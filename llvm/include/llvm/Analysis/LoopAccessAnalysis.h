@@ -37,6 +37,10 @@ struct VectorizerParams {
 
   /// VF as overridden by the user.
   LLVM_ABI static unsigned VectorizationFactor;
+  /// Select a reduction-fission candidate at VectorizationFactor instead of a
+  /// normal vectorization candidate. The width itself retains its usual
+  /// meaning.
+  LLVM_ABI static bool ForceReductionFission;
   /// Interleave factor as overridden by the user.
   LLVM_ABI static unsigned VectorizationInterleave;
   /// True if force-vector-interleave was specified by the user.

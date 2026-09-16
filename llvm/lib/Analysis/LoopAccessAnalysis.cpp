@@ -71,11 +71,32 @@ using namespace llvm::SCEVPatternMatch;
 
 #define DEBUG_TYPE "loop-accesses"
 
-static cl::opt<unsigned, true>
-VectorizationFactor("force-vector-width", cl::Hidden,
-                    cl::desc("Sets the SIMD width. Zero is autoselect."),
-                    cl::location(VectorizerParams::VectorizationFactor));
+namespace {
+struct VectorizationFactorParser : cl::parser<unsigned> {
+  VectorizationFactorParser(cl::Option &O) : cl::parser<unsigned>(O) {}
+
+  bool parse(cl::Option &O, StringRef ArgName, StringRef Arg, unsigned &Value) {
+    bool Fission = Arg.consume_front("fission:");
+    if (cl::parser<unsigned>::parse(O, ArgName, Arg, Value))
+      return true;
+    if (Fission &&
+        (!isPowerOf2_32(Value) || Value > VectorizerParams::MaxVectorWidth))
+      return O.error("fission width must be a nonzero power of two no greater "
+                     "than " +
+                     Twine(VectorizerParams::MaxVectorWidth));
+    VectorizerParams::ForceReductionFission = Fission;
+    return false;
+  }
+};
+} // namespace
+
+static cl::opt<unsigned, true, VectorizationFactorParser> VectorizationFactor(
+    "force-vector-width", cl::Hidden,
+    cl::desc("Sets the SIMD width. Zero is autoselect. Use fission:N to select "
+             "reduction fission with map width N."),
+    cl::location(VectorizerParams::VectorizationFactor));
 unsigned VectorizerParams::VectorizationFactor;
+bool VectorizerParams::ForceReductionFission;
 
 static cl::opt<unsigned, true>
 VectorizationInterleave("force-vector-interleave", cl::Hidden,

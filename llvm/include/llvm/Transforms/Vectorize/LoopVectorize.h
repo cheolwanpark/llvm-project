@@ -59,6 +59,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/TypeSize.h"
 #include "llvm/Transforms/Utils/ExtraPassManager.h"
 #include <functional>
 
@@ -138,6 +139,11 @@ private:
   /// If true, only loops that explicitly request vectorization are considered.
   bool VectorizeOnlyWhenForced;
 
+  // Forced fission is committed atomically after all component plans execute.
+  bool IsFissionAttempt = false;
+  bool FissionAttemptFailed = false;
+  unsigned FissionSelections = 0;
+
 public:
   LLVM_ABI LoopVectorizePass(LoopVectorizeOptions Opts = {});
 
@@ -162,7 +168,9 @@ public:
   // Shim for old PM.
   LLVM_ABI LoopVectorizeResult runImpl(Function &F);
 
-  LLVM_ABI bool processLoop(Loop *L);
+  LLVM_ABI bool
+  processLoop(Loop *L, std::optional<ElementCount> RequiredVF = std::nullopt,
+              bool PlanOnly = false);
 };
 
 /// Reports a vectorization failure: print \p DebugMsg for debugging

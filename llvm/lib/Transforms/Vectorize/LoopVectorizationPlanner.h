@@ -24,6 +24,7 @@
 #ifndef LLVM_TRANSFORMS_VECTORIZE_LOOPVECTORIZATIONPLANNER_H
 #define LLVM_TRANSFORMS_VECTORIZE_LOOPVECTORIZATIONPLANNER_H
 
+#include "ReductionFission.h"
 #include "VPlan.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/InstructionCost.h"
@@ -513,8 +514,24 @@ public:
   /// VF and its cost.
   VectorizationFactor planInVPlanNativePath(ElementCount UserVF);
 
-  /// Return the VPlan for \p VF. At the moment, there is always a single VPlan
-  /// for each VF.
+  /// Enumerate logical choices independently from the number of VPlan objects.
+  /// Fission owns fresh plans after distribution; getPlanFor(VF) continues to
+  /// refer exclusively to the original loop's Normal plan.
+  SmallVector<LoopVectorizationCandidate> candidates(bool FissionLegal) const {
+    SmallVector<LoopVectorizationCandidate> Result;
+    for (const VPlanPtr &P : VPlans)
+      for (ElementCount VF : P->vectorFactors()) {
+        if (!VF.isVector())
+          continue;
+        Result.push_back({LoopVectorizationCandidate::Kind::Normal, VF});
+        if (FissionLegal)
+          Result.push_back({LoopVectorizationCandidate::Kind::Fission, VF});
+      }
+    return Result;
+  }
+
+  /// Return the Normal VPlan for \p VF. A selected fission candidate must
+  /// distribute first and build independent plans for the resulting loops.
   VPlan &getPlanFor(ElementCount VF) const;
 
   /// Compute and return the most profitable vectorization factor. Also collect

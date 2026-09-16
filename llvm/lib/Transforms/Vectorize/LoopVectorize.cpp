@@ -136,6 +136,7 @@
 #include "llvm/Support/NativeFormatting.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/InjectTLIMappings.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
@@ -4402,6 +4403,11 @@ bool LoopVectorizationCostModel::isEpilogueVectorizationProfitable(
 VectorizationFactor LoopVectorizationPlanner::selectEpilogueVectorizationFactor(
     const ElementCount MainLoopVF, unsigned IC) {
   VectorizationFactor Result = VectorizationFactor::Disabled();
+  // Every vector reduction component uses its independently selected maximum
+  // legal width. Keep the ordinary scalar tail instead of adding a smaller
+  // fixed-width reduction epilogue.
+  if (findOptionMDForLoop(OrigLoop, "llvm.loop.reduction.fission.reduction"))
+    return Result;
   if (!EnableEpilogueVectorization) {
     LLVM_DEBUG(dbgs() << "LEV: Epilogue vectorization is disabled.\n");
     return Result;
@@ -6627,6 +6633,11 @@ void LoopVectorizationCostModel::collectValuesToIgnore() {
 }
 
 void LoopVectorizationCostModel::collectInLoopReductions() {
+  // Distribution requires vector accumulation followed by one exit collapse.
+  if (getOptionalBoolLoopAttribute(TheLoop,
+                                   "llvm.loop.reduction.fission.reduction")
+          .has_value())
+    return;
   // Avoid duplicating work finding in-loop reductions.
   if (!InLoopReductions.empty())
     return;
@@ -9683,7 +9694,9 @@ static void connectEpilogueVectorLoop(
                                   LVL, ExpandedSCEVs, EPI.VectorTripCount);
 }
 
-bool LoopVectorizePass::processLoop(Loop *L) {
+bool LoopVectorizePass::processLoop(Loop *L,
+                                    std::optional<ElementCount> RequiredVF,
+                                    bool PlanOnly) {
   assert((EnableVPlanNativePath || L->isInnermost()) &&
          "VPlan-native path is not enabled. Only process inner loops.");
 
@@ -9736,6 +9749,10 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                                 /*AllowRuntimeSCEVChecks=*/!OptForSize, AA);
   if (!LVL.canVectorize(EnableVPlanNativePath)) {
     LLVM_DEBUG(dbgs() << "LV: Not vectorizing: Cannot prove legality.\n");
+    if (VectorizerParams::ForceReductionFission)
+      reportVectorizationFailure("fission not selected: original loop fails "
+                                 "reduction or memory legality",
+                                 "ReductionFissionOriginalLegality", ORE, L);
     Hints.emitRemarkWithHints();
     return false;
   }
@@ -9876,9 +9893,127 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   if (UserIC > 1 && !LVL.isSafeForAnyVectorWidth())
     UserIC = 1;
 
+  // Analyze the untouched scalar loop. Logical fission candidates never enter
+  // ordinary cost arithmetic or minimum profitable trip-count calculations.
+  bool GeneratedFission =
+      getOptionalBoolLoopAttribute(L, "llvm.loop.reduction.fission.generated")
+          .has_value();
+  ReductionFission Fission(L);
+  bool FissionLegal = !GeneratedFission && Fission.analyze(LVL, *SE, *DT, *TTI);
+  bool ForceFission =
+      VectorizerParams::ForceReductionFission && !GeneratedFission;
+
   // Plan how to best vectorize.
   LVP.plan(UserVF, UserIC);
+  auto Candidates = LVP.candidates(FissionLegal);
+  for (const auto &Candidate : Candidates) {
+    if (GeneratedFission)
+      break;
+    ORE->emit([&]() {
+      return OptimizationRemarkAnalysis(DEBUG_TYPE, "VectorizationCandidate",
+                                        L->getStartLoc(), L->getHeader())
+             << "candidate "
+             << (Candidate.isAutomaticallySelectable() ? "Normal" : "Fission")
+             << " MapVF=" << ore::NV("MapVF", Candidate.MapVF)
+             << (Candidate.isAutomaticallySelectable()
+                     ? " cost=normal"
+                     : " cost=INF (manual only)");
+    });
+  }
+  if (ForceFission) {
+    auto Selected = find_if(Candidates, [&](const auto &C) {
+      return C.Transform == LoopVectorizationCandidate::Kind::Fission &&
+             C.MapVF == UserVF;
+    });
+    if (!FissionLegal || Selected == Candidates.end()) {
+      ORE->emit([&]() {
+        return OptimizationRemarkMissed(DEBUG_TYPE, "ReductionFissionRejected",
+                                        L->getStartLoc(), L->getHeader())
+               << "fission not selected: "
+               << ore::NV("Reason", FissionLegal
+                                        ? "requested Map VF has no legal plan"
+                                        : Fission.getFailure());
+      });
+      return false;
+    }
+    ORE->emit([&]() {
+      return OptimizationRemark(DEBUG_TYPE, "ReductionFissionSelected",
+                                L->getStartLoc(), L->getHeader())
+             << "selected Fission MapVF=" << ore::NV("MapVF", Selected->MapVF)
+             << "; full distribution with "
+             << ore::NV("Reductions", Fission.getReductionVFs().size())
+             << " independent reduction loops";
+    });
+    ++FissionSelections;
+    SmallVector<Loop *> Parts = Fission.execute(*Selected, *LI, *SE, *DT);
+    LLVM_DEBUG(dbgs() << "LV: scalar IR after selected reduction fission:\n";
+               F->print(dbgs()));
+    LAIs->clear();
+    // The original legality, cost model, and demanded bits describe pre-split
+    // IR. Each generated loop gets fresh analyses and an independent plan.
+    DemandedBits *OldDB = DB;
+    auto ReductionVFChoices = Fission.getReductionVFChoices();
+    // Type legality bounds the search, but the generated recurrence's actual
+    // VPlan must also support the width. Resolve each reduction independently,
+    // largest first; never explore combinations of accumulator widths.
+    for (unsigned Index = 1; Index < Parts.size(); ++Index) {
+      Loop *Part = Parts[Index];
+      DemandedBits FreshDB(*F, *AC, *DT);
+      DB = &FreshDB;
+      bool Supported = false;
+      for (ElementCount Choice : ReductionVFChoices[Index - 1]) {
+        ReductionFission::setReductionVF(Part, Choice);
+        LAIs->clear();
+        if (!processLoop(Part, Choice, /*PlanOnly=*/true))
+          continue;
+        Supported = true;
+        ORE->emit([&]() {
+          return OptimizationRemarkAnalysis(
+                     DEBUG_TYPE, "ReductionFissionSchedule",
+                     Part->getStartLoc(), Part->getHeader())
+                 << "fission reduction " << ore::NV("Index", Index - 1)
+                 << " maximum supported VF=" << ore::NV("ReductionVF", Choice)
+                 << "; interleave count=1";
+        });
+        break;
+      }
+      if (!Supported) {
+        FissionAttemptFailed = true;
+        ORE->emit([&]() {
+          return OptimizationRemarkMissed(
+                     DEBUG_TYPE, "ReductionFissionPartFailed",
+                     Part->getStartLoc(), Part->getHeader())
+                 << "no target-legal VF has a supported vector reduction plan";
+        });
+        DB = OldDB;
+        return true;
+      }
+    }
+    for (Loop *Part : Parts) {
+      DemandedBits FreshDB(*F, *AC, *DT);
+      DB = &FreshDB;
+      LoopVectorizeHints PartHints(Part, false, *ORE, TTI);
+      bool Vectorized = processLoop(Part, PartHints.getWidth());
+      LAIs->clear();
+      if (!Vectorized) {
+        FissionAttemptFailed = true;
+        ORE->emit([&]() {
+          return OptimizationRemarkMissed(
+                     DEBUG_TYPE, "ReductionFissionPartFailed",
+                     Part->getStartLoc(), Part->getHeader())
+                 << "selected fission component could not be vectorized";
+        });
+      }
+    }
+    DB = OldDB;
+    return true;
+  }
+  // computeBestVF visits Normal VPlans only. INF is never an InstructionCost.
   VectorizationFactor VF = LVP.computeBestVF();
+  if (RequiredVF && (VF.Width != *RequiredVF || !VF.Width.isVector()))
+    return false;
+  if (PlanOnly)
+    return VF.Width.isVector();
   unsigned IC = 1;
 
   if (ORE->allowExtraAnalysis(LV_NAME))
@@ -10172,6 +10307,76 @@ PreservedAnalyses LoopVectorizePass::run(Function &F,
   // expensive analyses.
   if (LI->empty())
     return PreservedAnalyses::all();
+  bool HasFissionInput = any_of(LI->getLoopsInPreorder(), [](Loop *L) {
+    return L->isInnermost() &&
+           !findOptionMDForLoop(L, "llvm.loop.reduction.fission.generated");
+  });
+  if (VectorizerParams::ForceReductionFission && !IsFissionAttempt &&
+      HasFissionInput) {
+    // External blockaddress constants cannot be preserved by replacing a body.
+    if (any_of(F, [](const BasicBlock &BB) { return BB.hasAddressTaken(); })) {
+      auto &Remarks = AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
+      Remarks.emit([&]() {
+        return OptimizationRemarkMissed(DEBUG_TYPE,
+                                        "ReductionFissionBlockAddress", &F)
+               << "fission not selected: function contains an address-taken "
+                  "block";
+      });
+      return PreservedAnalyses::all();
+    }
+    // Candidate discovery never changes the caller's scalar IR. Trying the
+    // selected composite plan on a private copy also permits target/planner
+    // failures to reject the whole transformation, without a scalar reduction
+    // fallback or a half-distributed loop in the caller.
+    ValueToValueMapTy VM;
+    Function *Trial = CloneFunction(&F, VM);
+    Trial->setName(F.getName() + ".fission.trial");
+    LoopVectorizePass Attempt(LoopVectorizeOptions(InterleaveOnlyWhenForced,
+                                                   VectorizeOnlyWhenForced));
+    Attempt.IsFissionAttempt = true;
+    Attempt.run(*Trial, AM);
+    bool Commit = Attempt.FissionSelections && !Attempt.FissionAttemptFailed;
+    AM.clear(*Trial, Trial->getName());
+    if (Commit) {
+      // No analysis for F is reused after replacing its body.
+      auto Linkage = F.getLinkage();
+      F.deleteBody();
+      F.setLinkage(Linkage);
+      ValueToValueMapTy Back;
+      Back[Trial] = &F;
+      for (auto [From, To] : zip(Trial->args(), F.args()))
+        Back[&From] = &To;
+      SmallVector<ReturnInst *> Returns;
+      CloneFunctionInto(&F, Trial, Back,
+                        CloneFunctionChangeType::LocalChangesOnly, Returns);
+    }
+    Trial->eraseFromParent();
+    OptimizationRemarkEmitter TransactionRemarks(&F);
+    if (Commit)
+      TransactionRemarks.emit([&]() {
+        return OptimizationRemark(DEBUG_TYPE, "ReductionFissionCommitted", &F)
+               << "committed fission for "
+               << ore::NV("Loops", Attempt.FissionSelections)
+               << " original loops; every component vectorized at its "
+                  "requested VF";
+      });
+    else if (Attempt.FissionSelections)
+      TransactionRemarks.emit([&]() {
+        return OptimizationRemarkMissed(DEBUG_TYPE,
+                                        "ReductionFissionRolledBack", &F)
+               << "fission rejected: a component failed; original function "
+                  "preserved";
+      });
+    if (!Commit)
+      return PreservedAnalyses::all();
+    // Preserve only the pipeline-control marker, never analyses of the body
+    // that was replaced. The ordinary post-vectorization cleanup must still
+    // run.
+    AM.getResult<ShouldRunExtraVectorPasses>(F);
+    PreservedAnalyses PA;
+    PA.preserve<ShouldRunExtraVectorPasses>();
+    return PA;
+  }
   SE = &AM.getResult<ScalarEvolutionAnalysis>(F);
   TTI = &AM.getResult<TargetIRAnalysis>(F);
   DT = &AM.getResult<DominatorTreeAnalysis>(F);

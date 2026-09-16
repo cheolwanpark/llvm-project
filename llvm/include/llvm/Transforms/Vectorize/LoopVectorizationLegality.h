@@ -173,14 +173,7 @@ public:
   /// error accumulates in the loop.
   bool allowReordering() const;
 
-  bool isPotentiallyUnsafe() const {
-    // Avoid FP vectorization if the target is unsure about proper support.
-    // This may be related to the SIMD unit in the target not handling
-    // IEEE 754 FP ops properly, or bad single-to-double promotions.
-    // Otherwise, a sequence of vectorized loops, even without reduction,
-    // could lead to different end results on the destination vectors.
-    return getForce() != LoopVectorizeHints::FK_Enabled && PotentiallyUnsafe;
-  }
+  bool isPotentiallyUnsafe() const;
 
   void setPotentiallyUnsafe() { PotentiallyUnsafe = true; }
 

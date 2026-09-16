@@ -115,11 +115,23 @@ LoopVectorizeHints::LoopVectorizeHints(const Loop *L,
       Predicate("vectorize.predicate.enable", FK_Undefined, HK_PREDICATE),
       Scalable("vectorize.scalable.enable", SK_Unspecified, HK_SCALABLE),
       TheLoop(L), ORE(ORE) {
+  bool FissionGenerated =
+      findOptionMDForLoop(L, "llvm.loop.reduction.fission.generated");
+  // Generated loops have their own widths and interleave policy. In particular,
+  // reduction loops can use scalable vectors even when the map uses fixed ones.
+  if (FissionGenerated)
+    Width.Value = 0;
   // Populate values with existing loop metadata.
   getHintsFromMetadata();
 
+  // This force request bypasses profitability, without authorizing additional
+  // floating-point transformations (see allowReordering()).
+  if (VectorizerParams::ForceReductionFission && !FissionGenerated &&
+      getForce() != FK_Disabled)
+    Force.Value = FK_Enabled;
+
   // force-vector-interleave overrides DisableInterleaving.
-  if (VectorizerParams::isInterleaveForced())
+  if (!FissionGenerated && VectorizerParams::isInterleaveForced())
     Interleave.Value = VectorizerParams::VectorizationInterleave;
 
   // If the metadata doesn't explicitly specify whether to enable scalable
@@ -142,8 +154,8 @@ LoopVectorizeHints::LoopVectorizeHints(const Loop *L,
 
   // If the flag is set to force any use of scalable vectors, override the loop
   // hints.
-  if (ForceScalableVectorization.getValue() !=
-      LoopVectorizeHints::SK_Unspecified)
+  if (!FissionGenerated && ForceScalableVectorization.getValue() !=
+                               LoopVectorizeHints::SK_Unspecified)
     Scalable.Value = ForceScalableVectorization.getValue();
 
   // Scalable vectorization is disabled if no preference is specified.
@@ -268,12 +280,25 @@ const char *LoopVectorizeHints::vectorizeAnalysisPassName() const {
 }
 
 bool LoopVectorizeHints::allowReordering() const {
+  // Fission is a scheduling choice, not permission to weaken FP semantics.
+  if (VectorizerParams::ForceReductionFission ||
+      findOptionMDForLoop(TheLoop, "llvm.loop.reduction.fission.generated"))
+    return false;
   // Allow the vectorizer to change the order of operations if enabling
   // loop hints are provided
   ElementCount EC = getWidth();
   return HintsAllowReordering &&
          (getForce() == LoopVectorizeHints::FK_Enabled ||
           EC.getKnownMinValue() > 1);
+}
+
+bool LoopVectorizeHints::isPotentiallyUnsafe() const {
+  // A fission request does not override the target's FP semantics restrictions.
+  if (VectorizerParams::ForceReductionFission ||
+      findOptionMDForLoop(TheLoop, "llvm.loop.reduction.fission.generated"))
+    return PotentiallyUnsafe;
+  // Explicit normal vectorization hints retain their existing behavior.
+  return getForce() != LoopVectorizeHints::FK_Enabled && PotentiallyUnsafe;
 }
 
 void LoopVectorizeHints::getHintsFromMetadata() {
