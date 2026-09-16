@@ -1,7 +1,7 @@
 # Reduction fission: flags, execution policy, and integration guide
 
 This guide describes the experimental implementation in this worktree on
-`codex/reduction-fission`, based on LLVM revision
+`reduction-fission`, based on LLVM revision
 `ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`. It is intended for developers and
 coding agents using or modifying the implementation. These behaviors are local
 to this implementation; an unmodified LLVM installation does not accept the
