@@ -641,6 +641,11 @@ void VFSelectionContext::computeMinimalBitwidths() {
 }
 
 void VFSelectionContext::collectInLoopReductions() {
+  // Distribution requires vector accumulation followed by one exit collapse.
+  if (getOptionalBoolLoopAttribute(TheLoop,
+                                  "llvm.loop.reduction.fission.reduction")
+          .has_value())
+    return;
   // Avoid duplicating work finding in-loop reductions.
   if (!InLoopReductions.empty())
     return;

@@ -4,6 +4,7 @@ add_llvm_component_library(LLVMVectorize
   LoopVectorizationLegality.cpp
   LoopVectorizationPlanner.cpp
   LoopVectorize.cpp
+  ReductionFission.cpp
   SandboxVectorizer/DependencyGraph.cpp
   SandboxVectorizer/InstrMaps.cpp
   SandboxVectorizer/Interval.cpp

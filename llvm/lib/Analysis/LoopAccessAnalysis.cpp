@@ -71,11 +71,38 @@ using namespace llvm::SCEVPatternMatch;
 
 #define DEBUG_TYPE "loop-accesses"
 
-static cl::opt<ElementCount, true>
-    VectorizationFactor("force-vector-width", cl::Hidden,
-                        cl::desc("Sets the SIMD width. Zero is autoselect."),
-                        cl::location(VectorizerParams::VectorizationFactor));
+namespace {
+struct VectorizationFactorParser : cl::parser<ElementCount> {
+  VectorizationFactorParser(cl::Option &O) : cl::parser<ElementCount>(O) {}
+
+  bool parse(cl::Option &O, StringRef ArgName, StringRef Arg,
+             ElementCount &Value) {
+    bool Fission = Arg.consume_front("fission:");
+    if (Fission) {
+      unsigned Width;
+      if (cl::parser<unsigned>(O).parse(O, ArgName, Arg, Width))
+        return true;
+      if (!isPowerOf2_32(Width) || Width > VectorizerParams::MaxVectorWidth)
+        return O.error("fission width must be a nonzero power of two no greater "
+                       "than " +
+                       Twine(VectorizerParams::MaxVectorWidth));
+      Value = ElementCount::getFixed(Width);
+    } else if (cl::parser<ElementCount>::parse(O, ArgName, Arg, Value)) {
+      return true;
+    }
+    VectorizerParams::ForceReductionFission = Fission;
+    return false;
+  }
+};
+} // namespace
+
+static cl::opt<ElementCount, true, VectorizationFactorParser> VectorizationFactor(
+    "force-vector-width", cl::Hidden,
+    cl::desc("Sets the SIMD width. Zero is autoselect. Use fission:N to select "
+             "reduction fission with map width N."),
+    cl::location(VectorizerParams::VectorizationFactor));
 ElementCount VectorizerParams::VectorizationFactor;
+bool VectorizerParams::ForceReductionFission;
 
 static cl::opt<unsigned, true>
 VectorizationInterleave("force-vector-interleave", cl::Hidden,
