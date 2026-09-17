@@ -67,11 +67,25 @@ input buffers, and a shared input can be stored once. For example, TSVC `s319`
 has one accumulator updated twice per iteration, so its implementation uses
 two input buffers and one reduction loop.
 
-Buffers use the exact runtime trip count and checked address-sized byte
-arithmetic. There is no arbitrary buffer-size or profitability limit.
-Zero-trip execution bypasses allocation; cleanup follows the reductions,
-including for repeated calls and source loops nested in an outer loop.
-Allocation failure or unrepresentable size traps.
+Heap buffers use the exact runtime trip count and checked address-sized byte
+arithmetic. Small constant scratch uses fixed entry-block allocas with lifetime
+markers. `-reduction-fission-stack-budget` defaults to 16384 bytes, charging all
+scratch together with existing static allocas in the function. Unknown existing
+stack use, unknown counts, or an exceeded budget retain heap allocation. The
+budget bounds IR storage, not the entire machine frame including spills;
+`-reduction-fission-stack-budget=0` disables stack scratch. No dynamic alloca or
+zero-fill is introduced. Entry placement prevents accumulation in outer loops.
+
+Heap fallback requires available, correctly declared malloc/free builtins;
+otherwise the transformation is rejected without changing the source function.
+This matters for `-fno-builtin` and `-ffreestanding`. Zero-trip execution bypasses
+allocation. Heap failure or unrepresentable size traps as before.
+
+For a single-block Map with an existing store, proven stable contiguous input
+or output streams can replace scratch. Non-wrapping addresses, matching element
+stride, and whole-object alias checks are required. Conditional, overwritten,
+and uncertain streams keep their buffers. Map still finishes before reductions;
+pure sums retain their copy Map rather than silently becoming a single loop.
 
 ### Candidates, planning, and rollback
 
@@ -223,13 +237,13 @@ Global VF, scalable, and interleave force options are not reapplied to these
 components. This prevents recursive Fission and accidental reuse of Map width
 for reductions. Do not add these internal markers to arbitrary user loops as
 a public configuration mechanism. Relevant unrelated Map metadata is preserved;
-reductions receive independent loop IDs for their scratch-storage accesses.
+reductions receive independent loop IDs for scratch or proven stable streams.
 
 ## 5. Reproducible examples
 
 Use the modified tools from this worktree's build. A matching base version
 string alone does not prove that an executable contains uncommitted changes.
-The local validated build is `../reduction-fission-build` relative to this
+The local validated build is `build-fission` relative to this
 worktree. Adjust `RF_BIN` if using another build directory.
 
 ### Direct Clang pipeline
@@ -239,7 +253,7 @@ requires no target system headers or linker. `-ffast-math` is intentional for
 this example; use only FP permissions appropriate to the real input program.
 
 ```sh
-RF_BIN="$(cd ../reduction-fission-build/bin && pwd)"
+RF_BIN="$(cd build-fission/bin && pwd)"
 RF_OUT="$(mktemp -d "${TMPDIR:-/tmp}/reduction-fission-guide.XXXXXX")"
 
 cat > "$RF_OUT/example.c" <<'EOF'
@@ -258,7 +272,7 @@ void reduce_pair(const float *restrict a, const float *restrict b,
 EOF
 
 "$RF_BIN/clang" --target=riscv64 -march=rv64gcv -mabi=lp64d \
-  -O2 -ffast-math -ffp-contract=off -ffreestanding -fno-builtin \
+  -O2 -ffast-math -ffp-contract=off \
   -mllvm -force-vector-width=fission:4 \
   -mllvm -scalable-vectorization=off \
   -Rpass=loop-vectorize -Rpass-analysis=loop-vectorize \
@@ -290,7 +304,7 @@ scalar IR first avoids comparing against an already-vectorized input.
 ```sh
 "$RF_BIN/clang" --target=riscv64 -march=rv64gcv -mabi=lp64d \
   -O1 -Xclang -disable-llvm-passes -ffast-math -ffp-contract=off \
-  -ffreestanding -fno-builtin -fno-discard-value-names \
+  -fno-discard-value-names \
   -S -emit-llvm "$RF_OUT/example.c" -o "$RF_OUT/raw.ll"
 
 "$RF_BIN/opt" \
@@ -341,18 +355,18 @@ with that transaction, and inspect the output IR. For LLVM debugging builds,
 `-debug-only=loop-vectorize` also prints the scalar IR immediately after the
 selected split and before component vectorization.
 
-Successful RVV output should have independent Map work and buffer stores,
+Successful RVV output should have independent Map work and materialized streams,
 separate recurrence loops, vector accumulator updates, and horizontal collapse
 outside each recurrence's backedge. Examine actual SEW/LMUL and memory EEW:
 `e8,m2` followed by `vle32.v` has EMUL8, just as `e8,m1` with `vle64.v` does.
 Look at register use and control flow, not only mnemonic presence.
 
-Later optimization can change presentation: TSVC `s311`'s fixed Map copy can
-become `memcpy`, even though the immediate Map IR used the requested VF.
+Later optimization can unroll stages or replace a copy loop with `memcpy`.
 Inspect both immediate and final IR. Wider groups also increase register
-pressure. TSVC `s352` has observed in-loop vector spills, and direct Clang O2
-examples have observed vector spills around cleanup `free` calls. Such costs
-are recorded, not filtered by a profitability policy. No speedup is promised.
+pressure. InstCombine avoids sinking a vector's final scalar-producing use
+across a dominating call or a subsequent natural loop, including backedge uses that
+precede the exit reduction.
+Other register-pressure costs remain possible. No speedup is promised.
 
 ## 7. Supported scope and invariants for maintainers
 
@@ -394,34 +408,22 @@ are recorded, not filtered by a profitability policy. No speedup is promised.
 | Existing RVV tuning options | [RISCVTargetTransformInfo.cpp](llvm/lib/Target/RISCV/RISCVTargetTransformInfo.cpp), [RISCVSubtarget.cpp](llvm/lib/Target/RISCV/RISCVSubtarget.cpp) |
 | Concise implementation documentation | [ReductionFission.rst](llvm/docs/ReductionFission.rst) |
 
-Run the nine focused lit files from the project root:
+Run the focused regression tests from the project root:
 
 ```sh
 "$RF_BIN/llvm-lit" -j 2 -v \
   llvm/test/Transforms/LoopVectorize/reduction-fission-*.ll \
-  llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-*.ll
+  llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-*.ll \
+  llvm/test/Transforms/InstCombine/sink-vector-call.ll
 ```
 
 The `force-option` test covers parser compatibility; `generated-hints` covers
-global VF/IC/scalable isolation; the RISCV tests cover candidates, kinds,
-control flow, FP semantics, memory recurrences, and rollback/transactions.
-
-Local experiment evidence is outside the repository and is not automatically
-included in a checkout. In this workspace it is available at
-`../reduction-fission-evidence/`:
-
-- [REPORT.md](../reduction-fission-evidence/REPORT.md): implementation, build,
-  benchmark provenance, limitations, and runtime scope.
-- [BUILD.md](../reduction-fission-evidence/BUILD.md): exact tool build commands,
-  including the host-Clang-only O0 memory workaround.
-- [LMUL range verification](../reduction-fission-evidence/lmul-range-check/README.md):
-  candidate ranges, maximum-force checks, commands, IR/assembly, and tool hashes.
-- [Documentation example results](../reduction-fission-evidence/documentation-examples/results.json):
-  direct Clang examples and vectorization-disable flag interactions.
-- [Benchmark results](../reduction-fission-evidence/BENCHMARK_RESULTS.md):
-  final TSVC/PolyBench compilation and lowering classifications.
-- [Runtime results](../reduction-fission-evidence/runtime/rvv/RESULTS.md):
-  separately identified benchmark-derived RVV execution evidence.
+global VF/IC/scalable isolation. The RISCV tests cover candidates, kinds,
+control flow, FP semantics, memory recurrences, allocation limits, aggregate
+stack use, lifetimes, allocation address spaces, stream reuse, and rollback.
+Machine-verified cleanup and pressure tests cover independent reductions.
+The InstCombine test covers vector-to-scalar sinking around calls and loops,
+including accumulator backedges, later vector uses, and shared constants.
 
 Keep compile/lowering checks, runtime checks, and performance measurements
 distinct when reporting results. Preserve tool identities, exact flags, target
