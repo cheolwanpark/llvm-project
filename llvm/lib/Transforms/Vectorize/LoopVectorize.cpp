@@ -9899,7 +9899,8 @@ bool LoopVectorizePass::processLoop(Loop *L,
       getOptionalBoolLoopAttribute(L, "llvm.loop.reduction.fission.generated")
           .has_value();
   ReductionFission Fission(L);
-  bool FissionLegal = !GeneratedFission && Fission.analyze(LVL, *SE, *DT, *TTI);
+  bool FissionLegal =
+      !GeneratedFission && Fission.analyze(LVL, *SE, *DT, *TTI, *AA, *TLI);
   bool ForceFission =
       VectorizerParams::ForceReductionFission && !GeneratedFission;
 

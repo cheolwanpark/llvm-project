@@ -5,16 +5,20 @@
 #ifndef LLVM_LIB_TRANSFORMS_VECTORIZE_REDUCTIONFISSION_H
 #define LLVM_LIB_TRANSFORMS_VECTORIZE_REDUCTIONFISSION_H
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/IVDescriptors.h"
+#include "llvm/Support/Alignment.h"
 #include "llvm/Support/TypeSize.h"
 
 namespace llvm {
+class AAResults;
 class Loop;
 class LoopInfo;
 class ScalarEvolution;
 class DominatorTree;
 class TargetTransformInfo;
+class TargetLibraryInfo;
 class LoopVectorizationLegality;
 
 /// A logical choice sits above VPlan: a fission choice owns several loop plans,
@@ -37,6 +41,11 @@ class ReductionFission {
   };
   Loop *L;
   SmallVector<Reduction, 2> Reductions;
+  struct Stream {
+    const SCEV *Start;
+    Align Alignment;
+  };
+  DenseMap<Value *, Stream> Streams;
   const SCEV *BackedgeCount = nullptr;
   std::string Failure;
 
@@ -44,7 +53,8 @@ public:
   explicit ReductionFission(Loop *L) : L(L) {}
   /// Read-only analysis of scalar IR. Does not allocate buffers or alter CFG.
   bool analyze(LoopVectorizationLegality &Legal, ScalarEvolution &SE,
-               DominatorTree &DT, const TargetTransformInfo &TTI);
+               DominatorTree &DT, const TargetTransformInfo &TTI,
+               AAResults &AA, const TargetLibraryInfo &TLI);
   StringRef getFailure() const { return Failure; }
   SmallVector<ElementCount> getReductionVFs() const;
   SmallVector<SmallVector<ElementCount, 8>> getReductionVFChoices() const;

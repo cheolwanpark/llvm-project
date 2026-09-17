@@ -5436,6 +5436,50 @@ bool InstCombinerImpl::tryToSinkInstruction(Instruction *I,
       return false;
   }
 
+  // Sinking a vector-to-scalar operation can replace a short scalar live
+  // range with an entire vector live across a call or a subsequent loop. This
+  // is particularly costly for scalable reductions. If it kills a wider vector,
+  // avoid extending that live range across calls or natural backedges on the
+  // dominator path. This is a profitability check, not an ordering constraint.
+  if ((I->getType()->isIntegerTy() || I->getType()->isFloatingPointTy()) &&
+      any_of(I->operands(), [&](Value *Op) {
+        // Constants can be rematerialized and may have users in other
+        // functions, outside this dominator tree.
+        if (isa<Constant>(Op))
+          return false;
+        auto *VTy = dyn_cast<VectorType>(Op->getType());
+        if (!VTy || (!VTy->getElementCount().isScalable() &&
+                     DL.getTypeSizeInBits(VTy) <=
+                         DL.getTypeSizeInBits(I->getType())))
+          return false;
+        // A loop accumulator also feeds its backedge PHI. That use precedes
+        // an exit reduction, so it does not keep the vector live after I.
+        return all_of(Op->uses(), [&](Use &U) {
+          if (U.getUser() == I || U.getUser()->isDroppable())
+            return true;
+          auto *User = dyn_cast<Instruction>(U.getUser());
+          if (auto *Phi = dyn_cast_or_null<PHINode>(User))
+            User = Phi->getIncomingBlock(U)->getTerminator();
+          return User && DT.dominates(User, I);
+        });
+      })) {
+    auto HasCall = [](BasicBlock::iterator Begin, BasicBlock::iterator End) {
+      return any_of(make_range(Begin, End), [](Instruction &Inst) {
+        return isa<CallBase>(Inst) && !isa<IntrinsicInst>(Inst);
+      });
+    };
+    if (HasCall(std::next(I->getIterator()), SrcBlock->end()))
+      return false;
+    for (auto *Node = DT.getNode(DestBlock)->getIDom();
+         Node && Node->getBlock() != SrcBlock; Node = Node->getIDom()) {
+      BasicBlock *BB = Node->getBlock();
+      if (HasCall(BB->begin(), BB->end()) ||
+          any_of(predecessors(BB),
+                 [&](BasicBlock *Pred) { return DT.dominates(BB, Pred); }))
+        return false;
+    }
+  }
+
   // Unless we can prove that the memory write isn't visibile except on the
   // path we're sinking to, we must bail.
   if (I->mayWriteToMemory()) {

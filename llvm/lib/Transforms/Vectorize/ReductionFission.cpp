@@ -3,21 +3,81 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #include "ReductionFission.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
 
 using namespace llvm;
+
+static cl::opt<unsigned> StackBudget(
+    "reduction-fission-stack-budget", cl::Hidden, cl::init(16384),
+    cl::desc("Maximum aggregate static alloca bytes in a function when placing "
+             "reduction fission scratch on the stack (0 disables)"));
+
+static Type *getBufferType(Value *V) {
+  // A scalar i1 occupies a byte, unlike packed vector masks.
+  return V->getType()->isIntegerTy(1) ? Type::getInt8Ty(V->getContext())
+                                      : V->getType();
+}
+
+// This bounds IR storage, not the final frame (which may also contain spills).
+// Reject unknown existing stack use, and charge all allocations, including
+// scratch for previously transformed loops. No dynamic alloca is introduced.
+static bool fitsOnStack(Function &F, ArrayRef<Value *> Inputs,
+                        const SCEV *BackedgeCount) {
+  if (!StackBudget || F.hasFnAttribute(Attribute::Naked))
+    return false;
+  const auto *BTC = dyn_cast<SCEVConstant>(BackedgeCount);
+  if (!BTC)
+    return false;
+  const DataLayout &DL = F.getDataLayout();
+  APInt Count = BTC->getAPInt().zextOrTrunc(DL.getPointerSizeInBits());
+  bool Overflow;
+  Count = Count.uadd_ov(APInt(Count.getBitWidth(), 1), Overflow);
+  if (Overflow || Count.ugt(StackBudget))
+    return false;
+
+  uint64_t Used = 0;
+  auto Charge = [&](uint64_t Size, Align Alignment) {
+    if (Size > StackBudget || Alignment.value() > StackBudget)
+      return false;
+    uint64_t Padded = alignTo(Size, Alignment);
+    if (Padded > StackBudget - Used)
+      return false;
+    Used += Padded;
+    return true;
+  };
+  for (Instruction &I : instructions(F))
+    if (auto *AI = dyn_cast<AllocaInst>(&I)) {
+      auto Size = AI->getAllocationSize(DL);
+      if (!AI->isStaticAlloca() || !Size || Size->isScalable() ||
+          !Charge(Size->getFixedValue(), AI->getAlign()))
+        return false;
+    }
+  for (Value *V : Inputs) {
+    Type *Ty = getBufferType(V);
+    uint64_t ElementSize = DL.getTypeAllocSize(Ty).getFixedValue();
+    if (ElementSize > StackBudget / Count.getZExtValue() ||
+        !Charge(ElementSize * Count.getZExtValue(), DL.getPrefTypeAlign(Ty)))
+      return false;
+  }
+  return true;
+}
 
 // Vectorization may preserve a finite-distance memory recurrence at a small VF.
 // Full fission's policy is stricter: no such recurrence may remain in Map.
@@ -144,7 +204,8 @@ static StringRef checkMapMemoryRecurrences(Loop *L, const LoopAccessInfo &LAI,
 
 bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
                                ScalarEvolution &SE, DominatorTree &DT,
-                               const TargetTransformInfo &TTI) {
+                               const TargetTransformInfo &TTI, AAResults &AA,
+                               const TargetLibraryInfo &TLI) {
   auto Reject = [&](StringRef Reason) {
     Failure = Reason.str();
     return false;
@@ -289,6 +350,63 @@ bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
                     "accumulator types");
     Reductions.push_back(std::move(R));
   }
+  // Reuse an existing, contiguous stream only when every iteration accesses
+  // a distinct location and no Map write can change it after its defining
+  // load/store. Whole-object alias queries cover other iterations as well.
+  // Keep conditional paths on scratch: availability and control replay need
+  // separate proofs. A pre-existing Map store keeps Map meaningful after a
+  // redundant copy is removed.
+  if (L->getNumBlocks() == 1 && any_of(*L->getHeader(), [](Instruction &I) {
+        return isa<StoreInst>(I);
+      })) {
+    auto TryStream = [&](Value *V, Value *Ptr, Align Alignment,
+                         Instruction *Writer) {
+      if (V->getType()->isIntegerTy(1))
+        return false;
+      const auto *AR = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Ptr));
+      if (!AR || AR->getLoop() != L || !AR->isAffine() ||
+          !AR->hasNoUnsignedWrap() || !SE.isLoopInvariant(AR->getStart(), L))
+        return false;
+      const auto *Step = dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
+      if (!Step || Step->getAPInt() != DL.getTypeAllocSize(V->getType()) ||
+          !Exp.isSafeToExpandAt(AR->getStart(),
+                                L->getLoopPreheader()->getTerminator()))
+        return false;
+      MemoryLocation Loc = MemoryLocation::getBeforeOrAfter(Ptr);
+      for (Instruction &I : *L->getHeader())
+        if (&I != Writer && isModSet(AA.getModRefInfo(&I, Loc)))
+          return false;
+      Streams[V] = {AR->getStart(), Alignment};
+      return true;
+    };
+    for (Reduction &R : Reductions)
+      for (Value *V : R.Inputs) {
+        if (Streams.contains(V))
+          continue;
+        if (auto *Load = dyn_cast<LoadInst>(V);
+            Load && Load->isSimple() &&
+            TryStream(V, Load->getPointerOperand(), Load->getAlign(), nullptr))
+          continue;
+        for (User *U : V->users())
+          if (auto *Store = dyn_cast<StoreInst>(U);
+              Store && L->contains(Store) && Store->isSimple() &&
+              Store->getValueOperand() == V &&
+              TryStream(V, Store->getPointerOperand(), Store->getAlign(),
+                        Store))
+            break;
+      }
+  }
+  SetVector<Value *> ScratchInputs;
+  for (Reduction &R : Reductions)
+    for (Value *V : R.Inputs)
+      if (!Streams.contains(V))
+        ScratchInputs.insert(V);
+  Function *F = L->getHeader()->getParent();
+  if (!ScratchInputs.empty() &&
+      !fitsOnStack(*F, ScratchInputs.getArrayRef(), BackedgeCount) &&
+      (!isLibFuncEmittable(F->getParent(), &TLI, LibFunc_malloc) ||
+       !isLibFuncEmittable(F->getParent(), &TLI, LibFunc_free)))
+    return Reject("heap scratch requires available malloc and free builtins");
   return true;
 }
 
@@ -312,7 +430,7 @@ static void setGeneratedHints(Loop *L, ElementCount VF, bool IsReduction) {
   SmallVector<Metadata *> MD{nullptr};
   // The Map retains the original memory instructions and their access groups.
   // Preserve unrelated loop contracts and follow-up metadata there. Reductions
-  // operate only on fresh scratch storage and receive independent loop IDs.
+  // receive independent IDs, using scratch or a proven stable Map stream.
   if (!IsReduction)
     if (MDNode *OldID = L->getLoopID())
       for (unsigned I = 1; I != OldID->getNumOperands(); ++I) {
@@ -360,12 +478,6 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   BasicBlock *MapLatch = L->getLoopLatch();
   Function *F = Map->getParent();
   Module *M = F->getParent();
-  // Heap scratch storage introduces effects absent from a pure scalar kernel.
-  F->setMemoryEffects(MemoryEffects::unknown());
-  for (Attribute::AttrKind Kind :
-       {Attribute::NoFree, Attribute::NoSync, Attribute::NoUnwind,
-        Attribute::Speculatable, Attribute::WillReturn})
-    F->removeFnAttr(Kind);
   LLVMContext &C = F->getContext();
   const DataLayout &DL = M->getDataLayout();
   BasicBlock *Pre = L->getLoopPreheader();
@@ -384,17 +496,27 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   Value *BadSize = Entry.CreateICmpEQ(TC, ConstantInt::get(IndexTy, 0));
   SetVector<Value *> Inputs;
   for (Reduction &R : Reductions)
-    Inputs.insert_range(R.Inputs);
+    for (Value *V : R.Inputs)
+      if (!Streams.contains(V))
+        Inputs.insert(V);
+  bool UseStack = fitsOnStack(*F, Inputs.getArrayRef(), BackedgeCount);
+  bool HasHeap = !UseStack && !Inputs.empty();
+  if (HasHeap) {
+    // Heap scratch storage introduces effects absent from a pure scalar kernel.
+    F->setMemoryEffects(MemoryEffects::unknown());
+    for (Attribute::AttrKind Kind :
+         {Attribute::NoFree, Attribute::NoSync, Attribute::NoUnwind,
+          Attribute::Speculatable, Attribute::WillReturn})
+      F->removeFnAttr(Kind);
+  }
   DenseMap<Value *, Value *> Sizes, Buffers;
-  auto BufferType = [&](Value *V) -> Type * {
-    // Scalar i1 memory occupies a byte. Explicit byte buffers avoid packed
-    // mask-vector loads accidentally describing a different memory layout.
-    return V->getType()->isIntegerTy(1) ? Type::getInt8Ty(C) : V->getType();
-  };
+  for (auto &[V, Stream] : Streams)
+    Buffers[V] = Exp.expandCodeFor(Stream.Start, Stream.Start->getType(),
+                                   Pre->getTerminator());
   for (Value *V : Inputs) {
     auto *Mul = Entry.CreateIntrinsic(
         Intrinsic::umul_with_overflow, {IndexTy},
-        {TC, ConstantInt::get(IndexTy, DL.getTypeAllocSize(BufferType(V)))});
+        {TC, ConstantInt::get(IndexTy, DL.getTypeAllocSize(getBufferType(V)))});
     Sizes[V] = Entry.CreateExtractValue(Mul, 0);
     BadSize = Entry.CreateOr(BadSize, Entry.CreateExtractValue(Mul, 1));
   }
@@ -408,14 +530,24 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   Pre->getTerminator()->eraseFromParent();
   IRBuilder<>(Pre).CreateCondBr(BadSize, Trap, Allocate);
   IRBuilder<> Alloc(Allocate);
-  FunctionCallee Malloc = M->getOrInsertFunction(
-      "malloc", FunctionType::get(PointerType::getUnqual(C), {IndexTy}, false));
   Value *Failed = ConstantInt::getFalse(C);
-  for (Value *V : Inputs) {
-    auto *Buf = Alloc.CreateCall(Malloc, {Sizes[V]}, "fission.buffer");
-    Buf->addRetAttr(Attribute::NoAlias);
-    Buffers[V] = Buf;
-    Failed = Alloc.CreateOr(Failed, Alloc.CreateIsNull(Buf));
+  if (UseStack) {
+    IRBuilder<> Stack(&F->getEntryBlock(), F->getEntryBlock().begin());
+    for (Value *V : Inputs) {
+      auto *Buf = Stack.CreateAlloca(getBufferType(V), TC, "fission.buffer");
+      Buffers[V] = Buf;
+      Alloc.CreateLifetimeStart(Buf);
+    }
+  } else if (HasHeap) {
+    FunctionCallee Malloc = M->getOrInsertFunction(
+        "malloc",
+        FunctionType::get(PointerType::getUnqual(C), {IndexTy}, false));
+    for (Value *V : Inputs) {
+      auto *Buf = Alloc.CreateCall(Malloc, {Sizes[V]}, "fission.buffer");
+      Buf->addRetAttr(Attribute::NoAlias);
+      Buffers[V] = Buf;
+      Failed = Alloc.CreateOr(Failed, Alloc.CreateIsNull(Buf));
+    }
   }
   BasicBlock *MapPre = BasicBlock::Create(C, "fission.map.preheader", F, Map);
   Alloc.CreateCondBr(Failed, Trap, MapPre);
@@ -440,7 +572,7 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
                       L->isLoopInvariant(V) || isa<PHINode>(Definition)
                           ? StoreBlock->getFirstInsertionPt()
                           : std::next(Definition->getIterator()));
-    Value *Ptr = Store.CreateGEP(BufferType(V), Buffers[V], Index);
+    Value *Ptr = Store.CreateGEP(getBufferType(V), Buffers[V], Index);
     Value *Data = V->getType()->isIntegerTy(1)
                       ? Store.CreateZExt(V, Type::getInt8Ty(C))
                       : V;
@@ -491,16 +623,19 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
         }
       }
       // All PHIs must precede loads. The precise position of independent
-      // calculations within a block is immaterial: scratch loads cannot alias
-      // Map storage, and execute on exactly the original control path.
+      // calculations within a block is immaterial: contributions are stable
+      // after Map, and execute on exactly the original control path.
       B.SetInsertPoint(Copy, Copy->getFirstInsertionPt());
       for (Value *V : R.Inputs) {
         BasicBlock *DefinitionBlock =
             L->isLoopInvariant(V) ? Map : cast<Instruction>(V)->getParent();
         if (DefinitionBlock != BB)
           continue;
-        Value *Ptr = B.CreateGEP(BufferType(V), Buffers[V], RI);
-        Value *Data = B.CreateLoad(BufferType(V), Ptr, "fission.contribution");
+        Value *Ptr = B.CreateGEP(getBufferType(V), Buffers[V], RI);
+        auto *Data =
+            B.CreateLoad(getBufferType(V), Ptr, "fission.contribution");
+        if (auto It = Streams.find(V); It != Streams.end())
+          Data->setAlignment(It->second.Alignment);
         VM[V] = V->getType()->isIntegerTy(1)
                     ? B.CreateTrunc(Data, Type::getInt1Ty(C))
                     : Data;
@@ -529,11 +664,16 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   if (Loop *Parent = L->getParentLoop())
     Parent->addBasicBlockToLoop(Cleanup, LI);
   IRBuilder<> Clean(Cleanup);
-  FunctionCallee Free = M->getOrInsertFunction(
-      "free", FunctionType::get(Type::getVoidTy(C), {PointerType::getUnqual(C)},
-                                false));
-  for (Value *V : Inputs)
-    Clean.CreateCall(Free, {Buffers[V]});
+  if (UseStack) {
+    for (Value *V : Inputs)
+      Clean.CreateLifetimeEnd(Buffers[V]);
+  } else if (HasHeap) {
+    FunctionCallee Free = M->getOrInsertFunction(
+        "free", FunctionType::get(Type::getVoidTy(C),
+                                  {PointerType::getUnqual(C)}, false));
+    for (Value *V : Inputs)
+      Clean.CreateCall(Free, {Buffers[V]});
+  }
   Clean.CreateBr(Exit);
   // Values produced by earlier loops dominate cleanup, but must be placed in
   // LCSSA before another loop is vectorized.
