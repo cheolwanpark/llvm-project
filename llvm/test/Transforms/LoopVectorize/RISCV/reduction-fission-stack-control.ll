@@ -1,16 +1,17 @@
 ; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
 ; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
 ;
-; A byte predicate and a conditional float contribution both use uninitialized
-; entry scratch. Masked reads must remain on precisely the written paths.
+; Map writes the identity for a skipped update to a single float stream.
+; The original source load stays masked; no predicate scratch is necessary.
 ; The trip count is deliberately not a multiple of either Map or reduction VF.
 target triple = "riscv64-unknown-linux-gnu"
 ; CHECK-LABEL: define float @conditional_fixed(
-; CHECK-DAG: alloca float, i64 65
-; CHECK-DAG: alloca i8, i64 65
+; CHECK: alloca float, i64 65
+; CHECK-NOT: = alloca
 ; CHECK-NOT: @malloc
 ; CHECK-NOT: @llvm.memset
 ; CHECK: @llvm.lifetime.start
+; CHECK: @llvm.{{(masked|vp)}}.load.{{(v4|nxv2)}}f32{{.*}}<{{(4|vscale x 2)}} x i1> %
 ; CHECK: fission.reduce.preheader
 ; CHECK: @llvm.{{(masked|vp)}}.load.nxv16f32
 ; CHECK: @llvm.vector.reduce.fadd

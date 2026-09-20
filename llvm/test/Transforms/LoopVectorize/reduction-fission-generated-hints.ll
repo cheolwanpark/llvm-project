@@ -1,3 +1,4 @@
+; RUN: opt %s -passes=loop-vectorize -force-vector-width="vscale x 2" -force-vector-interleave=4 -scalable-vectorization=off -force-target-supports-scalable-vectors -pass-remarks=loop-vectorize -S 2>&1 | FileCheck %s
 ; RUN: opt %s -passes=loop-vectorize -force-vector-width=2 -force-vector-interleave=4 -scalable-vectorization=off -force-target-supports-scalable-vectors -pass-remarks=loop-vectorize -S 2>&1 | FileCheck %s
 ; RUN: opt %s -passes=loop-vectorize -force-vector-width=fission:2 -force-vector-interleave=4 -scalable-vectorization=on -force-target-supports-scalable-vectors -pass-remarks=loop-vectorize -S 2>&1 | FileCheck %s
 

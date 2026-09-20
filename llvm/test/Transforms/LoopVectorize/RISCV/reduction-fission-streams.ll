@@ -200,3 +200,59 @@ exit:
   %result = phi float [0.0, %entry], [%next, %loop]
   ret float %result
 }
+
+; A fixed-width Map can scalarize this underaligned load. The scalable reducer
+; cannot: retaining aligned scratch is necessary to keep its maximum VF.
+; CHECK-LABEL: define float @unaligned_input_copy(
+; CHECK: alloca float, i64 64
+; CHECK: store <4 x float>
+; CHECK: fission.reduce.preheader
+; CHECK: phi <vscale x 16 x float>
+; CHECK: @llvm.vector.reduce.fadd.nxv16f32
+; CHECK: ret float
+define float @unaligned_input_copy(ptr noalias readonly %a, float %init) {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [0, %entry], [%inc, %loop]
+  %acc = phi float [%init, %entry], [%next, %loop]
+  %p = getelementptr inbounds nuw float, ptr %a, i64 %i
+  %x = load float, ptr %p, align 2
+  %next = fadd reassoc float %acc, %x
+  %inc = add nuw i64 %i, 1
+  %done = icmp eq i64 %inc, 64
+  br i1 %done, label %exit, label %loop
+exit:
+  %r = phi float [%next, %loop]
+  ret float %r
+}
+
+@bounded = external global [64 x float]
+
+; A[i] - one element starts at A[0]. The known global bounds prove a safe
+; forward stream even though neither GEP retained a nuw annotation.
+; CHECK-LABEL: define float @bounded_global_stream(
+; CHECK-NOT: = alloca
+; CHECK-NOT: @malloc
+; CHECK: phi <vscale x 16 x float>
+; CHECK: @llvm.vp.load.nxv16f32
+; CHECK: @llvm.vector.reduce.fadd.nxv16f32
+; CHECK-NOT: @free
+; CHECK: ret float
+define float @bounded_global_stream(float %init) {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [1, %entry], [%inc, %loop]
+  %acc = phi float [%init, %entry], [%next, %loop]
+  %base = getelementptr float, ptr @bounded, i64 %i
+  %p = getelementptr i8, ptr %base, i64 -4
+  %x = load float, ptr %p, align 4
+  %next = fadd reassoc float %acc, %x
+  %inc = add nuw i64 %i, 1
+  %done = icmp eq i64 %inc, 65
+  br i1 %done, label %exit, label %loop
+exit:
+  %r = phi float [%next, %loop]
+  ret float %r
+}

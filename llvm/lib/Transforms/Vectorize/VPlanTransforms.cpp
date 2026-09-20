@@ -2478,12 +2478,14 @@ bool VPlanTransforms::simplifyKnownEVL(VPlan &Plan, ElementCount VF,
 
 void VPlanTransforms::optimizeForVFAndUF(VPlan &Plan, ElementCount BestVF,
                                          unsigned BestUF,
-                                         PredicatedScalarEvolution &PSE) {
+                                         PredicatedScalarEvolution &PSE,
+                                         bool PreserveLoop) {
   assert(Plan.hasVF(BestVF) && "BestVF is not available in Plan");
   assert(Plan.hasUF(BestUF) && "BestUF is not available in Plan");
 
   bool MadeChange = tryToReplaceALMWithWideALM(Plan, BestVF, BestUF);
-  MadeChange |= simplifyBranchConditionForVFAndUF(Plan, BestVF, BestUF, PSE);
+  if (!PreserveLoop)
+    MadeChange |= simplifyBranchConditionForVFAndUF(Plan, BestVF, BestUF, PSE);
   MadeChange |= optimizeVectorInductionWidthForTCAndVFUF(Plan, BestVF, BestUF);
 
   if (MadeChange) {

@@ -161,6 +161,28 @@
 ; YAML-NEXT: Args:
 ; YAML-NEXT:   - String:          loop not vectorized
 ; YAML-NEXT: ...
+; YAML-NEXT: --- !Analysis
+; YAML-NEXT: Pass:            loop-vectorize
+; YAML-NEXT: Name:            VectorizationCandidate
+; YAML-NEXT: Function:        test_runtime_checks_threshold
+; YAML-NEXT: Args:
+; YAML-NEXT:   - String:          'candidate '
+; YAML-NEXT:   - String:          Normal
+; YAML-NEXT:   - String:          ' MapVF='
+; YAML-NEXT:   - MapVF:           '2'
+; YAML-NEXT:   - String:          ' cost=normal'
+; YAML-NEXT: ...
+; YAML-NEXT: --- !Analysis
+; YAML-NEXT: Pass:            loop-vectorize
+; YAML-NEXT: Name:            VectorizationCandidate
+; YAML-NEXT: Function:        test_runtime_checks_threshold
+; YAML-NEXT: Args:
+; YAML-NEXT:   - String:          'candidate '
+; YAML-NEXT:   - String:          Normal
+; YAML-NEXT:   - String:          ' MapVF='
+; YAML-NEXT:   - MapVF:           '4'
+; YAML-NEXT:   - String:          ' cost=normal'
+; YAML-NEXT: ...
 ; YAML-NEXT: --- !AnalysisAliasing
 ; YAML-NEXT: Pass:            loop-vectorize
 ; YAML-NEXT: Name:            TooManyMemoryRuntimeChecks

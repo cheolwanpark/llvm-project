@@ -156,7 +156,8 @@ LoopVectorizeHints::LoopVectorizeHints(const Loop *L,
     Scalable.Value = ForceScalableVectorization.getValue();
 
   // If force-vector-width is scalable, force scalable vectorization.
-  if (VectorizerParams::VectorizationFactor.isScalable())
+  if (!FissionGenerated &&
+      VectorizerParams::VectorizationFactor.isScalable())
     Scalable.Value = SK_AlwaysScalable;
 
   // Scalable vectorization is disabled if no preference is specified.

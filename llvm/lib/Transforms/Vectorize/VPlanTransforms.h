@@ -268,9 +268,12 @@ struct VPlanTransforms {
 
   /// Optimize \p Plan based on \p BestVF and \p BestUF. This may restrict the
   /// resulting plan to \p BestVF and \p BestUF.
+  /// When PreserveLoop is set, retain the vector loop and its runtime EVL even
+  /// if the selected VF can cover the whole trip count in one iteration.
   static void optimizeForVFAndUF(VPlan &Plan, ElementCount BestVF,
                                  unsigned BestUF,
-                                 PredicatedScalarEvolution &PSE);
+                                 PredicatedScalarEvolution &PSE,
+                                 bool PreserveLoop = false);
 
   /// Try to simplify VPInstruction::ExplicitVectorLength recipes when the AVL
   /// is known to be <= VF, replacing them with the AVL directly.
