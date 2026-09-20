@@ -1,17 +1,20 @@
 ; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=fission:4 -scalable-vectorization=off -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
 ; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=fission:2 -scalable-vectorization=on -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
 ;
-; Full distribution must preserve control-dependent contribution availability.
-; In particular, a skipped contribution load cannot read an uninitialized
-; scratch element, even when the map predicate is false on the scalar tail.
+; Full distribution preserves control-dependent contribution availability.
+; Map conditionally loads the source and stores an identity on skipped updates,
+; including on its scalar tail. Each reducer needs only the initialized stream.
 
 target triple = "riscv64-unknown-linux-gnu"
 
 ; CHECK-LABEL: define float @conditional_load(
 ; CHECK: @malloc
+; CHECK-NOT: @malloc
+; CHECK: @llvm.{{(masked|vp)}}.load.{{(v4|nxv2)}}f32{{.*}}<{{(4|vscale x 2)}} x i1> %
 ; CHECK: fission.reduce.preheader
 ; CHECK: phi <vscale x 16 x float>
-; CHECK: @llvm.{{(masked|vp)}}.load.nxv16f32{{.*}}<vscale x 16 x i1> %
+; CHECK: @llvm.vp.load.nxv16f32{{.*}}<vscale x 16 x i1> splat (i1 true)
+; CHECK: fadd reassoc arcp contract afn <vscale x 16 x float>
 ; CHECK: @llvm.vector.reduce.fadd.nxv16f32
 ; CHECK: @free
 ; CHECK: ret float
@@ -44,7 +47,7 @@ exit:
 }
 
 ; Both accumulators update on the same independent control path, but they must
-; still have separate complete reduction loops. The predicate can be shared.
+; still have separate complete reduction loops. Neither needs predicate storage.
 ; CHECK-LABEL: define { float, float } @conditional_two_accumulators(
 ; CHECK: @malloc
 ; CHECK: fission.reduce.preheader
@@ -149,14 +152,14 @@ exit:
   ret i32 %result
 }
 
-; Loop-invariant contributions still require a full map phase and must not be
-; confused with partially accumulated values. This is an LLVM-recognized fadd.
+; Loop-invariant contributions need no scratch or Map copies, but still execute
+; a full independent reduction. This is an LLVM-recognized fadd.
 ; CHECK-LABEL: define float @invariant_contribution(
-; CHECK: @malloc
-; CHECK: {{(store <(vscale x )?[24] x float>|@llvm.vp.store.nxv2f32)}}
+; CHECK-NOT: @malloc
+; CHECK-NOT: store
 ; CHECK: phi <vscale x 16 x float>
 ; CHECK: @llvm.vector.reduce.fadd.nxv16f32
-; CHECK: @free
+; CHECK-NOT: @free
 ; CHECK: ret float
 define float @invariant_contribution(i64 %n, float %init, float %step) {
 entry:

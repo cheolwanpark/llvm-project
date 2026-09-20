@@ -3,18 +3,25 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #include "ReductionFission.h"
+#include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/MemoryBuiltins.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/KnownFPClass.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/BuildLibCalls.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -202,6 +209,296 @@ static StringRef checkMapMemoryRecurrences(Loop *L, const LoopAccessInfo &LAI,
   return {};
 }
 
+void ReductionFission::planContribution(Reduction &R) {
+  // Combining existing output streams would add an owned full-trip buffer.
+  // Prefer their zero-scratch representation; each accumulator still gets its
+  // own reducer. This is a storage-driven multi-input fallback, not fusion.
+  bool HasProduct = any_of(R.Slice, [](Instruction *I) {
+    auto *II = dyn_cast<IntrinsicInst>(I);
+    return II && II->getIntrinsicID() == Intrinsic::fmuladd;
+  });
+  // Raw multiplicands are not contribution streams: the independent product
+  // of an fmuladd still belongs in Map, even if its factors could be reloaded.
+  if (!HasProduct && !R.Inputs.empty() &&
+      all_of(R.Inputs, [&](Value *V) { return Streams.contains(V); })) {
+    R.ContributionReason = "existing streams avoid owned scratch";
+    return;
+  }
+  unsigned Opcode;
+  Intrinsic::ID CombineIntrinsic = Intrinsic::not_intrinsic;
+  switch (R.Descriptor.getRecurrenceKind()) {
+  case RecurKind::Add:
+    Opcode = Instruction::Add;
+    break;
+  case RecurKind::Mul:
+    Opcode = Instruction::Mul;
+    break;
+  case RecurKind::And:
+    Opcode = Instruction::And;
+    break;
+  case RecurKind::Or:
+    Opcode = Instruction::Or;
+    break;
+  case RecurKind::Xor:
+    Opcode = Instruction::Xor;
+    break;
+  case RecurKind::FAdd:
+  case RecurKind::FMulAdd:
+    Opcode = Instruction::FAdd;
+    break;
+  case RecurKind::FMul:
+    Opcode = Instruction::FMul;
+    break;
+  case RecurKind::SMin:
+    Opcode = Instruction::Call;
+    CombineIntrinsic = Intrinsic::smin;
+    break;
+  case RecurKind::SMax:
+    Opcode = Instruction::Call;
+    CombineIntrinsic = Intrinsic::smax;
+    break;
+  case RecurKind::UMin:
+    Opcode = Instruction::Call;
+    CombineIntrinsic = Intrinsic::umin;
+    break;
+  case RecurKind::UMax:
+    Opcode = Instruction::Call;
+    CombineIntrinsic = Intrinsic::umax;
+    break;
+  case RecurKind::FMin:
+    Opcode = Instruction::Call;
+    CombineIntrinsic = Intrinsic::minnum;
+    break;
+  case RecurKind::FMax:
+    Opcode = Instruction::Call;
+    CombineIntrinsic = Intrinsic::maxnum;
+    break;
+  case RecurKind::FMinimum:
+    Opcode = Instruction::Call;
+    CombineIntrinsic = Intrinsic::minimum;
+    break;
+  case RecurKind::FMaximum:
+    Opcode = Instruction::Call;
+    CombineIntrinsic = Intrinsic::maximum;
+    break;
+  default:
+    R.ContributionReason = "recurrence is not a homogeneous binary combine";
+    return;
+  }
+
+  SmallVector<Instruction *, 4> Chain;
+  FastMathFlags FMF = FastMathFlags::getFast();
+  bool Invariant = true;
+  Value *Current = R.Descriptor.getLoopExitInstr();
+  Instruction *Guard = nullptr;
+  // A skipped update contributes the combine identity. The contribution is
+  // selected at the original join; its loads and arithmetic stay on their
+  // original paths. More complicated dependent PHIs keep the slice fallback.
+  if (auto *P = dyn_cast<PHINode>(Current)) {
+    R.ContributionReason = "join is not a single optionally executed chain";
+    if (P->getNumIncomingValues() != 2)
+      return;
+    if (P->getIncomingValue(0) == R.Phi)
+      Current = P->getIncomingValue(1);
+    else if (P->getIncomingValue(1) == R.Phi)
+      Current = P->getIncomingValue(0);
+    else
+      return;
+    Guard = P;
+  } else if (auto *S = dyn_cast<SelectInst>(Current)) {
+    R.ContributionReason = "select is not a single optionally executed chain";
+    if (S->getTrueValue() == R.Phi)
+      Current = S->getFalseValue();
+    else if (S->getFalseValue() == R.Phi)
+      Current = S->getTrueValue();
+    else
+      return;
+    Guard = S;
+  }
+  while (Current != R.Phi) {
+    R.ContributionReason = "dependent slice changes type or has an inner join";
+    auto *I = dyn_cast<Instruction>(Current);
+    if (!I || !R.Slice.contains(I) || I->getType() != R.Phi->getType())
+      return;
+    if (isa<FPMathOperator>(I)) {
+      R.ContributionReason = "an FP operation lacks reassociation permission";
+      if (!CombineIntrinsic && !I->hasAllowReassoc())
+        return;
+      FMF &= I->getFastMathFlags();
+    }
+    auto IsDependent = [&](Value *V) {
+      auto *Def = dyn_cast<Instruction>(V);
+      return Def && R.Slice.contains(Def);
+    };
+    if (auto *II = dyn_cast<IntrinsicInst>(I);
+        II && II->getIntrinsicID() == Intrinsic::fmuladd &&
+        Opcode == Instruction::FAdd) {
+      // fmuladd permits separately rounded multiplication and addition. fma
+      // does not, and is deliberately not accepted here.
+      R.ContributionReason = "multiply-add product depends on the accumulator";
+      if (IsDependent(II->getArgOperand(0)) ||
+          IsDependent(II->getArgOperand(1)) ||
+          !IsDependent(II->getArgOperand(2)))
+        return;
+      Invariant &= L->isLoopInvariant(II->getArgOperand(0)) &&
+                   L->isLoopInvariant(II->getArgOperand(1));
+      Current = II->getArgOperand(2);
+    } else if (CombineIntrinsic) {
+      auto *II = dyn_cast<IntrinsicInst>(I);
+      R.ContributionReason =
+          "dependent min/max is not a homogeneous intrinsic chain";
+      if (!II || II->getIntrinsicID() != CombineIntrinsic)
+        return;
+      bool Left = IsDependent(II->getArgOperand(0));
+      bool Right = IsDependent(II->getArgOperand(1));
+      if (Left == Right)
+        return;
+      Invariant &= L->isLoopInvariant(II->getArgOperand(Left ? 1 : 0));
+      Current = II->getArgOperand(Left ? 0 : 1);
+    } else {
+      R.ContributionReason = "dependent slice mixes combine operations";
+      auto *BO = dyn_cast<BinaryOperator>(I);
+      if (!BO || BO->getOpcode() != Opcode)
+        return;
+      bool Left = IsDependent(BO->getOperand(0));
+      bool Right = IsDependent(BO->getOperand(1));
+      R.ContributionReason = "combine does not contain the accumulator once";
+      if (Left == Right)
+        return;
+      Invariant &= L->isLoopInvariant(BO->getOperand(Left ? 1 : 0));
+      Current = BO->getOperand(Left ? 0 : 1);
+    }
+    Chain.push_back(I);
+  }
+  R.ContributionReason = "dependent instructions remain outside the chain";
+  if (Chain.empty() ||
+      Chain.size() + 1 + unsigned(Guard != nullptr) != R.Slice.size())
+    return;
+  if ((CombineIntrinsic == Intrinsic::minnum ||
+       CombineIntrinsic == Intrinsic::maxnum) &&
+      (!FMF.noNaNs() || !FMF.noSignedZeros())) {
+    R.ContributionReason = "minnum/maxnum reassociation requires nnan and nsz";
+    return;
+  }
+  // An ordinary single combine already has a minimal contribution. Keeping
+  // it unchanged also retains opportunities to reuse a narrower input stream.
+  if (!Guard && L->getNumBlocks() == 1 && Chain.size() == 1 &&
+      (isa<BinaryOperator>(Chain.front()) || CombineIntrinsic)) {
+    R.ContributionReason = "already a single scalar contribution";
+    return;
+  }
+  R.ContributionReason = Guard ? "conditional scalar contribution with identity"
+                               : "homogeneous associative scalar contribution";
+  R.CombineOpcode = Opcode;
+  R.CombineIntrinsic = CombineIntrinsic;
+  R.ContributionChain.assign(Chain.rbegin(), Chain.rend());
+  R.ContributionFMF = FMF;
+  // Unlike rewrite permissions, nnan/ninf do not follow from intersecting the
+  // original flags. For example, summing contributions can overflow even when
+  // their original updates, interleaved with the accumulator, stayed finite.
+  if (!CombineIntrinsic) {
+    R.ContributionFMF.setNoNaNs(false);
+    R.ContributionFMF.setNoInfs(false);
+  }
+  if (Guard && !CombineIntrinsic) {
+    // The original operation's flags impose no constraints on an accumulator
+    // when its update is skipped. Preserve special initial values there.
+    R.ContributionFMF.setNoSignedZeros(false);
+  }
+  R.ContributionGuard = Guard;
+  R.ContributionInvariant = Invariant && !Guard;
+  R.Inputs.clear();
+  // Use the update only as a typed storage-plan key during read-only analysis.
+  // execute() replaces it with the accumulator-independent contribution.
+  R.Inputs.insert(R.Descriptor.getLoopExitInstr());
+}
+
+bool ReductionFission::sameContribution(const Reduction &A,
+                                        const Reduction &B) {
+  if (!A.CombineOpcode || A.CombineOpcode != B.CombineOpcode ||
+      A.CombineIntrinsic != B.CombineIntrinsic ||
+      A.Phi->getType() != B.Phi->getType() ||
+      A.ContributionFMF != B.ContributionFMF ||
+      A.ContributionChain.size() != B.ContributionChain.size())
+    return false;
+  if (A.ContributionGuard || B.ContributionGuard) {
+    if (auto *AP = dyn_cast_or_null<PHINode>(A.ContributionGuard)) {
+      auto *BP = dyn_cast_or_null<PHINode>(B.ContributionGuard);
+      if (!BP)
+        return false;
+      for (unsigned I = 0; I != 2; ++I) {
+        int J = BP->getBasicBlockIndex(AP->getIncomingBlock(I));
+        if (J < 0 || (AP->getIncomingValue(I) == A.Phi) !=
+                         (BP->getIncomingValue(J) == B.Phi))
+          return false;
+      }
+    } else {
+      auto *AS = dyn_cast_or_null<SelectInst>(A.ContributionGuard);
+      auto *BS = dyn_cast_or_null<SelectInst>(B.ContributionGuard);
+      if (!AS || !BS || AS->getCondition() != BS->getCondition() ||
+          (AS->getTrueValue() == A.Phi) != (BS->getTrueValue() == B.Phi))
+        return false;
+    }
+  }
+  auto SameTerm = [&](Instruction *AI, Instruction *BI) {
+    auto *AC = dyn_cast<IntrinsicInst>(AI);
+    auto *BC = dyn_cast<IntrinsicInst>(BI);
+    if ((AC && AC->getIntrinsicID() == Intrinsic::fmuladd) ||
+        (BC && BC->getIntrinsicID() == Intrinsic::fmuladd))
+      return AC && BC &&
+             ((AC->getArgOperand(0) == BC->getArgOperand(0) &&
+               AC->getArgOperand(1) == BC->getArgOperand(1)) ||
+              (AC->getArgOperand(0) == BC->getArgOperand(1) &&
+               AC->getArgOperand(1) == BC->getArgOperand(0)));
+    auto Term = [](Instruction *I, const Reduction &R) {
+      auto *Left = dyn_cast<Instruction>(I->getOperand(0));
+      return I->getOperand(Left && R.Slice.contains(Left) ? 1 : 0);
+    };
+    return Term(AI, A) == Term(BI, B);
+  };
+  // All accepted combines are associative and commutative (with the checked
+  // FP permissions). Compare multisets so operand order does not duplicate
+  // storage; retain multiplicity, e.g. x+x must not share storage with x+y.
+  SmallVector<Instruction *, 4> Unmatched(B.ContributionChain);
+  for (Instruction *AI : A.ContributionChain) {
+    auto It =
+        find_if(Unmatched, [&](Instruction *BI) { return SameTerm(AI, BI); });
+    if (It == Unmatched.end())
+      return false;
+    Unmatched.erase(It);
+  }
+  return true;
+}
+
+SmallVector<ElementCount, 8>
+ReductionFission::getLegalVFs(const Reduction &R,
+                              const TargetTransformInfo &TTI) const {
+  SmallVector<ElementCount, 8> Choices;
+  bool Scalable =
+      Triple(L->getHeader()->getModule()->getTargetTriple()).isRISCV();
+  for (unsigned N = 1; N <= VectorizerParams::MaxVectorWidth; N *= 2) {
+    ElementCount VF = ElementCount::get(N, Scalable);
+    if (VF.isScalar())
+      continue;
+    auto TypeLegal = [&](Type *Ty) {
+      return Ty->isVoidTy() || (VectorType::isValidElementType(Ty) &&
+                                TTI.isTypeLegal(VectorType::get(Ty, VF)));
+    };
+    // Check logical contribution and recurrence types. Narrow storage encodings
+    // are extending loads, whose operation legality is checked separately; a
+    // subregister memory type need not itself occupy a native vector register.
+    bool TypesLegal =
+        TypeLegal(R.Phi->getType()) &&
+        all_of(R.Inputs, [&](Value *V) { return TypeLegal(V->getType()); }) &&
+        (R.CombineOpcode || all_of(R.Slice, [&](Instruction *I) {
+           return TypeLegal(I->getType());
+         }));
+    if (TypesLegal && TTI.isLegalToVectorizeReduction(R.Descriptor, VF))
+      Choices.push_back(VF);
+  }
+  return Choices;
+}
+
 bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
                                ScalarEvolution &SE, DominatorTree &DT,
                                const TargetTransformInfo &TTI, AAResults &AA,
@@ -300,18 +597,6 @@ bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
         R.Inputs.insert(Op);
       }
     }
-    if (R.Inputs.empty()) {
-      // Constant/invariant contributions are legal too. Materialize one at the
-      // separation boundary so the Map still has a real contribution stream.
-      for (Instruction *I : R.Slice) {
-        if (I == Phi)
-          continue;
-        for (Value *Op : I->operands())
-          if (L->isLoopInvariant(Op) && (Op->getType()->isIntegerTy() ||
-                                         Op->getType()->isFloatingPointTy()))
-            R.Inputs.insert(Op);
-      }
-    }
     // Reproduce the original per-iteration control path in each reduction.
     // Conditions are independent of every accumulator (checked above); buffer
     // them so Map effects/loads are never re-executed by a reduction loop.
@@ -321,54 +606,48 @@ bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
           !L->isLoopInvariant(Branch->getCondition()))
         R.Inputs.insert(Branch->getCondition());
     }
-    if (R.Inputs.empty())
-      return Reject("recurrence has no scalar contribution to materialize");
-    bool Scalable =
-        Triple(L->getHeader()->getModule()->getTargetTriple()).isRISCV();
-    // Probe actual type legality, including every widened intermediate type.
-    // RVV legal types extend through LMUL=8 regardless of tuning preferences.
-    for (unsigned N = 1; N <= VectorizerParams::MaxVectorWidth; N *= 2) {
-      ElementCount VF = ElementCount::get(N, Scalable);
-      if (VF.isScalar())
-        continue;
-      auto TypeLegal = [&](Type *Ty) {
-        return Ty->isVoidTy() || (VectorType::isValidElementType(Ty) &&
-                                  TTI.isTypeLegal(VectorType::get(Ty, VF)));
-      };
-      bool TypesLegal =
-          TypeLegal(Phi->getType()) &&
-          all_of(R.Inputs, [&](Value *V) { return TypeLegal(V->getType()); }) &&
-          all_of(R.Slice,
-                 [&](Instruction *I) { return TypeLegal(I->getType()); });
-      if (TypesLegal && TTI.isLegalToVectorizeReduction(Desc, VF)) {
-        R.VF = VF;
-        R.LegalVFs.push_back(VF);
-      }
-    }
-    if (!R.VF.isVector())
-      return Reject("target cannot lower this recurrence with legal vector "
-                    "accumulator types");
     Reductions.push_back(std::move(R));
   }
   // Reuse an existing, contiguous stream only when every iteration accesses
   // a distinct location and no Map write can change it after its defining
   // load/store. Whole-object alias queries cover other iterations as well.
   // Keep conditional paths on scratch: availability and control replay need
-  // separate proofs. A pre-existing Map store keeps Map meaningful after a
-  // redundant copy is removed.
-  if (L->getNumBlocks() == 1 && any_of(*L->getHeader(), [](Instruction &I) {
-        return isa<StoreInst>(I);
-      })) {
+  // separate proofs. A read-only loop can have an empty Map after reuse.
+  if (L->getNumBlocks() == 1) {
     auto TryStream = [&](Value *V, Value *Ptr, Align Alignment,
-                         Instruction *Writer) {
-      if (V->getType()->isIntegerTy(1))
+                         Instruction *Writer, Type *StoredType, ElementCount VF,
+                         unsigned ExtendOpcode = 0) {
+      if (StoredType->getScalarSizeInBits() % 8 != 0)
+        return false;
+      // Scalable reducers use predicated loads. If that load is unsupported
+      // (for example an underaligned RVV float stream), keep aligned scratch
+      // rather than losing a viable Map + maximum-width reducer combination.
+      if (VF.isScalable() &&
+          !TTI.isLegalMaskedLoad(VectorType::get(StoredType, VF), Alignment,
+                                 Ptr->getType()->getPointerAddressSpace()))
         return false;
       const auto *AR = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Ptr));
       if (!AR || AR->getLoop() != L || !AR->isAffine() ||
-          !AR->hasNoUnsignedWrap() || !SE.isLoopInvariant(AR->getStart(), L))
+          !SE.isLoopInvariant(AR->getStart(), L))
         return false;
+      if (!AR->hasNoUnsignedWrap()) {
+        // GEP canonicalization can lose nuw, e.g. A[i] followed by a negative
+        // byte offset. A constant traversal starting at a global object and
+        // wholly within its minimum size provides the same non-wrapping proof.
+        Value *Base = getUnderlyingObject(Ptr);
+        const auto *BTC = dyn_cast<SCEVConstant>(BackedgeCount);
+        ObjectSizeOpts Options;
+        Options.EvalMode = ObjectSizeOpts::Mode::Min;
+        uint64_t Size;
+        uint64_t ElementBytes = DL.getTypeAllocSize(StoredType).getFixedValue();
+        if (!isa<GlobalVariable>(Base) || !BTC ||
+            AR->getStart() != SE.getSCEV(Base) ||
+            !getObjectSize(Base, Size, DL, &TLI, Options) ||
+            !BTC->getAPInt().ult(Size / ElementBytes))
+          return false;
+      }
       const auto *Step = dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
-      if (!Step || Step->getAPInt() != DL.getTypeAllocSize(V->getType()) ||
+      if (!Step || Step->getAPInt() != DL.getTypeAllocSize(StoredType) ||
           !Exp.isSafeToExpandAt(AR->getStart(),
                                 L->getLoopPreheader()->getTerminator()))
         return false;
@@ -376,31 +655,168 @@ bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
       for (Instruction &I : *L->getHeader())
         if (&I != Writer && isModSet(AA.getModRefInfo(&I, Loc)))
           return false;
-      Streams[V] = {AR->getStart(), Alignment};
+      Streams[V] = {AR->getStart(), Alignment, StoredType, ExtendOpcode};
       return true;
     };
-    for (Reduction &R : Reductions)
+    for (Reduction &R : Reductions) {
+      auto Choices = getLegalVFs(R, TTI);
+      if (Choices.empty())
+        continue;
+      ElementCount VF = Choices.back();
       for (Value *V : R.Inputs) {
         if (Streams.contains(V))
           continue;
         if (auto *Load = dyn_cast<LoadInst>(V);
             Load && Load->isSimple() &&
-            TryStream(V, Load->getPointerOperand(), Load->getAlign(), nullptr))
+            TryStream(V, Load->getPointerOperand(), Load->getAlign(), nullptr,
+                      Load->getType(), VF))
           continue;
+        // Exact extensions provide a lossless storage encoding. Read the
+        // original narrower stream and reconstruct the logical contribution
+        // at its load, without allocating a widened copy. Never truncate an
+        // arbitrary computed value based only on its reducer's demanded type.
+        if (auto *Cast = dyn_cast<CastInst>(V);
+            Cast && (Cast->getOpcode() == Instruction::SExt ||
+                     Cast->getOpcode() == Instruction::ZExt ||
+                     Cast->getOpcode() == Instruction::FPExt)) {
+          auto *Load = dyn_cast<LoadInst>(Cast->getOperand(0));
+          if (Load && L->contains(Load) && Load->isSimple()) {
+            // Storage reuse must not make the maximum logical VF unsupported.
+            // Otherwise keep the original Map conversion and widened scratch.
+            if (TTI.getCastInstrCost(
+                       Cast->getOpcode(), VectorType::get(V->getType(), VF),
+                       VectorType::get(Load->getType(), VF),
+                       TargetTransformInfo::CastContextHint::Normal)
+                    .isValid() &&
+                TryStream(V, Load->getPointerOperand(), Load->getAlign(),
+                          nullptr, Load->getType(), VF, Cast->getOpcode()))
+              continue;
+          }
+        }
         for (User *U : V->users())
           if (auto *Store = dyn_cast<StoreInst>(U);
               Store && L->contains(Store) && Store->isSimple() &&
               Store->getValueOperand() == V &&
-              TryStream(V, Store->getPointerOperand(), Store->getAlign(),
-                        Store))
+              TryStream(V, Store->getPointerOperand(), Store->getAlign(), Store,
+                        V->getType(), VF))
             break;
+      }
+    }
+  }
+  for (Reduction &R : Reductions) {
+    planContribution(R);
+    if (R.Phi->getType()->isFloatingPointTy()) {
+      SmallVector<Value *> Work{R.Descriptor.getLoopExitInstr()};
+      SmallPtrSet<Value *, 8> Seen;
+      bool CanSkipUpdate = false;
+      while (!Work.empty()) {
+        Value *V = Work.pop_back_val();
+        if (V == R.Phi) {
+          CanSkipUpdate = true;
+          break;
+        }
+        if (!Seen.insert(V).second)
+          continue;
+        if (auto *P = dyn_cast<PHINode>(V))
+          append_range(Work, P->incoming_values());
+        else if (auto *S = dyn_cast<SelectInst>(V)) {
+          auto *Condition = dyn_cast<Instruction>(S->getCondition());
+          // The compare in a min/max idiom itself observes the accumulator;
+          // this is not an independent condition skipping its update.
+          if (!Condition || !R.Slice.contains(Condition)) {
+            Work.push_back(S->getTrueValue());
+            Work.push_back(S->getFalseValue());
+          }
+        }
+      }
+      if (CanSkipUpdate) {
+        Function *F = L->getHeader()->getParent();
+        if (F->getDenormalMode(R.Phi->getType()->getFltSemantics()) !=
+            DenormalMode::getIEEE())
+          return Reject("conditional FP identities require IEEE denormal mode");
+
+        // A skipped scalar update copies all bits of its initial NaN. Even an
+        // identity FP operation could instead quiet it or change its payload.
+        // For NaN-absorbing recurrences, retaining the original NaN also is a
+        // permitted result when an update executes (unchanged NaN propagation).
+        RecurKind Kind = R.Descriptor.getRecurrenceKind();
+        bool AbsorbsNaN = Kind == RecurKind::FAdd || Kind == RecurKind::FMul ||
+                          Kind == RecurKind::FMulAdd ||
+                          Kind == RecurKind::FMinimum ||
+                          Kind == RecurKind::FMaximum;
+        KnownFPClass InitialClass = computeKnownFPClass(
+            R.Descriptor.getRecurrenceStartValue(), DL, fcAllFlags, &TLI,
+            nullptr, L->getLoopPreheader()->getTerminator(), &DT);
+        R.PreserveInitialNaN = AbsorbsNaN && !InitialClass.isKnownNeverNaN();
+        if (R.CombineIntrinsic) {
+          // For these intrinsic chains, nnan/ninf constrain the accumulator
+          // operand of every active update. An exceptional initializer can
+          // therefore be returned unchanged: all-skipped execution requires
+          // that result, while an active update would produce poison.
+          R.PreserveInitialNaN |=
+              R.ContributionFMF.noNaNs() && !InitialClass.isKnownNeverNaN();
+          R.PreserveInitialInf = R.ContributionFMF.noInfs() &&
+                                 !InitialClass.isKnownNeverInfinity();
+          // nsz permits either zero sign after an active update, but must not
+          // change a zero copied through an all-skipped source loop.
+          R.PreserveInitialZero = R.ContributionFMF.noSignedZeros() &&
+                                  !InitialClass.isKnownNeverZero();
+        }
+
+        // A slice fallback's horizontal collapse uses the recurrence FMF
+        // unconditionally. Without a restore, those flags must also hold for
+        // an initializer returned unchanged by an all-skipped execution.
+        FastMathFlags FMF = R.Descriptor.getFastMathFlags();
+        FPClassTest Forbidden = fcNone;
+        if (!R.CombineOpcode) {
+          if (!R.PreserveInitialNaN)
+            Forbidden |= fcNan;
+          if (FMF.noInfs())
+            Forbidden |= fcInf;
+          if (FMF.noSignedZeros())
+            Forbidden |= fcZero;
+        }
+        if (!InitialClass.isKnownNever(Forbidden))
+          return Reject("conditional fallback cannot preserve the initial FP "
+                        "value");
+      }
+    }
+    // RVV legal types extend through LMUL=8, independent of tuning preferences.
+    R.LegalVFs = getLegalVFs(R, TTI);
+    if (R.LegalVFs.empty())
+      return Reject("target cannot lower this recurrence with legal vector "
+                    "accumulator types");
+    R.VF = R.LegalVFs.back();
+  }
+  // Storage sharing does not change the number or order of reduction loops.
+  // Match plans before budgeting scratch so sharing can also avoid heap use.
+  for (unsigned I = 0; I != Reductions.size(); ++I) {
+    Reduction &R = Reductions[I];
+    for (unsigned J = 0; J != I; ++J)
+      if (sameContribution(R, Reductions[J])) {
+        R.SharedContributionWith = J;
+        R.Inputs = Reductions[J].Inputs;
+        break;
       }
   }
   SetVector<Value *> ScratchInputs;
   for (Reduction &R : Reductions)
     for (Value *V : R.Inputs)
-      if (!Streams.contains(V))
+      if (!R.ContributionInvariant && !Streams.contains(V))
         ScratchInputs.insert(V);
+  // With owned storage, count/byte overflow takes the allocation-failure path.
+  // Without storage there is no allocation failure to justify such a trap.
+  // Require a representable count rather than changing a full-width (2^N)
+  // recurrence into a zero-trip reduction or an unconditional trap.
+  if (ScratchInputs.empty() &&
+      BackedgeCount->getType()->getIntegerBitWidth() ==
+          DL.getPointerSizeInBits() &&
+      !SE.isKnownPredicateAt(
+          CmpInst::ICMP_NE, BackedgeCount,
+          SE.getConstant(APInt::getMaxValue(DL.getPointerSizeInBits())),
+          L->getLoopPreheader()->getTerminator()))
+    return Reject(
+        "scratch-free iteration count may overflow the reducer index");
   Function *F = L->getHeader()->getParent();
   if (!ScratchInputs.empty() &&
       !fitsOnStack(*F, ScratchInputs.getArrayRef(), BackedgeCount) &&
@@ -415,6 +831,34 @@ SmallVector<ElementCount> ReductionFission::getReductionVFs() const {
   for (const Reduction &R : Reductions)
     Result.push_back(R.VF);
   return Result;
+}
+
+void ReductionFission::emitPlanRemarks(OptimizationRemarkEmitter &ORE) const {
+  for (unsigned I = 0; I != Reductions.size(); ++I) {
+    const Reduction &R = Reductions[I];
+    std::string Accumulator, Initial;
+    raw_string_ostream AccumulatorOS(Accumulator), InitialOS(Initial);
+    R.Phi->printAsOperand(AccumulatorOS, false);
+    R.Descriptor.getRecurrenceStartValue()->printAsOperand(InitialOS, false);
+    unsigned Borrowed =
+        count_if(R.Inputs, [&](Value *V) { return Streams.contains(V); });
+    unsigned Scratch = R.ContributionInvariant ? 0 : R.Inputs.size() - Borrowed;
+    ORE.emit([&]() {
+      return OptimizationRemarkAnalysis("loop-vectorize",
+                                        "ReductionFissionContribution",
+                                        R.Phi->getDebugLoc(), L->getHeader())
+             << "reduction " << ore::NV("Index", I)
+             << " accumulator=" << ore::NV("Accumulator", Accumulator)
+             << " initial=" << ore::NV("Initial", Initial)
+             << " type=" << ore::NV("Type", R.Phi->getType()) << ": "
+             << ore::NV("Reason", R.ContributionReason)
+             << "; scratch streams=" << ore::NV("ScratchStreams", Scratch)
+             << "; borrowed streams=" << ore::NV("BorrowedStreams", Borrowed)
+             << "; shared contribution="
+             << ore::NV("SharedContribution",
+                        R.SharedContributionWith.has_value());
+    });
+  }
 }
 
 SmallVector<SmallVector<ElementCount, 8>>
@@ -469,7 +913,7 @@ void ReductionFission::setReductionVF(Loop *L, ElementCount VF) {
   setGeneratedHints(L, VF, true);
 }
 
-SmallVector<Loop *>
+ReductionFission::GeneratedLoops
 ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
                           LoopInfo &LI, ScalarEvolution &SE,
                           DominatorTree &DT) {
@@ -483,6 +927,83 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   BasicBlock *Pre = L->getLoopPreheader();
   BasicBlock *Exit = L->getUniqueExitBlock();
   Type *IndexTy = DL.getIntPtrType(C);
+  for (Reduction &R : Reductions) {
+    if (!R.CombineOpcode)
+      continue;
+    if (R.SharedContributionWith) {
+      R.Contribution = Reductions[*R.SharedContributionWith].Contribution;
+      R.Inputs.clear();
+      if (!L->isLoopInvariant(R.Contribution))
+        R.Inputs.insert(R.Contribution);
+      continue;
+    }
+    IRBuilder<> B(R.ContributionInvariant ? Pre->getTerminator()
+                                          : R.Descriptor.getLoopExitInstr());
+    B.setFastMathFlags(R.ContributionFMF);
+    Value *Contribution = nullptr;
+    for (Instruction *I : R.ContributionChain) {
+      if (!R.ContributionInvariant)
+        B.SetInsertPoint(I);
+      Value *Term;
+      if (auto *II = dyn_cast<IntrinsicInst>(I);
+          II && II->getIntrinsicID() == Intrinsic::fmuladd) {
+        // Do not infer poison-generating flags for the newly exposed product
+        // from the result of the original multiply-add.
+        IRBuilderBase::FastMathFlagGuard Guard(B);
+        FastMathFlags ProductFMF = R.ContributionFMF;
+        ProductFMF.setNoNaNs(false);
+        ProductFMF.setNoInfs(false);
+        B.setFastMathFlags(ProductFMF);
+        Term = B.CreateFMul(II->getArgOperand(0), II->getArgOperand(1),
+                            "fission.product");
+      } else {
+        auto *Left = dyn_cast<Instruction>(I->getOperand(0));
+        Term = I->getOperand(Left && R.Slice.contains(Left) ? 1 : 0);
+      }
+      // Integer reassociation uses modular arithmetic. In particular, an
+      // original nsw/nuw chain does not prove those flags for the new sum of
+      // contributions or for its reordered combination with the initial value.
+      Contribution =
+          Contribution
+              ? R.CombineIntrinsic
+                    ? B.CreateBinaryIntrinsic(R.CombineIntrinsic, Contribution,
+                                              Term, {}, "fission.contribution")
+                    : B.CreateBinOp(Instruction::BinaryOps(R.CombineOpcode),
+                                    Contribution, Term, "fission.contribution")
+              : Term;
+    }
+    if (Instruction *Guard = R.ContributionGuard) {
+      auto *Identity = R.CombineIntrinsic
+                           ? cast<Constant>(getRecurrenceIdentity(
+                                 R.Descriptor.getRecurrenceKind(),
+                                 R.Phi->getType(), R.ContributionFMF))
+                           : ConstantExpr::getBinOpIdentity(R.CombineOpcode,
+                                                            R.Phi->getType());
+      assert(Identity && "normalized combines must have an identity");
+      if (auto *P = dyn_cast<PHINode>(Guard)) {
+        auto *CP = PHINode::Create(P->getType(), 2, "fission.contribution",
+                                   P->getIterator());
+        for (unsigned I = 0; I != 2; ++I)
+          CP->addIncoming(P->getIncomingValue(I) == R.Phi ? Identity
+                                                          : Contribution,
+                          P->getIncomingBlock(I));
+        Contribution = CP;
+      } else {
+        auto *S = cast<SelectInst>(Guard);
+        B.SetInsertPoint(S);
+        B.clearFastMathFlags();
+        Contribution = B.CreateSelect(
+            S->getCondition(),
+            S->getTrueValue() == R.Phi ? Identity : Contribution,
+            S->getFalseValue() == R.Phi ? Identity : Contribution,
+            "fission.contribution");
+      }
+    }
+    R.Inputs.clear();
+    R.Contribution = Contribution;
+    if (!L->isLoopInvariant(Contribution))
+      R.Inputs.insert(Contribution);
+  }
   SCEVExpander Exp(SE, "fission");
   Value *BTC = Exp.expandCodeFor(BackedgeCount, BackedgeCount->getType(),
                                  Pre->getTerminator());
@@ -579,16 +1100,21 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
     Store.CreateStore(Data, Ptr);
   }
 
-  SmallVector<Loop *> Result{L};
+  GeneratedLoops Result{L, {}};
   BasicBlock *Previous = MapLatch;
   DenseMap<Value *, Value *> FinalValues;
   for (Reduction &R : Reductions) {
     BasicBlock *RP = BasicBlock::Create(C, "fission.reduce.preheader", F, Exit);
     ValueToValueMapTy VM;
-    for (BasicBlock *BB : L->blocks())
+    SmallVector<BasicBlock *> Blocks;
+    if (R.CombineOpcode)
+      Blocks.push_back(Map);
+    else
+      append_range(Blocks, L->blocks());
+    for (BasicBlock *BB : Blocks)
       VM[BB] = BasicBlock::Create(C, "fission.reduce", F, Exit);
     auto *RB = cast<BasicBlock>(VM[Map]);
-    auto *Latch = cast<BasicBlock>(VM[MapLatch]);
+    auto *Latch = R.CombineOpcode ? RB : cast<BasicBlock>(VM[MapLatch]);
     auto *RL = LI.AllocateLoop();
     if (Loop *Parent = L->getParentLoop()) {
       Parent->addChildLoop(RL);
@@ -596,7 +1122,7 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
     } else
       LI.addTopLevelLoop(RL);
     RL->addBasicBlockToLoop(RB, LI);
-    for (BasicBlock *BB : L->blocks())
+    for (BasicBlock *BB : Blocks)
       if (BB != Map)
         RL->addBasicBlockToLoop(cast<BasicBlock>(VM[BB]), LI);
     IRBuilder<>(RP).CreateBr(RB);
@@ -605,17 +1131,26 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
     auto *RI = Header.CreatePHI(IndexTy, 2, "fission.reduce.index");
     RI->addIncoming(ConstantInt::get(IndexTy, 0), RP);
     auto *Acc = Header.CreatePHI(R.Phi->getType(), 2, "fission.acc");
-    Acc->addIncoming(R.Descriptor.getRecurrenceStartValue(), RP);
+    Value *Initial = R.Descriptor.getRecurrenceStartValue();
+    bool RestoreInitial =
+        R.PreserveInitialNaN || R.PreserveInitialInf || R.PreserveInitialZero;
+    if (RestoreInitial) {
+      // Classification, seeding and restoration must use one consistent value
+      // even if the original initializer is undef or poison.
+      IRBuilder<> Preheader(RP->getTerminator());
+      Initial = Preheader.CreateFreeze(Initial, "fission.initial");
+    }
+    Acc->addIncoming(Initial, RP);
     VM[R.Phi] = Acc;
     VM[MapPre] = RP;
     SmallVector<Instruction *> ToRemap;
-    for (BasicBlock *BB : L->blocks()) {
+    for (BasicBlock *BB : Blocks) {
       BasicBlock *Copy = cast<BasicBlock>(VM[BB]);
       IRBuilder<> B(Copy);
       for (Instruction &I : *BB) {
         if (&I == R.Phi)
           continue;
-        if (R.Slice.contains(&I)) {
+        if (!R.CombineOpcode && R.Slice.contains(&I)) {
           Instruction *Clone = I.clone();
           B.Insert(Clone, I.getName() + ".fission");
           VM[&I] = Clone;
@@ -629,18 +1164,24 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
       for (Value *V : R.Inputs) {
         BasicBlock *DefinitionBlock =
             L->isLoopInvariant(V) ? Map : cast<Instruction>(V)->getParent();
-        if (DefinitionBlock != BB)
+        if (!R.CombineOpcode && DefinitionBlock != BB)
           continue;
-        Value *Ptr = B.CreateGEP(getBufferType(V), Buffers[V], RI);
-        auto *Data =
-            B.CreateLoad(getBufferType(V), Ptr, "fission.contribution");
-        if (auto It = Streams.find(V); It != Streams.end())
-          Data->setAlignment(It->second.Alignment);
-        VM[V] = V->getType()->isIntegerTy(1)
-                    ? B.CreateTrunc(Data, Type::getInt1Ty(C))
-                    : Data;
+        auto Stream = Streams.find(V);
+        Type *StoredType = Stream == Streams.end() ? getBufferType(V)
+                                                   : Stream->second.StoredType;
+        Value *Ptr = B.CreateGEP(StoredType, Buffers[V], RI);
+        auto *Data = B.CreateLoad(StoredType, Ptr, "fission.contribution");
+        Value *Contribution = Data;
+        if (Stream != Streams.end()) {
+          Data->setAlignment(Stream->second.Alignment);
+          if (unsigned Opcode = Stream->second.ExtendOpcode)
+            Contribution = B.CreateCast(Instruction::CastOps(Opcode), Data,
+                                        V->getType(), "fission.extend");
+        } else if (V->getType()->isIntegerTy(1))
+          Contribution = B.CreateTrunc(Data, Type::getInt1Ty(C));
+        VM[V] = Contribution;
       }
-      if (BB != MapLatch) {
+      if (!R.CombineOpcode && BB != MapLatch) {
         Instruction *Branch = BB->getTerminator()->clone();
         Branch->insertInto(Copy, Copy->end());
         ToRemap.push_back(Branch);
@@ -648,16 +1189,61 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
     }
     for (Instruction *I : ToRemap)
       RemapInstruction(I, VM, RF_IgnoreMissingLocals | RF_NoModuleLevelChanges);
-    Value *Update = VM[R.Descriptor.getLoopExitInstr()];
-    Acc->addIncoming(Update, Latch);
     IRBuilder<> B(Latch);
+    Value *Update;
+    if (R.CombineOpcode) {
+      B.setFastMathFlags(R.ContributionFMF);
+      Value *Contribution = R.Contribution;
+      if (!R.Inputs.empty())
+        Contribution = VM[R.Contribution];
+      Update = R.CombineIntrinsic
+                   ? B.CreateBinaryIntrinsic(R.CombineIntrinsic, Acc,
+                                             Contribution, {}, "fission.update")
+                   : B.CreateBinOp(Instruction::BinaryOps(R.CombineOpcode), Acc,
+                                   Contribution, "fission.update");
+    } else
+      Update = VM[R.Descriptor.getLoopExitInstr()];
+    Acc->addIncoming(Update, Latch);
     Value *RN = B.CreateNUWAdd(RI, ConstantInt::get(IndexTy, 1));
     RI->addIncoming(RN, Latch);
-    B.CreateCondBr(B.CreateICmpNE(RN, TC), RB, Exit);
-    FinalValues[R.Descriptor.getLoopExitInstr()] = Update;
+    BasicBlock *ReduceExit = Exit;
+    Value *Final = Update;
     Previous = Latch;
+    if (RestoreInitial) {
+      ReduceExit = BasicBlock::Create(C, "fission.reduce.exit", F, Exit);
+      if (Loop *Parent = L->getParentLoop())
+        Parent->addBasicBlockToLoop(ReduceExit, LI);
+      IRBuilder<> Finish(ReduceExit);
+      auto *Reduced = Finish.CreatePHI(R.Phi->getType(), 1, "fission.result");
+      Reduced->addIncoming(Update, Latch);
+      auto IsClass = [&](Value *V, FPClassTest Mask) {
+        return Finish.CreateIntrinsic(Intrinsic::is_fpclass, {V->getType()},
+                                      {V, Finish.getInt32(Mask)});
+      };
+      Final = Reduced;
+      if (R.PreserveInitialZero) {
+        Value *BothZero = Finish.CreateAnd(IsClass(Initial, fcZero),
+                                           IsClass(Reduced, fcZero));
+        Final = Finish.CreateSelect(BothZero, Initial, Final,
+                                    "fission.result.zero");
+      }
+      FPClassTest Special = fcNone;
+      if (R.PreserveInitialNaN)
+        Special |= fcNan;
+      if (R.PreserveInitialInf)
+        Special |= fcInf;
+      // Keep this selection outermost: the unselected result (and its zero
+      // classification) may be poison for an nnan/ninf initializer.
+      if (Special != fcNone)
+        Final = Finish.CreateSelect(IsClass(Initial, Special), Initial, Final,
+                                    "fission.result.special");
+      Finish.CreateBr(Exit);
+      Previous = ReduceExit;
+    }
+    B.CreateCondBr(B.CreateICmpNE(RN, TC), RB, ReduceExit);
+    FinalValues[R.Descriptor.getLoopExitInstr()] = Final;
     setGeneratedHints(RL, R.VF, true);
-    Result.push_back(RL);
+    Result.Reductions.push_back(RL);
   }
   BasicBlock *Cleanup = BasicBlock::Create(C, "fission.cleanup", F, Exit);
   Previous->getTerminator()->replaceSuccessorWith(Exit, Cleanup);
@@ -695,7 +1281,24 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   setGeneratedHints(L, Candidate.MapVF, false);
   SE.forgetAllLoops();
   DT.recalculate(*F);
-  for (Loop *Generated : Result)
+  formLCSSARecursively(*L, DT, &LI, &SE);
+  for (Loop *Generated : Result.Reductions)
     formLCSSARecursively(*Generated, DT, &LI, &SE);
+  // Reuse may leave only dead loads, induction and control in Map. Exact
+  // backedge analysis already proved termination. Remove it only when it has
+  // neither observable effects nor live-outs; a failed nonempty Map must still
+  // reject the entire function transaction.
+  bool EmptyMap = all_of(L->blocks(), [&](BasicBlock *BB) {
+    return all_of(*BB, [&](Instruction &I) {
+      return !I.mayHaveSideEffects() && all_of(I.users(), [&](User *U) {
+        auto *UseI = dyn_cast<Instruction>(U);
+        return UseI && L->contains(UseI);
+      });
+    });
+  });
+  if (EmptyMap) {
+    deleteDeadLoop(L, &DT, &SE, &LI);
+    Result.Map = nullptr;
+  }
   return Result;
 }

@@ -1,0 +1,2 @@
+; REQUIRES: riscv-registered-target
+; RUN: %python %S/../../../../utils/reduction-fission/audit.py --self-test %llvm_tools_dir/opt

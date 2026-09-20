@@ -7425,7 +7425,15 @@ DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
   // Retrieving VectorPH now when it's easier while VPlan still has Regions.
   VPBasicBlock *VectorPH = cast<VPBasicBlock>(BestVPlan.getVectorPreheader());
 
-  VPlanTransforms::optimizeForVFAndUF(BestVPlan, BestVF, BestUF, PSE);
+  // Each fission reducer must finish its vector accumulation and collapse
+  // before the next reducer starts. Folding short reducers into straight-line
+  // code loses that boundary and exposes independent maximum-width vectors to
+  // joint scheduling. Keep their EVL-controlled loops, including for short
+  // trips. Map and ordinary loops retain the usual single-iteration folding.
+  bool PreserveReductionLoop =
+      findOptionMDForLoop(OrigLoop, "llvm.loop.reduction.fission.reduction");
+  VPlanTransforms::optimizeForVFAndUF(BestVPlan, BestVF, BestUF, PSE,
+                                      PreserveReductionLoop);
   VPlanTransforms::simplifyRecipes(BestVPlan);
   VPlanTransforms::removeBranchOnConst(BestVPlan);
   if (BestVPlan.getEntry()->getSingleSuccessor() ==
@@ -9946,7 +9954,8 @@ bool LoopVectorizePass::processLoop(Loop *L,
              << " independent reduction loops";
     });
     ++FissionSelections;
-    SmallVector<Loop *> Parts = Fission.execute(*Selected, *LI, *SE, *DT);
+    Fission.emitPlanRemarks(*ORE);
+    auto Parts = Fission.execute(*Selected, *LI, *SE, *DT);
     LLVM_DEBUG(dbgs() << "LV: scalar IR after selected reduction fission:\n";
                F->print(dbgs()));
     LAIs->clear();
@@ -9957,12 +9966,12 @@ bool LoopVectorizePass::processLoop(Loop *L,
     // Type legality bounds the search, but the generated recurrence's actual
     // VPlan must also support the width. Resolve each reduction independently,
     // largest first; never explore combinations of accumulator widths.
-    for (unsigned Index = 1; Index < Parts.size(); ++Index) {
-      Loop *Part = Parts[Index];
+    for (unsigned Index = 0; Index < Parts.Reductions.size(); ++Index) {
+      Loop *Part = Parts.Reductions[Index];
       DemandedBits FreshDB(*F, *AC, *DT);
       DB = &FreshDB;
       bool Supported = false;
-      for (ElementCount Choice : ReductionVFChoices[Index - 1]) {
+      for (ElementCount Choice : ReductionVFChoices[Index]) {
         ReductionFission::setReductionVF(Part, Choice);
         LAIs->clear();
         if (!processLoop(Part, Choice, /*PlanOnly=*/true))
@@ -9972,7 +9981,7 @@ bool LoopVectorizePass::processLoop(Loop *L,
           return OptimizationRemarkAnalysis(
                      DEBUG_TYPE, "ReductionFissionSchedule",
                      Part->getStartLoc(), Part->getHeader())
-                 << "fission reduction " << ore::NV("Index", Index - 1)
+                 << "fission reduction " << ore::NV("Index", Index)
                  << " maximum supported VF=" << ore::NV("ReductionVF", Choice)
                  << "; interleave count=1";
         });
@@ -9990,7 +9999,18 @@ bool LoopVectorizePass::processLoop(Loop *L,
         return true;
       }
     }
-    for (Loop *Part : Parts) {
+    SmallVector<Loop *> ToVectorize;
+    if (Parts.Map)
+      ToVectorize.push_back(Parts.Map);
+    else
+      ORE->emit([&]() {
+        return OptimizationRemarkAnalysis(DEBUG_TYPE,
+                                          "ReductionFissionEmptyMap", F)
+               << "stream/invariant reuse leaves an empty Map; independent "
+                  "reduction loops remain";
+      });
+    append_range(ToVectorize, Parts.Reductions);
+    for (Loop *Part : ToVectorize) {
       DemandedBits FreshDB(*F, *AC, *DT);
       DB = &FreshDB;
       LoopVectorizeHints PartHints(Part, false, *ORE, TTI);

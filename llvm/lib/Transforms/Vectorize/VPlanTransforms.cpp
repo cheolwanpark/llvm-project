@@ -2145,14 +2145,19 @@ static bool simplifyKnownEVL(VPlan &Plan, ElementCount VF,
 
 void VPlanTransforms::optimizeForVFAndUF(VPlan &Plan, ElementCount BestVF,
                                          unsigned BestUF,
-                                         PredicatedScalarEvolution &PSE) {
+                                         PredicatedScalarEvolution &PSE,
+                                         bool PreserveLoop) {
   assert(Plan.hasVF(BestVF) && "BestVF is not available in Plan");
   assert(Plan.hasUF(BestUF) && "BestUF is not available in Plan");
 
   bool MadeChange = tryToReplaceALMWithWideALM(Plan, BestVF, BestUF);
-  MadeChange |= simplifyBranchConditionForVFAndUF(Plan, BestVF, BestUF, PSE);
+  if (!PreserveLoop)
+    MadeChange |= simplifyBranchConditionForVFAndUF(Plan, BestVF, BestUF, PSE);
   MadeChange |= optimizeVectorInductionWidthForTCAndVFUF(Plan, BestVF, BestUF);
-  MadeChange |= simplifyKnownEVL(Plan, BestVF, PSE);
+  // Replacing EVL by AVL would also make the latch exit unconditional during
+  // subsequent simplification, even if region folding above was skipped.
+  if (!PreserveLoop)
+    MadeChange |= simplifyKnownEVL(Plan, BestVF, PSE);
 
   if (MadeChange) {
     Plan.setVF(BestVF);

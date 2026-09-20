@@ -470,9 +470,10 @@ exit:
 }
 
 ; FISSION-LABEL: define float @fmuladd_f32(
+; FISSION: fmul reassoc nsz arcp contract afn
 ; FISSION: fission.reduce.preheader
 ; FISSION: phi <vscale x 16 x float>
-; FISSION: llvm.fmuladd{{.*}}<vscale x 16 x float>
+; FISSION: fadd reassoc nsz arcp contract afn <vscale x 16 x float>
 ; FISSION: @llvm.vector.reduce.fadd.nxv16
 define float @fmuladd_f32(ptr noalias readonly %a, ptr noalias readonly %b, i64 %n, float %init) {
 entry:

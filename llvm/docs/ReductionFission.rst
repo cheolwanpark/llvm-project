@@ -30,6 +30,9 @@ and accumulator-dependent use slices. Analysis does not modify the scalar loop.
 Candidate remarks report the structurally and target-eligible alternatives.
 Concrete component planning remains a further check on a forced candidate.
 Selection is provisional until ``ReductionFissionCommitted`` is reported.
+``ReductionFissionContribution`` analysis remarks identify each original
+accumulator and initial value, its normalization or fallback reason, and its
+scratch, borrowed-stream and shared-contribution choices.
 If any component cannot vectorize at its requested VF, the function transaction
 is discarded and ``ReductionFissionRolledBack`` reports the failure. A provisional
 selection remark alone is not proof that fission was applied.
@@ -38,20 +41,85 @@ Execution and legality
 ----------------------
 
 Map executes all original iterations before any reduction executes. Separate
-buffers hold independent contributions, including multiple inputs to one
-recurrence. Shared inputs are stored once. Accumulator-dependent instructions
-are moved without rewriting their arithmetic; in particular a multiply-add
-intrinsic is cloned intact.
+buffers hold independent contributions. Read-only analysis recognizes
+homogeneous associative update chains containing the accumulator
+exactly once and plans one combined contribution per iteration. Execution
+materializes that contribution in Map, leaving one combination with the
+accumulator in the reducer. Reassociated integer operations do not inherit
+``nsw`` or ``nuw``. FP chains require reassociation permission on every operation
+and intersect their rewrite permissions; ``reassoc`` is never promoted to
+``fast``. New addition/multiplication drops ``nnan`` and ``ninf`` because reordered
+intermediates can overflow even when the original accumulator updates did not.
+Integer min/max and FP min/max intrinsic chains also combine their terms in
+Map. Min/max selects existing operands and retains justified flags; minnum/maxnum
+reassociation requires ``nnan`` and ``nsz``. An ``ninf`` min/max uses the largest
+finite value of the appropriate sign as its identity instead of infinity.
+An ``llvm.fmuladd`` update may contribute a separately rounded product in Map;
+this does not apply to the mandatory fused rounding of ``llvm.fma``.
+Reloadable multiplicands do not bypass this product materialization: they are
+factors of the contribution, rather than existing contribution streams.
 
-Independent branch conditions are buffered as bytes. Each reduction reproduces
-the original per-iteration control path, loading a conditional contribution only
-on the path where Map initialized it. This supports branch CFGs with a unique
-countable latch exit. Early exits and non-branch control flow are diagnosed.
+An optionally executed chain can also produce one contribution: its original
+PHI or select chooses the combine identity for a skipped update. Loads and
+arithmetic remain on their original paths in Map. The resulting unconditional
+addition/multiplication reducer drops ``nnan``, ``ninf`` and ``nsz`` because the skipped original
+arithmetic imposes no such constraints on the initial accumulator. Floating
+addition uses negative zero as the skipped contribution. For NaN-absorbing
+recurrences, a scalar exit selection preserves the original initializer's NaN
+bits: an all-skipped source loop performs no FP operation that could change its
+sign, signaling bit or payload. This does not introduce another vector
+accumulator. Conditional FP reductions with non-IEEE denormal modes are rejected
+because these identities can change skipped subnormal values.
+For conditional min/max, scalar exit selections preserve an exceptional
+initializer on paths where the original flagged update was skipped, and retain
+the initializer's zero sign when both it and the result are zero. These choices
+also respect the original permissions when an update executes. The initial value
+is frozen once before seeding/classification so new uses do not duplicate undef
+choices. These corrections add no vector accumulator and do not reduce VF.
 
-Scratch buffers use the exact runtime trip count, checked address-sized byte
-arithmetic, and heap allocation. Zero-trip paths bypass allocation. Buffers are
-freed after the last reduction, including when the source loop is nested in an
-outer loop or the function is called repeatedly. There is no buffer-capacity or
+Other recurrences retain their original accumulator-dependent slice and may
+require multiple input streams. This includes more complex dependent joins,
+mixed operations, and casts within the dependent slice. A chain whose inputs all
+reuse existing streams also keeps that zero-scratch representation instead of
+allocating a new buffer for their combined value. Identical input values and
+matching normalized expressions share storage while the accumulators still
+receive independent reduction loops. Sharing checks the operation, type,
+fast-math flags, terms, and any control selecting a skipped update.
+
+For slice fallbacks, independent branch conditions are buffered as bytes. Those
+reducers reproduce the original per-iteration control path, loading conditional
+contributions only on paths where Map initialized them. This supports branch
+CFGs with a unique countable latch exit. Early exits and non-branch control flow
+are diagnosed.
+
+If a slice fallback can skip every update, analysis also checks its initial
+value against the FP flags used by the eventual horizontal collapse. An
+unproven ``nnan``, ``ninf`` or ``nsz`` constraint rejects that candidate instead
+of applying flags from unexecuted arithmetic to the returned initializer.
+
+Non-wrapping contiguous read-only inputs can be reused without Map copies when
+alias analysis excludes changes by Map writes across all iterations.
+Known global-object bounds can prove a constant forward traversal non-wrapping
+even when GEP canonicalization did not retain a ``nuw`` annotation.
+Exact ``sext``, ``zext`` and ``fpext`` contributions can reuse a narrower stream
+and reconstruct their logical value at the reducer load, when the conversion
+supports the maximum logical reduction VF. This does not truncate an arbitrary
+computed value or lower the reducer width to make a storage encoding work.
+
+Invariant contributions need no per-iteration storage either. If distribution
+leaves Map with neither effects nor live-outs, its proven finite loop is deleted;
+the
+generated result explicitly records an absent Map. All reducer loops still
+must vectorize independently. A nonempty Map failure still rolls back the
+transaction. A scratch-free loop whose trip count may exceed the reducer index
+range is rejected, preserving its original execution without an allocation trap.
+
+Scratch buffers use the exact runtime trip count and checked address-sized byte
+arithmetic. Constant-size scratch uses entry allocas if all buffers and existing
+allocas fit the aggregate stack budget; otherwise it requires available heap
+allocation builtins. Zero-trip paths bypass allocation. Buffers have their
+lifetimes ended or are freed after the last reduction, including when nested
+in an outer loop or the function is called repeatedly. There is no buffer-capacity or
 profitability limit. Unrepresentable allocation sizes and allocation failure
 trap; they cannot produce wrapping buffer accesses.
 
@@ -89,6 +157,12 @@ handling remains in effect. RVV scalable FP/integer product and some FP min/max
 variants are rejected by existing target reduction legality. Genuine
 ``llvm.fma`` recurrences are not recognized by the existing reduction descriptor;
 ``llvm.fmuladd`` and separate multiply-plus-add contributions are distinct cases.
+
+For generated reducers, VPlan retains the vector loop and runtime EVL instead
+of folding a single-iteration region or replacing a known EVL with its AVL.
+This preserves an EVL-controlled backedge through the current RVV O2 pipeline,
+even when the trip count is below VLMAX, so each accumulator collapses before
+the next reducer starts. Normal and Map retain single-iteration folding.
 
 Implementation
 --------------

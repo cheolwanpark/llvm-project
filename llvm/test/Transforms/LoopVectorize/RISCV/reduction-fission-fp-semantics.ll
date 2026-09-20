@@ -41,23 +41,22 @@ exit:
   ret float %result
 }
 
-; llvm.fmuladd permits fusion but does not require it. Its two independent
-; multiplicands must cross the separation boundary separately. This checks the
-; intrinsic survives vectorization; it is not a claim of strict fused semantics
-; or of a particular target assembly instruction.
-; CHECK-LABEL: define float @reassoc_fmuladd_two_inputs(
+; llvm.fmuladd permits separate rounding. Materialize its product in Map, then
+; pass one contribution to the reducer. Even stable, reloadable multiplicands
+; are not logical contribution streams. Reassoc must not become fast or nsz.
+; CHECK-LABEL: define float @reassoc_fmuladd_product(
 ; CHECK: call noalias ptr @malloc
-; CHECK: call noalias ptr @malloc
+; CHECK-NOT: @malloc
+; CHECK: fmul reassoc
 ; CHECK: fission.reduce.preheader
 ; CHECK: phi <vscale x 16 x float>
 ; CHECK: {{(load <vscale x 16 x float>|@llvm.vp.load.nxv16f32|@llvm.masked.load.nxv16f32)}}
-; CHECK: {{(load <vscale x 16 x float>|@llvm.vp.load.nxv16f32|@llvm.masked.load.nxv16f32)}}
-; CHECK: call reassoc <vscale x 16 x float> @llvm.fmuladd.nxv16f32(
+; CHECK: fadd reassoc <vscale x 16 x float>
 ; CHECK: call reassoc float @llvm.vector.reduce.fadd.nxv16f32(float -0.000000e+00,
 ; CHECK: @free
-; CHECK: @free
+; CHECK-NOT: @free
 ; CHECK: ret float
-define float @reassoc_fmuladd_two_inputs(ptr noalias readonly %a, ptr noalias readonly %b, i64 %n, float %init) {
+define float @reassoc_fmuladd_product(ptr noalias readonly %a, ptr noalias readonly %b, i64 %n, float %init) {
 entry:
   %empty = icmp eq i64 %n, 0
   br i1 %empty, label %exit, label %preheader
@@ -66,8 +65,8 @@ preheader:
 loop:
   %i = phi i64 [ 0, %preheader ], [ %inc, %loop ]
   %acc = phi float [ %init, %preheader ], [ %next, %loop ]
-  %p = getelementptr float, ptr %a, i64 %i
-  %q = getelementptr float, ptr %b, i64 %i
+  %p = getelementptr inbounds nuw float, ptr %a, i64 %i
+  %q = getelementptr inbounds nuw float, ptr %b, i64 %i
   %x = load float, ptr %p, align 4
   %y = load float, ptr %q, align 4
   %next = call reassoc float @llvm.fmuladd.f32(float %x, float %y, float %acc)
@@ -150,3 +149,64 @@ exit:
 
 declare float @llvm.fmuladd.f32(float, float, float)
 declare float @llvm.fma.f32(float, float, float)
+
+; In a flushing environment an identity can change a skipped subnormal value.
+; Reject rather than silently assuming the default IEEE denormal behavior.
+; CHECK-LABEL: define float @conditional_ftz(
+; CHECK-NOT: fission
+; CHECK-NOT: @malloc
+; CHECK: ret float
+define float @conditional_ftz(ptr noalias readonly %a, ptr noalias readonly %enabled, i64 %n, float %init) "denormal-fp-math"="preserve-sign,preserve-sign" {
+entry:
+  %empty = icmp eq i64 %n, 0
+  br i1 %empty, label %exit, label %preheader
+preheader:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %preheader ], [ %inc, %latch ]
+  %acc = phi float [ %init, %preheader ], [ %next, %latch ]
+  %ep = getelementptr i8, ptr %enabled, i64 %i
+  %flag = load i8, ptr %ep, align 1
+  %active = icmp ne i8 %flag, 0
+  br i1 %active, label %contribute, label %latch
+contribute:
+  %p = getelementptr float, ptr %a, i64 %i
+  %x = load float, ptr %p, align 4
+  %sum = fadd reassoc float %acc, %x
+  br label %latch
+latch:
+  %next = phi float [ %acc, %loop ], [ %sum, %contribute ]
+  %inc = add nuw i64 %i, 1
+  %done = icmp eq i64 %inc, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  %result = phi float [ %init, %entry ], [ %next, %latch ]
+  ret float %result
+}
+
+; Strict constrained arithmetic must retain its ordering and exception contract.
+; CHECK-LABEL: define float @strict_add(
+; CHECK-NOT: fission
+; CHECK-NOT: @malloc
+; CHECK: call float @llvm.experimental.constrained.fadd.f32
+; CHECK: ret float
+define float @strict_add(ptr noalias readonly %a, i64 %n, float %init) strictfp {
+entry:
+  %empty = icmp eq i64 %n, 0
+  br i1 %empty, label %exit, label %pre
+pre:
+  br label %loop
+loop:
+  %i = phi i64 [0, %pre], [%inc, %loop]
+  %acc = phi float [%init, %pre], [%next, %loop]
+  %p = getelementptr float, ptr %a, i64 %i
+  %x = load float, ptr %p, align 4
+  %next = call float @llvm.experimental.constrained.fadd.f32(float %acc, float %x, metadata !"round.dynamic", metadata !"fpexcept.strict")
+  %inc = add nuw i64 %i, 1
+  %done = icmp eq i64 %inc, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  %result = phi float [%init, %entry], [%next, %loop]
+  ret float %result
+}
+declare float @llvm.experimental.constrained.fadd.f32(float, float, metadata, metadata)
