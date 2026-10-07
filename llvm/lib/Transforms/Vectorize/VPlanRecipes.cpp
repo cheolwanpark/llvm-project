@@ -444,7 +444,14 @@ void VPSingleDefRecipe::dump() const { VPRecipeBase::dump(); }
 
 void VPRecipeBase::print(raw_ostream &O, const Twine &Indent,
                          VPSlotTracker &SlotTracker) const {
-  printRecipe(O, Indent, SlotTracker);
+  if (SlotTracker.RecipeIDs) {
+    auto It = SlotTracker.RecipeIDs->find(this);
+    O << Indent;
+    if (It != SlotTracker.RecipeIDs->end())
+      O << "[R" << It->second << "] ";
+    printRecipe(O, "", SlotTracker);
+  } else
+    printRecipe(O, Indent, SlotTracker);
   if (auto DL = getDebugLoc()) {
     O << ", !dbg ";
     DL.print(O);
@@ -2113,7 +2120,7 @@ void VPPhi::printRecipe(raw_ostream &O, const Twine &Indent,
 }
 #endif
 
-VPIRInstruction *VPIRInstruction ::create(Instruction &I) {
+VPIRInstruction *VPIRInstruction::create(Instruction &I) {
   if (auto *Phi = dyn_cast<PHINode>(&I))
     return new VPIRPhi(*Phi);
   return new VPIRInstruction(I);

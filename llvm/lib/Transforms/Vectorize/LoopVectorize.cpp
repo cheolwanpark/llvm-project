@@ -277,7 +277,8 @@ static cl::opt<bool> EnableInterleavedMemAccesses(
 /// predication, or in order to mask away gaps.
 static cl::opt<bool> EnableMaskedInterleavedMemAccesses(
     "enable-masked-interleaved-mem-accesses", cl::init(false), cl::Hidden,
-    cl::desc("Enable vectorization on masked interleaved memory accesses in a loop"));
+    cl::desc("Enable vectorization on masked interleaved memory accesses in a "
+             "loop"));
 
 static cl::opt<unsigned> ForceTargetNumScalarRegs(
     "force-target-num-scalar-regs", cl::init(0), cl::Hidden,
@@ -1376,10 +1377,9 @@ private:
   InstructionCost getConsecutiveMemOpCost(Instruction *I, ElementCount VF,
                                           InstWidening Kind);
 
-  /// The cost calculation for Load/Store instruction \p I with uniform pointer -
-  /// Load: scalar load + broadcast.
-  /// Store: scalar store + (loop invariant value stored? 0 : extract of last
-  /// element)
+  /// The cost calculation for Load/Store instruction \p I with uniform pointer
+  /// - Load: scalar load + broadcast. Store: scalar store + (loop invariant
+  /// value stored? 0 : extract of last element)
   InstructionCost getUniformMemOpCost(Instruction *I, ElementCount VF);
 
   /// Estimate the overhead of scalarizing an instruction. This is a
@@ -1956,12 +1956,13 @@ static void collectSupportedLoops(Loop &L, LoopInfo *LI,
 //===----------------------------------------------------------------------===//
 
 /// For the given VF and UF and maximum trip count computed for the loop, return
-/// whether the induction variable might overflow in the vectorized loop. If not,
-/// then we know a runtime overflow check always evaluates to false and can be
-/// removed.
-static bool isIndvarOverflowCheckKnownFalse(
-    const LoopVectorizationCostModel *Cost,
-    ElementCount VF, std::optional<unsigned> UF = std::nullopt) {
+/// whether the induction variable might overflow in the vectorized loop. If
+/// not, then we know a runtime overflow check always evaluates to false and can
+/// be removed.
+static bool
+isIndvarOverflowCheckKnownFalse(const LoopVectorizationCostModel *Cost,
+                                ElementCount VF,
+                                std::optional<unsigned> UF = std::nullopt) {
   // Always be conservative if we don't know the exact unroll factor.
   unsigned MaxUF = UF ? *UF
                       : std::max(Cost->TTI.getMaxInterleaveFactor(VF, false),
@@ -2361,7 +2362,8 @@ void LoopVectorizationCostModel::collectLoopScalars(ElementCount VF) {
   auto ForcedScalar = ForcedScalars.find(VF);
   if (ForcedScalar != ForcedScalars.end())
     for (auto *I : ForcedScalar->second) {
-      LLVM_DEBUG(dbgs() << "LV: Found (forced) scalar instruction: " << *I << "\n");
+      LLVM_DEBUG(dbgs() << "LV: Found (forced) scalar instruction: " << *I
+                        << "\n");
       Worklist.insert(I);
     }
 
@@ -2452,7 +2454,7 @@ bool LoopVectorizationCostModel::isScalarWithPredication(Instruction *I,
 
   // Do we have a non-scalar lowering for this predicated
   // instruction? No - it is scalar with predication.
-  switch(I->getOpcode()) {
+  switch (I->getOpcode()) {
   default:
     return true;
   case Instruction::Call: {
@@ -2511,7 +2513,7 @@ bool LoopVectorizationCostModel::isPredicatedInst(Instruction *I) const {
   // having at least one active lane (the first). If the side-effects of the
   // instruction are invariant, executing it w/o (the tail-folding) mask is safe
   // - it will cause the same side-effects as when masked.
-  switch(I->getOpcode()) {
+  switch (I->getOpcode()) {
   default:
     llvm_unreachable(
         "instruction should have been considered by earlier checks");
@@ -2796,8 +2798,8 @@ void LoopVectorizationCostModel::collectLoopUniforms(ElementCount VF) {
   // where only a single instance out of VF should be formed.
   auto AddToWorklistIfAllowed = [&](Instruction *I) -> void {
     if (IsOutOfScope(I)) {
-      LLVM_DEBUG(dbgs() << "LV: Found not uniform due to scope: "
-                        << *I << "\n");
+      LLVM_DEBUG(dbgs() << "LV: Found not uniform due to scope: " << *I
+                        << "\n");
       return;
     }
     if (isPredicatedInst(I)) {
@@ -3553,9 +3555,9 @@ bool LoopVectorizationCostModel::isEpilogueVectorizationProfitable(
 std::unique_ptr<VPlan> LoopVectorizationPlanner::selectBestEpiloguePlan(
     VPlan &MainPlan, ElementCount MainLoopVF, unsigned IC) {
   auto Reject = [&](StringRef Reason) -> std::unique_ptr<VPlan> {
-    VP_COST_REPORT(Config.CostReport,
-                   OS << "  epilogue-selection status=skipped reason=" << Reason
-                      << '\n');
+    VP_COST_SUMMARY(
+        Config.CostReport,
+        OS << "  epilogue-selection status=skipped reason=" << Reason << '\n');
     return nullptr;
   };
   if (Config.CostReport)
@@ -3603,12 +3605,10 @@ std::unique_ptr<VPlan> LoopVectorizationPlanner::selectBestEpiloguePlan(
       std::unique_ptr<VPlan> Clone(
           getPlanFor(EpilogueVectorizationForceVF).duplicate());
       Clone->setVF(EpilogueVectorizationForceVF);
-      VP_COST_REPORT(Config.CostReport,
-                     OS << "  selected-for-epilogue plan="
-                        << Config.CostReport->planID(*Clone) << " source_plan="
-                        << Config.CostReport->planID(
-                               getPlanFor(EpilogueVectorizationForceVF))
-                        << " status=not-evaluated reason=forced-epilogue-vf\n");
+      if (Config.CostReport)
+        Config.CostReport->select(*Clone, EpilogueVectorizationForceVF,
+                                  "forced-epilogue-vf",
+                                  &getPlanFor(EpilogueVectorizationForceVF));
       return Clone;
     }
 
@@ -3699,18 +3699,15 @@ std::unique_ptr<VPlan> LoopVectorizationPlanner::selectBestEpiloguePlan(
   for (unsigned CandidateIndex = 0; CandidateIndex < ProfitableVFs.size();
        ++CandidateIndex) {
     auto &NextVF = ProfitableVFs[CandidateIndex];
-    VP_COST_REPORT(
-        Config.CostReport,
-        OS << "  epilogue-candidate cost_source_plan="
-           << Config.CostReport->planID(*ReportProfitablePlans[CandidateIndex])
-           << " reused_cost=" << NextVF.Cost << " source_evaluation=";
-        Config.CostReport->evaluationReference(
-            OS, *ReportProfitablePlans[CandidateIndex], NextVF.Width);
-        OS << " vf="; VPlanCostReport::printVF(OS, NextVF.Width); OS << '\n');
+    if (Config.CostReport)
+      Config.CostReport->beginComparison(
+          *ReportProfitablePlans[CandidateIndex], NextVF.Width, NextVF.Cost,
+          BestPlan, Result.Width, /*Scalar=*/false, /*Epilogue=*/true);
     // Skip candidate VFs without a corresponding VPlan.
     if (!hasPlanWithVF(NextVF.Width)) {
-      VP_COST_REPORT(Config.CostReport,
-                     OS << "    epilogue-filter reason=no-plan\n");
+      if (Config.CostReport)
+        Config.CostReport->skip(*ReportProfitablePlans[CandidateIndex],
+                                NextVF.Width, "no-plan", /*Epilogue=*/true);
       continue;
     }
 
@@ -3724,8 +3721,10 @@ std::unique_ptr<VPlan> LoopVectorizationPlanner::selectBestEpiloguePlan(
          ElementCount::isKnownGE(EffectiveVF, MainLoopVF)) ||
         (!EffectiveVF.isScalable() && !MainLoopVF.isScalable() &&
          ElementCount::isKnownGT(EffectiveVF, MainLoopVF))) {
-      VP_COST_REPORT(Config.CostReport,
-                     OS << "    epilogue-filter reason=vf-exceeds-main-loop\n");
+      if (Config.CostReport)
+        Config.CostReport->skip(*ReportProfitablePlans[CandidateIndex],
+                                NextVF.Width, "vf-exceeds-main-loop",
+                                /*Epilogue=*/true);
       continue;
     }
 
@@ -3744,19 +3743,16 @@ std::unique_ptr<VPlan> LoopVectorizationPlanner::selectBestEpiloguePlan(
             estimateElementCount(EffectiveVF, Config.getVScaleForTuning()));
       if (SkipVF(SE.getElementCount(TCType, EffectiveVF),
                  RemainingIterations)) {
-        VP_COST_REPORT(Config.CostReport,
-                       OS << "    epilogue-filter "
-                             "reason=vf-exceeds-remaining-iterations\n");
+        if (Config.CostReport)
+          Config.CostReport->skip(
+              *ReportProfitablePlans[CandidateIndex], NextVF.Width,
+              "vf-exceeds-remaining-iterations", /*Epilogue=*/true);
         continue;
       }
     }
 
-    VP_COST_REPORT(Config.CostReport,
-                   OS << "  comparison-purpose=epilogue candidate_plan="
-                      << Config.CostReport->planID(CurrentPlan)
-                      << " reused_cost=" << NextVF.Cost << " incumbent_plan=";
-                   if (BestPlan) OS << Config.CostReport->planID(*BestPlan);
-                   else OS << "none"; OS << '\n');
+    if (Config.CostReport && Result.Width.isScalar())
+      Config.CostReport->comparisonResult(true, "first-eligible-candidate");
     if (Result.Width.isScalar() ||
         isMoreProfitable(NextVF, Result, MaxTripCount, !hasTailFolded(MainPlan),
                          /*IsEpilogue*/ true)) {
@@ -3772,11 +3768,8 @@ std::unique_ptr<VPlan> LoopVectorizationPlanner::selectBestEpiloguePlan(
                     << Result.Width << "\n");
   std::unique_ptr<VPlan> Clone(BestPlan->duplicate());
   Clone->setVF(Result.Width);
-  VP_COST_REPORT(Config.CostReport,
-                 OS << "  selected-for-epilogue plan="
-                    << Config.CostReport->planID(*Clone)
-                    << " source_plan=" << Config.CostReport->planID(*BestPlan)
-                    << " reused_cost=" << Result.Cost << '\n');
+  if (Config.CostReport)
+    Config.CostReport->select(*Clone, Result.Width, {}, BestPlan);
   return Clone;
 }
 
@@ -3790,8 +3783,8 @@ LoopVectorizationPlanner::selectInterleaveCount(VPlan &Plan, ElementCount VF,
                                        << " reused_body_cost=" << LoopCost
                                        << '\n');
   auto Decision = [&](unsigned Count, StringRef Reason) {
-    VP_COST_REPORT(Config.CostReport, OS << "  interleave_count=" << Count
-                                         << " reason=" << Reason << '\n');
+    if (Config.CostReport)
+      Config.CostReport->interleave(Count, Reason);
     return Count;
   };
   // -- The interleave heuristics --
@@ -3851,7 +3844,8 @@ LoopVectorizationPlanner::selectInterleaveCount(VPlan &Plan, ElementCount VF,
       LoopCost = CM.expectedCost(VF);
     else
       LoopCost = cost(Plan, VF, &R);
-    assert(LoopCost.isValid() && "Expected to have chosen a VF with valid cost");
+    assert(LoopCost.isValid() &&
+           "Expected to have chosen a VF with valid cost");
 
     // Loop body is free and there is no need for interleaving.
     if (LoopCost == 0)
@@ -4162,11 +4156,9 @@ bool LoopVectorizationCostModel::useEmulatedMaskMemRefHack(Instruction *I,
   // from moving "masked load/store" check from legality to cost model.
   // Masked Load/Gather emulation was previously never allowed.
   // Limited number of Masked Store/Scatter emulation was allowed.
-  assert((isPredicatedInst(I)) &&
-         "Expecting a scalar emulated instruction");
+  assert((isPredicatedInst(I)) && "Expecting a scalar emulated instruction");
   return isa<LoadInst>(I) ||
-         (isa<StoreInst>(I) &&
-          NumPredStores > NumberOfStoresToPredicate);
+         (isa<StoreInst>(I) && NumPredStores > NumberOfStoresToPredicate);
 }
 
 void LoopVectorizationCostModel::collectInstsToScalarize(ElementCount VF) {
@@ -4371,10 +4363,8 @@ InstructionCost LoopVectorizationCostModel::expectedCost(ElementCount VF) {
   InstructionCost Cost;
   assert(VF.isScalar() && "must only be called for scalar VFs");
 
-  VP_COST_REPORT(Config.CostReport,
-                 OS << "  scalar-baseline phase=" << Config.CostReport->Phase
-                    << " evaluation=" << Config.CostReport->nextEvaluation()
-                    << "\n");
+  VP_COST_DETAIL(Config.CostReport, OS << "  scalar-baseline-details phase="
+                                       << Config.CostReport->Phase << '\n');
 
   // For each block.
   for (BasicBlock *BB : TheLoop->blocks()) {
@@ -4423,8 +4413,8 @@ InstructionCost LoopVectorizationCostModel::expectedCost(ElementCount VF) {
                       << Divisor << " weighted_cost=" << Weighted << '\n');
   }
 
-  VP_COST_REPORT(Config.CostReport,
-                 OS << "    scalar_iteration_cost=" << Cost << "\n");
+  if (Config.CostReport)
+    Config.CostReport->scalarBaseline(Cost);
   return Cost;
 }
 
@@ -4433,10 +4423,9 @@ InstructionCost LoopVectorizationCostModel::expectedCost(ElementCount VF) {
 ///
 /// This SCEV can be sent to the Target in order to estimate the address
 /// calculation cost.
-static const SCEV *getAddressAccessSCEV(
-              Value *Ptr,
-              PredicatedScalarEvolution &PSE,
-              const Loop *TheLoop) {
+static const SCEV *getAddressAccessSCEV(Value *Ptr,
+                                        PredicatedScalarEvolution &PSE,
+                                        const Loop *TheLoop) {
   const SCEV *Addr = PSE.getSCEV(Ptr);
   return vputils::isAddressSCEVForCost(Addr, *PSE.getSE(), TheLoop) ? Addr
                                                                     : nullptr;
@@ -5114,7 +5103,7 @@ void LoopVectorizationCostModel::setCostBasedWideningDecision(ElementCount VF) {
   for (BasicBlock *BB : TheLoop->blocks()) {
     // For each instruction in the old loop.
     for (Instruction &I : *BB) {
-      Value *Ptr =  getLoadStorePointerOperand(&I);
+      Value *Ptr = getLoadStorePointerOperand(&I);
       if (!Ptr)
         continue;
 
@@ -5241,7 +5230,7 @@ void LoopVectorizationCostModel::setCostBasedWideningDecision(ElementCount VF) {
   for (BasicBlock *BB : TheLoop->blocks())
     for (Instruction &I : *BB) {
       Instruction *PtrDef =
-        dyn_cast_or_null<Instruction>(getLoadStorePointerOperand(&I));
+          dyn_cast_or_null<Instruction>(getLoadStorePointerOperand(&I));
       if (PtrDef && TheLoop->contains(PtrDef) &&
           getWideningDecision(&I, VF) != CM_GatherScatter)
         AddrDefs.insert(PtrDef);
@@ -5671,7 +5660,7 @@ LoopVectorizationCostModel::getInstructionCost(Instruction *I,
       const auto [Op1VK, Op1VP] = TTI::getOperandInfo(Op0);
       const auto [Op2VK, Op2VP] = TTI::getOperandInfo(Op1);
       assert(Op0->getType()->getScalarSizeInBits() == 1 &&
-              Op1->getType()->getScalarSizeInBits() == 1);
+             Op1->getType()->getScalarSizeInBits() == 1);
 
       return observeVPlanCost(
           Config.CostReport, "getArithmeticInstrCost",
@@ -6002,8 +5991,8 @@ void LoopVectorizationPlanner::plan(ElementCount UserVF, unsigned UserIC) {
 
   FixedScalableVFPair MaxFactors = CM.computeMaxVF(UserVF, UserIC);
   if (!MaxFactors) { // Neither vectorization nor interleaving is feasible.
-    VP_COST_REPORT(Config.CostReport,
-                   OS << "  no-plan reason=no-feasible-vf\n");
+    VP_COST_SUMMARY(Config.CostReport,
+                    OS << "  no-plan reason=no-feasible-vf\n");
     return;
   }
 
@@ -6016,8 +6005,8 @@ void LoopVectorizationPlanner::plan(ElementCount UserVF, unsigned UserIC) {
 
   auto VPlan1 = tryToBuildVPlan1();
   if (!VPlan1) {
-    VP_COST_REPORT(Config.CostReport,
-                   OS << "  no-plan reason=base-plan-construction-failed\n");
+    VP_COST_SUMMARY(Config.CostReport,
+                    OS << "  no-plan reason=base-plan-construction-failed\n");
     return;
   }
 
@@ -6084,10 +6073,10 @@ void LoopVectorizationPlanner::plan(ElementCount UserVF, unsigned UserIC) {
       }
       if (Config.CostReport)
         for (const auto &P : VPlans) {
-          VP_COST_REPORT(Config.CostReport,
-                         OS << "  discarded plan="
-                            << Config.CostReport->planID(*P)
-                            << " reason=invalid-user-vf-cost\n");
+          VP_COST_SUMMARY(Config.CostReport,
+                          OS << "  discarded plan="
+                             << Config.CostReport->planID(*P)
+                             << " reason=invalid-user-vf-cost\n");
           Config.CostReport->forgetPlan(*P);
         }
       VPlans.clear();
@@ -6349,8 +6338,10 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
   VP_COST_REPORT(CostCtx.Report,
                  OS << "      candidate_cost=" << Cost << " status="
                     << (Cost.isValid() ? "evaluated" : "invalid") << '\n');
-  if (CostCtx.Report)
+  if (CostCtx.Report) {
+    CostCtx.Report->bodyCost(Plan, VF, Cost);
     CostCtx.Report->endEvaluation();
+  }
 
 #ifndef NDEBUG
   unsigned EstimatedWidth =
@@ -6392,15 +6383,12 @@ LoopVectorizationPlanner::computeBestVF() {
     assert((FirstPlan.hasScalarVFOnly() || hasPlanWithVF(UserVF) ||
             FirstPlan.isOuterLoop()) &&
            "must have a single scalar VF, UserVF or an outer loop");
-    VP_COST_REPORT(Config.CostReport, OS << "  selected-for-main plan="
-                                         << Config.CostReport->planID(FirstPlan)
-                                         << " vf=";
-                   VPlanCostReport::printVF(OS, FirstPlan.getSingleVF());
-                   OS << " status=not-evaluated reason="
-                      << (FirstPlan.isOuterLoop()       ? "outer-loop-heuristic"
-                          : FirstPlan.hasScalarVFOnly() ? "scalar-only-plan"
-                                                        : "user-vf")
-                      << '\n');
+    if (Config.CostReport)
+      Config.CostReport->select(FirstPlan, FirstPlan.getSingleVF(),
+                                FirstPlan.isOuterLoop() ? "outer-loop-heuristic"
+                                : FirstPlan.hasScalarVFOnly()
+                                    ? "scalar-only-plan"
+                                    : "user-vf");
     return {VectorizationFactor(FirstPlan.getSingleVF(), 0, 0), &FirstPlan};
   }
 
@@ -6410,11 +6398,9 @@ LoopVectorizationPlanner::computeBestVF() {
            "expected first plan to be for the forced epilogue VF");
     assert(VPlans[1]->getSingleVF() == UserVF &&
            "expected second plan to be for the forced UserVF");
-    VP_COST_REPORT(
-        Config.CostReport,
-        OS << "  selected-for-main plan="
-           << Config.CostReport->planID(*VPlans[1])
-           << " status=not-evaluated reason=forced-main-and-epilogue-vf\n");
+    if (Config.CostReport)
+      Config.CostReport->select(*VPlans[1], UserVF,
+                                "forced-main-and-epilogue-vf");
     return {VectorizationFactor(UserVF, 0, 0), VPlans[1].get()};
   }
 
@@ -6444,11 +6430,11 @@ LoopVectorizationPlanner::computeBestVF() {
     // Initialize cost to max so that VF = 2 is, at least, chosen during cost
     // evaluation.
     BestFactor.Cost = InstructionCost::getMax();
-    VP_COST_REPORT(Config.CostReport,
-                   OS << "  selection-override reason=forced-vectorization "
-                         "real_scalar_cost="
-                      << ScalarCost << " incumbent_sentinel=" << BestFactor.Cost
-                      << '\n');
+    VP_COST_SUMMARY(Config.CostReport,
+                    OS << "  selection-override reason=forced-vectorization "
+                          "real_scalar_cost="
+                       << ScalarCost
+                       << " incumbent_sentinel=" << BestFactor.Cost << '\n');
   }
 
   VPlan *PlanForBestVF = &FirstPlan;
@@ -6473,11 +6459,8 @@ LoopVectorizationPlanner::computeBestVF() {
             dbgs()
             << "LV: Not considering vector loop of width " << VF
             << " because it will not generate any vector instructions.\n");
-        VP_COST_REPORT(Config.CostReport,
-                       OS << "  skipped plan=" << Config.CostReport->planID(*P)
-                          << " vf=";
-                       VPlanCostReport::printVF(OS, VF);
-                       OS << " reason=no-vector-instructions\n");
+        if (Config.CostReport)
+          Config.CostReport->skip(*P, VF, "no-vector-instructions");
         continue;
       }
       if (Config.OptForSize && !ForceVectorization && hasReplicatorRegion(*P)) {
@@ -6486,11 +6469,8 @@ LoopVectorizationPlanner::computeBestVF() {
             << "LV: Not considering vector loop of width " << VF
             << " because it would cause replicated blocks to be generated,"
             << " which isn't allowed when optimizing for size.\n");
-        VP_COST_REPORT(Config.CostReport,
-                       OS << "  skipped plan=" << Config.CostReport->planID(*P)
-                          << " vf=";
-                       VPlanCostReport::printVF(OS, VF);
-                       OS << " reason=replication-under-opt-for-size\n");
+        if (Config.CostReport)
+          Config.CostReport->skip(*P, VF, "replication-under-opt-for-size");
         continue;
       }
 
@@ -6498,25 +6478,17 @@ LoopVectorizationPlanner::computeBestVF() {
           cost(*P, VF, ConsiderRegPressure ? &RUs[I] : nullptr);
       VectorizationFactor CurrentFactor(VF, Cost, ScalarCost);
 
-      VP_COST_REPORT(Config.CostReport,
-                     OS << "  comparison-purpose=incumbent candidate_plan="
-                        << Config.CostReport->planID(*P) << " incumbent_plan="
-                        << Config.CostReport->planID(*PlanForBestVF)
-                        << " candidate_evaluation=";
-                     Config.CostReport->evaluationReference(OS, *P, VF);
-                     OS << " incumbent_evaluation=";
-                     Config.CostReport->evaluationReference(OS, *PlanForBestVF,
-                                                            BestFactor.Width);
-                     OS << '\n');
+      if (Config.CostReport)
+        Config.CostReport->beginComparison(*P, VF, Cost, PlanForBestVF,
+                                           BestFactor.Width);
       if (isMoreProfitable(CurrentFactor, BestFactor, P->hasScalarTail())) {
         BestFactor = CurrentFactor;
         PlanForBestVF = P.get();
       }
 
-      VP_COST_REPORT(
-          Config.CostReport,
-          OS << "  comparison-purpose=scalar-profitability candidate_plan="
-             << Config.CostReport->planID(*P) << '\n');
+      if (Config.CostReport)
+        Config.CostReport->beginComparison(*P, VF, Cost, nullptr, ScalarVF,
+                                           /*Scalar=*/true);
       // If profitable add it to ProfitableVF list.
       if (isMoreProfitable(CurrentFactor, ScalarFactor, P->hasScalarTail())) {
         ProfitableVFs.push_back(CurrentFactor);
@@ -6532,10 +6504,8 @@ LoopVectorizationPlanner::computeBestVF() {
          "when vectorizing, the scalar cost must be computed.");
 
   LLVM_DEBUG(dbgs() << "LV: Selecting VF: " << BestFactor.Width << ".\n");
-  VP_COST_REPORT(Config.CostReport, OS << "  selected-for-main plan="
-                                       << Config.CostReport->planID(BestPlan)
-                                       << " vf=";
-                 VPlanCostReport::printVF(OS, BestFactor.Width); OS << '\n');
+  if (Config.CostReport)
+    Config.CostReport->select(BestPlan, BestFactor.Width);
   return {BestFactor, &BestPlan};
 }
 
@@ -7959,8 +7929,12 @@ static bool isOutsideLoopWorkProfitable(GeneratedRTChecks &Checks,
                                         EpilogueLowering SEL,
                                         std::optional<unsigned> VScale) {
   auto Decision = [&](bool Result, StringRef Reason) {
-    VP_COST_REPORT(CostCtx.Report, OS << "  outside-loop decision=" << Result
-                                      << " reason=" << Reason << '\n');
+    if (!Result)
+      VP_COST_SUMMARY(CostCtx.Report, OS << "  outside-loop decision=0 reason="
+                                         << Reason << '\n');
+    else
+      VP_COST_DETAIL(CostCtx.Report, OS << "  outside-loop decision=1 reason="
+                                        << Reason << '\n');
     return Result;
   };
   InstructionCost RtC = Checks.getCost(CostCtx.Report);
@@ -8271,8 +8245,8 @@ static SmallVector<Instruction *> preparePlanForEpilogueVectorLoop(
         auto *VPI = dyn_cast<VPInstruction>(R);
         return VPI && VPI->getOpcode() == VPInstruction::ComputeReductionResult;
       };
-      auto *RdxResult = cast<VPInstruction>(
-          vputils::findRecipe(ReductionPhi->getBackedgeValue(), IsReductionResult));
+      auto *RdxResult = cast<VPInstruction>(vputils::findRecipe(
+          ReductionPhi->getBackedgeValue(), IsReductionResult));
       assert(RdxResult && "expected to find reduction result");
 
       VPInstruction *ResumeForEpi = IRPhiToResumeForEpi.at(
@@ -8762,8 +8736,8 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // For VPlan build stress testing of outer loops, bail after plan
   // construction.
   if (!IsInnerLoop && VPlanBuildOuterloopStressTest) {
-    VP_COST_REPORT(Config.CostReport,
-                   OS << "  rejection reason=outer-loop-build-stress-test\n");
+    VP_COST_SUMMARY(Config.CostReport,
+                    OS << "  rejection reason=outer-loop-build-stress-test\n");
     return false;
   }
 
@@ -8791,13 +8765,13 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       using namespace llvm::PatternMatch;
       if (Checks.getSCEVChecks().first &&
           match(Checks.getSCEVChecks().first, m_One())) {
-        VP_COST_REPORT(Config.CostReport,
-                       OS << "  rejection reason=always-failing-scev-check\n");
+        VP_COST_SUMMARY(Config.CostReport,
+                        OS << "  rejection reason=always-failing-scev-check\n");
         return false;
       }
       if (Checks.getMemRuntimeChecks().first &&
           match(Checks.getMemRuntimeChecks().first, m_One())) {
-        VP_COST_REPORT(
+        VP_COST_SUMMARY(
             Config.CostReport,
             OS << "  rejection reason=always-failing-memory-check\n");
         return false;
@@ -8812,10 +8786,10 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     VPCostContext CostCtx(CM.TTI, *CM.TLI, *BestPlanPtr, CM, Config.CostKind,
                           CM.PSE, L);
     CostCtx.Report = Config.CostReport;
-    VP_COST_REPORT(Config.CostReport,
-                   OS << "  outside-loop-profitability bypass="
-                      << (ForceVectorization ? "forced-vectorization" : "none")
-                      << '\n');
+    if (ForceVectorization)
+      VP_COST_SUMMARY(
+          Config.CostReport,
+          OS << "  outside-loop-profitability bypass=forced-vectorization\n");
     if (!ForceVectorization &&
         !isOutsideLoopWorkProfitable(Checks, VF, L, PSE, CostCtx, *BestPlanPtr,
                                      SEL, Config.getVScaleForTuning())) {
@@ -8917,14 +8891,14 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     IC = 1;
   }
 
-  VP_COST_REPORT(Config.CostReport, OS << "  selected_interleave_count=" << IC
-                                       << " user_ic=" << UserIC << " policy="
-                                       << IntDiagMsg.first << '\n');
+  if (Config.CostReport)
+    Config.CostReport->interleave(IC, IntDiagMsg.first, /*Final=*/true);
   // Emit diagnostic messages, if any.
   if (!VectorizeLoop && !InterleaveLoop) {
-    VP_COST_REPORT(Config.CostReport,
-                   OS << "  rejection vectorization_reason=" << VecDiagMsg.first
-                      << " interleave_reason=" << IntDiagMsg.first << '\n');
+    VP_COST_SUMMARY(Config.CostReport,
+                    OS << "  rejection vectorization_reason="
+                       << VecDiagMsg.first
+                       << " interleave_reason=" << IntDiagMsg.first << '\n');
     // Do not vectorize or interleaving the loop.
     ORE->emit([&]() {
       return OptimizationRemarkMissed(LV_NAME, VecDiagMsg.first,

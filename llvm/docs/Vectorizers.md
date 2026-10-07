@@ -88,27 +88,39 @@ $ opt -passes=loop-vectorize --print-vplans -disable-output input.ll
 $ opt -passes=loop-vectorize --print-detailed-vplans -disable-output input.ll
 ```
 
-Both options include candidate plan snapshots, recipe identities, legacy
-charges, the scalar baseline, register-pressure costs, comparisons, and
-selection and transformation outcomes. Detailed mode adds nested calculations
-and observed target cost queries. Setting both options produces one detailed
-report per loop attempt. Neither option requires `-debug` or `-debug-only`.
+`--print-vplans` shows loop identity, target CPU, the scalar baseline, and one
+candidate table, followed by selected VFs, the final interleave count, and the
+transformation outcome. Each row identifies the selection phase, plan, VF,
+estimated lane count, body cost, and ranking score. Incumbent comparisons and
+scalar profitability have separate results and reasons. Invalid-cost reasons
+and policy overrides remain visible; graphs, recipe inventories, target feature
+lists, and successful diagnostic checks are omitted.
 
-Costs are model units for the displayed cost kind, not measured cycles. A zero
+`--print-detailed-vplans` includes the same summary followed by each plan graph
+once, with recipe IDs attached directly to its recipes. Costs are grouped by
+plan, VF, and evaluation phase, with nested calculations under the owning
+recipes. Successful validity checks and unvisited recipes are summarized with
+counts and recipe-ID ranges. Setting both options produces one detailed report
+per loop attempt. Neither option requires `-debug` or `-debug-only`.
+
+Costs are model units for the displayed cost kind, not measured cycles. Body
+cost includes the existing legacy, vector-region, and spill charges. Scores
+appear once per candidate and selection phase: an exact cost/estimated-width
+ratio for unknown trip counts, the observed whole-loop cost for known trip
+counts, or the body cost for code-size ranking. Fractional costs are preserved.
+Policy decisions can bypass numeric ranking; unavailable scores and scalar
+baselines are marked `not-evaluated`, never replaced with placeholder zeros.
+
+Plan and recipe numbers belong to the displayed snapshot. Evaluation phases
+distinguish validation, VF selection, interleave selection, and outside-loop
+profitability. Epilogue clones identify their source; their body costs are
+reused while their ranking context can differ from the main loop. A zero
 recipe contribution can indicate an ignored operation or a cost charged
-elsewhere. Validity-only queries and outside-loop work are kept separate from
-the candidate's vector-region total. Shortcut selections are marked
-`not-evaluated`; their placeholder zero costs are not a scalar baseline.
+elsewhere. Validity-only queries and outside-loop work do not contribute to
+the candidate's vector-region total. Target queries are leaves of the report;
+cached legacy values retain their `opaque-legacy` coverage label.
 
-Plan and recipe numbers belong to the displayed snapshot. Evaluation numbers
-and phases distinguish validation, VF selection, interleave selection, and
-outside-loop profitability. Epilogue clones identify their source; reused
-costs are labeled separately from fresh evaluations. A target query is a leaf
-of the report: target-internal lowering is not expanded. Cached legacy values
-whose construction is not attached to the current calculation are labeled
-`opaque-legacy`.
-
-The deterministic text layout is identified by `report_version=1`; it is not a
+The deterministic text layout is identified by `report_version=2`; it is not a
 stable machine-readable schema. Reporting observes the existing cost model
 and does not request additional cost queries or change vectorization policy.
 The options are unavailable in release builds without dump support.

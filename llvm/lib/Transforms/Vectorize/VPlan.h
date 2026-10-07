@@ -5101,7 +5101,9 @@ public:
   void printLiveIns(raw_ostream &O) const;
 
   /// Print this VPlan to \p O.
-  LLVM_ABI_FOR_TEST void print(raw_ostream &O) const;
+  LLVM_ABI_FOR_TEST void print(raw_ostream &O,
+                               const DenseMap<const VPRecipeBase *, unsigned>
+                                   *RecipeIDs = nullptr) const;
 
   /// Print this VPlan in DOT format to \p O.
   LLVM_ABI_FOR_TEST void printDOT(raw_ostream &O) const;

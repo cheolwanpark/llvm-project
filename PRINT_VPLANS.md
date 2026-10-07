@@ -5,8 +5,8 @@ costs candidate VPlans and chooses a vectorization strategy:
 
 | Flag | Output |
 | --- | --- |
-| `--print-vplans` | Plan snapshots, cost contributions, scalar baseline, comparisons, and decisions. |
-| `--print-detailed-vplans` | All of the above, plus nested calculations and observed target cost queries. |
+| `--print-vplans` | Loop and CPU identity, scalar baseline, one candidate table, selections, and outcome. |
+| `--print-detailed-vplans` | The summary plus annotated plan graphs, grouped recipe costs, and nested calculations. |
 
 Both flags write to **standard error** and default to false. Neither requires
 `-debug` or `-debug-only`. Enabling both produces one detailed report per loop
@@ -68,34 +68,72 @@ and selection; the reporting flags only expose their effects.
 
 ## Reading a report
 
-Each loop report starts with `VPlan report_version=1` and ends with
+Each loop report starts with `VPlan report_version=2` and ends with
 `End VPlan report`. The header identifies the module, invocation, function,
-loop index, original header, and reporting depth. Context includes the target,
-available function CPU/features attributes, cost kind, size-optimization state,
-tuning vscale, user hints, and debug location when present.
+loop index, original header, and reporting depth. Context includes the target
+triple, function CPU attribute (`unspecified` if absent), cost kind,
+size-optimization state, tuning vscale, user hints, and debug location.
+Exhaustive target feature lists are omitted.
 
 Reports cover loops that reach planning. A loop rejected before planning may
 have no report. If planning produces no candidate, the report includes
 `outcome=no-plan` and the available failure information.
 
-### Plans, recipes, and evaluations
+### Summary table
 
-- `plan=N` identifies a candidate snapshot. Different plans may support the
-  same vectorization factor, so a VF alone does not identify a candidate.
-- `vf=f4` means four fixed lanes; `vf=s4` means `vscale * 4` lanes.
-- `recipe_inventory` assigns names such as `R0` and `R1` to recipes in that
-  snapshot. Cost entries use those names to reference the displayed recipes.
-- `evaluation=N` distinguishes repeated evaluations, including evaluations of
-  the same plan and VF for different purposes.
-- `phase` identifies the purpose, such as `candidate-validation`,
-  `main-selection`, `interleave-selection`, or `outside-loop-profitability`.
-  Additional queries for invalid-cost remarks use `invalid-cost-remarks`.
+The scalar baseline precedes one candidate table. Its columns are:
 
-Snapshots are captured before subsequent transformations or deletion can
-invalidate their contents. Each snapshot is printed once, followed by its
-evaluations. Loop-level events follow the plan groups, so output order is not
-a chronological trace of all queries. Identities belong to this invocation
-and snapshot; they are not persistent identifiers across compiler revisions.
+| Column | Meaning |
+| --- | --- |
+| `phase` | Main-loop or epilogue selection; the same plan/VF can participate in both contexts. |
+| `plan` | Snapshot identity; different plans may support the same VF. |
+| `vf` | `f4` means four fixed lanes; `s4` means `vscale * 4` lanes. |
+| `estimated_width` | Estimated lanes using tuning vscale when available, otherwise the known minimum. |
+| `body_cost` | Observed candidate cost, including legacy and spill charges. |
+| `score` | Ranking score, printed once per candidate and phase. |
+| `score_kind` | `cost-per-lane`, `whole-loop`, `code-size`, or `not-evaluated`. |
+| `vs_incumbent` | Whether the candidate replaced the incumbent, its identity, and the comparison reason. |
+| `vs_scalar` | The independent scalar-profitability result and reason. |
+| `reason` | A skip or shortcut-selection reason, when applicable. |
+
+Unknown-trip-count scores use exact ratios such as `5/4`, preserving fractional
+numerators when present. Known-trip-count scores are the observed total costs,
+including scalar-tail work or rounding up vector iterations when folding the
+tail. Code-size scores use the body cost. Comparison results retain the actual
+tie rules and policy overrides; they are not reconstructed from printed scores.
+
+A shortcut can leave a score or scalar baseline `not-evaluated`. In particular,
+placeholder zero costs used for user-VF and outer-loop selections do not mean
+the loop is free. An epilogue candidate initially accepted without comparison
+can acquire a score later when the existing algorithm compares it as incumbent.
+No evaluation is performed merely to fill the table.
+
+Invalid-cost diagnostics, discarded-plan reasons, and policy decisions follow
+the table. Identical repeated diagnostics are printed once with an occurrence
+count. The summary ends with main and epilogue VFs, the final interleave count,
+and the transformation outcome. A late rejection can leave the final interleave
+count `not-evaluated`, even when an earlier heuristic selected a provisional
+count. Successful diagnostic checks are omitted from the summary.
+
+### Detailed graphs and evaluations
+
+Detailed mode adds a `details` section after the summary. Each plan graph is
+printed once, with `[R0]`, `[R1]`, and similar annotations attached directly to
+its recipes. There is no separate recipe inventory. Cost entries reference
+these IDs and retain their nested calculations.
+
+Snapshots are captured before transformation or deletion can invalidate their
+contents. Evaluations are grouped by plan and VF, then retain observation order
+within each VF. `evaluation=N` distinguishes repeated evaluations; `phase`
+identifies `candidate-validation`, `main-selection`, `interleave-selection`,
+`outside-loop-profitability`, or `invalid-cost-remarks`. This grouping is not a
+chronological trace of all queries. IDs belong to the invocation and snapshot,
+not to a persistent identity across compiler revisions.
+
+Successful validity-only checks are summarized with a count and recipe-ID
+ranges. Unvisited recipes likewise use a single `not-evaluated` count and range
+list per evaluation. Invalid checks retain their individual entries and
+available calculation details.
 
 ### Cost accounting
 
@@ -123,7 +161,7 @@ Recipe entries separate `cost` from `contribution` and describe their `source`:
 - Outside-loop profitability and invalid-cost remark queries also have their
   own scope; their recipe entries do not contribute to the candidate body.
 - `Invalid` is preserved as an invalid cost, not converted to zero.
-- `status=not-evaluated` indicates a recipe was not queried in that evaluation.
+- `not-evaluated count=... recipes=...` lists recipes not queried in that evaluation.
 - Forced instruction-cost replacements and emulated masked-memory penalties
   are identified explicitly.
 
@@ -134,21 +172,21 @@ the scalar VPlan snapshot. It reports instruction costs and block weighting:
 scalar_iteration_cost = sum(block_instruction_sum / block_divisor)
 ```
 
-Integer division happens **after summing a block**. Dividing individual
-instruction costs first would change rounding.
+Division happens **after summing a block**, using the existing
+`InstructionCost` precision (quarter units in this checkout). For example,
+`3 / 2` is reported as `1.5`. Dividing individual instruction costs first
+would change rounding.
 
 ### Comparisons and outcomes
 
-Comparison events distinguish ranking against the incumbent from profitability
-against scalar execution. They report costs, estimated widths, the maximum
-trip count, the actual scalar-tail argument, and the decision reason.
-
-For throughput comparisons with an unknown maximum trip count, the report
-shows the integer cross-products used to compare cost per lane. For known
-trip counts, it shows vector iterations, any scalar remainder, and the vector
-and scalar-tail terms. Code-size comparisons and fixed/scalable preferences
-have their own decision reasons; some preferences decide before numeric
-ranking.
+The table separates ranking against the incumbent from profitability against
+scalar execution. For throughput comparisons with an unknown maximum trip
+count, the existing algorithm compares cross-products; the table displays the
+equivalent cost-per-lane ratio. For known trip counts, the score accounts for
+vector iterations and any scalar remainder. Detailed ranking context records
+the maximum trip count and actual scalar-tail argument without repeating the
+scores. Code-size comparisons and fixed/scalable preferences retain their
+own decision reasons; some preferences decide before numeric ranking.
 
 `selected-for-main` and `selected-for-epilogue` identify selected plans.
 Epilogue events distinguish source plans, reused costs, and cloned plans.
@@ -160,8 +198,8 @@ omits epilogue cost, which the report labels explicitly.
 A selection can still end in `outcome=vectorization-rejected` after later
 checks. `outcome=vectorization-emitted` records that the transformation ran.
 User-hinted, scalar-only, and outer-loop shortcuts can select a plan without
-normal cost comparison. These selections are marked `not-evaluated` with a
-reason; placeholder zero costs must not be interpreted as modeled free loops.
+normal cost comparison. Their unavailable costs and scores are marked `not-evaluated`, with a
+selection reason; placeholder zero costs must not be interpreted as modeled free loops.
 Forced vectorization's scalar-incumbent sentinel is likewise reported as an
 override, separately from the real scalar baseline.
 
@@ -185,7 +223,7 @@ Nested query results, intermediate values, and enclosing totals describe the
 same computation. Do not sum every number printed in a detailed report; use
 the contribution fields and component totals for accounting.
 
-The text layout is identified by `report_version=1` but is not a stable
+The text layout is identified by `report_version=2` but is not a stable
 machine-readable schema. There is no JSON output or report-specific filtering
 option. Existing VPlan transformation-printing options remain useful for
 inspecting intermediate transformation states.
@@ -204,6 +242,7 @@ Focused tests are in
 [`print-vplans-costs.ll`](llvm/test/Transforms/LoopVectorize/AArch64/print-vplans-costs.ll),
 and
 [`print-vplans-paths.ll`](llvm/test/Transforms/LoopVectorize/AArch64/print-vplans-paths.ll).
-They cover flag behavior, deterministic output, unchanged generated IR,
-accounting, scalar rounding, tail handling, spills, invalid costs, and selection
-paths. See also the [vectorizer documentation](llvm/docs/Vectorizers.md).
+They cover flag behavior, deterministic output, unchanged generated IR and
+cost/selection debug traces, exact fractional accounting, tail handling, spills,
+invalid costs, and selection paths. A recording-TTI unit test also checks that
+reporting modes preserve the cost-query sequence and returned values. See also the [vectorizer documentation](llvm/docs/Vectorizers.md).

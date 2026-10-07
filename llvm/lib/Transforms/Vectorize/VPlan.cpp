@@ -807,8 +807,8 @@ InstructionCost VPRegionBlock::cost(ElementCount VF, VPCostContext &Ctx) {
   // TODO: Discard scalable VPlans with replicate recipes earlier after
   // construction.
   if (VF.isScalable()) {
-    VP_COST_REPORT(Ctx.Report,
-                   OS << "      invalid reason=scalable-replicator-region\n");
+    if (Ctx.Report)
+      Ctx.Report->invalid("scalable-replicator-region");
     return InstructionCost::getInvalid();
   }
 
@@ -1137,8 +1137,11 @@ void VPlan::printLiveIns(raw_ostream &O) const {
 }
 
 LLVM_DUMP_METHOD
-void VPlan::print(raw_ostream &O) const {
+void VPlan::print(
+    raw_ostream &O,
+    const DenseMap<const VPRecipeBase *, unsigned> *RecipeIDs) const {
   VPSlotTracker SlotTracker(this);
+  SlotTracker.RecipeIDs = RecipeIDs;
 
   O << "VPlan '" << getName() << "' {";
 

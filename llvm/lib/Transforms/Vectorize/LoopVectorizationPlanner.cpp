@@ -179,9 +179,10 @@ bool VFSelectionContext::useMaxBandwidth(bool IsScalable) const {
 
 bool VFSelectionContext::shouldConsiderRegPressureForVF(ElementCount VF) const {
   auto Decision = [&](bool Result, StringRef Reason) {
-    VP_COST_REPORT(CostReport, OS << "  register-pressure-policy vf=";
-                   VPlanCostReport::printVF(OS, VF);
-                   OS << " enabled=" << Result << " reason=" << Reason << '\n');
+    VP_COST_SUMMARY(CostReport, OS << "  register-pressure-policy vf=";
+                    VPlanCostReport::printVF(OS, VF);
+                    OS << " enabled=" << Result << " reason=" << Reason
+                       << '\n');
     return Result;
   };
   if (ConsiderRegPressure.getNumOccurrences())
@@ -709,21 +710,12 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
   InstructionCost CostA = A.Cost;
   InstructionCost CostB = B.Cost;
   auto Decision = [&](bool Result, StringRef Reason) {
-    VP_COST_REPORT(Config.CostReport, OS << "    decision=" << Result
-                                         << " reason=" << Reason << '\n');
+    if (Config.CostReport)
+      Config.CostReport->comparisonResult(Result, Reason);
     return Result;
   };
-  VP_COST_REPORT(Config.CostReport,
-                 OS << "  comparison phase="
-                    << (IsEpilogue ? "epilogue-selection" : "main-selection")
-                    << " candidate_vf=";
-                 VPlanCostReport::printVF(OS, A.Width); OS << " incumbent_vf=";
-                 VPlanCostReport::printVF(OS, B.Width);
-                 OS << " candidate_cost=" << CostA << " incumbent_cost="
-                    << CostB << " scalar_cost_a=" << A.ScalarCost
-                    << " scalar_cost_b=" << B.ScalarCost
-                    << " maximum_trip_count=" << MaxTripCount
-                    << " has_tail=" << HasTail << '\n');
+  if (Config.CostReport)
+    Config.CostReport->comparisonContext(MaxTripCount, HasTail);
 
   // When there is a hint to always prefer scalable vectors, honour that hint.
   if (Hints.isScalableVectorizationAlwaysPreferred())
@@ -744,13 +736,14 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
   // When optimizing for size choose whichever is smallest, which will be the
   // one with the smallest cost for the whole loop. On a tie pick the larger
   // vector width, on the assumption that throughput will be greater.
-  VP_COST_REPORT(Config.CostReport,
-                 OS << "    estimated_width_a=" << EstimatedWidthA
-                    << " estimated_width_b=" << EstimatedWidthB << '\n');
-  if (Config.CostKind == TTI::TCK_CodeSize)
+
+  if (Config.CostKind == TTI::TCK_CodeSize) {
+    if (Config.CostReport)
+      Config.CostReport->comparisonScore(CostA, CostB, "code-size");
     return Decision(CostA < CostB ||
                         (CostA == CostB && EstimatedWidthA > EstimatedWidthB),
                     "code-size-less-than-or-tie-larger-width");
+  }
 
   // Assume vscale may be larger than 1 (or the value being tuned for),
   // so that scalable vectorization is slightly favorable over fixed-width
@@ -769,17 +762,20 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
   InstructionCost CrossProductA = CostA * EstimatedWidthB;
   InstructionCost CrossProductB = CostB * EstimatedWidthA;
   bool LowerCostWithoutTC = CmpFn(CrossProductA, CrossProductB);
-  VP_COST_REPORT(Config.CostReport,
-                 OS << "    cross_product_a=" << CrossProductA
-                    << " cross_product_b=" << CrossProductB
-                    << " operator=" << (PreferScalable ? "<=" : "<")
-                    << " prefer_scalable_tie=" << PreferScalable << '\n');
-  if (!MaxTripCount)
-    return Decision(LowerCostWithoutTC, "unknown-trip-count-cross-products");
 
-  auto GetCostForTC = [this, MaxTripCount,
-                       HasTail](unsigned VF, InstructionCost VectorCost,
-                                InstructionCost ScalarCost) {
+  if (!MaxTripCount) {
+    if (Config.CostReport)
+      Config.CostReport->comparisonScore(CostA, CostB, "cost-per-lane",
+                                         EstimatedWidthA, EstimatedWidthB);
+    return Decision(LowerCostWithoutTC,
+                    PreferScalable
+                        ? "unknown-trip-count-cross-products-scalable-tie"
+                        : "unknown-trip-count-cross-products");
+  }
+
+  auto GetCostForTC = [MaxTripCount, HasTail](unsigned VF,
+                                              InstructionCost VectorCost,
+                                              InstructionCost ScalarCost) {
     // If the trip count is a known (possibly small) constant, the trip count
     // will be rounded up to an integer number of iterations under
     // FoldTailByMasking. The total cost in that case will be
@@ -791,20 +787,11 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
     if (HasTail) {
       InstructionCost VectorTerm = VectorCost * (MaxTripCount / VF);
       InstructionCost ScalarTerm = ScalarCost * (MaxTripCount % VF);
-      VP_COST_REPORT(Config.CostReport,
-                     OS << "    trip-count-cost width=" << VF
-                        << " vector_iterations=" << MaxTripCount / VF
-                        << " remainder=" << MaxTripCount % VF
-                        << " vector_term=" << VectorTerm
-                        << " scalar_tail_term=" << ScalarTerm << '\n');
+
       return VectorTerm + ScalarTerm;
     }
     InstructionCost VectorTerm = VectorCost * divideCeil(MaxTripCount, VF);
-    VP_COST_REPORT(Config.CostReport,
-                   OS << "    trip-count-cost width=" << VF
-                      << " vector_iterations=" << divideCeil(MaxTripCount, VF)
-                      << " vector_term=" << VectorTerm
-                      << " scalar_tail_term=0\n");
+
     return VectorTerm;
   };
 
@@ -819,10 +806,11 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
               "into consideration for a maximum trip count of "
            << MaxTripCount << ".\n";
   });
-  VP_COST_REPORT(Config.CostReport, OS << "    candidate_compare=" << RTCostA
-                                       << " incumbent_compare=" << RTCostB
-                                       << '\n');
-  return Decision(LowerCostWithTC, "known-trip-count");
+  if (Config.CostReport)
+    Config.CostReport->comparisonScore(RTCostA, RTCostB, "whole-loop");
+  return Decision(LowerCostWithTC, PreferScalable
+                                       ? "known-trip-count-scalable-tie"
+                                       : "known-trip-count");
 }
 
 bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,

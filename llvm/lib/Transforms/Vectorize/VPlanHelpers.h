@@ -422,6 +422,9 @@ class VPSlotTracker {
   std::string getName(const Value *V);
 
 public:
+  // Optional report-local annotations; ordinary VPlan printing has no IDs.
+  const DenseMap<const VPRecipeBase *, unsigned> *RecipeIDs = nullptr;
+
   VPSlotTracker(const VPlan *Plan = nullptr) {
     if (Plan) {
       assignNames(*Plan);
