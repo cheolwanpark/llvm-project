@@ -629,6 +629,8 @@ struct FixedScalableVFPair {
 
 /// Holds state needed to make cost decisions before computing costs per-VF,
 /// including the maximum VFs.
+class VPlanCostReport;
+
 class VFSelectionContext {
   /// \return True if maximizing vector bandwidth is enabled by the target or
   /// user options, for the given register kind (scalable or fixed-width).
@@ -708,12 +710,16 @@ class VFSelectionContext {
   MapVector<Instruction *, uint64_t> MinBWs;
 
 public:
+  VPlanCostReport *CostReport = nullptr;
+
   /// The kind of cost that we are calculating.
   const TTI::TargetCostKind CostKind;
 
   /// Whether this loop should be optimized for size based on function attribute
   /// or profile information.
   const bool OptForSize;
+
+  const LoopVectorizeHints &getHints() const { return *Hints; }
 
   VFSelectionContext(const TargetTransformInfo &TTI,
                      const LoopVectorizationLegality *Legal,
@@ -861,6 +867,9 @@ class LoopVectorizationPlanner {
 
   /// Profitable vector factors.
   SmallVector<VectorizationFactor, 8> ProfitableVFs;
+  // Populated only for reporting. The legacy epilogue lookup may return a
+  // different plan with the same VF; retain the actual source of reused costs.
+  SmallVector<const VPlan *, 8> ReportProfitablePlans;
 
   /// A builder used to construct the current plan.
   VPBuilder Builder;

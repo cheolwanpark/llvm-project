@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "LoopVectorizationPlanner.h"
+#include "VPlanCostReport.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -177,20 +178,28 @@ bool VFSelectionContext::useMaxBandwidth(bool IsScalable) const {
 }
 
 bool VFSelectionContext::shouldConsiderRegPressureForVF(ElementCount VF) const {
+  auto Decision = [&](bool Result, StringRef Reason) {
+    VP_COST_REPORT(CostReport, OS << "  register-pressure-policy vf=";
+                   VPlanCostReport::printVF(OS, VF);
+                   OS << " enabled=" << Result << " reason=" << Reason << '\n');
+    return Result;
+  };
   if (ConsiderRegPressure.getNumOccurrences())
-    return ConsiderRegPressure;
+    return Decision(ConsiderRegPressure, "command-line");
 
   // TODO: We should eventually consider register pressure for all targets. The
   // TTI hook is temporary whilst target-specific issues are being fixed.
   if (TTI.shouldConsiderVectorizationRegPressure())
-    return true;
+    return Decision(true, "target-preference");
 
   if (!useMaxBandwidth(VF.isScalable()))
-    return false;
+    return Decision(false, "bandwidth-maximization-disabled");
   // Only calculate register pressure for VFs enabled by MaxBandwidth.
-  return ElementCount::isKnownGT(
-      VF, VF.isScalable() ? MaxPermissibleVFWithoutMaxBW.ScalableVF
-                          : MaxPermissibleVFWithoutMaxBW.FixedVF);
+  return Decision(
+      ElementCount::isKnownGT(VF, VF.isScalable()
+                                      ? MaxPermissibleVFWithoutMaxBW.ScalableVF
+                                      : MaxPermissibleVFWithoutMaxBW.FixedVF),
+      "bandwidth-vf-range");
 }
 
 ElementCount VFSelectionContext::clampVFByMaxTripCount(
@@ -699,12 +708,28 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
                                                 bool IsEpilogue) const {
   InstructionCost CostA = A.Cost;
   InstructionCost CostB = B.Cost;
+  auto Decision = [&](bool Result, StringRef Reason) {
+    VP_COST_REPORT(Config.CostReport, OS << "    decision=" << Result
+                                         << " reason=" << Reason << '\n');
+    return Result;
+  };
+  VP_COST_REPORT(Config.CostReport,
+                 OS << "  comparison phase="
+                    << (IsEpilogue ? "epilogue-selection" : "main-selection")
+                    << " candidate_vf=";
+                 VPlanCostReport::printVF(OS, A.Width); OS << " incumbent_vf=";
+                 VPlanCostReport::printVF(OS, B.Width);
+                 OS << " candidate_cost=" << CostA << " incumbent_cost="
+                    << CostB << " scalar_cost_a=" << A.ScalarCost
+                    << " scalar_cost_b=" << B.ScalarCost
+                    << " maximum_trip_count=" << MaxTripCount
+                    << " has_tail=" << HasTail << '\n');
 
   // When there is a hint to always prefer scalable vectors, honour that hint.
   if (Hints.isScalableVectorizationAlwaysPreferred())
     if (A.Width.isScalable() && CostA.isValid() && !B.Width.isScalable() &&
         !B.Width.isScalar())
-      return true;
+      return Decision(true, "scalable-hint-policy-before-ranking");
 
   // Improve estimate for the vector width if it is scalable.
   unsigned EstimatedWidthA = A.Width.getKnownMinValue();
@@ -719,9 +744,13 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
   // When optimizing for size choose whichever is smallest, which will be the
   // one with the smallest cost for the whole loop. On a tie pick the larger
   // vector width, on the assumption that throughput will be greater.
+  VP_COST_REPORT(Config.CostReport,
+                 OS << "    estimated_width_a=" << EstimatedWidthA
+                    << " estimated_width_b=" << EstimatedWidthB << '\n');
   if (Config.CostKind == TTI::TCK_CodeSize)
-    return CostA < CostB ||
-           (CostA == CostB && EstimatedWidthA > EstimatedWidthB);
+    return Decision(CostA < CostB ||
+                        (CostA == CostB && EstimatedWidthA > EstimatedWidthB),
+                    "code-size-less-than-or-tie-larger-width");
 
   // Assume vscale may be larger than 1 (or the value being tuned for),
   // so that scalable vectorization is slightly favorable over fixed-width
@@ -737,14 +766,20 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
   // To avoid the need for FP division:
   //      (CostA / EstimatedWidthA) < (CostB / EstimatedWidthB)
   // <=>  (CostA * EstimatedWidthB) < (CostB * EstimatedWidthA)
-  bool LowerCostWithoutTC =
-      CmpFn(CostA * EstimatedWidthB, CostB * EstimatedWidthA);
+  InstructionCost CrossProductA = CostA * EstimatedWidthB;
+  InstructionCost CrossProductB = CostB * EstimatedWidthA;
+  bool LowerCostWithoutTC = CmpFn(CrossProductA, CrossProductB);
+  VP_COST_REPORT(Config.CostReport,
+                 OS << "    cross_product_a=" << CrossProductA
+                    << " cross_product_b=" << CrossProductB
+                    << " operator=" << (PreferScalable ? "<=" : "<")
+                    << " prefer_scalable_tie=" << PreferScalable << '\n');
   if (!MaxTripCount)
-    return LowerCostWithoutTC;
+    return Decision(LowerCostWithoutTC, "unknown-trip-count-cross-products");
 
-  auto GetCostForTC = [MaxTripCount, HasTail](unsigned VF,
-                                              InstructionCost VectorCost,
-                                              InstructionCost ScalarCost) {
+  auto GetCostForTC = [this, MaxTripCount,
+                       HasTail](unsigned VF, InstructionCost VectorCost,
+                                InstructionCost ScalarCost) {
     // If the trip count is a known (possibly small) constant, the trip count
     // will be rounded up to an integer number of iterations under
     // FoldTailByMasking. The total cost in that case will be
@@ -753,10 +788,24 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
     // some extra overheads, but for the purpose of comparing the costs of
     // different VFs we can use this to compare the total loop-body cost
     // expected after vectorization.
-    if (HasTail)
-      return VectorCost * (MaxTripCount / VF) +
-             ScalarCost * (MaxTripCount % VF);
-    return VectorCost * divideCeil(MaxTripCount, VF);
+    if (HasTail) {
+      InstructionCost VectorTerm = VectorCost * (MaxTripCount / VF);
+      InstructionCost ScalarTerm = ScalarCost * (MaxTripCount % VF);
+      VP_COST_REPORT(Config.CostReport,
+                     OS << "    trip-count-cost width=" << VF
+                        << " vector_iterations=" << MaxTripCount / VF
+                        << " remainder=" << MaxTripCount % VF
+                        << " vector_term=" << VectorTerm
+                        << " scalar_tail_term=" << ScalarTerm << '\n');
+      return VectorTerm + ScalarTerm;
+    }
+    InstructionCost VectorTerm = VectorCost * divideCeil(MaxTripCount, VF);
+    VP_COST_REPORT(Config.CostReport,
+                   OS << "    trip-count-cost width=" << VF
+                      << " vector_iterations=" << divideCeil(MaxTripCount, VF)
+                      << " vector_term=" << VectorTerm
+                      << " scalar_tail_term=0\n");
+    return VectorTerm;
   };
 
   auto RTCostA = GetCostForTC(EstimatedWidthA, CostA, A.ScalarCost);
@@ -770,7 +819,10 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
               "into consideration for a maximum trip count of "
            << MaxTripCount << ".\n";
   });
-  return LowerCostWithTC;
+  VP_COST_REPORT(Config.CostReport, OS << "    candidate_compare=" << RTCostA
+                                       << " incumbent_compare=" << RTCostB
+                                       << '\n');
+  return Decision(LowerCostWithTC, "known-trip-count");
 }
 
 bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,

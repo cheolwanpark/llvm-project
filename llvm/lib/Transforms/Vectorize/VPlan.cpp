@@ -793,6 +793,11 @@ InstructionCost VPRegionBlock::cost(ElementCount VF, VPCostContext &Ctx) {
             : Ctx.TTI.getCFInstrCost(Instruction::UncondBr, Ctx.CostKind);
     LLVM_DEBUG(dbgs() << "Cost of " << BackedgeCost << " for VF " << VF
                       << ": vector loop backedge\n");
+    VP_COST_REPORT(Ctx.Report,
+                   OS << "      region-backedge region=" << getName()
+                      << " cost=" << BackedgeCost << " forced="
+                      << (ForceTargetInstructionCost.getNumOccurrences() > 0)
+                      << '\n');
     Cost += BackedgeCost;
     return Cost;
   }
@@ -801,8 +806,11 @@ InstructionCost VPRegionBlock::cost(ElementCount VF, VPCostContext &Ctx) {
   // scalable vectors, return an invalid cost for them.
   // TODO: Discard scalable VPlans with replicate recipes earlier after
   // construction.
-  if (VF.isScalable())
+  if (VF.isScalable()) {
+    VP_COST_REPORT(Ctx.Report,
+                   OS << "      invalid reason=scalable-replicator-region\n");
     return InstructionCost::getInvalid();
+  }
 
   // Compute and return the cost of the conditionally executed recipes.
   assert(VF.isVector() && "Can only compute vector cost at the moment.");
@@ -1043,7 +1051,12 @@ InstructionCost VPlan::cost(ElementCount VF, VPCostContext &Ctx) {
   // blocks, like the preheader or middle blocks, expect for checking them for
   // recipes with invalid costs.
   InstructionCost Cost = getVectorLoopRegion()->cost(VF, Ctx);
+  VP_COST_REPORT(Ctx.Report, OS << "      vector_region_body=" << Cost << '\n');
 
+  if (Ctx.Report) {
+    Ctx.Report->Contributes = false;
+    Ctx.Report->RecipeScope = "validity-only";
+  }
   // If the cost of the loop region is invalid or any recipe in the skeleton
   // outside loop regions are invalid return an invalid cost.
   if (!Cost.isValid() || any_of(VPBlockUtils::blocksOnly<VPBasicBlock>(
@@ -1876,21 +1889,32 @@ VPCostContext::getOperandInfo(VPValue *V) const {
 InstructionCost VPCostContext::getScalarizationOverhead(
     Type *ResultTy, ArrayRef<const VPValue *> Operands, ElementCount VF,
     TTI::VectorInstrContext VIC, bool AlwaysIncludeReplicatingR) {
+  VPlanCostReport::CostScope ReportScope(
+      Report, "VPCostContext::getScalarizationOverhead");
+  VP_COST_DETAIL(Report, OS << "        vf="; VPlanCostReport::printVF(OS, VF);
+                 OS << '\n');
+
   if (VF.isScalar())
-    return 0;
+    return observeVPlanCost(Report, "0", 0, "expanded");
 
   assert(!VF.isScalable() &&
          "Scalarization overhead not supported for scalable vectors");
 
-  InstructionCost ScalarizationCost = 0;
+  InstructionCost ScalarizationCost =
+      observeVPlanCost(Report, "initialize ScalarizationCost", 0, "expanded");
   // Compute the cost of scalarizing the result if needed.
   if (!ResultTy->isVoidTy()) {
     for (Type *VectorTy :
          to_vector(getContainedTypes(toVectorizedTy(ResultTy, VF)))) {
-      ScalarizationCost += TTI.getScalarizationOverhead(
-          cast<VectorType>(VectorTy), APInt::getAllOnes(VF.getFixedValue()),
-          /*Insert=*/true, /*Extract=*/false, CostKind,
-          /*ForPoisonSrc=*/true, {}, VIC);
+      observeVPlanCost(Report, "ScalarizationCost += getScalarizationOverhead",
+                       ScalarizationCost += observeVPlanCost(
+                           Report, "getScalarizationOverhead",
+                           TTI.getScalarizationOverhead(
+                               cast<VectorType>(VectorTy),
+                               APInt::getAllOnes(VF.getFixedValue()),
+                               /*Insert=*/true, /*Extract=*/false, CostKind,
+                               /*ForPoisonSrc=*/true, {}, VIC)),
+                       "expanded");
     }
   }
   // Compute the cost of scalarizing the operands, skipping ones that do not
@@ -1907,8 +1931,13 @@ InstructionCost VPCostContext::getScalarizationOverhead(
       continue;
     Tys.push_back(toVectorizedTy(Op->getScalarType(), VF));
   }
-  return ScalarizationCost +
-         TTI.getOperandsScalarizationOverhead(Tys, CostKind, VIC);
+  return observeVPlanCost(
+      Report, "ScalarizationCost + getOperandsScalarizationOverhead",
+      ScalarizationCost +
+          observeVPlanCost(
+              Report, "getOperandsScalarizationOverhead",
+              TTI.getOperandsScalarizationOverhead(Tys, CostKind, VIC)),
+      "expanded");
 }
 
 bool VPCostContext::useEmulatedMaskMemRefHack(const VPReplicateRecipe *R,

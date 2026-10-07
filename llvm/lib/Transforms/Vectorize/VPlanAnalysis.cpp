@@ -9,6 +9,7 @@
 #include "VPlanAnalysis.h"
 #include "VPlan.h"
 #include "VPlanCFG.h"
+#include "VPlanCostReport.h"
 #include "VPlanDominatorTree.h"
 #include "VPlanHelpers.h"
 #include "VPlanPatternMatch.h"
@@ -83,20 +84,35 @@ bool VPDominatorTree::properlyDominates(const VPRecipeBase *A,
 InstructionCost
 VPRegisterUsage::spillCost(const TargetTransformInfo &TTI,
                            TargetTransformInfo::TargetCostKind CostKind,
-                           unsigned OverrideMaxNumRegs) const {
+                           unsigned OverrideMaxNumRegs,
+                           VPlanCostReport *Report) const {
   InstructionCost Cost;
-  for (const auto &[RegClass, MaxUsers] : MaxLocalUsers) {
+  for (const auto &Entry : MaxLocalUsers) {
+    unsigned RegClass = Entry.first;
+    unsigned MaxUsers = Entry.second;
     unsigned AvailableRegs = OverrideMaxNumRegs > 0
                                  ? OverrideMaxNumRegs
                                  : TTI.getNumberOfRegisters(RegClass);
+    VP_COST_REPORT(Report, OS << "      register_class=" << RegClass
+                              << " local_peak=" << MaxUsers
+                              << " invariant_usage="
+                              << LoopInvariantRegs.lookup(RegClass)
+                              << " limit=" << AvailableRegs << '\n');
     if (MaxUsers > AvailableRegs) {
       // Assume that for each register used past what's available we get one
       // spill and reload.
       unsigned Spills = MaxUsers - AvailableRegs;
-      InstructionCost SpillCost =
-          TTI.getRegisterClassSpillCost(RegClass, CostKind) +
+      InstructionCost SpillUnit =
+          TTI.getRegisterClassSpillCost(RegClass, CostKind);
+      InstructionCost ReloadUnit =
           TTI.getRegisterClassReloadCost(RegClass, CostKind);
+      InstructionCost SpillCost = SpillUnit + ReloadUnit;
       InstructionCost TotalCost = Spills * SpillCost;
+      VP_COST_DETAIL(Report, OS << "        coverage=expanded excess=" << Spills
+                                << " getRegisterClassSpillCost=" << SpillUnit
+                                << " getRegisterClassReloadCost=" << ReloadUnit
+                                << " spill_plus_reload=" << SpillCost
+                                << " multiply=" << TotalCost << '\n');
       LLVM_DEBUG(dbgs() << "LV(REG): Cost of " << TotalCost << " from "
                         << Spills << " spills of "
                         << TTI.getRegisterClassName(RegClass) << "\n");

@@ -162,6 +162,8 @@ public:
   // Shim for old PM.
   LLVM_ABI LoopVectorizeResult runImpl(Function &F);
 
+  unsigned ReportInvocation = 0;
+  unsigned ReportLoopIndex = 0;
   LLVM_ABI bool processLoop(Loop *L);
 };
 

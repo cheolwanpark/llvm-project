@@ -77,6 +77,42 @@ See the Clang
 [language extensions](https://clang.llvm.org/docs/LanguageExtensions.html#extensions-for-loop-hint-optimizations)
 for details.
 
+### Inspecting VPlan costs
+
+In builds with assertions or `LLVM_ENABLE_DUMP`, the hidden `opt` options
+`--print-vplans` and `--print-detailed-vplans` report the loop vectorizer's
+cost observations to standard error:
+
+```console
+$ opt -passes=loop-vectorize --print-vplans -disable-output input.ll
+$ opt -passes=loop-vectorize --print-detailed-vplans -disable-output input.ll
+```
+
+Both options include candidate plan snapshots, recipe identities, legacy
+charges, the scalar baseline, register-pressure costs, comparisons, and
+selection and transformation outcomes. Detailed mode adds nested calculations
+and observed target cost queries. Setting both options produces one detailed
+report per loop attempt. Neither option requires `-debug` or `-debug-only`.
+
+Costs are model units for the displayed cost kind, not measured cycles. A zero
+recipe contribution can indicate an ignored operation or a cost charged
+elsewhere. Validity-only queries and outside-loop work are kept separate from
+the candidate's vector-region total. Shortcut selections are marked
+`not-evaluated`; their placeholder zero costs are not a scalar baseline.
+
+Plan and recipe numbers belong to the displayed snapshot. Evaluation numbers
+and phases distinguish validation, VF selection, interleave selection, and
+outside-loop profitability. Epilogue clones identify their source; reused
+costs are labeled separately from fresh evaluations. A target query is a leaf
+of the report: target-internal lowering is not expanded. Cached legacy values
+whose construction is not attached to the current calculation are labeled
+`opaque-legacy`.
+
+The deterministic text layout is identified by `report_version=1`; it is not a
+stable machine-readable schema. Reporting observes the existing cost model
+and does not request additional cost queries or change vectorization policy.
+The options are unavailable in release builds without dump support.
+
 ### Diagnostics
 
 Many loops cannot be vectorized including loops with complicated control flow,
