@@ -1,4 +1,4 @@
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s --implicit-check-not=@malloc --implicit-check-not=@free --implicit-check-not='= alloca'
+; RUN: opt -reduction-fission-filter=false -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s --implicit-check-not=@malloc --implicit-check-not=@free --implicit-check-not='= alloca'
 ;
 ; Reusing read-only streams and invariant contributions needs no scratch.
 ; Map may be absent only when it has neither effects nor live-outs. Deleting

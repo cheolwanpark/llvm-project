@@ -1,6 +1,6 @@
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -S %s | FileCheck %s --check-prefix=DEFAULT
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -reduction-fission-stack-budget=256 -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -reduction-fission-stack-budget=0 -S %s | FileCheck %s --check-prefix=HEAP
+; RUN: opt -reduction-fission-allow-heap -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -S %s | FileCheck %s --check-prefix=DEFAULT
+; RUN: opt -reduction-fission-allow-heap -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -reduction-fission-stack-budget=256 -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
+; RUN: opt -reduction-fission-allow-heap -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -reduction-fission-stack-budget=0 -S %s | FileCheck %s --check-prefix=HEAP
 
 ; Fixed scratch is charged as a cohort, including existing static allocas.
 ; Entry allocation is reused across outer-loop iterations; lifetime.end is

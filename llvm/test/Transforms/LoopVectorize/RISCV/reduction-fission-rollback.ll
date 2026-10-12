@@ -1,4 +1,4 @@
-; RUN: opt -passes='loop-vectorize,verify' -verify-dom-info -verify-loop-info -verify-scev -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -pass-remarks=loop-vectorize -pass-remarks-missed=loop-vectorize -S %s 2>&1 | FileCheck %s
+; RUN: opt -reduction-fission-allow-heap -passes='loop-vectorize,verify' -verify-dom-info -verify-loop-info -verify-scev -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -pass-remarks=loop-vectorize -pass-remarks-missed=loop-vectorize -S %s 2>&1 | FileCheck %s
 ;
 ; Underaligned scalable loads have invalid target costs. Even though the
 ; generated reduction vectorizes, Map failure must roll back the entire trial.
@@ -6,7 +6,7 @@
 ; CHECK: selected Fission MapVF=vscale x 2
 ; CHECK: selected fission component could not be vectorized
 ; CHECK: vectorized loop (vectorization width: vscale x 16, interleaved count: 1)
-; CHECK: fission rejected: a component failed; original function preserved
+; CHECK: fission rejected: failed transformation trial; selecting Normal on the original function
 ; CHECK-NOT: committed fission
 ; CHECK-LABEL: define float @sum(
 ; CHECK-NOT: call {{.*}}@malloc

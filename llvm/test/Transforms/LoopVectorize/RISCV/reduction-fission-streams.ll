@@ -1,4 +1,4 @@
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
+; RUN: opt -reduction-fission-allow-heap -reduction-fission-filter=false -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
 
 ; Reuse only a non-wrapping contiguous stream with no possibly aliasing Map
 ; overwrite. Every positive case retains a Map store and a separate reduction.

@@ -34,8 +34,25 @@ Selection is provisional until ``ReductionFissionCommitted`` is reported.
 accumulator and initial value, its normalization or fallback reason, and its
 scratch, borrowed-stream and shared-contribution choices.
 If any component cannot vectorize at its requested VF, the function transaction
-is discarded and ``ReductionFissionRolledBack`` reports the failure. A provisional
-selection remark alone is not proof that fission was applied.
+is discarded and ``ReductionFissionRolledBack`` reports the failure. Rejection
+also discards a function trial when another original loop selected Fission.
+Ordinary Normal planning then runs on the original IR. The Fission force and
+Map width do not become Normal hints; independent user controls, including loop
+metadata, interleave settings and scalable-vectorization settings still apply.
+A provisional selection remark alone is not proof that fission was applied.
+
+Two conservative structural filters are enabled by default: an empty Map with
+exactly one reducer, and one reducer requiring owned scratch for a recognized
+cheap sum-of-products Map. The latter recognizes direct add-of-multiply or
+``llvm.fmuladd`` with the accumulator as its third operand, contiguous loads or
+invariant factors, address/control bookkeeping, and at most one direct input-copy
+store. Indexed loads, additional arithmetic, division, square root and other
+calls do not match. These are minimal heuristics, not a general profitability
+decision or a claim that every rejected candidate slows down. Empty Maps with
+multiple reducers are not rejected by the single-reducer rule.
+``-reduction-fission-filter=false`` disables only these structural filters for
+experiments and direct transformation tests. Legality and resource policy remain
+in force.
 
 Execution and legality
 ----------------------
@@ -114,14 +131,28 @@ must vectorize independently. A nonempty Map failure still rolls back the
 transaction. A scratch-free loop whose trip count may exceed the reducer index
 range is rejected, preserving its original execution without an allocation trap.
 
-Scratch buffers use the exact runtime trip count and checked address-sized byte
-arithmetic. Constant-size scratch uses entry allocas if all buffers and existing
-allocas fit the aggregate stack budget; otherwise it requires available heap
-allocation builtins. Zero-trip paths bypass allocation. Buffers have their
-lifetimes ended or are freed after the last reduction, including when nested
-in an outer loop or the function is called repeatedly. There is no buffer-capacity or
-profitability limit. Unrepresentable allocation sizes and allocation failure
-trap; they cannot produce wrapping buffer accesses.
+Owned scratch uses static function-entry allocas when a proven constant trip
+count capacity fits ``-reduction-fission-stack-budget`` (default 16384 bytes).
+The capacity may come from an exact count or ScalarEvolution's constant maximum
+backedge count plus one. Map and reducers always execute the actual runtime
+count. Count conversion, addition, element-byte multiplication and alignment are
+checked before accepting the capacity. Only unique physical storage after
+sharing/reuse is charged, together with existing static allocas and alignment.
+Unknown/dynamic existing allocas preclude stack scratch. The budget bounds IR
+storage, not the final machine frame: spills may add space. Entry allocations are
+reused across enclosing-loop iterations; lifetime markers delimit each use.
+
+``-reduction-fission-allow-heap`` defaults to false. Without permitted bounded
+stack storage, Normal planning runs instead. Setting the stack budget to zero
+disables stack allocation; it does not itself enable heap allocation. Explicit
+heap permission preserves the legal malloc/free path, with checked address-sized
+runtime byte arithmetic and allocation-failure traps. Each unique owned input
+can require its own allocation/free pair per invocation. Heap permission bypasses
+neither allocation legality nor overflow or alias checks. This is an explicit
+resource policy, not evidence that every heap candidate is unprofitable.
+Zero-trip paths bypass allocation; buffers are freed or have their lifetimes
+ended after the last reduction. No profile or benchmark fixture supplies a bound,
+and no tiling or general cost model is used.
 
 Every header recurrence must be a normal induction or an eligible independent
 reduction. An accumulator observed by Map memory/control, an intermediate

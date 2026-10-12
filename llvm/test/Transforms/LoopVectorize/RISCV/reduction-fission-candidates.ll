@@ -1,8 +1,8 @@
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=4 -scalable-vectorization=off -pass-remarks-analysis=loop-vectorize -S %s 2>&1 | FileCheck %s --check-prefix=NORMAL
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -pass-remarks=loop-vectorize -S %s 2>&1 | FileCheck %s --check-prefix=FISSION
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:8 -scalable-vectorization=off -pass-remarks=loop-vectorize -S %s 2>&1 | FileCheck %s --check-prefix=FISSION
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+f,+d -scalable-vectorization=off -pass-remarks-analysis=loop-vectorize -S %s 2>&1 | FileCheck %s --check-prefix=AUTO-FIXED
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+f,+d -scalable-vectorization=on -pass-remarks-analysis=loop-vectorize -S %s 2>&1 | FileCheck %s --check-prefix=AUTO-SCALABLE
+; RUN: opt -reduction-fission-allow-heap -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=4 -scalable-vectorization=off -pass-remarks-analysis=loop-vectorize -S %s 2>&1 | FileCheck %s --check-prefix=NORMAL
+; RUN: opt -reduction-fission-allow-heap -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -pass-remarks=loop-vectorize -S %s 2>&1 | FileCheck %s --check-prefix=FISSION
+; RUN: opt -reduction-fission-allow-heap -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:8 -scalable-vectorization=off -pass-remarks=loop-vectorize -S %s 2>&1 | FileCheck %s --check-prefix=FISSION
+; RUN: opt -reduction-fission-allow-heap -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+f,+d -scalable-vectorization=off -pass-remarks-analysis=loop-vectorize -S %s 2>&1 | FileCheck %s --check-prefix=AUTO-FIXED
+; RUN: opt -reduction-fission-allow-heap -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+f,+d -scalable-vectorization=on -pass-remarks-analysis=loop-vectorize -S %s 2>&1 | FileCheck %s --check-prefix=AUTO-SCALABLE
 ;
 ; Logical candidates share a Map VF without overloading ElementCount or the
 ; normal VPlan lookup. INF is diagnostic policy, never an invalid numeric cost.

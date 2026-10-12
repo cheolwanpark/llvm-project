@@ -134,6 +134,7 @@
 #include "llvm/Support/InstructionCost.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/NativeFormatting.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -8560,7 +8561,12 @@ LoopVectorizeResult LoopVectorizePass::runImpl(Function &F) {
     // transform.
     Changed |= formLCSSARecursively(*L, *DT, LI, SE);
 
-    Changed |= CFGChanged |= processLoop(L);
+    bool Vectorized = processLoop(L);
+    // A rejected original loop must not be committed as scalar just because a
+    // different loop in the same transaction successfully selected Fission.
+    if (IsFissionAttempt && !Vectorized)
+      FissionAttemptFailed = true;
+    Changed |= CFGChanged |= Vectorized;
 
     if (Changed) {
       LAIs->clear();
@@ -8589,6 +8595,20 @@ PreservedAnalyses LoopVectorizePass::run(Function &F,
   });
   if (VectorizerParams::ForceReductionFission && !IsFissionAttempt &&
       HasFissionInput) {
+    auto RunNormal = [&]() {
+      // fission:N's width and force belong only to the composite candidate.
+      // Re-enter ordinary planning on original IR, with fresh hints/cost model.
+      // Independent interleave, scalable and loop metadata controls still
+      // apply. Clearing the force also prevents another private trial on this
+      // retry.
+      SaveAndRestore<bool> Force(VectorizerParams::ForceReductionFission,
+                                 false);
+      SaveAndRestore<ElementCount> Width(VectorizerParams::VectorizationFactor,
+                                         ElementCount::getFixed(0));
+      LoopVectorizePass Normal(LoopVectorizeOptions(InterleaveOnlyWhenForced,
+                                                    VectorizeOnlyWhenForced));
+      return Normal.run(F, AM);
+    };
     // External blockaddress constants cannot be preserved by replacing a body.
     if (any_of(F, [](const BasicBlock &BB) { return BB.hasAddressTaken(); })) {
       auto &Remarks = AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
@@ -8598,12 +8618,15 @@ PreservedAnalyses LoopVectorizePass::run(Function &F,
                << "fission not selected: function contains an address-taken "
                   "block";
       });
-      return PreservedAnalyses::all();
+      return RunNormal();
     }
     // Candidate discovery never changes the caller's scalar IR. Trying the
     // selected composite plan on a private copy also permits target/planner
     // failures to reject the whole transformation, without a scalar reduction
     // fallback or a half-distributed loop in the caller.
+    SmallPtrSet<Function *, 32> OriginalFunctions;
+    for (Function &Fn : *F.getParent())
+      OriginalFunctions.insert(&Fn);
     ValueToValueMapTy VM;
     Function *Trial = CloneFunction(&F, VM);
     Trial->setName(F.getName() + ".fission.trial");
@@ -8627,6 +8650,13 @@ PreservedAnalyses LoopVectorizePass::run(Function &F,
                         CloneFunctionChangeType::LocalChangesOnly, Returns);
     }
     Trial->eraseFromParent();
+    // Intrinsic/libcall declarations inserted by a discarded trial are module
+    // changes too. Remove only newly introduced, unused declarations.
+    if (!Commit)
+      for (Function &Fn : make_early_inc_range(*F.getParent()))
+        if (!OriginalFunctions.contains(&Fn) && Fn.isDeclaration() &&
+            Fn.use_empty())
+          Fn.eraseFromParent();
     OptimizationRemarkEmitter TransactionRemarks(&F);
     if (Commit)
       TransactionRemarks.emit([&]() {
@@ -8640,11 +8670,11 @@ PreservedAnalyses LoopVectorizePass::run(Function &F,
       TransactionRemarks.emit([&]() {
         return OptimizationRemarkMissed(DEBUG_TYPE,
                                         "ReductionFissionRolledBack", &F)
-               << "fission rejected: a component failed; original function "
-                  "preserved";
+               << "fission rejected: failed transformation trial; selecting "
+                  "Normal on the original function";
       });
     if (!Commit)
-      return PreservedAnalyses::all();
+      return RunNormal();
     // Preserve only the pipeline-control marker, never analyses of the body
     // that was replaced. The ordinary post-vectorization cleanup must still
     // run.

@@ -59,6 +59,8 @@ class ReductionFission {
     StringRef ContributionReason = "original dependent slice";
   };
   void planContribution(Reduction &R);
+  bool isCheapProduct(const Reduction &R, LoopVectorizationLegality &Legal,
+                      ScalarEvolution &SE) const;
   static bool sameContribution(const Reduction &A, const Reduction &B);
   SmallVector<ElementCount, 8>
   getLegalVFs(const Reduction &R, const TargetTransformInfo &TTI) const;
@@ -86,6 +88,10 @@ class ReductionFission {
                       ArrayRef<CastInst *> Decode = {});
   bool hasStream(Value *V) const;
   const SCEV *BackedgeCount = nullptr;
+  // Static full-loop capacity proven and budgeted after physical storage
+  // sharing. Execution always uses BackedgeCount + 1, including for dynamic
+  // trip counts.
+  std::optional<uint64_t> StackCapacity;
   std::string Failure;
 
 public:

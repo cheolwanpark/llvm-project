@@ -1,4 +1,4 @@
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -S %s | FileCheck %s
+; RUN: opt -reduction-fission-allow-heap -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -S %s | FileCheck %s
 ;
 ; An nnan/nsz min operation is not evaluated on a skipped path. Its flags do
 ; not constrain an arbitrary initial value when every update is skipped.

@@ -1,5 +1,5 @@
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=fission:4 -scalable-vectorization=off -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=fission:2 -scalable-vectorization=on -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
+; RUN: opt -reduction-fission-allow-heap -reduction-fission-filter=false -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=fission:4 -scalable-vectorization=off -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
+; RUN: opt -reduction-fission-allow-heap -reduction-fission-filter=false -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=fission:2 -scalable-vectorization=on -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
 ;
 ; Reassociation is sufficient for unordered accumulation, but it does not waive
 ; signed-zero semantics. None of the positive cases grants nsz or fast.
@@ -113,12 +113,14 @@ exit:
 ; Ordered fadd can be vectorized with in-loop horizontal reductions on RVV, but
 ; cannot use the required vector accumulator and exit-only collapse. One ordered
 ; recurrence therefore rejects the entire original loop, including its otherwise
-; eligible reassoc recurrence. A force request must not add reassoc to either.
+; eligible reassoc recurrence. Normal can still vectorize the ordered update
+; using an ordered in-loop reduction, without adding reassoc.
 ; CHECK-LABEL: define { double, double } @mixed_reassoc_and_ordered(
 ; CHECK-NOT: @malloc
 ; CHECK-NOT: fission.reduce
-; CHECK: %unordered.next = fadd reassoc double %unordered.acc, %x
-; CHECK-NEXT: %ordered.next = fadd double %ordered.acc, %x
+; CHECK: fadd reassoc <{{(vscale x )?}}
+; CHECK: call double @llvm.{{(vp|vector)}}.reduce.fadd
+; CHECK: call reassoc double @llvm.vector.reduce.fadd
 ; CHECK-NOT: @malloc
 ; CHECK-NOT: fission.reduce
 ; CHECK: ret { double, double }

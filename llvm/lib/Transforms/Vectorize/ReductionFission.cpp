@@ -36,6 +36,17 @@ static cl::opt<unsigned> StackBudget(
     cl::desc("Maximum aggregate static alloca bytes in a function when placing "
              "reduction fission scratch on the stack (0 disables)"));
 
+// Resource permission is independent of the experimental structural heuristics.
+static cl::opt<bool> AllowHeap(
+    "reduction-fission-allow-heap", cl::Hidden, cl::init(false),
+    cl::desc(
+        "Permit legal heap scratch when bounded stack storage is unavailable"));
+static cl::opt<bool> Filter(
+    "reduction-fission-filter", cl::Hidden, cl::init(true),
+    cl::desc(
+        "Apply conservative reduction fission structural filters (does not "
+        "change legality or heap permission)"));
+
 static Type *getBufferType(Value *V) {
   // A scalar i1 occupies a byte, unlike packed vector masks.
   return V->getType()->isIntegerTy(1) ? Type::getInt8Ty(V->getContext())
@@ -45,24 +56,31 @@ static Type *getBufferType(Value *V) {
 // This bounds IR storage, not the final frame (which may also contain spills).
 // Reject unknown existing stack use, and charge all allocations, including
 // scratch for previously transformed loops. No dynamic alloca is introduced.
-static bool fitsOnStack(Function &F, ArrayRef<std::pair<Type *, Align>> Inputs,
-                        const SCEV *BackedgeCount) {
+static std::optional<uint64_t>
+getStackCapacity(Function &F, ArrayRef<std::pair<Type *, Align>> Inputs,
+                 const SCEV *MaxBackedgeCount) {
   if (!StackBudget || F.hasFnAttribute(Attribute::Naked))
-    return false;
-  const auto *BTC = dyn_cast<SCEVConstant>(BackedgeCount);
+    return std::nullopt;
+  const auto *BTC = dyn_cast<SCEVConstant>(MaxBackedgeCount);
   if (!BTC)
-    return false;
+    return std::nullopt;
   const DataLayout &DL = F.getDataLayout();
-  APInt Count = BTC->getAPInt().zextOrTrunc(DL.getPointerSizeInBits());
+  // Check before narrowing; a wrapped capacity must never look affordable.
+  unsigned IndexBits = DL.getPointerSizeInBits();
+  if (BTC->getAPInt().getActiveBits() > IndexBits)
+    return std::nullopt;
+  APInt Count = BTC->getAPInt().zextOrTrunc(IndexBits);
   bool Overflow;
   Count = Count.uadd_ov(APInt(Count.getBitWidth(), 1), Overflow);
   if (Overflow || Count.ugt(StackBudget))
-    return false;
+    return std::nullopt;
 
   uint64_t Used = 0;
   auto Charge = [&](uint64_t Size, Align Alignment) {
     if (Size > StackBudget || Alignment.value() > StackBudget)
       return false;
+    // Both operands are bounded by the unsigned budget, so alignment cannot
+    // overflow uint64_t. Subtraction checks the subsequent aggregate addition.
     uint64_t Padded = alignTo(Size, Alignment);
     if (Padded > StackBudget - Used)
       return false;
@@ -74,15 +92,15 @@ static bool fitsOnStack(Function &F, ArrayRef<std::pair<Type *, Align>> Inputs,
       auto Size = AI->getAllocationSize(DL);
       if (!AI->isStaticAlloca() || !Size || Size->isScalable() ||
           !Charge(Size->getFixedValue(), AI->getAlign()))
-        return false;
+        return std::nullopt;
     }
   for (auto [Ty, Alignment] : Inputs) {
     uint64_t ElementSize = DL.getTypeAllocSize(Ty).getFixedValue();
     if (ElementSize > StackBudget / Count.getZExtValue() ||
         !Charge(ElementSize * Count.getZExtValue(), Alignment))
-      return false;
+      return std::nullopt;
   }
-  return true;
+  return Count.getZExtValue();
 }
 
 // Vectorization may preserve a finite-distance memory recurrence at a small VF.
@@ -533,6 +551,102 @@ ReductionFission::getLegalVFs(const Reduction &R,
   return Choices;
 }
 
+// Deliberately recognize only direct add-of-mul and fmuladd(accumulator in
+// operand 2). This is a small experimental heuristic, not a cost model. Any
+// unexplained instruction makes the shape ineligible for this filter.
+bool ReductionFission::isCheapProduct(const Reduction &R,
+                                      LoopVectorizationLegality &Legal,
+                                      ScalarEvolution &SE) const {
+  if (L->getNumBlocks() != 1 || R.Slice.size() != 2)
+    return false;
+  Instruction *Update = R.Descriptor.getLoopExitInstr();
+  Value *Left, *Right;
+  SmallPtrSet<Instruction *, 16> Understood{R.Phi, Update};
+  if (auto *II = dyn_cast<IntrinsicInst>(Update)) {
+    if (II->getIntrinsicID() != Intrinsic::fmuladd ||
+        II->getArgOperand(2) != R.Phi)
+      return false;
+    Left = II->getArgOperand(0);
+    Right = II->getArgOperand(1);
+  } else {
+    if (Update->getOpcode() != Instruction::Add &&
+        Update->getOpcode() != Instruction::FAdd)
+      return false;
+    unsigned ProductOperand;
+    if (Update->getOperand(0) == R.Phi)
+      ProductOperand = 1;
+    else if (Update->getOperand(1) == R.Phi)
+      ProductOperand = 0;
+    else
+      return false;
+    auto *Product =
+        dyn_cast<BinaryOperator>(Update->getOperand(ProductOperand));
+    if (!Product || !L->contains(Product) ||
+        Product->getOpcode() != (Update->getOpcode() == Instruction::Add
+                                     ? Instruction::Mul
+                                     : Instruction::FMul))
+      return false;
+    Understood.insert(Product);
+    Left = Product->getOperand(0);
+    Right = Product->getOperand(1);
+  }
+  const DataLayout &DL = L->getHeader()->getModule()->getDataLayout();
+  auto Contiguous = [&](Value *Ptr, Type *Ty) {
+    auto *AR = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Ptr));
+    if (!AR || AR->getLoop() != L || !AR->isAffine() ||
+        !SE.isLoopInvariant(AR->getStart(), L))
+      return false;
+    auto *Step = dyn_cast<SCEVConstant>(AR->getStepRecurrence(SE));
+    return Step && Step->getAPInt() == DL.getTypeAllocSize(Ty);
+  };
+  for (Value *Factor : {Left, Right}) {
+    if (L->isLoopInvariant(Factor))
+      continue;
+    auto *Load = dyn_cast<LoadInst>(Factor);
+    if (!Load || !Load->isSimple() ||
+        !Contiguous(Load->getPointerOperand(), Load->getType()))
+      return false;
+    Understood.insert(Load);
+  }
+  // Only canonical integer induction, its update, address formation and the
+  // latch comparison are bookkeeping. In particular an indexed load, extra
+  // arithmetic, or any other call is not explained by this whitelist.
+  for (auto &[Phi, Induction] : Legal.getInductionVars()) {
+    if (!Phi->getType()->isIntegerTy())
+      return false;
+    Understood.insert(Phi);
+    if (auto *Inc = dyn_cast<BinaryOperator>(
+            Phi->getIncomingValueForBlock(L->getLoopLatch()));
+        Inc && Inc->getOpcode() == Instruction::Add &&
+        (isa<ConstantInt>(Inc->getOperand(0)) ||
+         isa<ConstantInt>(Inc->getOperand(1))))
+      Understood.insert(Inc);
+    else
+      return false;
+  }
+  auto *Branch = dyn_cast<CondBrInst>(L->getLoopLatch()->getTerminator());
+  if (!Branch)
+    return false;
+  Understood.insert(Branch);
+  if (auto *Cmp = dyn_cast<ICmpInst>(Branch->getCondition()))
+    Understood.insert(Cmp);
+  unsigned Copies = 0;
+  for (Instruction &I : *L->getHeader()) {
+    if (Understood.contains(&I) || isa<GetElementPtrInst>(I) ||
+        isa<SExtInst>(I) || isa<ZExtInst>(I) || isa<TruncInst>(I))
+      continue;
+    auto *Store = dyn_cast<StoreInst>(&I);
+    if (!Store || !Store->isSimple() || ++Copies > 1 ||
+        (Store->getValueOperand() != Left &&
+         Store->getValueOperand() != Right) ||
+        !isa<LoadInst>(Store->getValueOperand()) ||
+        !Contiguous(Store->getPointerOperand(),
+                    Store->getValueOperand()->getType()))
+      return false;
+  }
+  return true;
+}
+
 bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
                                ScalarEvolution &SE, DominatorTree &DT,
                                const TargetTransformInfo &TTI, AAResults &AA,
@@ -911,11 +1025,38 @@ bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
     return Reject(
         "scratch-free iteration count may overflow the reducer index");
   Function *F = L->getHeader()->getParent();
-  if (!ScratchInputs.empty() &&
-      !fitsOnStack(*F, ScratchInputs, BackedgeCount) &&
-      (!isLibFuncEmittable(F->getParent(), &TLI, LibFunc_malloc) ||
-       !isLibFuncEmittable(F->getParent(), &TLI, LibFunc_free)))
-    return Reject("heap scratch requires available malloc and free builtins");
+  if (Filter && Reductions.size() == 1) {
+    const Reduction &R = Reductions.front();
+    // After removing the recurrence, borrowed streams and invariant inputs
+    // leave no useful Map if there are no other effects or live-outs.
+    bool EmptyMap =
+        ScratchInputs.empty() && all_of(L->blocks(), [&](BasicBlock *BB) {
+          return all_of(*BB, [&](Instruction &I) {
+            return R.Slice.contains(&I) ||
+                   (!I.mayHaveSideEffects() && all_of(I.users(), [&](User *U) {
+                     auto *Use = dyn_cast<Instruction>(U);
+                     return Use && L->contains(Use);
+                   }));
+          });
+        });
+    if (EmptyMap)
+      return Reject("empty Map with one reducer; selecting Normal");
+    if (!ScratchInputs.empty() && isCheapProduct(R, Legal, SE))
+      return Reject(
+          "recognized cheap product Map with owned scratch; selecting Normal");
+  }
+  if (!ScratchInputs.empty()) {
+    StackCapacity = getStackCapacity(*F, ScratchInputs,
+                                     SE.getConstantMaxBackedgeTakenCount(L));
+    if (!StackCapacity) {
+      if (!AllowHeap)
+        return Reject("no permitted bounded scratch storage; selecting Normal");
+      if (!isLibFuncEmittable(F->getParent(), &TLI, LibFunc_malloc) ||
+          !isLibFuncEmittable(F->getParent(), &TLI, LibFunc_free))
+        return Reject(
+            "heap scratch requires available malloc and free builtins");
+    }
+  }
   return true;
 }
 
@@ -1114,17 +1255,17 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
       Entry.CreateAdd(WideBTC, ConstantInt::get(IndexTy, 1), "fission.count");
   Value *BadSize = Entry.CreateICmpEQ(TC, ConstantInt::get(IndexTy, 0));
   SetVector<unsigned> ScratchBuffers, ActiveBuffers;
-  SmallVector<std::pair<Type *, Align>> ScratchTypes;
   for (Reduction &R : Reductions)
     for (Value *V : R.Inputs) {
       unsigned Buffer = Encodings.find(V)->second.Buffer;
       ActiveBuffers.insert(Buffer);
       const Storage &S = StoragePlans[Buffer];
-      if (!S.Start && ScratchBuffers.insert(Buffer))
-        ScratchTypes.emplace_back(S.StoredType, S.Alignment);
+      if (!S.Start)
+        ScratchBuffers.insert(Buffer);
     }
-  bool UseStack = fitsOnStack(*F, ScratchTypes, BackedgeCount);
+  bool UseStack = StackCapacity.has_value();
   bool HasHeap = !UseStack && !ScratchBuffers.empty();
+  assert((!HasHeap || AllowHeap) && "heap scratch was not permitted");
   if (HasHeap) {
     // Heap scratch storage introduces effects absent from a pure scalar kernel.
     F->setMemoryEffects(MemoryEffects::unknown());
@@ -1162,7 +1303,8 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   if (UseStack) {
     IRBuilder<> Stack(&F->getEntryBlock(), F->getEntryBlock().begin());
     for (unsigned Buffer : ScratchBuffers) {
-      auto *Buf = Stack.CreateAlloca(StoragePlans[Buffer].StoredType, TC,
+      auto *Buf = Stack.CreateAlloca(StoragePlans[Buffer].StoredType,
+                                     ConstantInt::get(IndexTy, *StackCapacity),
                                      "fission.buffer");
       Buf->setAlignment(StoragePlans[Buffer].Alignment);
       Buffers[Buffer] = Buf;

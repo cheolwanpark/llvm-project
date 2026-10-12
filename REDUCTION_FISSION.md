@@ -4,8 +4,9 @@ This document consolidates the earlier flags guide and implementation report
 and describes the experimental implementation on the `reduction-fission` branch
 of this LLVM 23.1.3 worktree. It includes the
 storage encoding changes in commit `7b5de8dce79b` (separate physical storage and
-consumer decoding). These behaviors are local to this implementation; an
-unmodified LLVM installation does not accept its selection syntax.
+consumer decoding), followed by conservative structural filters, explicit heap
+permission, proven bounded stack capacity, and transactional Normal fallback.
+These behaviors are local to this implementation; an unmodified LLVM installation does not accept its selection syntax.
 
 The contract is **N independent reductions → one full-trip Map → N separate
 reducer loops**. Each reducer completes its accumulation and horizontal collapse
@@ -16,7 +17,8 @@ Map contributions; storage sharing never fuses reducers.
 Sections 1–8 describe current behavior and usage. Section 9 records validation
 of the storage encoding change. Section 10 preserves the earlier report's
 **pre-LLVM-23.1.3-rebase** campaign evidence; those campaign and QEMU results have
-not been rerun for this change and are not current performance measurements.
+not been rerun for the policy change and are not current performance measurements.
+Section 11 records the policy change and its current validation.
 
 The change extends the existing hidden LLVM option **`-force-vector-width`**
 with **`fission:N`**. It does not introduce a separate public Clang driver flag.
@@ -30,6 +32,9 @@ Pass LLVM options directly to `opt`, or through `-mllvm` when invoking Clang.
 | `-force-vector-width=4` | Existing Normal vectorization, requesting width 4. |
 | `-force-vector-width=fission:4 -scalable-vectorization=off` | Request Fission with a fixed Map VF of 4. |
 | `-force-vector-width=fission:4 -scalable-vectorization=on` | Request Fission with a scalable Map VF of `vscale x 4`. |
+| `-reduction-fission-allow-heap` | Default **false**. Permit the existing legal heap path when bounded stack storage is unavailable. |
+| `-reduction-fission-stack-budget=N` | Default **16384 bytes**. Aggregate IR static-allocation budget, including existing allocas and alignment. Zero disables stack scratch, independently of heap permission. |
+| `-reduction-fission-filter=false` | Disable only the two structural heuristics for experiments; legality and heap permission still apply. The filters default to **true**. |
 
 `N` is a lane count (the known-minimum element count for scalable vectors),
 not a byte count, LMUL, interleave count, or reduction VF. The Fission parser
@@ -79,19 +84,33 @@ streams. For example, TSVC `s319` retains two reusable output streams and one
 reducer, avoiding a new buffer for their combined value. The copy of `a[i]` in
 the example can also disappear when its input stream is safe to borrow.
 
-Heap buffers use the exact runtime trip count and checked address-sized byte
-arithmetic. Small constant scratch uses fixed entry-block allocas with lifetime
-markers. `-reduction-fission-stack-budget` defaults to 16384 bytes, charging all
-scratch together with existing static allocas in the function. Unknown existing
-stack use, unknown counts, or an exceeded budget retain heap allocation. The
-budget bounds IR storage, not the entire machine frame including spills;
-`-reduction-fission-stack-budget=0` disables stack scratch. No dynamic alloca or
-zero-fill is introduced. Entry placement prevents accumulation in outer loops.
+Owned stack scratch uses a proven constant full-loop capacity: either the exact
+trip count or ScalarEvolution's constant maximum backedge count plus one.
+For example, `(n & 63) + 1` permits capacity for 64 elements while Map and
+reducers still execute the actual runtime count. Count conversion, addition,
+element-byte multiplication, alignment, and aggregate accounting must not
+wrap. Profiling and input fixtures supply no proof: row lengths loaded from CSR
+offsets are not bounded merely because a benchmark uses five nonzeros per row.
 
-Heap fallback requires available, correctly declared malloc/free builtins;
-otherwise the transformation is rejected without changing the source function.
-This matters for `-fno-builtin` and `-ffreestanding`. Zero-trip execution bypasses
-allocation. Heap failure or unrepresentable size traps as before.
+`-reduction-fission-stack-budget` defaults to 16384 bytes. It charges unique
+physical scratch after reuse/sharing, existing static allocas, and alignment.
+Unknown/dynamic existing allocas still preclude stack scratch; bounds exceeding
+the budget are not allocated. The budget bounds IR storage, not the final
+machine frame, where spills can add space. Stack buffers remain static allocas
+in function entry and are reused across enclosing-loop iterations, with scoped
+lifetime markers. This placement was already present before the policy change;
+no new stack hoisting or dynamic alloca is introduced.
+
+Heap scratch is **disabled by default**. If permitted bounded stack storage
+cannot be obtained, the pass runs Normal planning. Explicit
+`-reduction-fission-allow-heap` retains the legal malloc/free path with exact
+runtime counts, checked address-sized byte arithmetic, and failure traps.
+Available, correctly declared malloc/free builtins are still required, including
+under `-fno-builtin` or `-ffreestanding`. Each unique owned input can cause its own
+malloc/free pair per loop invocation. Heap permission bypasses neither overflow
+checks nor allocation or alias legality. A zero stack budget alone does not
+permit heap allocation. Zero-trip execution bypasses allocation and no zero-fill
+is introduced.
 
 For a single-block Map, proven stable contiguous input or output streams can
 replace scratch; a read-only loop does not need an output store to qualify.
@@ -100,6 +119,26 @@ observable effects nor live-outs and its finite traversal is proved, it is
 explicitly deleted. Every original accumulator still has its own reducer.
 Conditional, overwritten, and uncertain streams use safe scratch or cause
 rejection; a syntactically matching load or store alone is insufficient.
+
+### Conservative structural filters
+
+Only two structural heuristics are enabled initially:
+
+1. No useful Map work and exactly one reducer selects Normal. Pure loops with
+   multiple independent reductions are not rejected by this rule.
+2. One reducer with owned scratch and a recognized trivially cheap product Map
+   selects Normal. The supported shapes are direct add-of-multiply and
+   `llvm.fmuladd` with the accumulator in operand 2, using contiguous input loads
+   or loop-invariant factors, address/control bookkeeping, and at most one direct
+   input-copy store. Dot products and sum-of-squares, including `out[i] = a[i]`,
+   can match. Indexed loads, division, square root, other calls, and additional
+   arithmetic prevent a match. Uncertain shapes are not classified as cheap.
+
+These are minimal heuristics, not a general profitability model. They do not
+reject every single reducer, FMA, or small trip count, and output reuse alone is
+not a profitability conclusion. `-reduction-fission-filter=false` disables both
+heuristics for controlled experiments and direct transformation coverage. It
+does not relax legality or override heap permission.
 
 ### Contribution normalization and arithmetic
 
@@ -200,8 +239,9 @@ Borrowing retains the existing conservative legality conditions:
   is exempted from that check.
 
 Failure to prove reuse leaves owned scratch available, subject to the existing
-allocation and component-planning checks. A conditional store of the narrow
-value is insufficient when the reducer needs a value on every iteration.
+allocation permission, budget, and component-planning checks. A conditional
+store of the narrow value is insufficient when the reducer needs a value on
+every iteration.
 
 Budgeting, checked byte arithmetic, allocation, GEPs, Map stores, and reducer
 loads use the **physical storage type**. Each active owned buffer is charged
@@ -215,8 +255,9 @@ data layout and a 512-byte stack budget.
 All distinct owned buffers remain live through Map and until every consumer has
 finished. Sequential reducers do not make their buffer lifetimes disjoint:
 **all contents must survive completion of Map**. No overlapping scratch arena,
-heap hoisting, new heap policy, tiling, reducer fusion, profitability model, or
-new VF search is introduced by the storage encoding change.
+heap hoisting, tiling, reducer fusion, general profitability model, or new VF
+search is introduced. The subsequent policy change controls heap permission
+without changing these lifetimes.
 
 ### Candidates, planning, and rollback
 
@@ -228,7 +269,8 @@ does not create a Cartesian product of VF choices.
 Fission's reported cost is `INF (manual only)`. This is an explicit automatic
 selection exclusion, not an invalid/max `InstructionCost`; it does not enter
 ordinary cost arithmetic or minimum-profitable-trip-count calculations.
-Manual selection bypasses profitability, while retaining legality checks.
+Manual selection bypasses ordinary cost-based selection, while retaining
+legality, the structural filters, and scratch resource policy.
 
 Analysis examines untouched scalar IR using `RecurrenceDescriptor` and
 accumulator-dependent instruction slices. Storage/decoding plans and typed
@@ -239,17 +281,25 @@ selection, a private function clone is distributed and its components are
 planned with fresh analyses. The Map must use the selected VF. Each reduction
 is tested at its legal widths, largest first, independently of other reductions.
 
-Only a successful transaction replaces the original function body. If any
-selected component fails, all selected transformations in that function are
-rolled back, including earlier successful ones. An ineligible source loop is
-not partially distributed. Other eligible source loops in the same function
-can still be selected; eligibility is assessed per original loop, while
-rollback after a selected component failure is at function scope.
+Only a successful transaction replaces the original function body. Policy or
+structural rejection, an unplannable requested VF, or a failed component discards
+the trial. Rejection of another processed original loop also prevents committing
+earlier successful Fission work in the same function. Newly introduced unused
+trial declarations are removed along with the private body and allocations.
+
+The pass then runs **fresh ordinary Normal vectorization planning on the original
+IR**, rather than waiting for a later pass. During this retry it clears the
+Fission force and its Map width; component-specific choices and generated
+metadata never become forced Normal choices. Independent user settings,
+including original loop metadata, scalable settings, interleave controls, and
+forced-only pass gates remain effective. Clearing the Fission request also
+prevents recursive trial retries. Normal may still select scalar execution when
+its own legality, profitability, or user controls require it.
 
 The pass does not provide a scalar-only distributed recurrence fallback.
 Ordinary vectorization tails and supported runtime-versioned paths remain
-possible. Later optimization passes may vectorize an untouched loop normally;
-that is not evidence of successful Fission.
+possible. Normal vectorization after rejection is not evidence of successful
+Fission.
 
 ## 3. RVV width policy and LMUL tuning
 
@@ -409,6 +459,7 @@ EOF
 "$RF_BIN/clang" --target=riscv64 -march=rv64gcv -mabi=lp64d \
   -O2 -ffast-math -ffp-contract=off \
   -mllvm -force-vector-width=fission:4 \
+  -mllvm -reduction-fission-allow-heap \
   -mllvm -scalable-vectorization=off \
   -Rpass=loop-vectorize -Rpass-analysis=loop-vectorize \
   -Rpass-missed=loop-vectorize -fsave-optimization-record=yaml \
@@ -419,7 +470,12 @@ EOF
   -verify-machineinstrs "$RF_OUT/clang.ll" -o "$RF_OUT/clang.s"
 ```
 
-For the wider scalable example, replace the two `-mllvm` settings with:
+The count argument has no small proven bound, so this example explicitly permits
+heap scratch. Omitting that permission exercises Normal fallback. Rebuild
+`clang` as well as `opt`/`llc` before testing current frontend behavior.
+
+For the wider scalable example, retain heap permission and replace the Map
+width/scalable settings with:
 
 ```sh
 -mllvm -force-vector-width=fission:16 \
@@ -428,9 +484,10 @@ For the wider scalable example, replace the two `-mllvm` settings with:
 ```
 
 The earlier flags-guide validation compiled and machine-verified both direct
-configurations. Section 9 identifies the tools and checks rebuilt/run for the
-storage encoding change; it does not claim a fresh Clang frontend campaign. For a Normal comparison, replace `fission:4` with `4`, or `fission:16`
-with `16`, keeping the other settings the same. Use separate output names.
+configurations. Sections 9 and 11 identify the tools and checks for the storage
+and policy changes; neither claims a fresh Clang frontend campaign. For a Normal
+comparison, replace `fission:4` with `4`, or `fission:16` with `16`, keeping the
+other settings the same. Use separate output names.
 
 ### Inspect the immediate transformation with opt
 
@@ -451,6 +508,7 @@ scalar IR first avoids comparing against an already-vectorized input.
 "$RF_BIN/opt" -passes='loop-vectorize,verify' \
   -mtriple=riscv64 -mattr=+v,+f,+d \
   -force-vector-width=fission:4 -scalable-vectorization=off \
+  -reduction-fission-allow-heap \
   -verify-dom-info -verify-loop-info -verify-scev \
   -pass-remarks=loop-vectorize -pass-remarks-analysis=loop-vectorize \
   -pass-remarks-missed=loop-vectorize \
@@ -481,10 +539,15 @@ separate forced invocations to validate particular Fission candidates.
 | `ReductionFissionSchedule` | Actual generated reduction's maximum supported VF and IC1. |
 | `ReductionFissionCommitted` | The function transaction succeeded and replaced the original body. |
 | `ReductionFissionOriginalLegality` | The original loop failed ordinary vectorization legality. |
-| `ReductionFissionRejected` | Structural/target eligibility failed, or requested Map VF has no plan. |
+| `ReductionFissionRejected` | Structural/resource/target eligibility failed, or requested Map VF has no plan; Normal planning follows. |
 | `ReductionFissionPartFailed` | A generated component could not use its required plan/width. |
-| `ReductionFissionRolledBack` | The selected transformation was discarded; original function preserved. |
+| `ReductionFissionRolledBack` | Failed transformation trial discarded; Normal planning runs on the original function. |
 | `ReductionFissionBlockAddress` | Function-body replacement is unsupported for address-taken blocks. |
+
+Rejection messages distinguish `empty Map with one reducer`, `recognized cheap
+product Map with owned scratch`, `no permitted bounded scratch storage`, and
+`failed transformation trial`. They explain the decision without claiming that
+a heuristic proves a measured slowdown.
 
 A zero exit status, a vector instruction, or `ReductionFissionSelected` alone
 is insufficient. Check the final commit remark, associate selected source loops
@@ -532,6 +595,12 @@ register-pressure costs remain possible. No speedup is promised.
 - Preserve generated-loop option isolation, IC1, independent maximum-width
   planning, and suppression of per-iteration horizontal collapse. Do not infer
   maximum legal reduction width from a preferred-register-width query.
+- Budget unique physical storage using a proven constant capacity while
+  executing the runtime count. Preserve existing static-allocation accounting;
+  heap permission and structural-filter controls are independent.
+- Discard rejected trials before running fresh Normal planning. Never use the
+  Fission Map VF as a forced Normal VF or silently commit a rejected loop as
+  scalar alongside another successful Fission loop.
 - Rebuild affected analyses after distribution and invalidate original-body
   analyses on commit. Do not reuse original scalar-loop legality/cost results
   as if they described generated components.
@@ -565,6 +634,17 @@ The [storage encoding regression](llvm/test/Transforms/LoopVectorize/RISCV/reduc
 adds narrow output reuse, owned byte scratch, sharing with different decoding,
 mixed extension chains, alias/coverage negatives, distinct live buffers,
 normalization preservation, and physical-byte/alignment budgeting.
+The [policy regression](llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-policy.ll)
+checks filter on/off behavior, Normal baseline equality, integer/FP products,
+input copies, and independent metadata controls. The
+[bounded-stack regression](llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-stack.ll)
+covers exact/dynamic capacities, runtime execution counts, zero-trip guards,
+alignment, unknown allocas, heap permission, nested lifetimes, excessive bounds,
+and count/multiplication overflow risks. The
+[filter-scope regression](llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-filter-scope.ll)
+preserves indexed/division/complex-FMA Maps, shared physical storage, and multiple
+reusable-input reducers. The transaction test compares a failed private trial's
+fallback output against a separate Normal invocation.
 Machine-verified cleanup and pressure tests cover independent reductions.
 The InstCombine test covers vector-to-scalar sinking around calls and loops,
 including accumulator backedges, later vector uses, and shared constants.
@@ -578,8 +658,8 @@ extending the experiments.
 
 The storage encoding implementation in `7b5de8dce79b` was built and checked on
 this LLVM 23.1.3 worktree. `opt`, `llc`, and `FileCheck` were rebuilt from source.
-The following results belong to this change, rather than to the historical
-campaign in section 10:
+The following results belong to the storage encoding change, rather than to
+the historical campaign in section 10:
 
 | Check | Result and scope |
 |---|---|
@@ -597,7 +677,8 @@ alignment. Its assertions inspect storage, loads, conversions, and separate
 reducers; they do not assert performance.
 
 Reproduce the focused tests and representative machine verification from the
-repository root:
+repository root. The explicit policy overrides retain direct transformation
+coverage with current defaults:
 
 ```sh
 cmake --build build-fission --target opt llc FileCheck -j 8
@@ -613,6 +694,7 @@ python3 llvm/utils/reduction-fission/audit.py --self-test "$RF_BIN/opt"
   -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v,+f,+d \
   -riscv-v-vector-bits-min=128 -scalable-vectorization=on \
   -force-vector-width=fission:16 -force-vector-interleave=1 \
+  -reduction-fission-allow-heap -reduction-fission-filter=false \
   -verify-dom-info -verify-loop-info -verify-scev \
   -S llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-storage-encoding.ll \
   -o "$RF_OUT/storage.ll"
@@ -814,3 +896,49 @@ The existing result DB's measurement/image identity is not reused.
 The historical implementation, tests, tools, and experiment report were
 recorded on the `reduction-fission` branch. Section 9 describes the narrower
 validation completed for the subsequent storage encoding change.
+
+## 11. Conservative policy and Normal fallback validation
+
+The policy change retains full-loop distribution and introduces no tiling,
+VF tuning, general instruction-cost model, malloc hoisting, or disjoint-lifetime
+arena reuse. Existing function-entry stack placement is preserved. Heap
+permission is an explicit resource policy, separate from the two structural
+heuristics and from legality.
+
+The supplied measurement motivation reported that all **40 nonempty-Map,
+stack-scratch cases** in the inspected XS best-versus-best subset lost to Normal,
+with cheap sums of products particularly poor candidates. A complex MiniMD case
+with heap scratch nevertheless improved by about **0.68%**. A nested sparse
+example made **64,000 malloc/free pairs** for short row reductions and increased
+from about **3.61 to 14.65 million cycles**. These are prior observations provided
+for the change, not measurements rerun here or proof that every heap case loses.
+No fixture-specific row length is used as a bound.
+
+`opt` and `llc` were rebuilt in `build-fission` with assertions enabled and
+RISC-V/AArch64 targets. Current checks completed for this patch:
+
+| Check | Result and scope |
+|---|---|
+| Focused Fission lit suite | **29/29 passed**, including policy, bounded-stack, filter-scope, and updated transaction regressions. |
+| Entire LoopVectorize lit directory | **984 passed; 397 unsupported** by this build's target configuration; no failures. |
+| Normal fallback | Early structural rejection and failed private trials have explicit Normal baselines; tests compare resulting IR and check vectorization and user metadata controls. |
+| IR analysis verification | New tests run `loop-simplify,lcssa,loop-vectorize,verify` with `-verify-dom-info -verify-loop-info -verify-scev`. |
+| RISC-V machine verification | Representative accepted stack/heap transformations and Normal fallbacks pass `llc -verify-machineinstrs`, using `+v,+f,+d`, XiangShan Kunminghu, and minimum VLEN128. |
+| CFG audit self-tests | Passed, including constant-exit, unreachable-loop, and late-collapse fixtures. |
+| RVV runtime / performance measurement | Not rerun. These compiler checks do not establish a measured speedup or replace the historical executable validation. |
+
+Reproduce the current checks from the repository root:
+
+```sh
+cmake --build build-fission --target opt llc -j 8
+RF_BIN="$(cd build-fission/bin && pwd)"
+"$RF_BIN/llvm-lit" -j 8 \
+  llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-*.ll \
+  llvm/test/Transforms/LoopVectorize/reduction-fission-*.ll
+"$RF_BIN/llvm-lit" -j 8 llvm/test/Transforms/LoopVectorize
+python3 llvm/utils/reduction-fission/audit.py --self-test "$RF_BIN/opt"
+```
+
+The new tests include their own target settings and representative lowering
+commands. Existing structural tests explicitly enable heap or disable filters
+only where needed to retain their intended transformation coverage.

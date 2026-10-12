@@ -1,7 +1,7 @@
 ; NOTE: Focused semantic inputs, independent of benchmark extraction.
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=fission:4 -scalable-vectorization=off -S %s | FileCheck %s --check-prefix=FISSION
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=fission:2 -scalable-vectorization=on -S %s | FileCheck %s --check-prefix=FISSION
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=4 -S %s | FileCheck %s --check-prefix=NORMAL
+; RUN: opt -reduction-fission-allow-heap -reduction-fission-filter=false -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=fission:4 -scalable-vectorization=off -S %s | FileCheck %s --check-prefix=FISSION
+; RUN: opt -reduction-fission-allow-heap -reduction-fission-filter=false -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=fission:2 -scalable-vectorization=on -S %s | FileCheck %s --check-prefix=FISSION
+; RUN: opt -reduction-fission-allow-heap -reduction-fission-filter=false -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+d,+f -force-vector-width=4 -S %s | FileCheck %s --check-prefix=NORMAL
 ;
 ; Reduction VF is independent of Map VF: RVV m8 = nxv16f32/nxv8f64/
 ; nxv16i32. These checks require vector accumulator updates and final collapse.

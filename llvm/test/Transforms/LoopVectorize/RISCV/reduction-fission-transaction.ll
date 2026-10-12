@@ -1,28 +1,30 @@
-; RUN: opt -passes='loop-vectorize,verify' -verify-dom-info -verify-loop-info -verify-scev -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -pass-remarks=loop-vectorize -pass-remarks-missed=loop-vectorize -S %s 2>&1 | FileCheck %s --implicit-check-not='committed fission' --implicit-check-not='call {{.*}}@malloc' --implicit-check-not='call {{.*}}@free' --implicit-check-not='fission.buffer' --implicit-check-not='phi <vscale'
+; RUN: opt -reduction-fission-allow-heap -passes='loop-simplify,lcssa,loop-vectorize,verify' -verify-dom-info -verify-loop-info -verify-scev -mtriple=riscv64 -mattr=+v,+f,+d -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=128 -scalable-vectorization=on -pass-remarks=loop-vectorize -pass-remarks-missed=loop-vectorize -S %s -o %t.normal
+; RUN: opt -reduction-fission-allow-heap -passes='loop-simplify,lcssa,loop-vectorize,verify' -verify-dom-info -verify-loop-info -verify-scev -mtriple=riscv64 -mattr=+v,+f,+d -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=128 -force-vector-width=fission:2 -scalable-vectorization=on -pass-remarks=loop-vectorize -pass-remarks-missed=loop-vectorize -S %s -o %t.trial
+; RUN: diff %t.normal %t.trial
+; RUN: llc -mtriple=riscv64 -mattr=+v,+f,+d -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=128 -verify-machineinstrs %t.trial -o /dev/null
+; RUN: opt -reduction-fission-allow-heap -passes='loop-simplify,lcssa,loop-vectorize,verify' -verify-dom-info -verify-loop-info -verify-scev -mtriple=riscv64 -mattr=+v,+f,+d -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=128 -force-vector-width=fission:2 -scalable-vectorization=on -pass-remarks=loop-vectorize -pass-remarks-missed=loop-vectorize -S %s 2>&1 | FileCheck %s --implicit-check-not='committed fission' --implicit-check-not='call {{.*}}@malloc' --implicit-check-not='call {{.*}}@free' --implicit-check-not='fission.buffer'
 ;
 ; A function transaction must undo earlier successful original-loop transforms
 ; when a later original loop has an unsupported component. Here both components
 ; of the aligned sum vectorize before the second, underaligned Map fails. The
-; second reduction still vectorizes in the trial, but the final function retains
-; both original scalar loops and contains no generated allocations or buffers.
+; second reduction still vectorizes in the trial. Normal planning then vectorizes
+; the original aligned loop, with no generated allocations or Fission buffers.
 ; CHECK: selected Fission MapVF=vscale x 2
 ; CHECK: vectorized loop (vectorization width: vscale x 2, interleaved count: 1)
 ; CHECK: vectorized loop (vectorization width: vscale x 16, interleaved count: 1)
 ; CHECK: selected Fission MapVF=vscale x 2
 ; CHECK: selected fission component could not be vectorized
 ; CHECK: vectorized loop (vectorization width: vscale x 16, interleaved count: 1)
-; CHECK: fission rejected: a component failed; original function preserved
+; CHECK: fission rejected: failed transformation trial; selecting Normal on the original function
 ; CHECK-LABEL: define float @successful_then_failed(
-; CHECK: first.loop:
-; CHECK: %first.acc = phi float
-; CHECK: %first.x = load float, ptr %first.p, align 4
-; CHECK: %first.update = fadd fast float %first.acc, %first.x
-; CHECK: br i1 %first.done, label %first.exit, label %first.loop
+; CHECK: vector.body:
+; CHECK: phi <vscale x
+; CHECK: @llvm.vector.reduce.fadd
 ; CHECK: second.loop:
 ; CHECK: %second.acc = phi float
 ; CHECK: %second.x = load float, ptr %second.p, align 2
 ; CHECK: %second.update = fadd fast float %second.acc, %second.x
-; CHECK: br i1 %second.done, label %exit, label %second.loop
+; CHECK: br i1 %second.done, label %exit.loopexit, label %second.loop
 ; CHECK: %result = fadd float %first.result, %second.result
 ; CHECK: ret float %result
 

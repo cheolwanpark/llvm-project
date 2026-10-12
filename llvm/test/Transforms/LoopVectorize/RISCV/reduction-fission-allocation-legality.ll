@@ -1,4 +1,4 @@
-; RUN: opt -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -S %s | FileCheck %s
+; RUN: opt -reduction-fission-allow-heap -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:4 -scalable-vectorization=off -S %s | FileCheck %s
 ;
 ; Compiler-generated heap calls require available builtins. Stack scratch
 ; does not create calls to disabled builtins. Dynamic heap overflow/failure

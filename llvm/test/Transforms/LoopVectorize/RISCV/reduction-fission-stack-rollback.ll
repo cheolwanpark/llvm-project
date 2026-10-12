@@ -1,16 +1,17 @@
-; RUN: opt -passes='loop-vectorize,verify' -verify-dom-info -verify-loop-info -verify-scev -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -pass-remarks=loop-vectorize -pass-remarks-missed=loop-vectorize -S %s 2>&1 | FileCheck %s
+; RUN: opt -reduction-fission-allow-heap -passes='loop-vectorize,verify' -verify-dom-info -verify-loop-info -verify-scev -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -pass-remarks=loop-vectorize -pass-remarks-missed=loop-vectorize -S %s 2>&1 | FileCheck %s
 ;
 ; The first loop creates fixed entry scratch. Failure to vectorize the
 ; underaligned second Map must roll back the complete function transaction.
 ; CHECK: selected Fission
 ; CHECK: selected Fission
-; CHECK: fission rejected: a component failed; original function preserved
+; CHECK: fission rejected: failed transformation trial; selecting Normal on the original function
 ; CHECK-LABEL: define float @stack_then_failed(
 ; CHECK-NOT: = alloca
 ; CHECK-NOT: call {{.*}}@malloc
 ; CHECK-NOT: call {{.*}}@free
 ; CHECK-NOT: fission.buffer
-; CHECK: %first.update = fadd fast float
+; CHECK: phi <vscale x
+; CHECK: @llvm.vector.reduce.fadd
 ; CHECK: %second.x = load float, ptr %second.p, align 2
 ; CHECK: ret float
 define float @stack_then_failed(ptr noalias readonly %a, ptr noalias readonly %b, i64 %n, float %initial) {
