@@ -15,6 +15,7 @@
 
 namespace llvm {
 class AAResults;
+class DataLayout;
 class Loop;
 class LoopInfo;
 class ScalarEvolution;
@@ -63,13 +64,27 @@ class ReductionFission {
   getLegalVFs(const Reduction &R, const TargetTransformInfo &TTI) const;
   Loop *L;
   SmallVector<Reduction, 2> Reductions;
-  struct Stream {
-    const SCEV *Start;
-    Align Alignment;
+  // A buffer is identified by the SSA value and its definition's iteration
+  // coverage, not by the decoding chosen by a consumer. A null Start denotes
+  // owned scratch; otherwise this is a proven stable, borrowed Map stream.
+  struct Storage {
+    Value *StoredValue;
     Type *StoredType;
-    unsigned ExtendOpcode;
+    // Allocation alignment for owned scratch; access alignment for streams.
+    Align Alignment;
+    const SCEV *Start = nullptr;
+    Align getAccessAlignment(const DataLayout &DL) const;
   };
-  DenseMap<Value *, Stream> Streams;
+  struct Encoding {
+    unsigned Buffer;
+    // In load-to-consumer order. Preserve mixed sext/zext chains exactly.
+    SmallVector<CastInst *, 2> Decode;
+  };
+  SmallVector<Storage, 4> StoragePlans;
+  DenseMap<Value *, Encoding> Encodings;
+  void recordEncoding(Value *Logical, Storage S,
+                      ArrayRef<CastInst *> Decode = {});
+  bool hasStream(Value *V) const;
   const SCEV *BackedgeCount = nullptr;
   std::string Failure;
 

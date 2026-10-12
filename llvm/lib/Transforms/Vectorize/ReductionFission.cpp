@@ -45,7 +45,7 @@ static Type *getBufferType(Value *V) {
 // This bounds IR storage, not the final frame (which may also contain spills).
 // Reject unknown existing stack use, and charge all allocations, including
 // scratch for previously transformed loops. No dynamic alloca is introduced.
-static bool fitsOnStack(Function &F, ArrayRef<Value *> Inputs,
+static bool fitsOnStack(Function &F, ArrayRef<std::pair<Type *, Align>> Inputs,
                         const SCEV *BackedgeCount) {
   if (!StackBudget || F.hasFnAttribute(Attribute::Naked))
     return false;
@@ -76,11 +76,10 @@ static bool fitsOnStack(Function &F, ArrayRef<Value *> Inputs,
           !Charge(Size->getFixedValue(), AI->getAlign()))
         return false;
     }
-  for (Value *V : Inputs) {
-    Type *Ty = getBufferType(V);
+  for (auto [Ty, Alignment] : Inputs) {
     uint64_t ElementSize = DL.getTypeAllocSize(Ty).getFixedValue();
     if (ElementSize > StackBudget / Count.getZExtValue() ||
-        !Charge(ElementSize * Count.getZExtValue(), DL.getPrefTypeAlign(Ty)))
+        !Charge(ElementSize * Count.getZExtValue(), Alignment))
       return false;
   }
   return true;
@@ -209,6 +208,33 @@ static StringRef checkMapMemoryRecurrences(Loop *L, const LoopAccessInfo &LAI,
   return {};
 }
 
+Align ReductionFission::Storage::getAccessAlignment(const DataLayout &DL) const {
+  // Preferred allocation alignment need not hold at every element offset.
+  return Start ? Alignment
+               : commonAlignment(Alignment,
+                                 DL.getTypeAllocSize(StoredType).getFixedValue());
+}
+
+void ReductionFission::recordEncoding(Value *Logical, Storage S,
+                                      ArrayRef<CastInst *> Decode) {
+  unsigned Buffer = 0;
+  for (; Buffer != StoragePlans.size(); ++Buffer) {
+    const Storage &Existing = StoragePlans[Buffer];
+    if (Existing.StoredValue == S.StoredValue &&
+        Existing.StoredType == S.StoredType && Existing.Start == S.Start &&
+        Existing.Alignment == S.Alignment)
+      break;
+  }
+  if (Buffer == StoragePlans.size())
+    StoragePlans.push_back(S);
+  Encodings[Logical] = {Buffer, SmallVector<CastInst *, 2>(Decode)};
+}
+
+bool ReductionFission::hasStream(Value *V) const {
+  auto It = Encodings.find(V);
+  return It != Encodings.end() && StoragePlans[It->second.Buffer].Start;
+}
+
 void ReductionFission::planContribution(Reduction &R) {
   // Combining existing output streams would add an owned full-trip buffer.
   // Prefer their zero-scratch representation; each accumulator still gets its
@@ -220,7 +246,7 @@ void ReductionFission::planContribution(Reduction &R) {
   // Raw multiplicands are not contribution streams: the independent product
   // of an fmuladd still belongs in Map, even if its factors could be reloaded.
   if (!HasProduct && !R.Inputs.empty() &&
-      all_of(R.Inputs, [&](Value *V) { return Streams.contains(V); })) {
+      all_of(R.Inputs, [&](Value *V) { return hasStream(V); })) {
     R.ContributionReason = "existing streams avoid owned scratch";
     return;
   }
@@ -408,9 +434,17 @@ void ReductionFission::planContribution(Reduction &R) {
   R.ContributionGuard = Guard;
   R.ContributionInvariant = Invariant && !Guard;
   R.Inputs.clear();
-  // Use the update only as a typed storage-plan key during read-only analysis.
-  // execute() replaces it with the accumulator-independent contribution.
-  R.Inputs.insert(R.Descriptor.getLoopExitInstr());
+  if (!Guard && R.ContributionChain.size() == 1 && !HasProduct) {
+    Instruction *I = R.ContributionChain.front();
+    auto *Left = dyn_cast<Instruction>(I->getOperand(0));
+    // Flattening control does not change this term. Keep its storage encoding
+    // instead of planning a fresh buffer under the update's placeholder key.
+    R.Inputs.insert(I->getOperand(Left && R.Slice.contains(Left) ? 1 : 0));
+  } else {
+    // Use the update only as a typed key for a newly computed contribution.
+    // execute() replaces it with the accumulator-independent value.
+    R.Inputs.insert(R.Descriptor.getLoopExitInstr());
+  }
 }
 
 bool ReductionFission::sameContribution(const Reduction &A,
@@ -613,10 +647,13 @@ bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
   // load/store. Whole-object alias queries cover other iterations as well.
   // Keep conditional paths on scratch: availability and control replay need
   // separate proofs. A read-only loop can have an empty Map after reuse.
-  if (L->getNumBlocks() == 1) {
-    auto TryStream = [&](Value *V, Value *Ptr, Align Alignment,
-                         Instruction *Writer, Type *StoredType, ElementCount VF,
-                         unsigned ExtendOpcode = 0) {
+  {
+    auto TryStream = [&](Value *Logical, Value *Stored, Value *Ptr,
+                         Align Alignment, Instruction *Writer, ElementCount VF,
+                         ArrayRef<CastInst *> Decode) {
+      if (L->getNumBlocks() != 1)
+        return false;
+      Type *StoredType = Stored->getType();
       if (StoredType->getScalarSizeInBits() % 8 != 0)
         return false;
       // Scalable reducers use predicated loads. If that load is unsupported
@@ -655,51 +692,97 @@ bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
       for (Instruction &I : *L->getHeader())
         if (&I != Writer && isModSet(AA.getModRefInfo(&I, Loc)))
           return false;
-      Streams[V] = {AR->getStart(), Alignment, StoredType, ExtendOpcode};
+      recordEncoding(Logical, {Stored, StoredType, Alignment, AR->getStart()},
+                     Decode);
       return true;
     };
-    for (Reduction &R : Reductions) {
+    DenseMap<Value *, ElementCount> MaxVFs;
+    for (const Reduction &R : Reductions) {
       auto Choices = getLegalVFs(R, TTI);
       if (Choices.empty())
         continue;
-      ElementCount VF = Choices.back();
       for (Value *V : R.Inputs) {
-        if (Streams.contains(V))
+        auto [It, Inserted] = MaxVFs.try_emplace(V, Choices.back());
+        if (!Inserted &&
+            It->second.getKnownMinValue() < Choices.back().getKnownMinValue())
+          It->second = Choices.back();
+      }
+    }
+    for (Reduction &R : Reductions) {
+      for (Value *V : R.Inputs) {
+        auto It = MaxVFs.find(V);
+        if (It == MaxVFs.end())
           continue;
-        if (auto *Load = dyn_cast<LoadInst>(V);
-            Load && Load->isSimple() &&
-            TryStream(V, Load->getPointerOperand(), Load->getAlign(), nullptr,
-                      Load->getType(), VF))
+        // A shared logical input must support every consumer's maximum VF.
+        ElementCount VF = It->second;
+        if (Encodings.contains(V))
           continue;
-        // Exact extensions provide a lossless storage encoding. Read the
-        // original narrower stream and reconstruct the logical contribution
-        // at its load, without allocating a widened copy. Never truncate an
-        // arbitrary computed value based only on its reducer's demanded type.
-        if (auto *Cast = dyn_cast<CastInst>(V);
-            Cast && (Cast->getOpcode() == Instruction::SExt ||
-                     Cast->getOpcode() == Instruction::ZExt ||
-                     Cast->getOpcode() == Instruction::FPExt)) {
-          auto *Load = dyn_cast<LoadInst>(Cast->getOperand(0));
-          if (Load && L->contains(Load) && Load->isSimple()) {
-            // Storage reuse must not make the maximum logical VF unsupported.
-            // Otherwise keep the original Map conversion and widened scratch.
-            if (TTI.getCastInstrCost(
-                       Cast->getOpcode(), VectorType::get(V->getType(), VF),
-                       VectorType::get(Load->getType(), VF),
-                       TargetTransformInfo::CastContextHint::Normal)
-                    .isValid() &&
-                TryStream(V, Load->getPointerOperand(), Load->getAlign(),
-                          nullptr, Load->getType(), VF, Cast->getOpcode()))
-              continue;
-          }
-        }
-        for (User *U : V->users())
-          if (auto *Store = dyn_cast<StoreInst>(U);
-              Store && L->contains(Store) && Store->isSimple() &&
-              Store->getValueOperand() == V &&
-              TryStream(V, Store->getPointerOperand(), Store->getAlign(), Store,
-                        V->getType(), VF))
+        auto TryExisting = [&](Value *Stored, ArrayRef<CastInst *> Decode) {
+          if (auto *Load = dyn_cast<LoadInst>(Stored);
+              Load && L->contains(Load) && Load->isSimple() &&
+              TryStream(V, Stored, Load->getPointerOperand(), Load->getAlign(),
+                        nullptr, VF, Decode))
+            return true;
+          for (User *U : Stored->users())
+            if (auto *Store = dyn_cast<StoreInst>(U);
+                Store && L->contains(Store) && Store->isSimple() &&
+                Store->getValueOperand() == Stored &&
+                TryStream(V, Stored, Store->getPointerOperand(),
+                          Store->getAlign(), Store, VF, Decode))
+              return true;
+          return false;
+        };
+        // Retain already reusable logical streams, including widened outputs.
+        if (TryExisting(V, {}))
+          continue;
+        Value *Stored = V;
+        SmallVector<CastInst *, 2> Decode;
+        while (auto *Cast = dyn_cast<CastInst>(Stored)) {
+          if (!L->contains(Cast) || (Cast->getOpcode() != Instruction::SExt &&
+                                     Cast->getOpcode() != Instruction::ZExt))
             break;
+          if (!TTI.getCastInstrCost(
+                      Cast->getOpcode(), VectorType::get(Cast->getType(), VF),
+                      VectorType::get(Cast->getSrcTy(), VF),
+                      TargetTransformInfo::CastContextHint::Normal)
+                   .isValid())
+            break;
+          Decode.push_back(Cast);
+          Stored = Cast->getOperand(0);
+        }
+        std::reverse(Decode.begin(), Decode.end());
+        // An intermediate extension may already have a reusable output too.
+        for (unsigned I = Decode.size(); I != 0; --I)
+          if (TryExisting(Decode[I - 1]->getOperand(0),
+                          ArrayRef(Decode).drop_front(I - 1)))
+            break;
+        if (hasStream(V))
+          continue;
+        // Preserve fpext input reuse, without narrowing computed FP values.
+        if (auto *Cast = dyn_cast<FPExtInst>(V)) {
+          auto *Load = dyn_cast<LoadInst>(Cast->getOperand(0));
+          if (Load && L->contains(Load) && Load->isSimple() &&
+              TTI.getCastInstrCost(Cast->getOpcode(),
+                                   VectorType::get(V->getType(), VF),
+                                   VectorType::get(Load->getType(), VF),
+                                   TargetTransformInfo::CastContextHint::Normal)
+                  .isValid() &&
+              TryStream(V, Load, Load->getPointerOperand(), Load->getAlign(),
+                        nullptr, VF, {Cast}))
+            continue;
+        }
+        Type *StoredType = getBufferType(Stored);
+        Storage S{Stored, StoredType, DL.getPrefTypeAlign(StoredType)};
+        // Decoding must remain legal at the maximum logical reducer VF.
+        if (VF.isScalable() &&
+            !TTI.isLegalMaskedLoad(VectorType::get(StoredType, VF),
+                                   S.getAccessAlignment(DL),
+                                   DL.getAllocaAddrSpace())) {
+          StoredType = getBufferType(V);
+          S = {V, StoredType, DL.getPrefTypeAlign(StoredType)};
+          Decode.clear();
+        }
+        recordEncoding(V, S, Decode);
       }
     }
   }
@@ -799,11 +882,21 @@ bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
         break;
       }
   }
-  SetVector<Value *> ScratchInputs;
+  SetVector<unsigned> ScratchBuffers;
+  SmallVector<std::pair<Type *, Align>> ScratchInputs;
   for (Reduction &R : Reductions)
-    for (Value *V : R.Inputs)
-      if (!R.ContributionInvariant && !Streams.contains(V))
-        ScratchInputs.insert(V);
+    for (Value *V : R.Inputs) {
+      if (R.ContributionInvariant)
+        continue;
+      // Normalized contributions use a typed placeholder until execution.
+      if (!Encodings.contains(V))
+        recordEncoding(
+            V, {V, getBufferType(V), DL.getPrefTypeAlign(getBufferType(V))});
+      unsigned Buffer = Encodings.find(V)->second.Buffer;
+      const Storage &S = StoragePlans[Buffer];
+      if (!S.Start && ScratchBuffers.insert(Buffer))
+        ScratchInputs.emplace_back(S.StoredType, S.Alignment);
+    }
   // With owned storage, count/byte overflow takes the allocation-failure path.
   // Without storage there is no allocation failure to justify such a trap.
   // Require a representable count rather than changing a full-width (2^N)
@@ -819,7 +912,7 @@ bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
         "scratch-free iteration count may overflow the reducer index");
   Function *F = L->getHeader()->getParent();
   if (!ScratchInputs.empty() &&
-      !fitsOnStack(*F, ScratchInputs.getArrayRef(), BackedgeCount) &&
+      !fitsOnStack(*F, ScratchInputs, BackedgeCount) &&
       (!isLibFuncEmittable(F->getParent(), &TLI, LibFunc_malloc) ||
        !isLibFuncEmittable(F->getParent(), &TLI, LibFunc_free)))
     return Reject("heap scratch requires available malloc and free builtins");
@@ -841,7 +934,7 @@ void ReductionFission::emitPlanRemarks(OptimizationRemarkEmitter &ORE) const {
     R.Phi->printAsOperand(AccumulatorOS, false);
     R.Descriptor.getRecurrenceStartValue()->printAsOperand(InitialOS, false);
     unsigned Borrowed =
-        count_if(R.Inputs, [&](Value *V) { return Streams.contains(V); });
+        count_if(R.Inputs, [&](Value *V) { return hasStream(V); });
     unsigned Scratch = R.ContributionInvariant ? 0 : R.Inputs.size() - Borrowed;
     ORE.emit([&]() {
       return OptimizationRemarkAnalysis("loop-vectorize",
@@ -999,6 +1092,11 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
             "fission.contribution");
       }
     }
+    if (!R.ContributionInvariant && !Encodings.contains(Contribution)) {
+      Encoding E = Encodings.find(R.Inputs.front())->second;
+      StoragePlans[E.Buffer].StoredValue = Contribution;
+      Encodings[Contribution] = E;
+    }
     R.Inputs.clear();
     R.Contribution = Contribution;
     if (!L->isLoopInvariant(Contribution))
@@ -1015,13 +1113,18 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   Value *TC =
       Entry.CreateAdd(WideBTC, ConstantInt::get(IndexTy, 1), "fission.count");
   Value *BadSize = Entry.CreateICmpEQ(TC, ConstantInt::get(IndexTy, 0));
-  SetVector<Value *> Inputs;
+  SetVector<unsigned> ScratchBuffers, ActiveBuffers;
+  SmallVector<std::pair<Type *, Align>> ScratchTypes;
   for (Reduction &R : Reductions)
-    for (Value *V : R.Inputs)
-      if (!Streams.contains(V))
-        Inputs.insert(V);
-  bool UseStack = fitsOnStack(*F, Inputs.getArrayRef(), BackedgeCount);
-  bool HasHeap = !UseStack && !Inputs.empty();
+    for (Value *V : R.Inputs) {
+      unsigned Buffer = Encodings.find(V)->second.Buffer;
+      ActiveBuffers.insert(Buffer);
+      const Storage &S = StoragePlans[Buffer];
+      if (!S.Start && ScratchBuffers.insert(Buffer))
+        ScratchTypes.emplace_back(S.StoredType, S.Alignment);
+    }
+  bool UseStack = fitsOnStack(*F, ScratchTypes, BackedgeCount);
+  bool HasHeap = !UseStack && !ScratchBuffers.empty();
   if (HasHeap) {
     // Heap scratch storage introduces effects absent from a pure scalar kernel.
     F->setMemoryEffects(MemoryEffects::unknown());
@@ -1030,15 +1133,19 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
           Attribute::Speculatable, Attribute::WillReturn})
       F->removeFnAttr(Kind);
   }
-  DenseMap<Value *, Value *> Sizes, Buffers;
-  for (auto &[V, Stream] : Streams)
-    Buffers[V] = Exp.expandCodeFor(Stream.Start, Stream.Start->getType(),
-                                   Pre->getTerminator());
-  for (Value *V : Inputs) {
+  DenseMap<unsigned, Value *> Sizes, Buffers;
+  for (unsigned Buffer : ActiveBuffers) {
+    const Storage &S = StoragePlans[Buffer];
+    if (S.Start)
+      Buffers[Buffer] =
+          Exp.expandCodeFor(S.Start, S.Start->getType(), Pre->getTerminator());
+  }
+  for (unsigned Buffer : ScratchBuffers) {
     auto *Mul = Entry.CreateIntrinsic(
         Intrinsic::umul_with_overflow, {IndexTy},
-        {TC, ConstantInt::get(IndexTy, DL.getTypeAllocSize(getBufferType(V)))});
-    Sizes[V] = Entry.CreateExtractValue(Mul, 0);
+        {TC, ConstantInt::get(IndexTy, DL.getTypeAllocSize(
+                                           StoragePlans[Buffer].StoredType))});
+    Sizes[Buffer] = Entry.CreateExtractValue(Mul, 0);
     BadSize = Entry.CreateOr(BadSize, Entry.CreateExtractValue(Mul, 1));
   }
   BasicBlock *Allocate = BasicBlock::Create(C, "fission.allocate", F, Map);
@@ -1054,19 +1161,21 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   Value *Failed = ConstantInt::getFalse(C);
   if (UseStack) {
     IRBuilder<> Stack(&F->getEntryBlock(), F->getEntryBlock().begin());
-    for (Value *V : Inputs) {
-      auto *Buf = Stack.CreateAlloca(getBufferType(V), TC, "fission.buffer");
-      Buffers[V] = Buf;
+    for (unsigned Buffer : ScratchBuffers) {
+      auto *Buf = Stack.CreateAlloca(StoragePlans[Buffer].StoredType, TC,
+                                     "fission.buffer");
+      Buf->setAlignment(StoragePlans[Buffer].Alignment);
+      Buffers[Buffer] = Buf;
       Alloc.CreateLifetimeStart(Buf);
     }
   } else if (HasHeap) {
     FunctionCallee Malloc = M->getOrInsertFunction(
         "malloc",
         FunctionType::get(PointerType::getUnqual(C), {IndexTy}, false));
-    for (Value *V : Inputs) {
-      auto *Buf = Alloc.CreateCall(Malloc, {Sizes[V]}, "fission.buffer");
+    for (unsigned Buffer : ScratchBuffers) {
+      auto *Buf = Alloc.CreateCall(Malloc, {Sizes[Buffer]}, "fission.buffer");
       Buf->addRetAttr(Attribute::NoAlias);
-      Buffers[V] = Buf;
+      Buffers[Buffer] = Buf;
       Failed = Alloc.CreateOr(Failed, Alloc.CreateIsNull(Buf));
     }
   }
@@ -1085,7 +1194,9 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   Value *Next =
       MapEnd.CreateNUWAdd(Index, ConstantInt::get(IndexTy, 1), "fission.next");
   Index->addIncoming(Next, MapLatch);
-  for (Value *V : Inputs) {
+  for (unsigned Buffer : ScratchBuffers) {
+    const Storage &S = StoragePlans[Buffer];
+    Value *V = S.StoredValue;
     Instruction *Definition = dyn_cast<Instruction>(V);
     BasicBlock *StoreBlock =
         L->isLoopInvariant(V) ? Map : Definition->getParent();
@@ -1093,11 +1204,11 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
                       L->isLoopInvariant(V) || isa<PHINode>(Definition)
                           ? StoreBlock->getFirstInsertionPt()
                           : std::next(Definition->getIterator()));
-    Value *Ptr = Store.CreateGEP(getBufferType(V), Buffers[V], Index);
+    Value *Ptr = Store.CreateGEP(S.StoredType, Buffers[Buffer], Index);
     Value *Data = V->getType()->isIntegerTy(1)
                       ? Store.CreateZExt(V, Type::getInt8Ty(C))
                       : V;
-    Store.CreateStore(Data, Ptr);
+    Store.CreateAlignedStore(Data, Ptr, S.getAccessAlignment(DL));
   }
 
   GeneratedLoops Result{L, {}};
@@ -1166,19 +1277,16 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
             L->isLoopInvariant(V) ? Map : cast<Instruction>(V)->getParent();
         if (!R.CombineOpcode && DefinitionBlock != BB)
           continue;
-        auto Stream = Streams.find(V);
-        Type *StoredType = Stream == Streams.end() ? getBufferType(V)
-                                                   : Stream->second.StoredType;
-        Value *Ptr = B.CreateGEP(StoredType, Buffers[V], RI);
-        auto *Data = B.CreateLoad(StoredType, Ptr, "fission.contribution");
-        Value *Contribution = Data;
-        if (Stream != Streams.end()) {
-          Data->setAlignment(Stream->second.Alignment);
-          if (unsigned Opcode = Stream->second.ExtendOpcode)
-            Contribution = B.CreateCast(Instruction::CastOps(Opcode), Data,
-                                        V->getType(), "fission.extend");
-        } else if (V->getType()->isIntegerTy(1))
-          Contribution = B.CreateTrunc(Data, Type::getInt1Ty(C));
+        const Encoding &E = Encodings.find(V)->second;
+        const Storage &S = StoragePlans[E.Buffer];
+        Value *Ptr = B.CreateGEP(S.StoredType, Buffers[E.Buffer], RI);
+        Value *Contribution = B.CreateAlignedLoad(
+            S.StoredType, Ptr, S.getAccessAlignment(DL), "fission.contribution");
+        if (S.StoredValue->getType()->isIntegerTy(1))
+          Contribution = B.CreateTrunc(Contribution, Type::getInt1Ty(C));
+        for (CastInst *Cast : E.Decode)
+          Contribution = B.CreateCast(Cast->getOpcode(), Contribution,
+                                      Cast->getType(), "fission.extend");
         VM[V] = Contribution;
       }
       if (!R.CombineOpcode && BB != MapLatch) {
@@ -1251,14 +1359,14 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
     Parent->addBasicBlockToLoop(Cleanup, LI);
   IRBuilder<> Clean(Cleanup);
   if (UseStack) {
-    for (Value *V : Inputs)
-      Clean.CreateLifetimeEnd(Buffers[V]);
+    for (unsigned Buffer : ScratchBuffers)
+      Clean.CreateLifetimeEnd(Buffers[Buffer]);
   } else if (HasHeap) {
     FunctionCallee Free = M->getOrInsertFunction(
         "free", FunctionType::get(Type::getVoidTy(C),
                                   {PointerType::getUnqual(C)}, false));
-    for (Value *V : Inputs)
-      Clean.CreateCall(Free, {Buffers[V]});
+    for (unsigned Buffer : ScratchBuffers)
+      Clean.CreateCall(Free, {Buffers[Buffer]});
   }
   Clean.CreateBr(Exit);
   // Values produced by earlier loops dominate cleanup, but must be placed in
