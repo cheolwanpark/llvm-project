@@ -1,4 +1,5 @@
-; RUN: opt -reduction-fission-allow-heap -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
+; RUN: opt -reduction-fission-tile-budget=0 -reduction-fission-allow-heap -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
+; Tiling is disabled here to retain full-loop storage/heap policy coverage.
 ;
 ; Commuted expressions and reordered PHI inputs share storage, never
 ; accumulator loops. Conditional
@@ -180,7 +181,7 @@ exit:
   ret i32 %result
 }
 
-; RUN: opt -reduction-fission-allow-heap -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -pass-remarks-analysis=loop-vectorize -disable-output %s 2>&1 | FileCheck %s --check-prefix=PLAN
+; RUN: opt -reduction-fission-tile-budget=0 -reduction-fission-allow-heap -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -pass-remarks-analysis=loop-vectorize -disable-output %s 2>&1 | FileCheck %s --check-prefix=PLAN
 ; PLAN: reduction 0 accumulator=%s0 initial=%init0 type=float: homogeneous associative scalar contribution; scratch streams=1; borrowed streams=0; shared contribution=false
 ; PLAN: reduction 1 accumulator=%s1 initial=%init1 type=float: homogeneous associative scalar contribution; scratch streams=1; borrowed streams=0; shared contribution=true
 ; PLAN: reduction 0 accumulator=%s0 initial=%init0 type=float: conditional scalar contribution with identity; scratch streams=1; borrowed streams=0; shared contribution=false

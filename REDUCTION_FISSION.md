@@ -6,10 +6,13 @@ of this LLVM 23.1.3 worktree. It includes the
 storage encoding changes in commit `7b5de8dce79b` (separate physical storage and
 consumer decoding), followed by conservative structural filters, explicit heap
 permission, proven bounded stack capacity, and transactional Normal fallback.
+The latest change adds fixed-capacity tiled stack execution and permits normal
+short-loop folding for regions with exactly one reducer.
 These behaviors are local to this implementation; an unmodified LLVM installation does not accept its selection syntax.
 
-The contract is **N independent reductions → one full-trip Map → N separate
-reducer loops**. Each reducer completes its accumulation and horizontal collapse
+The contract is **N independent reductions → one Map → N separate reducer
+loops**, over the full invocation when storage fits or repeated for each tile.
+Each reducer completes its accumulation and horizontal collapse
 before the next reducer starts. Existing stream reuse may leave an effect-free
 Map empty, in which case it is explicitly removed. Independent products remain
 Map contributions; storage sharing never fuses reducers.
@@ -17,8 +20,9 @@ Map contributions; storage sharing never fuses reducers.
 Sections 1–8 describe current behavior and usage. Section 9 records validation
 of the storage encoding change. Section 10 preserves the earlier report's
 **pre-LLVM-23.1.3-rebase** campaign evidence; those campaign and QEMU results have
-not been rerun for the policy change and are not current performance measurements.
-Section 11 records the policy change and its current validation.
+not been rerun for the policy or tiling changes and are not current performance
+measurements. Section 11 records validation at the preceding policy commit.
+Section 12 records the tiled-execution and single-reducer-folding validation.
 
 The change extends the existing hidden LLVM option **`-force-vector-width`**
 with **`fission:N`**. It does not introduce a separate public Clang driver flag.
@@ -34,9 +38,10 @@ Pass LLVM options directly to `opt`, or through `-mllvm` when invoking Clang.
 | `-force-vector-width=fission:4 -scalable-vectorization=on` | Request Fission with a scalable Map VF of `vscale x 4`. |
 | `-reduction-fission-allow-heap` | Default **false**. Permit the existing legal heap path when bounded stack storage is unavailable. |
 | `-reduction-fission-stack-budget=N` | Default **16384 bytes**. Aggregate IR static-allocation budget, including existing allocas and alignment. Zero disables stack scratch, independently of heap permission. |
+| `-reduction-fission-tile-budget=N` | Default **4096 bytes**. Fixed-capacity tile scratch budget, subordinate to the remaining aggregate stack budget. Zero disables tiling; full-loop stack storage remains available. |
 | `-reduction-fission-filter=false` | Disable only the two structural heuristics for experiments; legality and heap permission still apply. The filters default to **true**. |
 
-`N` is a lane count (the known-minimum element count for scalable vectors),
+In `fission:N`, `N` is a lane count (the known-minimum element count for scalable vectors),
 not a byte count, LMUL, interleave count, or reduction VF. The Fission parser
 accepts nonzero powers of two through 64. `fission:0`, `fission:3`, and
 `fission:128` are rejected. `fission:1` parses, but fixed VF1 is scalar and is
@@ -75,16 +80,17 @@ for (i = 0; i < n; ++i)
   dot += dot_input[i];
 ```
 
-The entire Map completes before any reduction begins. There is one separate
-reduction loop per accumulator: no chunking, tiling, or merging of different
-accumulators into one recurrence loop. Buffers contain independent per-iteration
+In full-loop mode the entire Map completes before any reduction begins. In
+tiled mode each Map tile completes before that tile's reducers begin. There is
+one Map and one separate reduction loop per accumulator; different accumulators
+are never merged into one recurrence loop. Buffers contain independent per-iteration
 values, not partial accumulated results. Normalization can combine multiple terms
 into one logical contribution. A legal slice fallback can still consume multiple
 streams. For example, TSVC `s319` retains two reusable output streams and one
 reducer, avoiding a new buffer for their combined value. The copy of `a[i]` in
 the example can also disappear when its input stream is safe to borrow.
 
-Owned stack scratch uses a proven constant full-loop capacity: either the exact
+Full-loop stack scratch uses a proven constant capacity: either the exact
 trip count or ScalarEvolution's constant maximum backedge count plus one.
 For example, `(n & 63) + 1` permits capacity for 64 elements while Map and
 reducers still execute the actual runtime count. Count conversion, addition,
@@ -100,6 +106,52 @@ machine frame, where spills can add space. Stack buffers remain static allocas
 in function entry and are reused across enclosing-loop iterations, with scoped
 lifetime markers. This placement was already present before the policy change;
 no new stack hoisting or dynamic alloca is introduced.
+
+Storage preference is: reuse existing streams and narrow/shared representations;
+full-loop bounded stack storage when it fits; tiled stack storage when supported;
+then Normal fallback or explicitly permitted full-loop heap storage. Tiling does
+not bypass the cheap-Map filter. It is initially limited to single-block source
+loops with a representable total count and the existing legality proofs.
+
+For a tile, let `B` be the smaller of the tile budget and the stack budget left
+after charging existing static allocations. For each **unique owned physical
+buffer**, let `s` be its element allocation size and `a` its allocation alignment.
+Reserve `P = sum(a - gcd(s, a))` for possible tail padding and choose
+`K = floor((B - P) / sum(s))`. If that formula cannot provide a positive capacity,
+use one only if its actual padded layout fits. Reject layouts that cannot fit
+one element of every required buffer. This conservative, deterministic formula
+can leave bytes unused; there is no tile-size or cost search. For example, with
+28 available bytes, an i8 buffer aligned to four bytes and an i32 buffer give
+`K = (28 - 3) / 5 = 5`, using `alignTo(5, 4) + 20 = 28` bytes.
+
+Conceptually, execution is:
+
+```c
+acc0 = original_initial0;
+acc1 = original_initial1;
+base = 0;
+while (base < T) {
+  len = min(K, T - base);
+  for (j = 0; j < len; ++j)
+    map(base + j, scratch[j]);
+  for (j = 0; j < len; ++j)
+    acc0 = reduce0(acc0, contribution0(base, j));
+  for (j = 0; j < len; ++j)
+    acc1 = reduce1(acc1, contribution1(base, j));
+  base += len;
+}
+publish(acc0, acc1);
+```
+
+Owned storage uses `j`; borrowed storage uses `base + j` relative to its original
+proven stream start and physical stride. Map retains its original induction
+state across tiles, including nonzero starts and supported steps; an original
+address need not equal the logical iteration number. Each accumulator's original
+initial value is used once. Only scalar results cross tile boundaries, and the
+existing FP identity/restoration handling remains in force. `T - base` avoids
+an overflowing `base + K`; `len <= T - base` makes advancement safe. The original
+zero-trip guard bypasses the phases and buffer lifetimes. Capacity one and short
+final tiles use the same construction.
 
 Heap scratch is **disabled by default**. If permitted bounded stack storage
 cannot be obtained, the pass runs Normal planning. Explicit
@@ -253,11 +305,19 @@ alignment. The `storage-encoding` test exercises this distinction with a custom
 data layout and a 512-byte stack budget.
 
 All distinct owned buffers remain live through Map and until every consumer has
-finished. Sequential reducers do not make their buffer lifetimes disjoint:
-**all contents must survive completion of Map**. No overlapping scratch arena,
-heap hoisting, tiling, reducer fusion, general profitability model, or new VF
-search is introduced. The subsequent policy change controls heap permission
-without changing these lifetimes.
+finished. In tiled mode, all contents of a tile must survive until that tile's
+last consumer finishes; the next Map tile then overwrites the same buffers.
+Each unique buffer is allocated once in function entry, with lifetime markers
+around the whole source invocation, not each tile. This also supports reuse
+across repeated enclosing-loop invocations. Sequential reducers do not justify
+disjoint buffer lifetimes. No overlapping scratch arena, heap hoisting, reducer
+fusion, general profitability model, or new VF search is introduced.
+
+Interleaving Map tiles with reducers retains the existing Map recurrence, alias,
+and accumulator-independence checks. Reducers write no observable memory and
+read only owned contributions or borrowed streams proven stable across all Map
+iterations. Later Map tiles therefore cannot invalidate borrowed values observed
+by an earlier reducer. Buffer capacity does not weaken these proofs.
 
 ### Candidates, planning, and rollback
 
@@ -414,6 +474,10 @@ Generated components carry internal metadata:
 
 - `llvm.loop.reduction.fission.generated` identifies both Map and reductions.
 - `llvm.loop.reduction.fission.reduction` additionally identifies reductions.
+- `llvm.loop.reduction.fission.single` marks a reducer from a source region with
+  exactly one reducer. It survives reducer-VF selection and allows short-loop
+  folding. Counting PHIs in an individual generated loop cannot establish this
+  region-level condition.
 - Their own `llvm.loop.vectorize.width`, `llvm.loop.vectorize.scalable.enable`,
   `llvm.loop.vectorize.enable`, and `llvm.loop.interleave.count` specify the
   selected component policy.
@@ -459,7 +523,6 @@ EOF
 "$RF_BIN/clang" --target=riscv64 -march=rv64gcv -mabi=lp64d \
   -O2 -ffast-math -ffp-contract=off \
   -mllvm -force-vector-width=fission:4 \
-  -mllvm -reduction-fission-allow-heap \
   -mllvm -scalable-vectorization=off \
   -Rpass=loop-vectorize -Rpass-analysis=loop-vectorize \
   -Rpass-missed=loop-vectorize -fsave-optimization-record=yaml \
@@ -470,12 +533,13 @@ EOF
   -verify-machineinstrs "$RF_OUT/clang.ll" -o "$RF_OUT/clang.s"
 ```
 
-The count argument has no small proven bound, so this example explicitly permits
-heap scratch. Omitting that permission exercises Normal fallback. Rebuild
-`clang` as well as `opt`/`llc` before testing current frontend behavior.
+The count argument has no small proven bound, so supported single-block loops
+use tiled stack scratch by default. To exercise Normal fallback for this dynamic
+owned-storage example, add `-mllvm -reduction-fission-tile-budget=0`; to permit the
+full-loop heap path instead, also add `-mllvm -reduction-fission-allow-heap`.
+Rebuild `clang` as well as `opt`/`llc` before testing current frontend behavior.
 
-For the wider scalable example, retain heap permission and replace the Map
-width/scalable settings with:
+For the wider scalable example, replace the Map width/scalable settings with:
 
 ```sh
 -mllvm -force-vector-width=fission:16 \
@@ -508,7 +572,6 @@ scalar IR first avoids comparing against an already-vectorized input.
 "$RF_BIN/opt" -passes='loop-vectorize,verify' \
   -mtriple=riscv64 -mattr=+v,+f,+d \
   -force-vector-width=fission:4 -scalable-vectorization=off \
-  -reduction-fission-allow-heap \
   -verify-dom-info -verify-loop-info -verify-scev \
   -pass-remarks=loop-vectorize -pass-remarks-analysis=loop-vectorize \
   -pass-remarks-missed=loop-vectorize \
@@ -562,11 +625,14 @@ Examine actual SEW/LMUL and memory EEW:
 `e8,m2` followed by `vle32.v` has EMUL8, just as `e8,m1` with `vle64.v` does.
 Look at register use and control flow, not only mnemonic presence.
 
-Generated reducer VPlans retain runtime EVL and loop boundaries even for short
-trips, so each accumulator collapses before the next reducer. Normal and Map
-retain their ordinary single-iteration folding; later optimization can also
-replace a copy Map with `memcpy`. Inspect both immediate and final IR. Wider
-groups can still increase register pressure. InstCombine avoids sinking a
+For regions with multiple reducers, generated reducer VPlans retain runtime EVL
+and loop boundaries even for short trips, so each accumulator collapses before
+the next reducer. With exactly one reducer, the explicit region marker permits
+normal single-iteration folding in full-loop and tiled modes. VPlan can also
+bound a decreasing AVL by its initial tile length. This simplification remains
+disabled for multi-reducer regions. Normal and Map retain their ordinary folding;
+later optimization can also replace a copy Map with `memcpy`. Inspect both
+immediate and final IR. Wider groups can still increase register pressure. InstCombine avoids sinking a
 vector's final scalar-producing use across a dominating call or a subsequent
 natural loop, including backedge uses that precede the exit reduction. Other
 register-pressure costs remain possible. No speedup is promised.
@@ -581,7 +647,9 @@ register-pressure costs remain possible. No speedup is promised.
   sufficiently small VF. Incomplete dependence information is diagnosed.
 - Branch CFGs require a countable unique latch exit. Conditions may be buffered;
   conditional values are loaded only along paths where Map initialized them.
-  Early exits and unsupported non-branch CFGs are rejected.
+  Early exits and unsupported non-branch CFGs are rejected. Supported multi-block
+  branch CFGs can use full-loop storage, but cannot currently tile. Supported
+  single-block selects retain existing reduction-recognition requirements.
 - FP permissions must already permit the chosen reduction. Ordered FP is not
   silently converted to unordered FP. Initial values, zero trips, tails, and
   required signed-zero behavior remain part of legality and execution.
@@ -595,9 +663,15 @@ register-pressure costs remain possible. No speedup is promised.
 - Preserve generated-loop option isolation, IC1, independent maximum-width
   planning, and suppression of per-iteration horizontal collapse. Do not infer
   maximum legal reduction width from a preferred-register-width query.
-- Budget unique physical storage using a proven constant capacity while
-  executing the runtime count. Preserve existing static-allocation accounting;
-  heap permission and structural-filter controls are independent.
+- Budget unique physical storage using a proven full-loop bound or fixed tile
+  capacity while executing the actual runtime count. Preserve existing
+  static-allocation accounting; heap permission and structural-filter controls
+  are independent. Tile planning must not accept a possibly overflowing total
+  count or a layout that cannot fit one element per unique owned buffer.
+- Carry scalar reduction results and original induction state between tiles.
+  Do not carry wide vector accumulators across Map phases or reapply initial
+  values on each tile. Full-loop and tiled single-reducer regions can fold;
+  retain loop preservation for multi-reducer regions.
 - Discard rejected trials before running fresh Normal planning. Never use the
   Fission Map VF as a forced Normal VF or silently commit a rejected loop as
   scalar alongside another successful Fission loop.
@@ -615,6 +689,7 @@ register-pressure costs remain possible. No speedup is promised.
 | Selection, component planning, transaction, and reduction policy | [LoopVectorize.cpp](llvm/lib/Transforms/Vectorize/LoopVectorize.cpp) |
 | Hint precedence and FP safeguards | [LoopVectorizationLegality.cpp](llvm/lib/Transforms/Vectorize/LoopVectorizationLegality.cpp) |
 | Existing RVV tuning options | [RISCVTargetTransformInfo.cpp](llvm/lib/Target/RISCV/RISCVTargetTransformInfo.cpp), [RISCVSubtarget.cpp](llvm/lib/Target/RISCV/RISCVSubtarget.cpp) |
+| Short-loop/EVL simplification | [VPlanTransforms.cpp](llvm/lib/Transforms/Vectorize/VPlanTransforms.cpp), [VPlanTransforms.h](llvm/lib/Transforms/Vectorize/VPlanTransforms.h) |
 | Concise implementation documentation | [ReductionFission.rst](llvm/docs/ReductionFission.rst) |
 
 Run the focused regression tests from the project root:
@@ -645,6 +720,16 @@ and count/multiplication overflow risks. The
 preserves indexed/division/complex-FMA Maps, shared physical storage, and multiple
 reusable-input reducers. The transaction test compares a failed private trial's
 fallback output against a separate Normal invocation.
+The [tiled execution regression](llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-tiled.ll)
+covers dynamic counts, shared narrow storage, mixed indexing and stepped
+inductions, scalar carry, FP/fmuladd semantics, conditional selects, and nested
+invocation. The [tiled controls](llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-tiled-control.ll)
+cover disabled/insufficient budgets, capacity one, alignment and existing stack
+charges, filters, unsupported CFG/ordered/strict-FMA cases, overflow rejection,
+and rollback. The [single-reducer folding regression](llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-single-reducer-fold.ll)
+checks full-loop and tiled folding in IR and assembly, with multi-reducer
+counterparts retaining their backedges. Earlier full-loop storage/heap tests
+explicitly disable tiling to keep their original coverage.
 Machine-verified cleanup and pressure tests cover independent reductions.
 The InstCombine test covers vector-to-scalar sinking around calls and loops,
 including accumulator backedges, later vector uses, and shared constants.
@@ -899,8 +984,9 @@ validation completed for the subsequent storage encoding change.
 
 ## 11. Conservative policy and Normal fallback validation
 
-The policy change retains full-loop distribution and introduces no tiling,
-VF tuning, general instruction-cost model, malloc hoisting, or disjoint-lifetime
+The preceding policy change (`b613964deac3`) retained full-loop distribution and
+introduced no tiling, VF tuning, general instruction-cost model, malloc
+hoisting, or disjoint-lifetime
 arena reuse. Existing function-entry stack placement is preserved. Heap
 permission is an explicit resource policy, separate from the two structural
 heuristics and from legality.
@@ -915,7 +1001,7 @@ for the change, not measurements rerun here or proof that every heap case loses.
 No fixture-specific row length is used as a bound.
 
 `opt` and `llc` were rebuilt in `build-fission` with assertions enabled and
-RISC-V/AArch64 targets. Current checks completed for this patch:
+RISC-V/AArch64 targets. Checks completed at that policy commit:
 
 | Check | Result and scope |
 |---|---|
@@ -927,7 +1013,7 @@ RISC-V/AArch64 targets. Current checks completed for this patch:
 | CFG audit self-tests | Passed, including constant-exit, unreachable-loop, and late-collapse fixtures. |
 | RVV runtime / performance measurement | Not rerun. These compiler checks do not establish a measured speedup or replace the historical executable validation. |
 
-Reproduce the current checks from the repository root:
+The policy-stage checks used these commands from the repository root:
 
 ```sh
 cmake --build build-fission --target opt llc -j 8
@@ -942,3 +1028,70 @@ python3 llvm/utils/reduction-fission/audit.py --self-test "$RF_BIN/opt"
 The new tests include their own target settings and representative lowering
 commands. Existing structural tests explicitly enable heap or disable filters
 only where needed to retain their intended transformation coverage.
+
+## 12. Tiled execution and single-reducer folding validation
+
+This change retains the minimal policy, one Map, and one reducer per original
+accumulator. Storage sharing does not change the reducer count. It adds no
+whole-nest flattening, general CFG distribution, heap arena/hoisting,
+disjoint-region pooling, vector-accumulator carry, VF search, or general
+profitability model. Tile-loop construction repairs LoopInfo, rebuilds the
+dominator tree, forgets ScalarEvolution loop state, and restores recursive LCSSA.
+A failed component trial still rolls back the entire function and runs Normal.
+
+The supplied motivation reported a 16-tap FIR repeated across 155 outputs
+slowing from **7,798 to 16,379 cycles**, despite only **128 bytes of scratch**.
+The retained one-iteration reducer loop and scratch traffic showed that bounded
+storage alone was insufficient. A separate five-reduction/eight-item-row case
+paid repeated setup and collapse costs. These are prior observations, not new
+measurements. Only the single-reducer preservation decision changes; the latter
+multi-reducer case does not justify broadly folding protected reducers.
+
+Tiling can reduce live scratch and improve locality, but does not remove total
+scratch stores/loads or recover an FMA split by contribution materialization.
+It adds repeated phase setup and horizontal reductions. Neither these tests nor
+the earlier measurements establish how much folding recovers or that every
+tiled case becomes faster. Ordered reductions gain no reassociation permission;
+`llvm.fmuladd` remains distinct from strict `llvm.fma`.
+
+Validation completed with assertion-enabled `build-fission` tools:
+
+| Check | Result and scope |
+|---|---|
+| RISC-V LoopVectorize directory plus top-level Fission tests | **143/143 passed**. Includes the three new regressions and the existing multi-reducer short-loop tests. |
+| Focused Fission lit suite | **32/32 passed**. Full-loop heap/storage cases explicitly disable tiling where their checks require that path. |
+| IR verification | `loop-simplify,lcssa,loop-vectorize,verify` with `-verify-dom-info -verify-loop-info -verify-scev`; small budgets test fixed entry allocation, scalar carry, remaining-count arithmetic, indexing, legality and rollback. |
+| RISC-V lowering | Representative narrow/shared, multiple-reducer, remainder, nested and folding cases pass `llc -verify-machineinstrs`. Folding tests also check reducer control flow in assembly without fixed register names or instruction counts. |
+| QEMU execution | Available and passed: 19 counts, tile/stack budgets of **4, 8 and 16 bytes**, and **VLEN128/256**; additionally fixed Map VF2 at budget16/VLEN128. Scalable Map uses `vscale x 2`. |
+| Runtime scope | Modular integer references, shared signed/unsigned byte decoding, borrowed/owned indexing with nonzero starts and step two, nonzero initial values, seven enclosing-loop invocations, reassociable FP, and supported conditional FP selects. |
+| Performance | No new cycle measurements or benchmark speedup claim. The historical campaign was not rerun. |
+
+The executed counts were `0, 1, 2, 3, 4, 5, 7, 8, 9, 11, 15, 16, 17, 19, 31,
+32, 33, 35, 63`, covering capacity one, exact boundaries and short final tiles
+for the tested physical layouts. FP reference data used small exactly
+representable values; this is not a requirement for bitwise equality of arbitrary
+reassociated sums. All-skipped conditional updates also preserved the bits of
+positive/negative signaling NaNs, negative/positive zero and positive infinity.
+The runtime harness and ELF artifacts were local validation files under
+`/tmp/fission-exec`; they are not a checked-in benchmark or durable evidence
+package. The committed IR regressions provide the transformation/lowering cases.
+
+Reproduce the committed regression coverage from the repository root:
+
+```sh
+cmake --build build-fission --target opt llc -j 6
+RF_BIN="$(cd build-fission/bin && pwd)"
+"$RF_BIN/llvm-lit" -v -j 6 \
+  llvm/test/Transforms/LoopVectorize/RISCV \
+  llvm/test/Transforms/LoopVectorize/reduction-fission-*.ll
+```
+
+For the executed kernels, `opt` used the verifier pipeline above, `-mtriple=riscv64`,
+`-mattr=+v,+f,+d`, `-mcpu=xiangshan-kunminghu`,
+`-riscv-v-vector-bits-min=128`, `-force-vector-width=fission:2`, and
+`-reduction-fission-filter=false`, with the small budgets listed above.
+`llc` produced RV64 bare-metal objects with machine verification. A freestanding
+scalar-reference harness, compiled with vectorization disabled, ran under
+`qemu-system-riscv64 -M virt -cpu rv64,v=true,vlen=128,elen=64 -bios none`
+(and `vlen=256`). All runs exited successfully; these are correctness checks,
+not QEMU timing comparisons.

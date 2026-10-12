@@ -1,4 +1,5 @@
-; RUN: opt -reduction-fission-allow-heap -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
+; RUN: opt -reduction-fission-tile-budget=0 -reduction-fission-allow-heap -passes='loop-vectorize,verify' -mtriple=riscv64 -mattr=+v,+f,+d -force-vector-width=fission:2 -scalable-vectorization=on -verify-dom-info -verify-loop-info -verify-scev -S %s | FileCheck %s
+; Tiling is disabled here to retain full-loop storage/heap policy coverage.
 ;
 ; One scalar contribution per iteration for a two-term associative chain.
 ; The accumulator appears exactly once, and its initial value is used only in

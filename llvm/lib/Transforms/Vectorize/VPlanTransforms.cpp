@@ -2453,8 +2453,23 @@ bool VPlanTransforms::simplifyKnownEVL(VPlan &Plan, ElementCount VF,
         continue;
 
       const SCEV *AVLSCEV = vputils::getSCEVExprForVPValue(AVL, PSE);
-      if (isa<SCEVCouldNotCompute>(AVLSCEV))
-        continue;
+      if (isa<SCEVCouldNotCompute>(AVLSCEV)) {
+        // EVL tail folding counts AVL down from the trip count with a nuw
+        // subtraction. Its initial value bounds every subsequent AVL, including
+        // when the trip count is a bounded runtime tile length.
+        VPValue *Start, *Next;
+        if (!match(AVL, m_VPInstruction<Instruction::PHI>(m_VPValue(Start),
+                                                          m_VPValue(Next))) ||
+            !match(Next, m_Sub(m_Specific(AVL),
+                               m_ZExtOrSelf(m_Specific(R.getVPSingleValue())))))
+          continue;
+        auto *Sub = dyn_cast<VPRecipeWithIRFlags>(Next);
+        if (!Sub || !Sub->hasNoUnsignedWrap())
+          continue;
+        AVLSCEV = vputils::getSCEVExprForVPValue(Start, PSE);
+        if (isa<SCEVCouldNotCompute>(AVLSCEV))
+          continue;
+      }
       ScalarEvolution &SE = *PSE.getSE();
       const SCEV *VFSCEV = SE.getElementCount(AVLSCEV->getType(), VF);
       if (!SE.isKnownPredicate(CmpInst::ICMP_ULE, AVLSCEV, VFSCEV))

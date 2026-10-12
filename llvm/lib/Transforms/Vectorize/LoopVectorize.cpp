@@ -5946,13 +5946,12 @@ DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
   // Retrieving VectorPH now when it's easier while VPlan still has Regions.
   VPBasicBlock *VectorPH = cast<VPBasicBlock>(BestVPlan.getVectorPreheader());
 
-  // Each fission reducer must finish its vector accumulation and collapse
-  // before the next reducer starts. Folding short reducers into straight-line
-  // code loses that boundary and exposes independent maximum-width vectors to
-  // joint scheduling. Keep their EVL-controlled loops, including for short
-  // trips. Map and ordinary loops retain the usual single-iteration folding.
+  // Multiple reducers must collapse before the next wide accumulator starts.
+  // The explicit region-level single-reducer marker permits ordinary short-loop
+  // folding; counting PHIs in an individual generated loop cannot establish it.
   bool PreserveReductionLoop =
-      findOptionMDForLoop(OrigLoop, "llvm.loop.reduction.fission.reduction");
+      findOptionMDForLoop(OrigLoop, "llvm.loop.reduction.fission.reduction") &&
+      !findOptionMDForLoop(OrigLoop, "llvm.loop.reduction.fission.single");
   RUN_VPLAN_PASS(VPlanTransforms::materializeConstantVectorTripCount, BestVPlan,
                  BestVF, BestUF, PSE);
   RUN_VPLAN_PASS(VPlanTransforms::optimizeForVFAndUF, BestVPlan, BestVF, BestUF,
@@ -8140,7 +8139,7 @@ bool LoopVectorizePass::processLoop(Loop *L,
       return OptimizationRemark(DEBUG_TYPE, "ReductionFissionSelected",
                                 L->getStartLoc(), L->getHeader())
              << "selected Fission MapVF=" << ore::NV("MapVF", Selected->MapVF)
-             << "; full distribution with "
+             << "; distribution with "
              << ore::NV("Reductions", Fission.getReductionVFs().size())
              << " independent reduction loops";
     });

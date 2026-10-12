@@ -88,10 +88,11 @@ class ReductionFission {
                       ArrayRef<CastInst *> Decode = {});
   bool hasStream(Value *V) const;
   const SCEV *BackedgeCount = nullptr;
-  // Static full-loop capacity proven and budgeted after physical storage
-  // sharing. Execution always uses BackedgeCount + 1, including for dynamic
-  // trip counts.
+  // Static full-loop or tile capacity, budgeted after physical storage sharing.
+  // Execution covers BackedgeCount + 1 iterations in total.
   std::optional<uint64_t> StackCapacity;
+  // StackCapacity bounds each tile instead of the entire invocation.
+  bool Tiled = false;
   std::string Failure;
 
 public:

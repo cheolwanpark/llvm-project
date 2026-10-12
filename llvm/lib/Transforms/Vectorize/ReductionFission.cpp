@@ -28,6 +28,7 @@
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
+#include <numeric>
 
 using namespace llvm;
 
@@ -35,6 +36,11 @@ static cl::opt<unsigned> StackBudget(
     "reduction-fission-stack-budget", cl::Hidden, cl::init(16384),
     cl::desc("Maximum aggregate static alloca bytes in a function when placing "
              "reduction fission scratch on the stack (0 disables)"));
+
+static cl::opt<unsigned> TileBudget(
+    "reduction-fission-tile-budget", cl::Hidden, cl::init(4096),
+    cl::desc("Maximum bytes for fixed-capacity tiled reduction fission scratch "
+             "within the aggregate stack budget (0 disables tiling)"));
 
 // Resource permission is independent of the experimental structural heuristics.
 static cl::opt<bool> AllowHeap(
@@ -56,51 +62,85 @@ static Type *getBufferType(Value *V) {
 // This bounds IR storage, not the final frame (which may also contain spills).
 // Reject unknown existing stack use, and charge all allocations, including
 // scratch for previously transformed loops. No dynamic alloca is introduced.
-static std::optional<uint64_t>
-getStackCapacity(Function &F, ArrayRef<std::pair<Type *, Align>> Inputs,
-                 const SCEV *MaxBackedgeCount) {
+static std::optional<uint64_t> getAvailableStackBytes(Function &F) {
   if (!StackBudget || F.hasFnAttribute(Attribute::Naked))
     return std::nullopt;
-  const auto *BTC = dyn_cast<SCEVConstant>(MaxBackedgeCount);
-  if (!BTC)
-    return std::nullopt;
   const DataLayout &DL = F.getDataLayout();
-  // Check before narrowing; a wrapped capacity must never look affordable.
-  unsigned IndexBits = DL.getPointerSizeInBits();
-  if (BTC->getAPInt().getActiveBits() > IndexBits)
-    return std::nullopt;
-  APInt Count = BTC->getAPInt().zextOrTrunc(IndexBits);
-  bool Overflow;
-  Count = Count.uadd_ov(APInt(Count.getBitWidth(), 1), Overflow);
-  if (Overflow || Count.ugt(StackBudget))
-    return std::nullopt;
-
   uint64_t Used = 0;
-  auto Charge = [&](uint64_t Size, Align Alignment) {
-    if (Size > StackBudget || Alignment.value() > StackBudget)
-      return false;
-    // Both operands are bounded by the unsigned budget, so alignment cannot
-    // overflow uint64_t. Subtraction checks the subsequent aggregate addition.
-    uint64_t Padded = alignTo(Size, Alignment);
-    if (Padded > StackBudget - Used)
-      return false;
-    Used += Padded;
-    return true;
-  };
   for (Instruction &I : instructions(F))
     if (auto *AI = dyn_cast<AllocaInst>(&I)) {
       auto Size = AI->getAllocationSize(DL);
       if (!AI->isStaticAlloca() || !Size || Size->isScalable() ||
-          !Charge(Size->getFixedValue(), AI->getAlign()))
+          Size->getFixedValue() > StackBudget ||
+          AI->getAlign().value() > StackBudget)
         return std::nullopt;
+      uint64_t Padded = alignTo(Size->getFixedValue(), AI->getAlign());
+      if (Padded > StackBudget - Used)
+        return std::nullopt;
+      Used += Padded;
     }
+  return StackBudget - Used;
+}
+
+static bool fitsStackLayout(const DataLayout &DL,
+                            ArrayRef<std::pair<Type *, Align>> Inputs,
+                            uint64_t Capacity, uint64_t Budget) {
   for (auto [Ty, Alignment] : Inputs) {
-    uint64_t ElementSize = DL.getTypeAllocSize(Ty).getFixedValue();
-    if (ElementSize > StackBudget / Count.getZExtValue() ||
-        !Charge(ElementSize * Count.getZExtValue(), Alignment))
-      return std::nullopt;
+    uint64_t Size = DL.getTypeAllocSize(Ty).getFixedValue();
+    if (Size > Budget / Capacity || Alignment.value() > StackBudget)
+      return false;
+    uint64_t Padded = alignTo(Size * Capacity, Alignment);
+    if (Padded > Budget)
+      return false;
+    Budget -= Padded;
   }
+  return true;
+}
+
+static std::optional<uint64_t>
+getStackCapacity(Function &F, ArrayRef<std::pair<Type *, Align>> Inputs,
+                 const SCEV *MaxBackedgeCount) {
+  auto Available = getAvailableStackBytes(F);
+  const auto *BTC = dyn_cast<SCEVConstant>(MaxBackedgeCount);
+  if (!Available || !BTC)
+    return std::nullopt;
+  const DataLayout &DL = F.getDataLayout();
+  unsigned IndexBits = DL.getPointerSizeInBits();
+  if (BTC->getAPInt().getActiveBits() > IndexBits)
+    return std::nullopt;
+  bool Overflow;
+  APInt Count = BTC->getAPInt().zextOrTrunc(IndexBits);
+  Count = Count.uadd_ov(APInt(IndexBits, 1), Overflow);
+  if (Overflow || Count.ugt(*Available) ||
+      !fitsStackLayout(DL, Inputs, Count.getZExtValue(), *Available))
+    return std::nullopt;
   return Count.getZExtValue();
+}
+
+static std::optional<uint64_t>
+getTileCapacity(Function &F, ArrayRef<std::pair<Type *, Align>> Inputs) {
+  auto Available = getAvailableStackBytes(F);
+  if (!TileBudget || !Available)
+    return std::nullopt;
+  uint64_t Budget = std::min<uint64_t>(*Available, TileBudget);
+  const DataLayout &DL = F.getDataLayout();
+  if (!fitsStackLayout(DL, Inputs, 1, Budget))
+    return std::nullopt;
+  uint64_t BytesPerIteration = 0, Padding = 0;
+  for (auto [Ty, Alignment] : Inputs) {
+    uint64_t Size = DL.getTypeAllocSize(Ty).getFixedValue();
+    BytesPerIteration += Size;
+    // Reserve the maximum possible tail padding of each physical allocation.
+    // This closed-form capacity deliberately does not search tile sizes.
+    Padding += Alignment.value() - std::gcd(Size, Alignment.value());
+  }
+  uint64_t Capacity =
+      Budget > Padding ? (Budget - Padding) / BytesPerIteration : 1;
+  Capacity = std::max<uint64_t>(1, Capacity);
+  if (!isUIntN(DL.getPointerSizeInBits(), Capacity))
+    return std::nullopt;
+  assert(fitsStackLayout(DL, Inputs, Capacity, Budget));
+  return Capacity;
 }
 
 // Vectorization may preserve a finite-distance memory recurrence at a small VF.
@@ -1048,6 +1088,20 @@ bool ReductionFission::analyze(LoopVectorizationLegality &Legal,
   if (!ScratchInputs.empty()) {
     StackCapacity = getStackCapacity(*F, ScratchInputs,
                                      SE.getConstantMaxBackedgeTakenCount(L));
+    // Reducers are pure and read only owned scratch or streams proved stable
+    // across all Map iterations. Interleaving phases therefore needs no weaker
+    // dependence/recurrence rules. Initially keep tiling to single-block Maps,
+    // and prove the total count representable rather than trapping on wrap.
+    if (!StackCapacity && L->getNumBlocks() == 1 &&
+        (BackedgeCount->getType()->getIntegerBitWidth() <
+             DL.getPointerSizeInBits() ||
+         SE.isKnownPredicateAt(
+             CmpInst::ICMP_NE, BackedgeCount,
+             SE.getConstant(APInt::getMaxValue(DL.getPointerSizeInBits())),
+             L->getLoopPreheader()->getTerminator()))) {
+      StackCapacity = getTileCapacity(*F, ScratchInputs);
+      Tiled = StackCapacity.has_value();
+    }
     if (!StackCapacity) {
       if (!AllowHeap)
         return Reject("no permitted bounded scratch storage; selecting Normal");
@@ -1103,7 +1157,8 @@ ReductionFission::getReductionVFChoices() const {
   return Result;
 }
 
-static void setGeneratedHints(Loop *L, ElementCount VF, bool IsReduction) {
+static void setGeneratedHints(Loop *L, ElementCount VF, bool IsReduction,
+                              bool SingleReducer = false) {
   LLVMContext &C = L->getHeader()->getContext();
   SmallVector<Metadata *> MD{nullptr};
   // The Map retains the original memory instructions and their access groups.
@@ -1134,6 +1189,9 @@ static void setGeneratedHints(Loop *L, ElementCount VF, bool IsReduction) {
   if (IsReduction)
     MD.push_back(MDNode::get(
         C, MDString::get(C, "llvm.loop.reduction.fission.reduction")));
+  if (SingleReducer)
+    MD.push_back(
+        MDNode::get(C, MDString::get(C, "llvm.loop.reduction.fission.single")));
   AddInt("llvm.loop.vectorize.width", VF.getKnownMinValue());
   AddInt("llvm.loop.vectorize.scalable.enable", VF.isScalable());
   AddInt("llvm.loop.vectorize.enable", 1);
@@ -1144,7 +1202,9 @@ static void setGeneratedHints(Loop *L, ElementCount VF, bool IsReduction) {
 }
 
 void ReductionFission::setReductionVF(Loop *L, ElementCount VF) {
-  setGeneratedHints(L, VF, true);
+  bool SingleReducer =
+      findOptionMDForLoop(L, "llvm.loop.reduction.fission.single");
+  setGeneratedHints(L, VF, true, SingleReducer);
 }
 
 ReductionFission::GeneratedLoops
@@ -1282,6 +1342,8 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
           Exp.expandCodeFor(S.Start, S.Start->getType(), Pre->getTerminator());
   }
   for (unsigned Buffer : ScratchBuffers) {
+    if (Tiled)
+      continue;
     auto *Mul = Entry.CreateIntrinsic(
         Intrinsic::umul_with_overflow, {IndexTy},
         {TC, ConstantInt::get(IndexTy, DL.getTypeAllocSize(
@@ -1322,12 +1384,66 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
     }
   }
   BasicBlock *MapPre = BasicBlock::Create(C, "fission.map.preheader", F, Map);
-  Alloc.CreateCondBr(Failed, Trap, MapPre);
+  Loop *TileLoop = nullptr;
+  BasicBlock *TileHeader = nullptr, *TileLatch = nullptr;
+  PHINode *Base = nullptr;
+  Value *Length = TC;
+  DenseMap<PHINode *, PHINode *> Carries;
+  if (Tiled) {
+    TileHeader = BasicBlock::Create(C, "fission.tile", F, MapPre);
+    TileLatch = BasicBlock::Create(C, "fission.tile.latch", F, Exit);
+    TileLoop = LI.AllocateLoop();
+    Loop *Parent = L->getParentLoop();
+    if (Parent) {
+      Parent->removeChildLoop(L);
+      Parent->addChildLoop(TileLoop);
+    } else {
+      LI.removeLoop(llvm::find(LI, L));
+      LI.addTopLevelLoop(TileLoop);
+    }
+    TileLoop->addBasicBlockToLoop(TileHeader, LI);
+    // Existing Map blocks already belong to the original enclosing loops.
+    // Add them to the new parent without changing their innermost loop mapping.
+    TileLoop->addChildLoop(L);
+    for (BasicBlock *BB : L->blocks())
+      TileLoop->addBlockEntry(BB);
+    TileLoop->addBasicBlockToLoop(TileLatch, LI);
+    IRBuilder<> Tile(TileHeader);
+    Base = Tile.CreatePHI(IndexTy, 2, "fission.base");
+    Base->addIncoming(ConstantInt::get(IndexTy, 0), Allocate);
+    // Carry scalar reductions and the original induction state. In particular,
+    // an address need not be the zero-based logical iteration number.
+    for (PHINode &P : Map->phis()) {
+      auto *Carry = Tile.CreatePHI(P.getType(), 2, "fission.carry");
+      Value *Initial = P.getIncomingValueForBlock(Pre);
+      if (any_of(Reductions, [&](const Reduction &R) {
+            return R.Phi == &P &&
+                   (R.PreserveInitialNaN || R.PreserveInitialInf ||
+                    R.PreserveInitialZero);
+          }))
+        Initial = Alloc.CreateFreeze(Initial, "fission.initial");
+      Carry->addIncoming(Initial, Allocate);
+      Carries[&P] = Carry;
+    }
+    // Entry is guarded by the source loop, and each backedge has NextBase < TC.
+    // Length <= TC - Base proves both the subtraction and advancement safe.
+    Value *Remaining = Tile.CreateNUWSub(TC, Base, "fission.remaining");
+    Length = Tile.CreateBinaryIntrinsic(
+        Intrinsic::umin, Remaining, ConstantInt::get(IndexTy, *StackCapacity),
+        {}, "fission.length");
+    Tile.CreateBr(MapPre);
+  }
+  Alloc.CreateCondBr(Failed, Trap, Tiled ? TileHeader : MapPre);
   IRBuilder<>(MapPre).CreateBr(Map);
-  for (PHINode &P : Map->phis())
+  for (PHINode &P : Map->phis()) {
+    if (Tiled)
+      P.setIncomingValue(P.getBasicBlockIndex(Pre), Carries[&P]);
     P.replaceIncomingBlockWith(Pre, MapPre);
+  }
   if (Loop *Parent = L->getParentLoop()) {
-    Parent->addBasicBlockToLoop(Allocate, LI);
+    // Allocation/lifetime start stays outside the tile loop.
+    if (Loop *AllocParent = Tiled ? Parent->getParentLoop() : Parent)
+      AllocParent->addBasicBlockToLoop(Allocate, LI);
     Parent->addBasicBlockToLoop(MapPre, LI);
   }
   auto *Index = PHINode::Create(IndexTy, 2, "fission.index", Map->begin());
@@ -1336,6 +1452,12 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   Value *Next =
       MapEnd.CreateNUWAdd(Index, ConstantInt::get(IndexTy, 1), "fission.next");
   Index->addIncoming(Next, MapLatch);
+  if (Tiled) {
+    auto *Branch = cast<CondBrInst>(MapLatch->getTerminator());
+    Branch->setCondition(MapEnd.CreateICmpNE(Next, Length));
+    Branch->setSuccessor(0, Map);
+    Branch->setSuccessor(1, Exit);
+  }
   for (unsigned Buffer : ScratchBuffers) {
     const Storage &S = StoragePlans[Buffer];
     Value *V = S.StoredValue;
@@ -1384,10 +1506,11 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
     auto *RI = Header.CreatePHI(IndexTy, 2, "fission.reduce.index");
     RI->addIncoming(ConstantInt::get(IndexTy, 0), RP);
     auto *Acc = Header.CreatePHI(R.Phi->getType(), 2, "fission.acc");
-    Value *Initial = R.Descriptor.getRecurrenceStartValue();
+    Value *Initial =
+        Tiled ? Carries[R.Phi] : R.Descriptor.getRecurrenceStartValue();
     bool RestoreInitial =
         R.PreserveInitialNaN || R.PreserveInitialInf || R.PreserveInitialZero;
-    if (RestoreInitial) {
+    if (RestoreInitial && !Tiled) {
       // Classification, seeding and restoration must use one consistent value
       // even if the original initializer is undef or poison.
       IRBuilder<> Preheader(RP->getTerminator());
@@ -1421,7 +1544,10 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
           continue;
         const Encoding &E = Encodings.find(V)->second;
         const Storage &S = StoragePlans[E.Buffer];
-        Value *Ptr = B.CreateGEP(S.StoredType, Buffers[E.Buffer], RI);
+        Value *Position = RI;
+        if (Tiled && S.Start)
+          Position = B.CreateNUWAdd(Base, RI, "fission.position");
+        Value *Ptr = B.CreateGEP(S.StoredType, Buffers[E.Buffer], Position);
         Value *Contribution = B.CreateAlignedLoad(
             S.StoredType, Ptr, S.getAccessAlignment(DL), "fission.contribution");
         if (S.StoredValue->getType()->isIntegerTy(1))
@@ -1490,14 +1616,35 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
       Finish.CreateBr(Exit);
       Previous = ReduceExit;
     }
-    B.CreateCondBr(B.CreateICmpNE(RN, TC), RB, ReduceExit);
+    B.CreateCondBr(B.CreateICmpNE(RN, Length), RB, ReduceExit);
     FinalValues[R.Descriptor.getLoopExitInstr()] = Final;
-    setGeneratedHints(RL, R.VF, true);
+    setGeneratedHints(RL, R.VF, true, Reductions.size() == 1);
     Result.Reductions.push_back(RL);
   }
   BasicBlock *Cleanup = BasicBlock::Create(C, "fission.cleanup", F, Exit);
-  Previous->getTerminator()->replaceSuccessorWith(Exit, Cleanup);
-  if (Loop *Parent = L->getParentLoop())
+  Previous->getTerminator()->replaceSuccessorWith(Exit,
+                                                  Tiled ? TileLatch : Cleanup);
+  if (Tiled) {
+    IRBuilder<> Advance(TileLatch);
+    Value *NextBase = Advance.CreateNUWAdd(Base, Length, "fission.base.next");
+    Base->addIncoming(NextBase, TileLatch);
+    for (auto [Phi, Carry] : Carries) {
+      Value *NextValue = Phi->getIncomingValueForBlock(MapLatch);
+      if (FinalValues.contains(NextValue))
+        NextValue = FinalValues[NextValue];
+      Carry->addIncoming(NextValue, TileLatch);
+    }
+    Advance.CreateCondBr(Advance.CreateICmpNE(NextBase, TC), TileHeader,
+                         Cleanup);
+    // This loop sequences phases; only its Map and reducers are vectorized.
+    MDNode *ID = MDNode::getDistinct(
+        C, {nullptr,
+            MDNode::get(C, {MDString::get(C, "llvm.loop.vectorize.enable"),
+                            ConstantAsMetadata::get(Advance.getFalse())})});
+    ID->replaceOperandWith(0, ID);
+    TileLoop->setLoopID(ID);
+  }
+  if (Loop *Parent = Tiled ? TileLoop->getParentLoop() : L->getParentLoop())
     Parent->addBasicBlockToLoop(Cleanup, LI);
   IRBuilder<> Clean(Cleanup);
   if (UseStack) {
@@ -1531,9 +1678,13 @@ ReductionFission::execute(const LoopVectorizationCandidate &Candidate,
   setGeneratedHints(L, Candidate.MapVF, false);
   SE.forgetAllLoops();
   DT.recalculate(*F);
-  formLCSSARecursively(*L, DT, &LI, &SE);
-  for (Loop *Generated : Result.Reductions)
-    formLCSSARecursively(*Generated, DT, &LI, &SE);
+  if (Tiled)
+    formLCSSARecursively(*TileLoop, DT, &LI, &SE);
+  else {
+    formLCSSARecursively(*L, DT, &LI, &SE);
+    for (Loop *Generated : Result.Reductions)
+      formLCSSARecursively(*Generated, DT, &LI, &SE);
+  }
   // Reuse may leave only dead loads, induction and control in Map. Exact
   // backedge analysis already proved termination. Remove it only when it has
   // neither observable effects nor live-outs; a failed nonempty Map must still

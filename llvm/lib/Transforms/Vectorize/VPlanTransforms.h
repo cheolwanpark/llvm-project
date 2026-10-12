@@ -276,7 +276,9 @@ struct VPlanTransforms {
                                  bool PreserveLoop = false);
 
   /// Try to simplify VPInstruction::ExplicitVectorLength recipes when the AVL
-  /// is known to be <= VF, replacing them with the AVL directly.
+  /// is known to be <= VF (including a countdown from a bounded trip count),
+  /// replacing them with the AVL directly. Callers preserving boundaries
+  /// between multiple fission reducers must skip this simplification.
   static bool simplifyKnownEVL(VPlan &Plan, ElementCount VF,
                                PredicatedScalarEvolution &PSE);
 

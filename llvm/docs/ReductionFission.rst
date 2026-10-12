@@ -57,8 +57,9 @@ in force.
 Execution and legality
 ----------------------
 
-Map executes all original iterations before any reduction executes. Separate
-buffers hold independent contributions. Read-only analysis recognizes
+Map executes all iterations of the invocation, or of one tile, before that
+region's reducers execute in sequence. Separate buffers hold independent
+contributions. Read-only analysis recognizes
 homogeneous associative update chains containing the accumulator
 exactly once and plans one combined contribution per iteration. Execution
 materializes that contribution in Map, leaving one combination with the
@@ -142,8 +143,46 @@ Unknown/dynamic existing allocas preclude stack scratch. The budget bounds IR
 storage, not the final machine frame: spills may add space. Entry allocations are
 reused across enclosing-loop iterations; lifetime markers delimit each use.
 
+When full-loop storage does not fit, single-block source loops can use fixed
+capacity tiles. ``-reduction-fission-tile-budget`` defaults to 4096 bytes; zero
+disables tiling. The available tile bytes are the smaller of this budget and the
+remaining aggregate stack budget. For unique owned physical buffers with element
+sizes ``s`` and alignments ``a``, sizing reserves ``sum(a - gcd(s, a))`` bytes for
+possible allocation padding and divides the remainder by ``sum(s)``. A capacity
+of one is allowed if its actual padded layout fits. This conservative closed-form
+rule can leave some bytes unused; it does not search tile sizes. Layouts that
+cannot fit one element of every owned buffer are rejected. Reusable streams and
+narrow/shared encodings are planned first, and full-loop stack storage remains
+preferred when it fits. Neither tiling nor heap permission bypasses the minimal
+structural filters.
+
+A tile executes one Map followed by one loop per original reduction. Its length
+is ``min(capacity, count - base)`` and advancement is ``base + length``, avoiding
+an overflowing ``base + capacity``. Tiling requires a representable total count.
+Owned scratch uses the tile-local index; borrowed streams use ``base + index``
+relative to their proven original starts. Original induction state is carried
+between Maps, retaining nonzero starts and supported steps. Each reduction takes
+its previous scalar result into the next tile, with the original initial value
+used only at invocation entry. Wide vector accumulators do not cross Map phases.
+Buffers are allocated once in the function entry; lifetimes surround the whole
+source invocation, including all its tiles, and permit enclosing-loop reuse.
+
+The existing accumulator-independence, Map recurrence, and stream stability
+proofs still apply. Reducers only read owned contributions or borrowed streams
+proven unchanged by any other Map iteration; they do not write observable memory.
+Consequently interleaving Map tiles with reducers introduces no new memory/value
+flow. Multi-block source CFGs cannot currently tile (single-block selects remain
+subject to existing reduction recognition). Ordered reductions, strict FMA and
+unsupported component plans do not gain new permissions. Failure retains the
+transactional Normal fallback.
+
+Tiling bounds live scratch and can improve locality, but retains total scratch
+stores/loads and any FMA split caused by contribution materialization. Repeated
+phase setup and horizontal reductions can also cost time. Bounded scratch and
+single-reducer folding do not imply a measured speedup.
+
 ``-reduction-fission-allow-heap`` defaults to false. Without permitted bounded
-stack storage, Normal planning runs instead. Setting the stack budget to zero
+full-loop or tiled stack storage, Normal planning runs instead. Setting the stack budget to zero
 disables stack allocation; it does not itself enable heap allocation. Explicit
 heap permission preserves the legal malloc/free path, with checked address-sized
 runtime byte arithmetic and allocation-failure traps. Each unique owned input
@@ -152,7 +191,7 @@ neither allocation legality nor overflow or alias checks. This is an explicit
 resource policy, not evidence that every heap candidate is unprofitable.
 Zero-trip paths bypass allocation; buffers are freed or have their lifetimes
 ended after the last reduction. No profile or benchmark fixture supplies a bound,
-and no tiling or general cost model is used.
+and no general cost model is used.
 
 Every header recurrence must be a normal induction or an eligible independent
 reduction. An accumulator observed by Map memory/control, an intermediate
@@ -189,11 +228,17 @@ variants are rejected by existing target reduction legality. Genuine
 ``llvm.fma`` recurrences are not recognized by the existing reduction descriptor;
 ``llvm.fmuladd`` and separate multiply-plus-add contributions are distinct cases.
 
-For generated reducers, VPlan retains the vector loop and runtime EVL instead
+For regions with multiple generated reducers, VPlan retains the vector loop and
+runtime EVL instead
 of folding a single-iteration region or replacing a known EVL with its AVL.
 This preserves an EVL-controlled backedge through the current RVV O2 pipeline,
 even when the trip count is below VLMAX, so each accumulator collapses before
-the next reducer starts. Normal and Map retain single-iteration folding.
+the next reducer starts. Regions with exactly one reducer carry an explicit
+``llvm.loop.reduction.fission.single`` marker, preserved when selecting its VF.
+They use normal short-loop folding, including a bounded tile length that fits
+one legal vector iteration. This decision uses the source region's reducer count,
+not the number of reduction PHIs in an individual generated loop. Normal and Map
+retain single-iteration folding.
 
 Implementation
 --------------
