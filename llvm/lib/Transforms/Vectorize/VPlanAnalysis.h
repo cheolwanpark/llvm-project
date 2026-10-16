@@ -32,6 +32,8 @@ void collectEphemeralRecipesForVPlan(VPlan &Plan,
 
 /// A struct that represents some properties of the register usage
 /// of a loop.
+class VPlanCostReport;
+
 struct VPRegisterUsage {
   /// Holds the number of loop invariant values that are used in the loop.
   /// The key is ClassID of target-provided register class.
@@ -45,7 +47,8 @@ struct VPRegisterUsage {
   /// is used in place of the target's number of registers.
   InstructionCost spillCost(const TargetTransformInfo &TTI,
                             TargetTransformInfo::TargetCostKind CostKind,
-                            unsigned OverrideMaxNumRegs = 0) const;
+                            unsigned OverrideMaxNumRegs = 0,
+                            VPlanCostReport *Report = nullptr) const;
 };
 
 /// Estimate the register usage for \p Plan and vectorization factors in \p VFs

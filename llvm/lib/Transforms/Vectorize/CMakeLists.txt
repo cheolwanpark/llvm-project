@@ -29,6 +29,7 @@ add_llvm_component_library(LLVMVectorize
   VectorCombine.cpp
   VPlan.cpp
   VPlanAnalysis.cpp
+  VPlanCostReport.cpp
   VPlanConstruction.cpp
   VPlanPredicator.cpp
   VPlanRecipes.cpp

@@ -16,6 +16,7 @@
 #define LLVM_TRANSFORMS_VECTORIZE_VPLANHELPERS_H
 
 #include "VPlanAnalysis.h"
+#include "VPlanCostReport.h"
 #include "VPlanDominatorTree.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -320,6 +321,10 @@ struct VPTransformState {
 
 /// Struct to hold various analysis needed for cost computations.
 struct VPCostContext {
+  VPlanCostReport *Report = nullptr;
+  DenseMap<const Instruction *, StringRef> ReportOwners;
+  DenseMap<const Instruction *, const VPRecipeBase *> ReportRecipeOwners;
+  mutable bool UsedLegacyCost = false;
   const TargetTransformInfo &TTI;
   const TargetLibraryInfo &TLI;
   LLVMContext &LLVMCtx;
@@ -346,6 +351,7 @@ struct VPCostContext {
   /// Return true if the cost for \p UI shouldn't be computed, e.g. because it
   /// has already been pre-computed.
   bool skipCostComputation(Instruction *UI, bool IsVector) const;
+  StringRef getSkippedCostReason(Instruction *UI, bool IsVector) const;
 
   /// Mark the widening decision for \p I at \p VF as invalidated since a VPlan
   /// transform replaced the original recipe.
@@ -416,6 +422,9 @@ class VPSlotTracker {
   std::string getName(const Value *V);
 
 public:
+  // Optional report-local annotations; ordinary VPlan printing has no IDs.
+  const DenseMap<const VPRecipeBase *, unsigned> *RecipeIDs = nullptr;
+
   VPSlotTracker(const VPlan *Plan = nullptr) {
     if (Plan) {
       assignNames(*Plan);

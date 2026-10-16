@@ -315,13 +315,36 @@ InstructionCost VPRecipeBase::cost(ElementCount VF, VPCostContext &Ctx) {
   else if (auto *WidenMem = dyn_cast<VPWidenMemoryRecipe>(this))
     UI = &WidenMem->getIngredient();
 
+  if (Ctx.Report)
+    Ctx.Report->beginRecipe(*this);
+  StringRef Source = "recipe";
   InstructionCost RecipeCost;
   if (UI && Ctx.skipCostComputation(UI, VF.isVector())) {
     RecipeCost = 0;
+    if (Ctx.Report) {
+      Source = Ctx.getSkippedCostReason(UI, VF.isVector());
+      if (auto *Owner = Ctx.ReportRecipeOwners.lookup(UI))
+        Ctx.Report->recipeReference(*Owner);
+    }
   } else {
+    if (Ctx.Report)
+      Ctx.UsedLegacyCost = false;
     RecipeCost = computeCost(VF, Ctx);
+    if (Ctx.Report) {
+      if (Ctx.UsedLegacyCost)
+        Source = "recipe:legacy-fallback";
+      if (UI && Ctx.SkipCostComputation.contains(UI)) {
+        Ctx.ReportOwners.try_emplace(UI, "deduplicated:earlier-recipe");
+        Ctx.ReportRecipeOwners.try_emplace(UI, this);
+      }
+    }
     if (ForceTargetInstructionCost.getNumOccurrences() > 0 &&
         RecipeCost.isValid()) {
+      VP_COST_REPORT(
+          Ctx.Report,
+          OS << "        replacement=force-target-instruction-cost original="
+             << RecipeCost << '\n');
+      Source = "forced-instruction-cost";
       if (UI)
         RecipeCost = InstructionCost(ForceTargetInstructionCost);
       else
@@ -329,6 +352,8 @@ InstructionCost VPRecipeBase::cost(ElementCount VF, VPCostContext &Ctx) {
     }
   }
 
+  if (Ctx.Report)
+    Ctx.Report->recipe(*this, UI, RecipeCost, Source);
   LLVM_DEBUG({
     dbgs() << "Cost of " << RecipeCost << " for VF " << VF << ": ";
     dump();
@@ -338,6 +363,11 @@ InstructionCost VPRecipeBase::cost(ElementCount VF, VPCostContext &Ctx) {
 
 InstructionCost VPRecipeBase::computeCost(ElementCount VF,
                                           VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPRecipeBase::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   llvm_unreachable("subclasses should implement computeCost");
 }
 
@@ -414,7 +444,14 @@ void VPSingleDefRecipe::dump() const { VPRecipeBase::dump(); }
 
 void VPRecipeBase::print(raw_ostream &O, const Twine &Indent,
                          VPSlotTracker &SlotTracker) const {
-  printRecipe(O, Indent, SlotTracker);
+  if (SlotTracker.RecipeIDs) {
+    auto It = SlotTracker.RecipeIDs->find(this);
+    O << Indent;
+    if (It != SlotTracker.RecipeIDs->end())
+      O << "[R" << It->second << "] ";
+    printRecipe(O, "", SlotTracker);
+  } else
+    printRecipe(O, Indent, SlotTracker);
   if (auto DL = getDebugLoc()) {
     O << ", !dbg ";
     DL.print(O);
@@ -1111,11 +1148,22 @@ Value *VPInstruction::generate(VPTransformState &State) {
 
 InstructionCost VPRecipeWithIRFlags::getCostForRecipeWithOpcode(
     unsigned Opcode, ElementCount VF, VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(
+      Ctx.Report, "VPRecipeWithIRFlags::getCostForRecipeWithOpcode");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   Type *ScalarTy = this->getScalarType();
   Type *ResultTy = VF.isVector() ? toVectorTy(ScalarTy, VF) : ScalarTy;
+  VP_COST_DETAIL(Ctx.Report, OS << "        operation opcode="
+                                << Instruction::getOpcodeName(Opcode)
+                                << " type=" << *ResultTy << " vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
   switch (Opcode) {
   case Instruction::FNeg:
-    return Ctx.TTI.getArithmeticInstrCost(Opcode, ResultTy, Ctx.CostKind);
+    return observeVPlanCost(
+        Ctx.Report, "getArithmeticInstrCost",
+        Ctx.TTI.getArithmeticInstrCost(Opcode, ResultTy, Ctx.CostKind));
   case Instruction::UDiv:
   case Instruction::SDiv:
   case Instruction::SRem:
@@ -1147,10 +1195,12 @@ InstructionCost VPRecipeWithIRFlags::getCostForRecipeWithOpcode(
     SmallVector<const Value *, 4> Operands;
     if (CtxI)
       Operands.append(CtxI->value_op_begin(), CtxI->value_op_end());
-    return Ctx.TTI.getArithmeticInstrCost(
-        Opcode, ResultTy, Ctx.CostKind,
-        {TargetTransformInfo::OK_AnyValue, TargetTransformInfo::OP_None},
-        RHSInfo, Operands, CtxI, &Ctx.TLI);
+    return observeVPlanCost(
+        Ctx.Report, "getArithmeticInstrCost",
+        Ctx.TTI.getArithmeticInstrCost(
+            Opcode, ResultTy, Ctx.CostKind,
+            {TargetTransformInfo::OK_AnyValue, TargetTransformInfo::OP_None},
+            RHSInfo, Operands, CtxI, &Ctx.TLI));
   }
   case Instruction::Freeze:
     // NOTE: The only way to ask for the cost is via getInstructionCost, which
@@ -1158,24 +1208,28 @@ InstructionCost VPRecipeWithIRFlags::getCostForRecipeWithOpcode(
     // LoopVectorizationCostModel::getInstructionCost the costs mirror the
     // current behaviour in llvm/Analysis/TargetTransformInfoImpl.h to keep
     // them in sync.
-    return TTI::TCC_Free;
+    return observeVPlanCost(Ctx.Report, "TTI::TCC_Free", TTI::TCC_Free,
+                            "expanded");
   case Instruction::ExtractValue:
-    return Ctx.TTI.getInsertExtractValueCost(Instruction::ExtractValue,
-                                             Ctx.CostKind);
+    return observeVPlanCost(Ctx.Report, "getInsertExtractValueCost",
+                            Ctx.TTI.getInsertExtractValueCost(
+                                Instruction::ExtractValue, Ctx.CostKind));
   case Instruction::ICmp:
   case Instruction::FCmp: {
     Type *ScalarOpTy = getOperand(0)->getScalarType();
     Type *OpTy = VF.isVector() ? toVectorTy(ScalarOpTy, VF) : ScalarOpTy;
     Instruction *CtxI = dyn_cast_or_null<Instruction>(getUnderlyingValue());
-    return Ctx.TTI.getCmpSelInstrCost(
-        Opcode, OpTy, CmpInst::makeCmpResultType(OpTy), getPredicate(),
-        Ctx.CostKind, {TTI::OK_AnyValue, TTI::OP_None},
-        {TTI::OK_AnyValue, TTI::OP_None}, CtxI);
+    return observeVPlanCost(Ctx.Report, "getCmpSelInstrCost",
+                            Ctx.TTI.getCmpSelInstrCost(
+                                Opcode, OpTy, CmpInst::makeCmpResultType(OpTy),
+                                getPredicate(), Ctx.CostKind,
+                                {TTI::OK_AnyValue, TTI::OP_None},
+                                {TTI::OK_AnyValue, TTI::OP_None}, CtxI));
   }
   case Instruction::BitCast: {
     Type *ScalarTy = this->getScalarType();
     if (ScalarTy->isPointerTy())
-      return 0;
+      return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
     [[fallthrough]];
   }
   case Instruction::SExt:
@@ -1255,10 +1309,16 @@ InstructionCost VPRecipeWithIRFlags::getCostForRecipeWithOpcode(
 
     auto *ScalarSrcTy = Operand->getScalarType();
     Type *SrcTy = VF.isVector() ? toVectorTy(ScalarSrcTy, VF) : ScalarSrcTy;
+    VP_COST_DETAIL(Ctx.Report, OS << "        cast source_type=" << *SrcTy
+                                  << " result_type=" << *ResultTy
+                                  << " context_hint="
+                                  << static_cast<unsigned>(CCH) << '\n');
     // Arm TTI will use the underlying instruction to determine the cost.
-    return Ctx.TTI.getCastInstrCost(
-        Opcode, ResultTy, SrcTy, CCH, Ctx.CostKind,
-        dyn_cast_if_present<Instruction>(getUnderlyingValue()));
+    return observeVPlanCost(
+        Ctx.Report, "getCastInstrCost",
+        Ctx.TTI.getCastInstrCost(
+            Opcode, ResultTy, SrcTy, CCH, Ctx.CostKind,
+            dyn_cast_if_present<Instruction>(getUnderlyingValue())));
   }
   case Instruction::Select: {
     SelectInst *SI = cast_or_null<SelectInst>(getUnderlyingValue());
@@ -1289,9 +1349,11 @@ InstructionCost VPRecipeWithIRFlags::getCostForRecipeWithOpcode(
       if (SI && all_of(operands(),
                        [](VPValue *Op) { return Op->getUnderlyingValue(); }))
         append_range(Operands, SI->operands());
-      return Ctx.TTI.getArithmeticInstrCost(
-          IsLogicalOr ? Instruction::Or : Instruction::And, ResultTy,
-          Ctx.CostKind, {Op1VK, Op1VP}, {Op2VK, Op2VP}, Operands, SI);
+      return observeVPlanCost(
+          Ctx.Report, "getArithmeticInstrCost",
+          Ctx.TTI.getArithmeticInstrCost(
+              IsLogicalOr ? Instruction::Or : Instruction::And, ResultTy,
+              Ctx.CostKind, {Op1VK, Op1VP}, {Op2VK, Op2VP}, Operands, SI));
     }
 
     Type *CondTy = getOperand(0)->getScalarType();
@@ -1304,9 +1366,11 @@ InstructionCost VPRecipeWithIRFlags::getCostForRecipeWithOpcode(
         if (auto *Cmp = dyn_cast<CmpInst>(CondIRV->getValue()))
           Pred = Cmp->getPredicate();
     Type *VectorTy = toVectorTy(this->getScalarType(), VF);
-    return Ctx.TTI.getCmpSelInstrCost(
-        Instruction::Select, VectorTy, CondTy, Pred, Ctx.CostKind,
-        {TTI::OK_AnyValue, TTI::OP_None}, {TTI::OK_AnyValue, TTI::OP_None}, SI);
+    return observeVPlanCost(Ctx.Report, "getCmpSelInstrCost",
+                            Ctx.TTI.getCmpSelInstrCost(
+                                Instruction::Select, VectorTy, CondTy, Pred,
+                                Ctx.CostKind, {TTI::OK_AnyValue, TTI::OP_None},
+                                {TTI::OK_AnyValue, TTI::OP_None}, SI));
   }
   }
   llvm_unreachable("called for unsupported opcode");
@@ -1314,19 +1378,28 @@ InstructionCost VPRecipeWithIRFlags::getCostForRecipeWithOpcode(
 
 InstructionCost VPInstruction::computeCost(ElementCount VF,
                                            VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPInstruction::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   if (Instruction::isBinaryOp(getOpcode())) {
     if (!getUnderlyingValue() && getOpcode() != Instruction::FMul) {
       // TODO: Compute cost for VPInstructions without underlying values once
       // the legacy cost model has been retired.
-      return 0;
+      return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
     }
 
     assert(!doesGeneratePerAllLanes() &&
            "Should only generate a vector value or single scalar, not scalars "
            "for all lanes.");
-    return getCostForRecipeWithOpcode(
-        getOpcode(),
-        vputils::onlyFirstLaneUsed(this) ? ElementCount::getFixed(1) : VF, Ctx);
+    return observeVPlanCost(
+        Ctx.Report, "getCostForRecipeWithOpcode",
+        getCostForRecipeWithOpcode(
+            getOpcode(),
+            vputils::onlyFirstLaneUsed(this) ? ElementCount::getFixed(1) : VF,
+            Ctx),
+        "expanded");
   }
 
   switch (getOpcode()) {
@@ -1339,61 +1412,86 @@ InstructionCost VPInstruction::computeCost(ElementCount VF,
       CondTy = toVectorTy(CondTy, VF);
       VecTy = toVectorTy(VecTy, VF);
     }
-    return Ctx.TTI.getCmpSelInstrCost(Instruction::Select, VecTy, CondTy, Pred,
-                                      Ctx.CostKind);
+    return observeVPlanCost(Ctx.Report, "getCmpSelInstrCost",
+                            Ctx.TTI.getCmpSelInstrCost(Instruction::Select,
+                                                       VecTy, CondTy, Pred,
+                                                       Ctx.CostKind));
   }
   case Instruction::ExtractElement:
   case VPInstruction::ExtractLane: {
     if (VF.isScalar()) {
       // ExtractLane with VF=1 takes care of handling extracting across multiple
       // parts.
-      return 0;
+      return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
     }
 
     // Add on the cost of extracting the element.
     auto *VecTy = toVectorTy(getOperand(0)->getScalarType(), VF);
-    return Ctx.TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
-                                      Ctx.CostKind);
+    return observeVPlanCost(
+        Ctx.Report, "getVectorInstrCost",
+        Ctx.TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
+                                   Ctx.CostKind));
   }
   case VPInstruction::AnyOf: {
     auto *VecTy = toVectorTy(this->getScalarType(), VF);
-    return Ctx.TTI.getArithmeticReductionCost(
-        Instruction::Or, cast<VectorType>(VecTy), std::nullopt, Ctx.CostKind);
+    return observeVPlanCost(Ctx.Report, "getArithmeticReductionCost",
+                            Ctx.TTI.getArithmeticReductionCost(
+                                Instruction::Or, cast<VectorType>(VecTy),
+                                std::nullopt, Ctx.CostKind));
   }
   case VPInstruction::FirstActiveLane: {
     Type *Ty = this->getScalarType();
     Type *ScalarTy = getOperand(0)->getScalarType();
     if (VF.isScalar())
-      return Ctx.TTI.getCmpSelInstrCost(Instruction::ICmp, ScalarTy,
-                                        CmpInst::makeCmpResultType(ScalarTy),
-                                        CmpInst::ICMP_EQ, Ctx.CostKind);
+      return observeVPlanCost(
+          Ctx.Report, "getCmpSelInstrCost",
+          Ctx.TTI.getCmpSelInstrCost(Instruction::ICmp, ScalarTy,
+                                     CmpInst::makeCmpResultType(ScalarTy),
+                                     CmpInst::ICMP_EQ, Ctx.CostKind));
     // Calculate the cost of determining the lane index.
     auto *PredTy = toVectorTy(ScalarTy, VF);
     IntrinsicCostAttributes Attrs(Intrinsic::experimental_cttz_elts, Ty,
                                   {PredTy, Type::getInt1Ty(Ctx.LLVMCtx)});
-    return Ctx.TTI.getIntrinsicInstrCost(Attrs, Ctx.CostKind);
+    return observeVPlanCost(Ctx.Report, "getIntrinsicInstrCost",
+                            Ctx.TTI.getIntrinsicInstrCost(Attrs, Ctx.CostKind));
   }
   case VPInstruction::LastActiveLane: {
     Type *Ty = this->getScalarType();
     Type *ScalarTy = getOperand(0)->getScalarType();
     if (VF.isScalar())
-      return Ctx.TTI.getCmpSelInstrCost(Instruction::ICmp, ScalarTy,
-                                        CmpInst::makeCmpResultType(ScalarTy),
-                                        CmpInst::ICMP_EQ, Ctx.CostKind);
+      return observeVPlanCost(
+          Ctx.Report, "getCmpSelInstrCost",
+          Ctx.TTI.getCmpSelInstrCost(Instruction::ICmp, ScalarTy,
+                                     CmpInst::makeCmpResultType(ScalarTy),
+                                     CmpInst::ICMP_EQ, Ctx.CostKind));
     // Calculate the cost of determining the lane index: NOT + cttz_elts + SUB.
     auto *PredTy = toVectorTy(ScalarTy, VF);
     IntrinsicCostAttributes Attrs(Intrinsic::experimental_cttz_elts, Ty,
                                   {PredTy, Type::getInt1Ty(Ctx.LLVMCtx)});
-    InstructionCost Cost = Ctx.TTI.getIntrinsicInstrCost(Attrs, Ctx.CostKind);
+    InstructionCost Cost = observeVPlanCost(
+        Ctx.Report, "initialize Cost",
+        observeVPlanCost(Ctx.Report, "getIntrinsicInstrCost",
+                         Ctx.TTI.getIntrinsicInstrCost(Attrs, Ctx.CostKind)),
+        "expanded");
     // Add cost of NOT operation on the predicate.
-    Cost += Ctx.TTI.getArithmeticInstrCost(
-        Instruction::Xor, PredTy, Ctx.CostKind,
-        {TargetTransformInfo::OK_AnyValue, TargetTransformInfo::OP_None},
-        {TargetTransformInfo::OK_UniformConstantValue,
-         TargetTransformInfo::OP_None});
+    observeVPlanCost(Ctx.Report, "Cost += getArithmeticInstrCost",
+                     Cost += observeVPlanCost(
+                         Ctx.Report, "getArithmeticInstrCost",
+                         Ctx.TTI.getArithmeticInstrCost(
+                             Instruction::Xor, PredTy, Ctx.CostKind,
+                             {TargetTransformInfo::OK_AnyValue,
+                              TargetTransformInfo::OP_None},
+                             {TargetTransformInfo::OK_UniformConstantValue,
+                              TargetTransformInfo::OP_None})),
+                     "expanded");
     // Add cost of SUB operation on the index.
-    Cost += Ctx.TTI.getArithmeticInstrCost(Instruction::Sub, Ty, Ctx.CostKind);
-    return Cost;
+    observeVPlanCost(
+        Ctx.Report, "Cost += getArithmeticInstrCost",
+        Cost += observeVPlanCost(
+            Ctx.Report, "getArithmeticInstrCost",
+            Ctx.TTI.getArithmeticInstrCost(Instruction::Sub, Ty, Ctx.CostKind)),
+        "expanded");
+    return observeVPlanCost(Ctx.Report, "Cost", Cost, "expanded");
   }
   case VPInstruction::ExtractLastActive: {
     Type *ScalarTy = this->getScalarType();
@@ -1402,14 +1500,17 @@ InstructionCost VPInstruction::computeCost(ElementCount VF,
     IntrinsicCostAttributes ICA(
         Intrinsic::experimental_vector_extract_last_active, ScalarTy,
         {VecTy, MaskTy, ScalarTy});
-    return Ctx.TTI.getIntrinsicInstrCost(ICA, Ctx.CostKind);
+    return observeVPlanCost(Ctx.Report, "getIntrinsicInstrCost",
+                            Ctx.TTI.getIntrinsicInstrCost(ICA, Ctx.CostKind));
   }
   case VPInstruction::FirstOrderRecurrenceSplice: {
     assert(VF.isVector() && "Scalar FirstOrderRecurrenceSplice?");
     Type *VectorTy = toVectorTy(this->getScalarType(), VF);
-    return Ctx.TTI.getShuffleCost(
-        TargetTransformInfo::SK_Splice, cast<VectorType>(VectorTy),
-        cast<VectorType>(VectorTy), {}, Ctx.CostKind, -1);
+    return observeVPlanCost(
+        Ctx.Report, "getShuffleCost",
+        Ctx.TTI.getShuffleCost(
+            TargetTransformInfo::SK_Splice, cast<VectorType>(VectorTy),
+            cast<VectorType>(VectorTy), {}, Ctx.CostKind, -1));
   }
   case VPInstruction::ActiveLaneMask: {
     Type *ArgTy = getOperand(0)->getScalarType();
@@ -1417,7 +1518,8 @@ InstructionCost VPInstruction::computeCost(ElementCount VF,
     Type *RetTy = toVectorTy(Type::getInt1Ty(Ctx.LLVMCtx), VF * Multiplier);
     IntrinsicCostAttributes Attrs(Intrinsic::get_active_lane_mask, RetTy,
                                   {ArgTy, ArgTy});
-    return Ctx.TTI.getIntrinsicInstrCost(Attrs, Ctx.CostKind);
+    return observeVPlanCost(Ctx.Report, "getIntrinsicInstrCost",
+                            Ctx.TTI.getIntrinsicInstrCost(Attrs, Ctx.CostKind));
   }
   case VPInstruction::ExplicitVectorLength: {
     Type *Arg0Ty = getOperand(0)->getScalarType();
@@ -1425,7 +1527,8 @@ InstructionCost VPInstruction::computeCost(ElementCount VF,
     Type *I1Ty = Type::getInt1Ty(Ctx.LLVMCtx);
     IntrinsicCostAttributes Attrs(Intrinsic::experimental_get_vector_length,
                                   I32Ty, {Arg0Ty, I32Ty, I1Ty});
-    return Ctx.TTI.getIntrinsicInstrCost(Attrs, Ctx.CostKind);
+    return observeVPlanCost(Ctx.Report, "getIntrinsicInstrCost",
+                            Ctx.TTI.getIntrinsicInstrCost(Attrs, Ctx.CostKind));
   }
   case VPInstruction::Reverse: {
     assert(VF.isVector() && "Reverse operation must be vector type");
@@ -1434,28 +1537,33 @@ InstructionCost VPInstruction::computeCost(ElementCount VF,
     // FIXME: Remove this once redundant mask reverse operations can be
     // eliminated by VPlanTransforms::cse before cost computation.
     if (EltTy->isIntegerTy(1))
-      return 0;
+      return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
     auto *VectorTy = cast<VectorType>(toVectorTy(EltTy, VF));
-    return Ctx.TTI.getShuffleCost(TargetTransformInfo::SK_Reverse, VectorTy,
-                                  VectorTy, /*Mask=*/{}, Ctx.CostKind,
-                                  /*Index=*/0);
+    return observeVPlanCost(
+        Ctx.Report, "getShuffleCost",
+        Ctx.TTI.getShuffleCost(TargetTransformInfo::SK_Reverse, VectorTy,
+                               VectorTy, /*Mask=*/{}, Ctx.CostKind,
+                               /*Index=*/0));
   }
   case VPInstruction::ExtractLastLane: {
     // Add on the cost of extracting the element.
     auto *VecTy = toVectorTy(getOperand(0)->getScalarType(), VF);
-    return Ctx.TTI.getIndexedVectorInstrCostFromEnd(Instruction::ExtractElement,
-                                                    VecTy, Ctx.CostKind, 0);
+    return observeVPlanCost(
+        Ctx.Report, "getIndexedVectorInstrCostFromEnd",
+        Ctx.TTI.getIndexedVectorInstrCostFromEnd(Instruction::ExtractElement,
+                                                 VecTy, Ctx.CostKind, 0));
   }
   case VPInstruction::Not: {
     Type *ValTy = this->getScalarType();
     // InstCombine will fold `xor` to the conditional branch.
     if (auto *U = const_cast<VPUser *>(getSingleUser()))
       if (match(U, m_BranchOnCond(m_VPValue())))
-        return 0;
+        return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
     if (!vputils::onlyFirstLaneUsed(this))
       ValTy = toVectorTy(ValTy, VF);
-    return Ctx.TTI.getArithmeticInstrCost(Instruction::Xor, ValTy,
-                                          Ctx.CostKind);
+    return observeVPlanCost(
+        Ctx.Report, "getArithmeticInstrCost",
+        Ctx.TTI.getArithmeticInstrCost(Instruction::Xor, ValTy, Ctx.CostKind));
   }
   case VPInstruction::BranchOnCount: {
     // If TC <= VF then this is just a branch.
@@ -1469,28 +1577,35 @@ InstructionCost VPInstruction::computeCost(ElementCount VF,
     Value *TC = getParent()->getPlan()->getTripCount()->getUnderlyingValue();
     ConstantInt *TCConst = dyn_cast_if_present<ConstantInt>(TC);
     if (TCConst && TCConst->getValue().ule(VF.getKnownMinValue()))
-      return 0;
+      return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
     // Otherwise BranchOnCount generates ICmpEQ followed by a branch.
     Type *ValTy = getOperand(0)->getScalarType();
-    return Ctx.TTI.getCmpSelInstrCost(Instruction::ICmp, ValTy,
-                                      CmpInst::makeCmpResultType(ValTy),
-                                      CmpInst::ICMP_EQ, Ctx.CostKind);
+    return observeVPlanCost(
+        Ctx.Report, "getCmpSelInstrCost",
+        Ctx.TTI.getCmpSelInstrCost(Instruction::ICmp, ValTy,
+                                   CmpInst::makeCmpResultType(ValTy),
+                                   CmpInst::ICMP_EQ, Ctx.CostKind));
   }
   case Instruction::FCmp:
   case Instruction::ICmp:
-    return getCostForRecipeWithOpcode(
-        getOpcode(),
-        vputils::onlyFirstLaneUsed(this) ? ElementCount::getFixed(1) : VF, Ctx);
+    return observeVPlanCost(
+        Ctx.Report, "getCostForRecipeWithOpcode",
+        getCostForRecipeWithOpcode(
+            getOpcode(),
+            vputils::onlyFirstLaneUsed(this) ? ElementCount::getFixed(1) : VF,
+            Ctx),
+        "expanded");
   case VPInstruction::ExtractPenultimateElement:
     if (VF == ElementCount::getScalable(1))
-      return InstructionCost::getInvalid();
+      return observeVPlanCost(Ctx.Report, "InstructionCost::getInvalid()",
+                              InstructionCost::getInvalid(), "expanded");
     [[fallthrough]];
   default:
     // TODO: Compute cost other VPInstructions once the legacy cost model has
     // been retired.
     assert(!getUnderlyingValue() &&
            "unexpected VPInstruction witht underlying value");
-    return 0;
+    return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
   }
 }
 
@@ -1891,12 +2006,19 @@ void VPInstructionWithType::execute(VPTransformState &State) {
 
 InstructionCost VPInstructionWithType::computeCost(ElementCount VF,
                                                    VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPInstructionWithType::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   // NOTE: At the moment it seems only possible to expose this path for
   // the trunc, zext and sext opcodes. However, isScalarCast also covers
   // int<>fp conversions, bitcasts, ptr<>int conversions, etc.
   if (Instruction::isCast(getOpcode()))
-    return getCostForRecipeWithOpcode(getOpcode(), ElementCount::getFixed(1),
-                                      Ctx);
+    return observeVPlanCost(
+        Ctx.Report, "getCostForRecipeWithOpcode",
+        getCostForRecipeWithOpcode(getOpcode(), ElementCount::getFixed(1), Ctx),
+        "expanded");
 
   switch (getOpcode()) {
   case VPInstruction::StepVector:
@@ -1905,14 +2027,15 @@ InstructionCost VPInstructionWithType::computeCost(ElementCount VF,
     // Once the stepvector is correctly hoisted out of the vector loop by the
     // licm transform we can add the cost here so that it doesn't incorrectly
     // affect the choice of VF.
-    return 0;
+    return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
   case VPInstruction::Intrinsic: {
     Type *Ty = getScalarType();
     SmallVector<Type *, 2> ArgTys;
     for (const VPValue *Op : drop_end(operands()))
       ArgTys.push_back(Op->getScalarType());
     IntrinsicCostAttributes Attrs(vputils::getIntrinsicID(this), Ty, ArgTys);
-    return Ctx.TTI.getIntrinsicInstrCost(Attrs, Ctx.CostKind);
+    return observeVPlanCost(Ctx.Report, "getIntrinsicInstrCost",
+                            Ctx.TTI.getIntrinsicInstrCost(Attrs, Ctx.CostKind));
   }
   default:
     // Although VPInstructionWithType is also used for
@@ -1920,7 +2043,7 @@ InstructionCost VPInstructionWithType::computeCost(ElementCount VF,
     // where the cost is queried.
     llvm_unreachable("Unhandled opcode");
   }
-  return 0;
+  return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -1997,7 +2120,7 @@ void VPPhi::printRecipe(raw_ostream &O, const Twine &Indent,
 }
 #endif
 
-VPIRInstruction *VPIRInstruction ::create(Instruction &I) {
+VPIRInstruction *VPIRInstruction::create(Instruction &I) {
   if (auto *Phi = dyn_cast<PHINode>(&I))
     return new VPIRPhi(*Phi);
   return new VPIRInstruction(I);
@@ -2013,9 +2136,14 @@ void VPIRInstruction::execute(VPTransformState &State) {
 
 InstructionCost VPIRInstruction::computeCost(ElementCount VF,
                                              VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPIRInstruction::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   // The recipe wraps an existing IR instruction on the border of VPlan's scope,
   // hence it does not contribute to the cost-modeling for the VPlan.
-  return 0;
+  return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -2175,16 +2303,27 @@ void VPWidenCallRecipe::execute(VPTransformState &State) {
 
 InstructionCost VPWidenCallRecipe::computeCost(ElementCount VF,
                                                VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPWidenCallRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   assert(getVectorizedTypeVF(Variant->getReturnType()) == VF &&
          "Variant return type must match VF");
-  return computeCallCost(Variant, Ctx);
+  return observeVPlanCost(Ctx.Report, "computeCallCost(Variant, Ctx)",
+                          computeCallCost(Variant, Ctx), "expanded");
 }
 
 InstructionCost VPWidenCallRecipe::computeCallCost(Function *Variant,
                                                    VPCostContext &Ctx) {
-  return Ctx.TTI.getCallInstrCost(nullptr, Variant->getReturnType(),
-                                  Variant->getFunctionType()->params(),
-                                  Ctx.CostKind);
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPWidenCallRecipe::computeCallCost");
+
+  return observeVPlanCost(
+      Ctx.Report, "getCallInstrCost",
+      Ctx.TTI.getCallInstrCost(nullptr, Variant->getReturnType(),
+                               Variant->getFunctionType()->params(),
+                               Ctx.CostKind));
 }
 
 bool VPWidenCallRecipe::usesFirstLaneOnly(const VPValue *Op) const {
@@ -2287,12 +2426,18 @@ void VPWidenIntrinsicRecipe::execute(VPTransformState &State) {
 InstructionCost VPWidenIntrinsicRecipe::computeCallCost(
     Intrinsic::ID ID, ArrayRef<const VPValue *> Operands,
     const VPRecipeWithIRFlags &R, ElementCount VF, VPCostContext &Ctx) {
+  VPlanCostReport::CostScope ReportScope(
+      Ctx.Report, "VPWidenIntrinsicRecipe::computeCallCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   Type *ScalarRetTy = R.getScalarType();
   // Skip the reverse operation cost for the mask.
   // FIXME: Remove this once redundant mask reverse operations can be eliminated
   // by VPlanTransforms::cse before cost computation.
   if (ID == Intrinsic::experimental_vp_reverse && ScalarRetTy->isIntegerTy(1))
-    return InstructionCost(0);
+    return observeVPlanCost(Ctx.Report, "InstructionCost(0)",
+                            InstructionCost(0), "expanded");
 
   // Some backends analyze intrinsic arguments to determine cost. Use the
   // underlying value for the operand if it has one. Otherwise try to use the
@@ -2324,12 +2469,23 @@ InstructionCost VPWidenIntrinsicRecipe::computeCallCost(
       ID, RetTy, Arguments, ParamTys, R.getFastMathFlagsOrNone(),
       dyn_cast_or_null<IntrinsicInst>(R.getUnderlyingValue()),
       InstructionCost::getInvalid());
-  return Ctx.TTI.getIntrinsicInstrCost(CostAttrs, Ctx.CostKind);
+  return observeVPlanCost(
+      Ctx.Report, "getIntrinsicInstrCost",
+      Ctx.TTI.getIntrinsicInstrCost(CostAttrs, Ctx.CostKind));
 }
 
 InstructionCost VPWidenIntrinsicRecipe::computeCost(ElementCount VF,
                                                     VPCostContext &Ctx) const {
-  return computeCallCost(VectorIntrinsicID, operands(), *this, VF, Ctx);
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPWidenIntrinsicRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
+  return observeVPlanCost(
+      Ctx.Report,
+      "computeCallCost(VectorIntrinsicID, operands(), *this, VF, Ctx)",
+      computeCallCost(VectorIntrinsicID, operands(), *this, VF, Ctx),
+      "expanded");
 }
 
 StringRef VPWidenIntrinsicRecipe::getIntrinsicName() const {
@@ -2374,18 +2530,31 @@ void VPWidenMemIntrinsicRecipe::execute(VPTransformState &State) {
 InstructionCost VPWidenMemIntrinsicRecipe::computeMemIntrinsicCost(
     Intrinsic::ID IID, Type *Ty, bool IsMasked, Align Alignment,
     VPCostContext &Ctx) {
-  return Ctx.TTI.getMemIntrinsicInstrCost(
-      MemIntrinsicCostAttributes(IID, Ty, /*Ptr=*/nullptr, IsMasked, Alignment),
-      Ctx.CostKind);
+  VPlanCostReport::CostScope ReportScope(
+      Ctx.Report, "VPWidenMemIntrinsicRecipe::computeMemIntrinsicCost");
+
+  return observeVPlanCost(
+      Ctx.Report, "getMemIntrinsicInstrCost",
+      Ctx.TTI.getMemIntrinsicInstrCost(
+          MemIntrinsicCostAttributes(IID, Ty, /*Ptr=*/nullptr, IsMasked,
+                                     Alignment),
+          Ctx.CostKind));
 }
 
 InstructionCost
 VPWidenMemIntrinsicRecipe::computeCost(ElementCount VF,
                                        VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(
+      Ctx.Report, "VPWidenMemIntrinsicRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   Type *Ty = toVectorTy(getScalarType(), VF);
-  return computeMemIntrinsicCost(getVectorIntrinsicID(), Ty,
-                                 !match(getOperand(2), m_True()), Alignment,
-                                 Ctx);
+  return observeVPlanCost(
+      Ctx.Report, "computeMemIntrinsicCost",
+      computeMemIntrinsicCost(getVectorIntrinsicID(), Ty,
+                              !match(getOperand(2), m_True()), Alignment, Ctx),
+      "expanded");
 }
 
 void VPHistogramRecipe::execute(VPTransformState &State) {
@@ -2420,6 +2589,11 @@ void VPHistogramRecipe::execute(VPTransformState &State) {
 
 InstructionCost VPHistogramRecipe::computeCost(ElementCount VF,
                                                VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPHistogramRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   // FIXME: Take the gather and scatter into account as well. For now we're
   //        generating the same cost as the fallback path, but we'll likely
   //        need to create a new TTI method for determining the cost, including
@@ -2433,10 +2607,15 @@ InstructionCost VPHistogramRecipe::computeCost(ElementCount VF,
 
   // Assume that a non-constant update value (or a constant != 1) requires
   // a multiply, and add that into the cost.
-  InstructionCost MulCost =
-      Ctx.TTI.getArithmeticInstrCost(Instruction::Mul, VTy, Ctx.CostKind);
+  InstructionCost MulCost = observeVPlanCost(
+      Ctx.Report, "initialize MulCost",
+      observeVPlanCost(
+          Ctx.Report, "getArithmeticInstrCost",
+          Ctx.TTI.getArithmeticInstrCost(Instruction::Mul, VTy, Ctx.CostKind)),
+      "expanded");
   if (match(IncAmt, m_One()))
-    MulCost = TTI::TCC_Free;
+    observeVPlanCost(Ctx.Report, "MulCost = TTI::TCC_Free",
+                     MulCost = TTI::TCC_Free, "expanded");
 
   // Find the cost of the histogram operation itself.
   Type *PtrTy = VectorType::get(AddressTy, VF);
@@ -2446,8 +2625,15 @@ InstructionCost VPHistogramRecipe::computeCost(ElementCount VF,
                               {PtrTy, IncTy, MaskTy});
 
   // Add the costs together with the add/sub operation.
-  return Ctx.TTI.getIntrinsicInstrCost(ICA, Ctx.CostKind) + MulCost +
-         Ctx.TTI.getArithmeticInstrCost(Opcode, VTy, Ctx.CostKind);
+  return observeVPlanCost(
+      Ctx.Report, "getIntrinsicInstrCost + MulCost + getArithmeticInstrCost",
+      observeVPlanCost(Ctx.Report, "getIntrinsicInstrCost",
+                       Ctx.TTI.getIntrinsicInstrCost(ICA, Ctx.CostKind)) +
+          MulCost +
+          observeVPlanCost(
+              Ctx.Report, "getArithmeticInstrCost",
+              Ctx.TTI.getArithmeticInstrCost(Opcode, VTy, Ctx.CostKind)),
+      "expanded");
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -2847,6 +3033,11 @@ void VPWidenRecipe::execute(VPTransformState &State) {
 
 InstructionCost VPWidenRecipe::computeCost(ElementCount VF,
                                            VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPWidenRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   switch (Opcode) {
   case Instruction::UDiv:
   case Instruction::SDiv:
@@ -2876,7 +3067,9 @@ InstructionCost VPWidenRecipe::computeCost(ElementCount VF,
   case Instruction::ICmp:
   case Instruction::FCmp:
   case Instruction::Select:
-    return getCostForRecipeWithOpcode(getOpcode(), VF, Ctx);
+    return observeVPlanCost(
+        Ctx.Report, "getCostForRecipeWithOpcode(getOpcode(), VF, Ctx)",
+        getCostForRecipeWithOpcode(getOpcode(), VF, Ctx), "expanded");
   default:
     llvm_unreachable("Unsupported opcode for instruction");
   }
@@ -2910,7 +3103,14 @@ void VPWidenCastRecipe::execute(VPTransformState &State) {
 
 InstructionCost VPWidenCastRecipe::computeCost(ElementCount VF,
                                                VPCostContext &Ctx) const {
-  return getCostForRecipeWithOpcode(getOpcode(), VF, Ctx);
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPWidenCastRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
+  return observeVPlanCost(
+      Ctx.Report, "getCostForRecipeWithOpcode(getOpcode(), VF, Ctx)",
+      getCostForRecipeWithOpcode(getOpcode(), VF, Ctx), "expanded");
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -2927,7 +3127,14 @@ void VPWidenCastRecipe::printRecipe(raw_ostream &O, const Twine &Indent,
 
 InstructionCost VPHeaderPHIRecipe::computeCost(ElementCount VF,
                                                VPCostContext &Ctx) const {
-  return Ctx.TTI.getCFInstrCost(Instruction::PHI, Ctx.CostKind);
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPHeaderPHIRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
+  return observeVPlanCost(
+      Ctx.Report, "getCFInstrCost",
+      Ctx.TTI.getCFInstrCost(Instruction::PHI, Ctx.CostKind));
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -2955,6 +3162,11 @@ bool VPWidenIntOrFpInductionRecipe::isCanonical() const {
 
 InstructionCost VPDerivedIVRecipe::computeCost(ElementCount VF,
                                                VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPDerivedIVRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   // The cost model for this is modelled on expandVPDerivedIV in
   // VPlanTransforms.cpp. In order to avoid overly pessimistic costs that can
   // negatively affect vectorization it takes into account any expected
@@ -3007,27 +3219,45 @@ InstructionCost VPDerivedIVRecipe::computeCost(ElementCount VF,
     if ((NeedsAdd || NeedsMul || NeedsShl) && StepTySize != IndexTySize) {
       unsigned CastOpc =
           StepTySize < IndexTySize ? Instruction::Trunc : Instruction::SExt;
-      Cost += Ctx.TTI.getCastInstrCost(
-          CastOpc, StepTy, IndexTy, TTI::CastContextHint::None, Ctx.CostKind);
+      observeVPlanCost(Ctx.Report, "Cost += getCastInstrCost",
+                       Cost += observeVPlanCost(
+                           Ctx.Report, "getCastInstrCost",
+                           Ctx.TTI.getCastInstrCost(CastOpc, StepTy, IndexTy,
+                                                    TTI::CastContextHint::None,
+                                                    Ctx.CostKind)),
+                       "expanded");
     }
 
     if (NeedsMul)
-      Cost += Ctx.TTI.getArithmeticInstrCost(Instruction::Mul, StepTy,
-                                             Ctx.CostKind);
+      observeVPlanCost(
+          Ctx.Report, "Cost += getArithmeticInstrCost",
+          Cost += observeVPlanCost(Ctx.Report, "getArithmeticInstrCost",
+                                   Ctx.TTI.getArithmeticInstrCost(
+                                       Instruction::Mul, StepTy, Ctx.CostKind)),
+          "expanded");
     if (NeedsShl)
-      Cost += Ctx.TTI.getArithmeticInstrCost(
-          Instruction::Shl, StepTy, Ctx.CostKind,
-          {TargetTransformInfo::OK_AnyValue, TargetTransformInfo::OP_None},
-          {TargetTransformInfo::OK_UniformConstantValue,
-           TargetTransformInfo::OP_None});
+      observeVPlanCost(Ctx.Report, "Cost += getArithmeticInstrCost",
+                       Cost += observeVPlanCost(
+                           Ctx.Report, "getArithmeticInstrCost",
+                           Ctx.TTI.getArithmeticInstrCost(
+                               Instruction::Shl, StepTy, Ctx.CostKind,
+                               {TargetTransformInfo::OK_AnyValue,
+                                TargetTransformInfo::OP_None},
+                               {TargetTransformInfo::OK_UniformConstantValue,
+                                TargetTransformInfo::OP_None})),
+                       "expanded");
     if (NeedsAdd)
-      Cost += Ctx.TTI.getArithmeticInstrCost(Instruction::Add, StepTy,
-                                             Ctx.CostKind);
-    return Cost;
+      observeVPlanCost(
+          Ctx.Report, "Cost += getArithmeticInstrCost",
+          Cost += observeVPlanCost(Ctx.Report, "getArithmeticInstrCost",
+                                   Ctx.TTI.getArithmeticInstrCost(
+                                       Instruction::Add, StepTy, Ctx.CostKind)),
+          "expanded");
+    return observeVPlanCost(Ctx.Report, "Cost", Cost, "expanded");
   }
   }
 
-  return 0;
+  return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -3046,20 +3276,25 @@ void VPDerivedIVRecipe::printRecipe(raw_ostream &O, const Twine &Indent,
 
 InstructionCost VPScalarIVStepsRecipe::computeCost(ElementCount VF,
                                                    VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPScalarIVStepsRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   // TODO: Add costs for floating point.
   Type *BaseIVTy = getOperand(0)->getScalarType();
   if (!BaseIVTy->isIntegerTy())
-    return 0;
+    return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
 
   // TODO: Add support for predicated regions. Requires scaling the cost by the
   // probability of entering the block.
   if (getRegion() && getRegion()->isReplicator())
-    return 0;
+    return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
 
   // If only the first lane is used, then there won't be any code that remains
   // in the loop for the first unrolled part.
   if (vputils::onlyFirstLaneUsed(this))
-    return 0;
+    return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
 
   // Typically the operations are:
   //   1. Add the start index to each lane value.
@@ -3080,8 +3315,9 @@ InstructionCost VPScalarIVStepsRecipe::computeCost(ElementCount VF,
   //  %gep2 = getelementptr i8, ptr %base_gep, i32 1
   // Therefore, in reality the cost is somewhere betwen 1*AddCost and
   // (NumLanes - 1) * AddCost. For now, assume the cost of a single add.
-  return Ctx.TTI.getArithmeticInstrCost(Instruction::Add, BaseIVTy,
-                                        Ctx.CostKind);
+  return observeVPlanCost(
+      Ctx.Report, "getArithmeticInstrCost",
+      Ctx.TTI.getArithmeticInstrCost(Instruction::Add, BaseIVTy, Ctx.CostKind));
 }
 
 void VPScalarIVStepsRecipe::execute(VPTransformState &State) {
@@ -3256,6 +3492,11 @@ void VPVectorPointerRecipe::printRecipe(raw_ostream &O, const Twine &Indent,
 
 InstructionCost VPBlendRecipe::computeCost(ElementCount VF,
                                            VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPBlendRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   // A blend will be expanded to a select VPInstruction, which will generate a
   // scalar select if only the first lane is used.
   if (vputils::onlyFirstLaneUsed(this))
@@ -3263,9 +3504,14 @@ InstructionCost VPBlendRecipe::computeCost(ElementCount VF,
 
   Type *ResultTy = toVectorTy(this->getScalarType(), VF);
   Type *CmpTy = toVectorTy(Type::getInt1Ty(Ctx.LLVMCtx), VF);
-  return (getNumIncomingValues() - 1) *
-         Ctx.TTI.getCmpSelInstrCost(Instruction::Select, ResultTy, CmpTy,
-                                    CmpInst::BAD_ICMP_PREDICATE, Ctx.CostKind);
+  return observeVPlanCost(
+      Ctx.Report, "(getNumIncomingValues - 1) * getCmpSelInstrCost",
+      (getNumIncomingValues() - 1) *
+          observeVPlanCost(Ctx.Report, "getCmpSelInstrCost",
+                           Ctx.TTI.getCmpSelInstrCost(
+                               Instruction::Select, ResultTy, CmpTy,
+                               CmpInst::BAD_ICMP_PREDICATE, Ctx.CostKind)),
+      "expanded");
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -3389,6 +3635,11 @@ void VPReductionEVLRecipe::execute(VPTransformState &State) {
 
 InstructionCost VPReductionRecipe::computeCost(ElementCount VF,
                                                VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPReductionRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   RecurKind RdxKind = getRecurrenceKind();
   Type *ElementTy = this->getScalarType();
   auto *VectorTy = cast<VectorType>(toVectorTy(ElementTy, VF));
@@ -3398,18 +3649,28 @@ InstructionCost VPReductionRecipe::computeCost(ElementCount VF,
       ElementTy->isFloatingPointTy() ? std::make_optional(FMFs) : std::nullopt;
 
   if (isPartialReduction()) {
-    InstructionCost CondCost = 0;
+    InstructionCost CondCost =
+        observeVPlanCost(Ctx.Report, "initialize CondCost", 0, "expanded");
     if (isConditional()) {
       CmpInst::Predicate Pred = CmpInst::BAD_ICMP_PREDICATE;
       auto *CondTy =
           cast<VectorType>(toVectorTy(getCondOp()->getScalarType(), VF));
-      CondCost = Ctx.TTI.getCmpSelInstrCost(Instruction::Select, VectorTy,
-                                            CondTy, Pred, Ctx.CostKind);
+      observeVPlanCost(
+          Ctx.Report, "CondCost = getCmpSelInstrCost",
+          CondCost = observeVPlanCost(
+              Ctx.Report, "getCmpSelInstrCost",
+              Ctx.TTI.getCmpSelInstrCost(Instruction::Select, VectorTy, CondTy,
+                                         Pred, Ctx.CostKind)),
+          "expanded");
     }
-    return CondCost + Ctx.TTI.getPartialReductionCost(
-                          Opcode, ElementTy, ElementTy, ElementTy, VF,
-                          TTI::PR_None, TTI::PR_None, {}, Ctx.CostKind,
-                          OptionalFMF);
+    return observeVPlanCost(
+        Ctx.Report, "CondCost + getPartialReductionCost",
+        CondCost + observeVPlanCost(Ctx.Report, "getPartialReductionCost",
+                                    Ctx.TTI.getPartialReductionCost(
+                                        Opcode, ElementTy, ElementTy, ElementTy,
+                                        VF, TTI::PR_None, TTI::PR_None, {},
+                                        Ctx.CostKind, OptionalFMF)),
+        "expanded");
   }
 
   // TODO: Support any-of reductions.
@@ -3422,13 +3683,16 @@ InstructionCost VPReductionRecipe::computeCost(ElementCount VF,
   // and the BinOp cost in the getMinMaxReductionCost().
   if (RecurrenceDescriptor::isMinMaxRecurrenceKind(RdxKind)) {
     Intrinsic::ID Id = getMinMaxReductionIntrinsicOp(RdxKind);
-    return Ctx.TTI.getMinMaxReductionCost(Id, VectorTy, FMFs, Ctx.CostKind);
+    return observeVPlanCost(
+        Ctx.Report, "getMinMaxReductionCost",
+        Ctx.TTI.getMinMaxReductionCost(Id, VectorTy, FMFs, Ctx.CostKind));
   }
 
   // Note that TTI should model the cost of moving result to the scalar register
   // and the BinOp cost in the getArithmeticReductionCost().
-  return Ctx.TTI.getArithmeticReductionCost(Opcode, VectorTy, OptionalFMF,
-                                            Ctx.CostKind);
+  return observeVPlanCost(Ctx.Report, "getArithmeticReductionCost",
+                          Ctx.TTI.getArithmeticReductionCost(
+                              Opcode, VectorTy, OptionalFMF, Ctx.CostKind));
 }
 
 VPExpressionRecipe::VPExpressionRecipe(
@@ -3508,6 +3772,11 @@ void VPExpressionRecipe::decompose() {
 
 InstructionCost VPExpressionRecipe::computeCost(ElementCount VF,
                                                 VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPExpressionRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   Type *RedTy = this->getScalarType();
   auto *SrcVecTy =
       cast<VectorType>(toVectorTy(getOperand(0)->getScalarType(), VF));
@@ -3524,24 +3793,31 @@ InstructionCost VPExpressionRecipe::computeCost(ElementCount VF,
     auto *ExtR = cast<VPWidenCastRecipe>(ExpressionRecipes[0]);
 
     if (RedR->isPartialReduction())
-      return Ctx.TTI.getPartialReductionCost(
-          Opcode, getOperand(0)->getScalarType(), nullptr, RedTy, VF,
-          TargetTransformInfo::getPartialReductionExtendKind(ExtR->getOpcode()),
-          TargetTransformInfo::PR_None, std::nullopt, Ctx.CostKind,
-          RedTy->isFloatingPointTy()
-              ? std::optional{RedR->getFastMathFlagsOrNone()}
-              : std::nullopt);
+      return observeVPlanCost(
+          Ctx.Report, "getPartialReductionCost",
+          Ctx.TTI.getPartialReductionCost(
+              Opcode, getOperand(0)->getScalarType(), nullptr, RedTy, VF,
+              TargetTransformInfo::getPartialReductionExtendKind(
+                  ExtR->getOpcode()),
+              TargetTransformInfo::PR_None, std::nullopt, Ctx.CostKind,
+              RedTy->isFloatingPointTy()
+                  ? std::optional{RedR->getFastMathFlagsOrNone()}
+                  : std::nullopt));
     else if (!RedTy->isFloatingPointTy())
       // TTI::getExtendedReductionCost only supports integer types.
-      return Ctx.TTI.getExtendedReductionCost(
-          Opcode, ExtR->getOpcode() == Instruction::ZExt, RedTy, SrcVecTy,
-          std::nullopt, Ctx.CostKind);
+      return observeVPlanCost(Ctx.Report, "getExtendedReductionCost",
+                              Ctx.TTI.getExtendedReductionCost(
+                                  Opcode,
+                                  ExtR->getOpcode() == Instruction::ZExt, RedTy,
+                                  SrcVecTy, std::nullopt, Ctx.CostKind));
     else
-      return InstructionCost::getInvalid();
+      return observeVPlanCost(Ctx.Report, "InstructionCost::getInvalid()",
+                              InstructionCost::getInvalid(), "expanded");
   }
   case ExpressionTypes::MulAccReduction:
-    return Ctx.TTI.getMulAccReductionCost(false, Opcode, RedTy, SrcVecTy,
-                                          Ctx.CostKind);
+    return observeVPlanCost(Ctx.Report, "getMulAccReductionCost",
+                            Ctx.TTI.getMulAccReductionCost(
+                                false, Opcode, RedTy, SrcVecTy, Ctx.CostKind));
 
   case ExpressionTypes::ExtNegatedMulAccReduction:
     switch (Opcode) {
@@ -3561,23 +3837,27 @@ InstructionCost VPExpressionRecipe::computeCost(ElementCount VF,
       auto *Ext0R = cast<VPWidenCastRecipe>(ExpressionRecipes[0]);
       auto *Ext1R = cast<VPWidenCastRecipe>(ExpressionRecipes[1]);
       auto *Mul = cast<VPWidenRecipe>(ExpressionRecipes[2]);
-      return Ctx.TTI.getPartialReductionCost(
-          Opcode, getOperand(0)->getScalarType(),
-          getOperand(1)->getScalarType(), RedTy, VF,
-          TargetTransformInfo::getPartialReductionExtendKind(
-              Ext0R->getOpcode()),
-          TargetTransformInfo::getPartialReductionExtendKind(
-              Ext1R->getOpcode()),
-          Mul->getOpcode(), Ctx.CostKind,
-          RedTy->isFloatingPointTy()
-              ? std::optional{RedR->getFastMathFlagsOrNone()}
-              : std::nullopt);
+      return observeVPlanCost(
+          Ctx.Report, "getPartialReductionCost",
+          Ctx.TTI.getPartialReductionCost(
+              Opcode, getOperand(0)->getScalarType(),
+              getOperand(1)->getScalarType(), RedTy, VF,
+              TargetTransformInfo::getPartialReductionExtendKind(
+                  Ext0R->getOpcode()),
+              TargetTransformInfo::getPartialReductionExtendKind(
+                  Ext1R->getOpcode()),
+              Mul->getOpcode(), Ctx.CostKind,
+              RedTy->isFloatingPointTy()
+                  ? std::optional{RedR->getFastMathFlagsOrNone()}
+                  : std::nullopt));
     }
     assert(Opcode != Instruction::FSub && "Only integer types are supported");
-    return Ctx.TTI.getMulAccReductionCost(
-        cast<VPWidenCastRecipe>(ExpressionRecipes.front())->getOpcode() ==
-            Instruction::ZExt,
-        Opcode, RedTy, SrcVecTy, Ctx.CostKind);
+    return observeVPlanCost(
+        Ctx.Report, "getMulAccReductionCost",
+        Ctx.TTI.getMulAccReductionCost(
+            cast<VPWidenCastRecipe>(ExpressionRecipes.front())->getOpcode() ==
+                Instruction::ZExt,
+            Opcode, RedTy, SrcVecTy, Ctx.CostKind));
   }
   }
   llvm_unreachable("Unknown VPExpressionRecipe::ExpressionTypes enum");
@@ -3799,32 +4079,50 @@ static const SCEV *getAddressAccessSCEV(const VPValue *Ptr,
 
 InstructionCost VPReplicateRecipe::computeCost(ElementCount VF,
                                                VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPReplicateRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   Instruction *UI = cast<Instruction>(getUnderlyingValue());
   // VPReplicateRecipe may be cloned as part of an existing VPlan-to-VPlan
   // transform, avoid computing their cost multiple times for now.
   Ctx.SkipCostComputation.insert(UI);
+  VP_COST_DETAIL(Ctx.Report,
+                 OS << "        replication single_scalar=" << isSingleScalar()
+                    << " minimum_lanes=" << VF.getKnownMinValue()
+                    << " scalable=" << VF.isScalable() << '\n');
 
   if (VF.isScalable() && !isSingleScalar())
-    return InstructionCost::getInvalid();
+    return observeVPlanCost(Ctx.Report, "InstructionCost::getInvalid()",
+                            InstructionCost::getInvalid(), "expanded");
 
   switch (UI->getOpcode()) {
   case Instruction::Alloca:
     if (VF.isScalable())
-      return InstructionCost::getInvalid();
-    return Ctx.TTI.getArithmeticInstrCost(Instruction::Mul,
-                                          this->getScalarType(), Ctx.CostKind);
+      return observeVPlanCost(Ctx.Report, "InstructionCost::getInvalid()",
+                              InstructionCost::getInvalid(), "expanded");
+    return observeVPlanCost(
+        Ctx.Report, "getArithmeticInstrCost",
+        Ctx.TTI.getArithmeticInstrCost(Instruction::Mul, this->getScalarType(),
+                                       Ctx.CostKind));
   case Instruction::GetElementPtr:
     // We mark this instruction as zero-cost because the cost of GEPs in
     // vectorized code depends on whether the corresponding memory instruction
     // is scalarized or not. Therefore, we handle GEPs with the memory
     // instruction cost.
-    return 0;
+    return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
   case Instruction::Call: {
     auto *CalledFn =
         cast<Function>(getOperand(getNumOperands() - 1)->getLiveInIRValue());
     Type *ResultTy = this->getScalarType();
-    return computeCallCost(CalledFn, ResultTy, drop_end(operands()),
-                           isSingleScalar(), VF, Ctx);
+    return observeVPlanCost(Ctx.Report,
+                            "computeCallCost(CalledFn, ResultTy, "
+                            "drop_end(operands()), isSingleScalar(), VF, Ctx)",
+                            computeCallCost(CalledFn, ResultTy,
+                                            drop_end(operands()),
+                                            isSingleScalar(), VF, Ctx),
+                            "expanded");
   }
   case Instruction::Add:
   case Instruction::Sub:
@@ -3842,17 +4140,23 @@ InstructionCost VPReplicateRecipe::computeCost(ElementCount VF,
   case Instruction::Xor:
   case Instruction::ICmp:
   case Instruction::FCmp:
-    return getCostForRecipeWithOpcode(getOpcode(), ElementCount::getFixed(1),
-                                      Ctx) *
-           (isSingleScalar() ? 1 : VF.getFixedValue());
+    return observeVPlanCost(Ctx.Report,
+                            "getCostForRecipeWithOpcode * (isSingleScalar() ? "
+                            "1 : VF.getFixedValue)",
+                            getCostForRecipeWithOpcode(
+                                getOpcode(), ElementCount::getFixed(1), Ctx) *
+                                (isSingleScalar() ? 1 : VF.getFixedValue()),
+                            "expanded");
   case Instruction::SDiv:
   case Instruction::UDiv:
   case Instruction::SRem:
   case Instruction::URem: {
-    InstructionCost ScalarCost =
-        getCostForRecipeWithOpcode(getOpcode(), ElementCount::getFixed(1), Ctx);
+    InstructionCost ScalarCost = observeVPlanCost(
+        Ctx.Report, "initialize ScalarCost",
+        getCostForRecipeWithOpcode(getOpcode(), ElementCount::getFixed(1), Ctx),
+        "expanded");
     if (isSingleScalar())
-      return ScalarCost;
+      return observeVPlanCost(Ctx.Report, "ScalarCost", ScalarCost, "expanded");
 
     // If any of the operands is from a different replicate region and has its
     // cost skipped, it may have been forced to scalar. Fall back to legacy cost
@@ -3868,22 +4172,35 @@ InstructionCost VPReplicateRecipe::computeCost(ElementCount VF,
         }))
       break;
 
-    ScalarCost = ScalarCost * VF.getFixedValue() +
-                 Ctx.getScalarizationOverhead(this->getScalarType(),
-                                              to_vector(operands()), VF);
+    observeVPlanCost(
+        Ctx.Report,
+        "ScalarCost = ScalarCost * VF.getFixedValue + "
+        "Ctx.getScalarizationOverhead",
+        ScalarCost = ScalarCost * VF.getFixedValue() +
+                     Ctx.getScalarizationOverhead(this->getScalarType(),
+                                                  to_vector(operands()), VF),
+        "expanded");
     // If the recipe is not predicated (i.e. not in a replicate region), return
     // the scalar cost. Otherwise handle predicated cost.
     if (!getRegion()->isReplicator())
-      return ScalarCost;
+      return observeVPlanCost(Ctx.Report, "ScalarCost", ScalarCost, "expanded");
 
     // Account for the phi nodes that we will create.
-    ScalarCost += VF.getFixedValue() *
-                  Ctx.TTI.getCFInstrCost(Instruction::PHI, Ctx.CostKind);
+    observeVPlanCost(
+        Ctx.Report, "ScalarCost += VF.getFixedValue * getCFInstrCost",
+        ScalarCost += VF.getFixedValue() *
+                      observeVPlanCost(Ctx.Report, "getCFInstrCost",
+                                       Ctx.TTI.getCFInstrCost(Instruction::PHI,
+                                                              Ctx.CostKind)),
+        "expanded");
     // Scale the cost by the probability of executing the predicated blocks.
     // This assumes the predicated block for each vector lane is equally
     // likely.
-    ScalarCost /= Ctx.getPredBlockCostDivisor(UI->getParent());
-    return ScalarCost;
+    observeVPlanCost(
+        Ctx.Report,
+        "ScalarCost /= Ctx.getPredBlockCostDivisor(UI->getParent())",
+        ScalarCost /= Ctx.getPredBlockCostDivisor(UI->getParent()), "expanded");
+    return observeVPlanCost(Ctx.Report, "ScalarCost", ScalarCost, "expanded");
   }
   case Instruction::Load:
   case Instruction::Store: {
@@ -3901,18 +4218,37 @@ InstructionCost VPReplicateRecipe::computeCost(ElementCount VF,
     bool PreferVectorizedAddressing = Ctx.TTI.prefersVectorizedAddressing();
     bool UsedByLoadStoreAddress =
         !PreferVectorizedAddressing && vputils::isUsedByLoadStoreAddress(this);
-    InstructionCost ScalarMemOpCost = Ctx.TTI.getMemoryOpCost(
-        UI->getOpcode(), ValTy, Alignment, AS, Ctx.CostKind, OpInfo,
-        UsedByLoadStoreAddress ? UI : nullptr);
+    VP_COST_DETAIL(Ctx.Report, OS << "        memory opcode="
+                                  << UI->getOpcodeName() << " type=" << *ValTy
+                                  << " alignment=" << Alignment.value()
+                                  << " address_space=" << AS << '\n');
+    InstructionCost ScalarMemOpCost = observeVPlanCost(
+        Ctx.Report, "initialize ScalarMemOpCost",
+        observeVPlanCost(
+            Ctx.Report, "getMemoryOpCost",
+            Ctx.TTI.getMemoryOpCost(UI->getOpcode(), ValTy, Alignment, AS,
+                                    Ctx.CostKind, OpInfo,
+                                    UsedByLoadStoreAddress ? UI : nullptr)),
+        "expanded");
 
     Type *PtrTy = isSingleScalar() ? ScalarPtrTy : toVectorTy(ScalarPtrTy, VF);
+    InstructionCost AddressCost = observeVPlanCost(
+        Ctx.Report, "initialize AddressCost",
+        observeVPlanCost(Ctx.Report, "getAddressComputationCost",
+                         Ctx.TTI.getAddressComputationCost(
+                             PtrTy,
+                             UsedByLoadStoreAddress ? nullptr : Ctx.PSE.getSE(),
+                             PtrSCEV, Ctx.CostKind)),
+        "expanded");
     InstructionCost ScalarCost =
-        ScalarMemOpCost +
-        Ctx.TTI.getAddressComputationCost(
-            PtrTy, UsedByLoadStoreAddress ? nullptr : Ctx.PSE.getSE(), PtrSCEV,
-            Ctx.CostKind);
+        observeVPlanCost(Ctx.Report, "initialize ScalarCost",
+                         ScalarMemOpCost + AddressCost, "expanded");
+    VP_COST_DETAIL(Ctx.Report,
+                   OS << "        scalar_operation = " << ScalarMemOpCost
+                      << " + " << AddressCost << " = " << ScalarCost
+                      << " pointer_type=" << *PtrTy << '\n');
     if (isSingleScalar())
-      return ScalarCost;
+      return observeVPlanCost(Ctx.Report, "ScalarCost", ScalarCost, "expanded");
 
     SmallVector<const VPValue *> OpsToScalarize;
     Type *ResultTy = Type::getVoidTy(PtrTy->getContext());
@@ -3933,30 +4269,61 @@ InstructionCost VPReplicateRecipe::computeCost(ElementCount VF,
 
     TTI::VectorInstrContext VIC =
         IsLoad ? TTI::VectorInstrContext::Load : TTI::VectorInstrContext::Store;
-    InstructionCost Cost =
-        (ScalarCost * VF.getFixedValue()) +
-        Ctx.getScalarizationOverhead(ResultTy, OpsToScalarize, VF, VIC, true);
+    InstructionCost ReplicatedCost =
+        observeVPlanCost(Ctx.Report, "initialize ReplicatedCost",
+                         ScalarCost * VF.getFixedValue(), "expanded");
+    InstructionCost Overhead = observeVPlanCost(
+        Ctx.Report, "initialize Overhead",
+        Ctx.getScalarizationOverhead(ResultTy, OpsToScalarize, VF, VIC, true),
+        "expanded");
+    InstructionCost Cost = observeVPlanCost(
+        Ctx.Report, "initialize Cost", ReplicatedCost + Overhead, "expanded");
+    VP_COST_DETAIL(Ctx.Report,
+                   OS << "        replicated_operations = " << ScalarCost
+                      << " * " << VF.getFixedValue() << " = " << ReplicatedCost
+                      << "\n        unweighted_subtotal = " << ReplicatedCost
+                      << " + " << Overhead << " = " << Cost << '\n');
 
     const VPRegionBlock *ParentRegion = getRegion();
     if (ParentRegion && ParentRegion->isReplicator()) {
       if (!PtrSCEV)
         break;
-      Cost /= Ctx.getPredBlockCostDivisor(UI->getParent());
-      Cost += Ctx.TTI.getCFInstrCost(Instruction::CondBr, Ctx.CostKind);
+      uint64_t Divisor = Ctx.getPredBlockCostDivisor(UI->getParent());
+      VP_COST_DETAIL(Ctx.Report, OS << "        predication_divisor=" << Divisor
+                                    << " numerator=" << Cost << '\n');
+      observeVPlanCost(Ctx.Report, "Cost /= Divisor", Cost /= Divisor,
+                       "expanded");
+      VP_COST_DETAIL(Ctx.Report,
+                     OS << "        weighted_subtotal=" << Cost << '\n');
+      observeVPlanCost(
+          Ctx.Report, "Cost += getCFInstrCost",
+          Cost += observeVPlanCost(
+              Ctx.Report, "getCFInstrCost",
+              Ctx.TTI.getCFInstrCost(Instruction::CondBr, Ctx.CostKind)),
+          "expanded");
 
       auto *VecI1Ty = VectorType::get(
           IntegerType::getInt1Ty(Ctx.L->getHeader()->getContext()), VF);
-      Cost += Ctx.TTI.getScalarizationOverhead(
-          VecI1Ty, APInt::getAllOnes(VF.getFixedValue()),
-          /*Insert=*/false, /*Extract=*/true, Ctx.CostKind);
+      observeVPlanCost(
+          Ctx.Report, "Cost += getScalarizationOverhead",
+          Cost += observeVPlanCost(
+              Ctx.Report, "getScalarizationOverhead",
+              Ctx.TTI.getScalarizationOverhead(
+                  VecI1Ty, APInt::getAllOnes(VF.getFixedValue()),
+                  /*Insert=*/false, /*Extract=*/true, Ctx.CostKind)),
+          "expanded");
 
       if (Ctx.useEmulatedMaskMemRefHack(this, VF)) {
         // Artificially setting to a high enough value to practically disable
         // vectorization with such operations.
-        return 3000000;
+        VP_COST_REPORT(
+            Ctx.Report,
+            OS << "        replacement=emulated-mask-memory-penalty original="
+               << Cost << " replacement_cost=3000000\n");
+        return observeVPlanCost(Ctx.Report, "3000000", 3000000, "expanded");
       }
     }
-    return Cost;
+    return observeVPlanCost(Ctx.Report, "Cost", Cost, "expanded");
   }
   case Instruction::SExt:
   case Instruction::ZExt:
@@ -3972,21 +4339,33 @@ InstructionCost VPReplicateRecipe::computeCost(ElementCount VF,
   case Instruction::FPTrunc:
   case Instruction::Select:
   case Instruction::AddrSpaceCast: {
-    return getCostForRecipeWithOpcode(getOpcode(), ElementCount::getFixed(1),
-                                      Ctx) *
-           (isSingleScalar() ? 1 : VF.getFixedValue());
+    return observeVPlanCost(Ctx.Report,
+                            "getCostForRecipeWithOpcode * (isSingleScalar() ? "
+                            "1 : VF.getFixedValue)",
+                            getCostForRecipeWithOpcode(
+                                getOpcode(), ElementCount::getFixed(1), Ctx) *
+                                (isSingleScalar() ? 1 : VF.getFixedValue()),
+                            "expanded");
   }
   case Instruction::ExtractValue:
   case Instruction::InsertValue:
-    return Ctx.TTI.getInsertExtractValueCost(getOpcode(), Ctx.CostKind);
+    return observeVPlanCost(
+        Ctx.Report, "getInsertExtractValueCost",
+        Ctx.TTI.getInsertExtractValueCost(getOpcode(), Ctx.CostKind));
   }
 
-  return Ctx.getLegacyCost(UI, VF);
+  return observeVPlanCost(Ctx.Report, "Ctx.getLegacyCost(UI, VF)",
+                          Ctx.getLegacyCost(UI, VF), "expanded");
 }
 
 InstructionCost VPReplicateRecipe::computeCallCost(
     Function *CalledFn, Type *ResultTy, ArrayRef<const VPValue *> ArgOps,
     bool IsSingleScalar, ElementCount VF, VPCostContext &Ctx) {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPReplicateRecipe::computeCallCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   SmallVector<Type *, 4> Tys = map_to_vector<4>(
       ArgOps, [&](const VPValue *Op) { return Op->getScalarType(); });
 
@@ -3994,28 +4373,44 @@ InstructionCost VPReplicateRecipe::computeCallCost(
   auto GetIntrinsicCost = [&] {
     if (!IntrinID)
       return InstructionCost::getInvalid();
-    return Ctx.TTI.getIntrinsicInstrCost(
-        IntrinsicCostAttributes(IntrinID, ResultTy, Tys), Ctx.CostKind);
+    return observeVPlanCost(
+        Ctx.Report, "getIntrinsicInstrCost",
+        Ctx.TTI.getIntrinsicInstrCost(
+            IntrinsicCostAttributes(IntrinID, ResultTy, Tys), Ctx.CostKind));
   };
 
   if (IntrinID && VPCostContext::isFreeScalarIntrinsic(IntrinID)) {
     assert(GetIntrinsicCost() == 0 && "scalarizing intrinsic should be free");
-    return 0;
+    return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
   }
 
-  InstructionCost ScalarCallCost =
-      Ctx.TTI.getCallInstrCost(CalledFn, ResultTy, Tys, Ctx.CostKind);
+  InstructionCost ScalarCallCost = observeVPlanCost(
+      Ctx.Report, "initialize ScalarCallCost",
+      observeVPlanCost(
+          Ctx.Report, "getCallInstrCost",
+          Ctx.TTI.getCallInstrCost(CalledFn, ResultTy, Tys, Ctx.CostKind)),
+      "expanded");
   if (IsSingleScalar) {
-    ScalarCallCost = std::min(ScalarCallCost, GetIntrinsicCost());
-    return ScalarCallCost;
+    observeVPlanCost(
+        Ctx.Report,
+        "ScalarCallCost = std::min(ScalarCallCost, GetIntrinsicCost())",
+        ScalarCallCost = std::min(ScalarCallCost, GetIntrinsicCost()),
+        "expanded");
+    return observeVPlanCost(Ctx.Report, "ScalarCallCost", ScalarCallCost,
+                            "expanded");
   }
 
   // Scalarization overhead is undefined for scalable VFs.
   if (VF.isScalable())
-    return InstructionCost::getInvalid();
+    return observeVPlanCost(Ctx.Report, "InstructionCost::getInvalid()",
+                            InstructionCost::getInvalid(), "expanded");
 
-  return ScalarCallCost * VF.getFixedValue() +
-         Ctx.getScalarizationOverhead(ResultTy, ArgOps, VF);
+  return observeVPlanCost(
+      Ctx.Report,
+      "ScalarCallCost * VF.getFixedValue + Ctx.getScalarizationOverhead",
+      ScalarCallCost * VF.getFixedValue() +
+          Ctx.getScalarizationOverhead(ResultTy, ArgOps, VF),
+      "expanded");
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -4058,10 +4453,15 @@ void VPBranchOnMaskRecipe::execute(VPTransformState &State) {
 
 InstructionCost VPBranchOnMaskRecipe::computeCost(ElementCount VF,
                                                   VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPBranchOnMaskRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   // The legacy cost model doesn't assign costs to branches for individual
   // replicate regions. Match the current behavior in the VPlan cost model for
   // now.
-  return 0;
+  return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
 }
 
 void VPPredInstPHIRecipe::execute(VPTransformState &State) {
@@ -4092,6 +4492,11 @@ const VPRecipeBase *VPWidenStoreEVLRecipe::getAsRecipe() const { return this; }
 
 InstructionCost VPWidenMemoryRecipe::computeCost(ElementCount VF,
                                                  VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPWidenMemoryRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   const VPRecipeBase *R = getAsRecipe();
   bool IsLoad = isa<VPWidenLoadRecipe, VPWidenLoadEVLRecipe>(R);
   Type *ScalarTy = IsLoad ? cast<VPSingleDefRecipe>(R)->getScalarType()
@@ -4101,6 +4506,12 @@ InstructionCost VPWidenMemoryRecipe::computeCost(ElementCount VF,
       cast<PointerType>(getAddr()->getScalarType())->getAddressSpace();
   unsigned Opcode = IsLoad ? Instruction::Load : Instruction::Store;
 
+  VP_COST_DETAIL(Ctx.Report,
+                 OS << "        memory opcode="
+                    << Instruction::getOpcodeName(Opcode) << " type=" << *Ty
+                    << " alignment=" << Alignment.value()
+                    << " address_space=" << AS << " masked=" << IsMasked
+                    << " consecutive=" << Consecutive << '\n');
   if (!Consecutive) {
     // TODO: Using the original IR may not be accurate.
     // Currently, ARM will use the underlying IR to calculate gather/scatter
@@ -4117,28 +4528,45 @@ InstructionCost VPWidenMemoryRecipe::computeCost(ElementCount VF,
                    : isa<VPWidenStoreRecipe>(R)   ? Intrinsic::masked_scatter
                    : isa<VPWidenLoadEVLRecipe>(R) ? Intrinsic::vp_gather
                                                   : Intrinsic::vp_scatter;
-    return Ctx.TTI.getAddressComputationCost(PtrTy, nullptr, nullptr,
-                                             Ctx.CostKind) +
-           Ctx.TTI.getMemIntrinsicInstrCost(
-               MemIntrinsicCostAttributes(IID, Ty, Ptr, IsMasked, Alignment,
-                                          &Ingredient),
-               Ctx.CostKind);
+    return observeVPlanCost(
+        Ctx.Report, "getAddressComputationCost + getMemIntrinsicInstrCost",
+        observeVPlanCost(Ctx.Report, "getAddressComputationCost",
+                         Ctx.TTI.getAddressComputationCost(
+                             PtrTy, nullptr, nullptr, Ctx.CostKind)) +
+            observeVPlanCost(
+                Ctx.Report, "getMemIntrinsicInstrCost",
+                Ctx.TTI.getMemIntrinsicInstrCost(
+                    MemIntrinsicCostAttributes(IID, Ty, Ptr, IsMasked,
+                                               Alignment, &Ingredient),
+                    Ctx.CostKind)),
+        "expanded");
   }
 
-  InstructionCost Cost = 0;
+  InstructionCost Cost =
+      observeVPlanCost(Ctx.Report, "initialize Cost", 0, "expanded");
   if (IsMasked) {
     unsigned IID = isa<VPWidenLoadRecipe>(R) ? Intrinsic::masked_load
                                              : Intrinsic::masked_store;
-    Cost += Ctx.TTI.getMemIntrinsicInstrCost(
-        MemIntrinsicCostAttributes(IID, Ty, Alignment, AS), Ctx.CostKind);
+    observeVPlanCost(Ctx.Report, "Cost += getMemIntrinsicInstrCost",
+                     Cost += observeVPlanCost(
+                         Ctx.Report, "getMemIntrinsicInstrCost",
+                         Ctx.TTI.getMemIntrinsicInstrCost(
+                             MemIntrinsicCostAttributes(IID, Ty, Alignment, AS),
+                             Ctx.CostKind)),
+                     "expanded");
   } else {
     TTI::OperandValueInfo OpInfo = Ctx.getOperandInfo(
         isa<VPWidenLoadRecipe, VPWidenLoadEVLRecipe>(R) ? R->getOperand(0)
                                                         : R->getOperand(1));
-    Cost += Ctx.TTI.getMemoryOpCost(Opcode, Ty, Alignment, AS, Ctx.CostKind,
-                                    OpInfo, &Ingredient);
+    observeVPlanCost(
+        Ctx.Report, "Cost += getMemoryOpCost",
+        Cost += observeVPlanCost(Ctx.Report, "getMemoryOpCost",
+                                 Ctx.TTI.getMemoryOpCost(Opcode, Ty, Alignment,
+                                                         AS, Ctx.CostKind,
+                                                         OpInfo, &Ingredient)),
+        "expanded");
   }
-  return Cost;
+  return observeVPlanCost(Ctx.Report, "Cost", Cost, "expanded");
 }
 
 void VPWidenLoadRecipe::execute(VPTransformState &State) {
@@ -4208,8 +4636,15 @@ void VPWidenLoadEVLRecipe::execute(VPTransformState &State) {
 
 InstructionCost VPWidenLoadEVLRecipe::computeCost(ElementCount VF,
                                                   VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPWidenLoadEVLRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   if (!Consecutive || IsMasked)
-    return VPWidenMemoryRecipe::computeCost(VF, Ctx);
+    return observeVPlanCost(
+        Ctx.Report, "VPWidenMemoryRecipe::computeCost(VF, Ctx)",
+        VPWidenMemoryRecipe::computeCost(VF, Ctx), "expanded");
 
   // We need to use the getMemIntrinsicInstrCost() instead of getMemoryOpCost()
   // here because the EVL recipes using EVL to replace the tail mask. But in the
@@ -4219,9 +4654,11 @@ InstructionCost VPWidenLoadEVLRecipe::computeCost(ElementCount VF,
   Type *Ty = toVectorTy(getScalarType(), VF);
   unsigned AS =
       cast<PointerType>(getAddr()->getScalarType())->getAddressSpace();
-  return Ctx.TTI.getMemIntrinsicInstrCost(
-      MemIntrinsicCostAttributes(Intrinsic::vp_load, Ty, Alignment, AS),
-      Ctx.CostKind);
+  return observeVPlanCost(
+      Ctx.Report, "getMemIntrinsicInstrCost",
+      Ctx.TTI.getMemIntrinsicInstrCost(
+          MemIntrinsicCostAttributes(Intrinsic::vp_load, Ty, Alignment, AS),
+          Ctx.CostKind));
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -4296,8 +4733,15 @@ void VPWidenStoreEVLRecipe::execute(VPTransformState &State) {
 
 InstructionCost VPWidenStoreEVLRecipe::computeCost(ElementCount VF,
                                                    VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPWidenStoreEVLRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   if (!Consecutive || IsMasked)
-    return VPWidenMemoryRecipe::computeCost(VF, Ctx);
+    return observeVPlanCost(
+        Ctx.Report, "VPWidenMemoryRecipe::computeCost(VF, Ctx)",
+        VPWidenMemoryRecipe::computeCost(VF, Ctx), "expanded");
 
   // We need to use the getMemIntrinsicInstrCost() instead of getMemoryOpCost()
   // here because the EVL recipes using EVL to replace the tail mask. But in the
@@ -4307,9 +4751,11 @@ InstructionCost VPWidenStoreEVLRecipe::computeCost(ElementCount VF,
   Type *Ty = toVectorTy(getStoredValue()->getScalarType(), VF);
   unsigned AS =
       cast<PointerType>(getAddr()->getScalarType())->getAddressSpace();
-  return Ctx.TTI.getMemIntrinsicInstrCost(
-      MemIntrinsicCostAttributes(Intrinsic::vp_store, Ty, Alignment, AS),
-      Ctx.CostKind);
+  return observeVPlanCost(
+      Ctx.Report, "getMemIntrinsicInstrCost",
+      Ctx.TTI.getMemIntrinsicInstrCost(
+          MemIntrinsicCostAttributes(Intrinsic::vp_store, Ty, Alignment, AS),
+          Ctx.CostKind));
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -4749,6 +5195,11 @@ void VPInterleaveEVLRecipe::printRecipe(raw_ostream &O, const Twine &Indent,
 
 InstructionCost VPInterleaveBase::computeCost(ElementCount VF,
                                               VPCostContext &Ctx) const {
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPInterleaveBase::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
   Instruction *InsertPos = getInsertPos();
   // Find the VPValue index of the interleave group. We need to skip gaps.
   unsigned InsertPosIdx = 0;
@@ -4775,18 +5226,34 @@ InstructionCost VPInterleaveBase::computeCost(ElementCount VF,
     if (IG->getMember(IF))
       Indices.push_back(IF);
 
+  VP_COST_DETAIL(Ctx.Report,
+                 OS << "        interleave factor=" << InterleaveFactor
+                    << " type=" << *WideVecTy << " alignment="
+                    << IG->getAlign().value() << " address_space=" << AS
+                    << " masked=" << (getMask() != nullptr) << " mask_for_gaps="
+                    << NeedsMaskForGaps << " reverse=" << IG->isReverse()
+                    << " members=" << IG->getNumMembers() << '\n');
   // Calculate the cost of the whole interleaved group.
-  InstructionCost Cost = Ctx.TTI.getInterleavedMemoryOpCost(
-      InsertPos->getOpcode(), WideVecTy, IG->getFactor(), Indices,
-      IG->getAlign(), AS, Ctx.CostKind, getMask(), NeedsMaskForGaps);
+  InstructionCost Cost = observeVPlanCost(
+      Ctx.Report, "initialize Cost",
+      observeVPlanCost(Ctx.Report, "getInterleavedMemoryOpCost",
+                       Ctx.TTI.getInterleavedMemoryOpCost(
+                           InsertPos->getOpcode(), WideVecTy, IG->getFactor(),
+                           Indices, IG->getAlign(), AS, Ctx.CostKind, getMask(),
+                           NeedsMaskForGaps)),
+      "expanded");
 
   if (!IG->isReverse())
-    return Cost;
+    return observeVPlanCost(Ctx.Report, "Cost", Cost, "expanded");
 
-  return Cost + IG->getNumMembers() *
-                    Ctx.TTI.getShuffleCost(TargetTransformInfo::SK_Reverse,
-                                           VectorTy, VectorTy, {}, Ctx.CostKind,
-                                           0);
+  return observeVPlanCost(
+      Ctx.Report, "Cost + IG->getNumMembers * getShuffleCost",
+      Cost + IG->getNumMembers() *
+                 observeVPlanCost(Ctx.Report, "getShuffleCost",
+                                  Ctx.TTI.getShuffleCost(
+                                      TargetTransformInfo::SK_Reverse, VectorTy,
+                                      VectorTy, {}, Ctx.CostKind, 0)),
+      "expanded");
 }
 
 bool VPWidenPointerInductionRecipe::onlyScalarsGenerated(bool IsScalable) {
@@ -4866,10 +5333,17 @@ void VPFirstOrderRecurrencePHIRecipe::execute(VPTransformState &State) {
 InstructionCost
 VPFirstOrderRecurrencePHIRecipe::computeCost(ElementCount VF,
                                              VPCostContext &Ctx) const {
-  if (VF.isScalar())
-    return Ctx.TTI.getCFInstrCost(Instruction::PHI, Ctx.CostKind);
+  VPlanCostReport::CostScope ReportScope(
+      Ctx.Report, "VPFirstOrderRecurrencePHIRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
 
-  return 0;
+  if (VF.isScalar())
+    return observeVPlanCost(
+        Ctx.Report, "getCFInstrCost",
+        Ctx.TTI.getCFInstrCost(Instruction::PHI, Ctx.CostKind));
+
+  return observeVPlanCost(Ctx.Report, "0", 0, "expanded");
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -4934,7 +5408,14 @@ void VPWidenPHIRecipe::execute(VPTransformState &State) {
 
 InstructionCost VPWidenPHIRecipe::computeCost(ElementCount VF,
                                               VPCostContext &Ctx) const {
-  return Ctx.TTI.getCFInstrCost(Instruction::PHI, Ctx.CostKind);
+  VPlanCostReport::CostScope ReportScope(Ctx.Report,
+                                         "VPWidenPHIRecipe::computeCost");
+  VP_COST_DETAIL(Ctx.Report, OS << "        vf=";
+                 VPlanCostReport::printVF(OS, VF); OS << '\n');
+
+  return observeVPlanCost(
+      Ctx.Report, "getCFInstrCost",
+      Ctx.TTI.getCFInstrCost(Instruction::PHI, Ctx.CostKind));
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
