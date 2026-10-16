@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+from vplan_tools import cli, print_vplans_main
+
+if __name__ == "__main__":
+    cli(print_vplans_main)

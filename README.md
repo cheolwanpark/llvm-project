@@ -1,44 +1,93 @@
-# The LLVM Compiler Infrastructure
+# Backend-aware VPlan cost tools
 
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/llvm/llvm-project/badge)](https://securityscorecards.dev/viewer/?uri=github.com/llvm/llvm-project)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/8273/badge)](https://www.bestpractices.dev/projects/8273)
-[![libc++](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml/badge.svg?branch=main&event=schedule)](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml?query=event%3Aschedule)
+## Build and evaluate
 
-Welcome to the LLVM project!
+Use Linux or macOS with Python 3.10+ (`python3`), CMake 3.20+, Ninja, and a host
+C/C++ compiler. Supply an external database using the existing `summary.sqlite`
+schema; databases are not included in this repository.
 
-This repository contains the source code for LLVM, a toolkit for the
-construction of highly optimized compilers, optimizers, and run-time
-environments.
+```sh
+git clone --depth 1 --single-branch \
+  --branch backend-aware-vector-cost \
+  https://github.com/cheolwanpark/llvm-project.git
+cd llvm-project
 
-The LLVM project has multiple components. The core of the project is
-itself called "LLVM". This contains all of the tools, libraries, and header
-files needed to process intermediate representations and convert them into
-object files. Tools include an assembler, disassembler, bitcode analyzer, and
-bitcode optimizer.
+cmake -S llvm -B build-vplan-tools -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_ENABLE_ASSERTIONS=ON \
+  -DLLVM_ENABLE_PROJECTS=clang \
+  -DLLVM_TARGETS_TO_BUILD=RISCV \
+  -DLLVM_INCLUDE_TESTS=OFF \
+  -DLLVM_INCLUDE_EXAMPLES=OFF \
+  -DLLVM_INCLUDE_BENCHMARKS=OFF \
+  -DLLVM_PARALLEL_LINK_JOBS=1 \
+  -DCLANG_INCLUDE_TESTS=OFF \
+  -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
+  -DCLANG_ENABLE_OBJC_REWRITER=OFF
 
-C-like languages use the [Clang](https://clang.llvm.org/) frontend. This
-component compiles C, C++, Objective-C, and Objective-C++ code into LLVM bitcode
--- and from there into object files, using LLVM.
+cmake --build build-vplan-tools --parallel 2 \
+  --target clang clang-resource-headers
 
-Other components include:
-the [libc++ C++ standard library](https://libcxx.llvm.org),
-the [LLD linker](https://lld.llvm.org), and more.
+# Supply a database using the existing summary.sqlite schema.
+cp /path/to/results.sqlite ./results.sqlite
 
-## Getting the Source Code and Building LLVM
+utils/vplan-tools/evaluate
+utils/vplan-tools/print-vplans --benchmark tsvc-s000-l00 --detail
+```
 
-Consult the
-[Getting Started with LLVM](https://llvm.org/docs/GettingStarted.html#getting-the-source-code-and-building-llvm)
-page for information on building and running LLVM.
+`tsvc-s000-l00` is an example ID from the existing database; use an ID from your
+database. If you skip the explicit build, the tools configure and build LLVM
+automatically. They compile kernels for comparison without running benchmarks
+or updating measured cycles.
 
-For information on how to contribute to the LLVM project, please take a look at
-the [Contributing to LLVM](https://llvm.org/docs/Contributing.html) guide.
+Database precedence is **`--db PATH` > `VPLAN_DB` > `results.sqlite` at the
+checkout containing the tools**. An unset or empty `VPLAN_DB` uses the default;
+`--llvm-path` does not change it. For example:
 
-## Getting in touch
+```sh
+VPLAN_DB=/path/to/results.sqlite utils/vplan-tools/evaluate
+utils/vplan-tools/evaluate --db /path/to/results.sqlite
+```
 
-Join the [LLVM Discourse forums](https://discourse.llvm.org/), [Discord
-chat](https://discord.gg/xS7Z362),
-[LLVM Office Hours](https://llvm.org/docs/GettingInvolved.html#office-hours) or
-[Regular sync-ups](https://llvm.org/docs/GettingInvolved.html#online-sync-ups).
+See the [tools guide](utils/vplan-tools/README.md) for the database contract,
+metrics, and artifacts, and [LLVM's original README](LLVM_README.md) for general
+LLVM guidance.
 
-The LLVM project has adopted a [code of conduct](https://llvm.org/docs/CodeOfConduct.html) for
-participants to all modes of communication within the project.
+## Flags
+
+`print-vplan` is an alias for `print-vplans`. Explicit relative paths use the
+current working directory; paths also expand `~`.
+
+| Tool option | Commands | Usage |
+| --- | --- | --- |
+| `--benchmark ID` | Both | Evaluate one ID (default: all); required for printing. |
+| `--detail` | Print only | Include detailed VPlan cost calculations. |
+| `--db PATH` / `VPLAN_DB` | Both | Select the external summary database. |
+| `--build-dir PATH` | Both | Build directory; default: selected LLVM checkout's `build-vplan-tools`. |
+| `--llvm-path PATH` | Both | LLVM source checkout; default: checkout containing these tools. |
+| `--jobs N` | Both | Build parallelism; default 2, with one link job in fresh builds. |
+| `--timeout SECONDS` | Both | Per compiler invocation, including each probe; default 120. |
+| `--split all\|tuning\|validation` | Evaluate only | Select a split; default `all`. |
+| `--json-output PATH` | Evaluate only | Save metrics and exact rational VF costs. |
+| `--artifacts-dir PATH` | Evaluate only | Save reports and backend artifacts; tuning reports include details. |
+| `--exclude-reasons` | Evaluate only | List excluded benchmarks and reasons. |
+| `--compiler-mode meta\|direct` | Both | Default `meta` runs the Post-RA feedback pipeline; `direct` compares existing costs. |
+
+Pass LLVM options to clang with `-mllvm` before each option. The reporting flags
+alone do not enable the Post-RA model; the default meta evaluation path generates
+the required feedback.
+
+| LLVM option | Usage |
+| --- | --- |
+| `-mllvm -print-vplans` | Print VPlan cost reports. |
+| `-mllvm -print-detailed-vplans` | Include detailed calculations. |
+| `-vplan-pipeline=prepare\|resume` | Meta-compiler: create or resume the pre-vectorizer checkpoint. |
+| `-vplan-candidates-output=PATH` | Meta-compiler: write candidate and selection JSON. |
+| `-vplan-ra-run-id=DIGEST` | Meta-compiler: bind artifacts to a run identity. |
+| `-vplan-probe-candidate=ID` | Meta-compiler: probe one generated plan/VF. |
+| `-vplan-ra-features-output=PATH` | Meta-compiler: collect backend observations. |
+| `-vplan-ra-feedback=PATH` | Meta-compiler: provide observations for final costing. |
+| `-stop-after=riscv-vplan-ra-observe` | Stop after observation and emit MIR. |
+
+See [VPLAN_RA.md](VPLAN_RA.md#compiler-interfaces) for the compiler interfaces and
+manual invocation details.

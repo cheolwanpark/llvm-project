@@ -15,6 +15,15 @@ each valid candidate through register allocation, and returns to that checkpoint
 to make the final main-VF decision using the observations. It never reads cycle
 measurements or a benchmark database.
 
+For database-backed evaluation and VPlan output, see the
+[standalone tools](utils/vplan-tools/README.md). With an externally supplied
+`results.sqlite` at the checkout root:
+
+```sh
+utils/vplan-tools/evaluate
+utils/vplan-tools/print-vplans --benchmark tsvc-s000-l00 --detail
+```
+
 ## Build and run
 
 The following builds a standalone checkout with CMake, Ninja, a C/C++ toolchain,
