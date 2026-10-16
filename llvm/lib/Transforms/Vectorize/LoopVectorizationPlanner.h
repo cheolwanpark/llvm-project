@@ -631,6 +631,7 @@ struct FixedScalableVFPair {
 /// including the maximum VFs.
 class VPlanCostReport;
 
+class VPlanRAContext;
 class VFSelectionContext {
   /// \return True if maximizing vector bandwidth is enabled by the target or
   /// user options, for the given register kind (scalable or fixed-width).
@@ -711,6 +712,7 @@ class VFSelectionContext {
 
 public:
   VPlanCostReport *CostReport = nullptr;
+  VPlanRAContext *RA = nullptr;
 
   /// The kind of cost that we are calculating.
   const TTI::TargetCostKind CostKind;
@@ -904,6 +906,9 @@ public:
   /// non-zero or all applicable candidate VFs otherwise. If vectorization and
   /// interleaving should be avoided up-front, no plans are generated.
   void plan(ElementCount UserVF, unsigned UserIC);
+
+  void registerRACandidates();
+  std::pair<VectorizationFactor, VPlan *> selectRAProbe();
 
   /// Return the VPlan for \p VF. At the moment, there is always a single VPlan
   /// for each VF.

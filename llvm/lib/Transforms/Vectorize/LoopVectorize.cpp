@@ -54,6 +54,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
+#include "llvm/Transforms/Vectorize/VPlanRA.h"
 #include "LoopVectorizationPlanner.h"
 #include "VPRecipeBuilder.h"
 #include "VPlan.h"
@@ -6367,6 +6368,45 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
   return Cost;
 }
 
+void LoopVectorizationPlanner::registerRACandidates() {
+  if (!Config.RA)
+    return;
+  if (Config.CostReport)
+    Config.CostReport->Phase = "ra-enumeration";
+  for (const auto &P : VPlans) {
+    Config.RA->registerPlan(*P);
+    ArrayRef<ElementCount> VFs(P->vectorFactors().begin(),
+                              P->vectorFactors().end());
+    SmallVector<VPRegisterUsage, 8> RUs;
+    bool ConsiderRegPressure = any_of(VFs, [this](ElementCount VF) {
+      return Config.shouldConsiderRegPressureForVF(VF);
+    });
+    if (ConsiderRegPressure)
+      RUs = calculateRegisterUsageForPlan(*P, VFs, TTI, CM.ValuesToIgnore);
+    for (auto [I, VF] : enumerate(VFs)) {
+      auto Cost = VF.isScalar()
+                      ? CM.expectedCost(VF)
+                      : cost(*P, VF, ConsiderRegPressure ? &RUs[I] : nullptr);
+      Config.RA->recordCost(*P, VF, Cost);
+    }
+  }
+}
+
+std::pair<VectorizationFactor, VPlan *>
+LoopVectorizationPlanner::selectRAProbe() {
+  for (const auto &P : VPlans)
+    for (ElementCount VF : P->vectorFactors())
+      if (Config.RA->isProbe(*P, VF)) {
+        auto Cost = Config.RA->originalCost(*P, VF);
+        if (!Cost.isValid())
+          reportFatalUsageError("cannot probe an invalid-cost VPlan");
+        return {VectorizationFactor(VF, Cost,
+                                    CM.expectedCost(ElementCount::getFixed(1))),
+                P.get()};
+      }
+  reportFatalUsageError("requested VPlan RA candidate was not regenerated");
+}
+
 std::pair<VectorizationFactor, VPlan *>
 LoopVectorizationPlanner::computeBestVF() {
   if (Config.CostReport)
@@ -6476,6 +6516,15 @@ LoopVectorizationPlanner::computeBestVF() {
 
       InstructionCost Cost =
           cost(*P, VF, ConsiderRegPressure ? &RUs[I] : nullptr);
+      InstructionCost OriginalCost = Cost;
+      if (Config.RA) {
+        Cost = Config.RA->adjust(*P, VF, Cost);
+        if (Config.CostReport)
+          Config.CostReport->bodyCost(*P, VF, Cost);
+        VP_COST_REPORT(Config.CostReport,
+                       OS << "      ra-original=" << OriginalCost
+                          << " ra-effective=" << Cost << '\n');
+      }
       VectorizationFactor CurrentFactor(VF, Cost, ScalarCost);
 
       if (Config.CostReport)
@@ -6490,8 +6539,21 @@ LoopVectorizationPlanner::computeBestVF() {
         Config.CostReport->beginComparison(*P, VF, Cost, nullptr, ScalarVF,
                                            /*Scalar=*/true);
       // If profitable add it to ProfitableVF list.
-      if (isMoreProfitable(CurrentFactor, ScalarFactor, P->hasScalarTail())) {
-        ProfitableVFs.push_back(CurrentFactor);
+      bool Profitable =
+          isMoreProfitable(CurrentFactor, ScalarFactor, P->hasScalarTail());
+      // Epilogue configurations are part of each probed candidate. Keep their
+      // original policy/costs while researching the main-loop ranking.
+      if (Config.RA && Cost != OriginalCost) {
+        auto *SavedReport = Config.CostReport;
+        Config.CostReport = nullptr;
+        Profitable = isMoreProfitable(
+            VectorizationFactor(VF, OriginalCost, ScalarCost), ScalarFactor,
+            P->hasScalarTail());
+        Config.CostReport = SavedReport;
+      }
+      if (Profitable) {
+        ProfitableVFs.push_back(Config.RA
+            ? VectorizationFactor(VF, OriginalCost, ScalarCost) : CurrentFactor);
         if (Config.CostReport)
           ReportProfitablePlans.push_back(P.get());
       }
@@ -8730,7 +8792,20 @@ bool LoopVectorizePass::processLoop(Loop *L) {
 
   // Plan how to best vectorize.
   LVP.plan(UserVF, UserIC);
+  std::unique_ptr<VPlanRAContext> RA;
+  if (vplanRAEnabled()) {
+    if (!IsInnerLoop)
+      reportFatalUsageError("VPlan RA currently supports inner loops only");
+    RA = std::make_unique<VPlanRAContext>(*F, ReportLoopIndex);
+    Config.RA = RA.get();
+    LVP.registerRACandidates();
+  }
   auto [VF, BestPlanPtr] = LVP.computeBestVF();
+  bool RAProbe = RA && RA->probesThisLoop();
+  if (RAProbe) {
+    std::tie(VF, BestPlanPtr) = LVP.selectRAProbe();
+    F->addFnAttr("vplan.ra.candidate", getVPlanRAProbe());
+  }
   unsigned IC = 1;
 
   // For VPlan build stress testing of outer loops, bail after plan
@@ -8751,7 +8826,9 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                            CM.maskPartialAliasing());
   if (IsInnerLoop && LVP.hasPlanWithVF(VF.Width)) {
     // Select the interleave count.
-    IC = LVP.selectInterleaveCount(*BestPlanPtr, VF.Width, VF.Cost);
+    IC = LVP.selectInterleaveCount(
+        *BestPlanPtr, VF.Width,
+        RA ? RA->originalCost(*BestPlanPtr, VF.Width) : VF.Cost);
 
     unsigned SelectedIC = std::max(IC, UserIC);
     //  Optimistically generate runtime checks if they are needed. Drop them if
@@ -8790,7 +8867,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       VP_COST_SUMMARY(
           Config.CostReport,
           OS << "  outside-loop-profitability bypass=forced-vectorization\n");
-    if (!ForceVectorization &&
+    if (!ForceVectorization && !RAProbe &&
         !isOutsideLoopWorkProfitable(Checks, VF, L, PSE, CostCtx, *BestPlanPtr,
                                      SEL, Config.getVScaleForTuning())) {
       ORE->emit([&]() {
@@ -8895,6 +8972,9 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     Config.CostReport->interleave(IC, IntDiagMsg.first, /*Final=*/true);
   // Emit diagnostic messages, if any.
   if (!VectorizeLoop && !InterleaveLoop) {
+    if (RA && BestPlanPtr)
+      RA->selection(*BestPlanPtr, VF.Width, IC, ElementCount::getFixed(0),
+                    /*Emitted=*/false);
     VP_COST_SUMMARY(Config.CostReport,
                     OS << "  rejection vectorization_reason="
                        << VecDiagMsg.first
@@ -8958,6 +9038,10 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // Consider vectorizing the epilogue too if it's profitable.
   std::unique_ptr<VPlan> EpiPlan =
       LVP.selectBestEpiloguePlan(BestPlan, VF.Width, IC);
+  if (RA)
+    RA->selection(BestPlan, VF.Width, IC,
+                  EpiPlan ? EpiPlan->getSingleVF() : ElementCount::getFixed(0),
+                  /*Emitted=*/true);
   bool HasBranchWeights =
       hasBranchWeightMD(*L->getLoopLatch()->getTerminator());
   if (EpiPlan) {

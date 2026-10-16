@@ -40,6 +40,7 @@
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Vectorize/LoopIdiomVectorize.h"
+#include "llvm/Transforms/Vectorize/VPlanRA.h"
 #include <optional>
 using namespace llvm;
 
@@ -152,6 +153,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVExpandAtomicPseudoPass(*PR);
   initializeRISCVRedundantCopyEliminationPass(*PR);
   initializeRISCVAsmPrinterPass(*PR);
+  initializeRISCVVPlanRAObservePass(*PR);
   initializeRISCVPromoteConstantPass(*PR);
 }
 
@@ -462,7 +464,10 @@ bool RISCVPassConfig::addRegAssignAndRewriteFast() {
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
       EnableRISCVDeadRegisterElimination)
     addPass(createRISCVDeadRegisterDefinitionsPass());
-  return TargetPassConfig::addRegAssignAndRewriteFast();
+  bool Result = TargetPassConfig::addRegAssignAndRewriteFast();
+  if (!getVPlanRAFeaturesOutput().empty())
+    addPass(createRISCVVPlanRAObservePass());
+  return Result;
 }
 
 bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
@@ -472,7 +477,10 @@ bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
       EnableRISCVDeadRegisterElimination)
     addPass(createRISCVDeadRegisterDefinitionsPass());
-  return TargetPassConfig::addRegAssignAndRewriteOptimized();
+  bool Result = TargetPassConfig::addRegAssignAndRewriteOptimized();
+  if (!getVPlanRAFeaturesOutput().empty())
+    addPass(createRISCVVPlanRAObservePass());
+  return Result;
 }
 
 void RISCVPassConfig::addIRPasses() {

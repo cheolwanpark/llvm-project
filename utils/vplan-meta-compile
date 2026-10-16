@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""Compile every generated VPlan/VF through RA, then replay LV with feedback.
+
+This is fixed experiment infrastructure. Research lives in
+RISCVVPlanRAFeatures.cpp and VPlanRACostModel.cpp, not this driver.
+No measurements or benchmark database are read by this program.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+class MetaCompileError(Exception):
+    pass
+
+
+def write_json(path: Path, value) -> None:
+    path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
+
+
+def digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def llvm_flag(name: str, value: str) -> list[str]:
+    return ["-mllvm", f"-{name}={value}"]
+
+
+def resume_flags(flags: list[str]) -> list[str]:
+    """Preprocessing is performed once; retain all target/codegen options."""
+    out = []
+    i = 0
+    while i < len(flags):
+        flag = flags[i]
+        if flag in ("-I", "-D", "-U", "-isystem", "-idirafter", "-include", "-imacros"):
+            if i + 1 == len(flags):
+                raise MetaCompileError(f"missing value for {flag}")
+            i += 2
+            continue
+        if flag.startswith(("-I", "-D", "-U", "-std=")) or flag == "-nostdlibinc":
+            i += 1
+            continue
+        out.append(flag)
+        i += 1
+    return out
+
+
+def validate_flags(flags: list[str]) -> None:
+    # Source/output actions belong to the driver. In particular, an inherited
+    # forced width would change planning before candidate enumeration.
+    forbidden = ("-o", "-c", "-S", "-emit-llvm", "-x", "-E", "-fsyntax-only")
+    for i, flag in enumerate(flags):
+        if flag in forbidden or flag.startswith(("-flto", "-fprofile", "-fsanitize",
+                                                  "-fpass-plugin")):
+            raise MetaCompileError(f"unsupported meta-compiler option: {flag}")
+        if flag.startswith("-O") and flag != "-O2":
+            raise MetaCompileError("meta compilation currently supports -O2 only")
+        if flag == "-mllvm":
+            if i + 1 == len(flags):
+                raise MetaCompileError("missing -mllvm argument")
+            option = flags[i + 1].lstrip("-").split("=", 1)[0]
+            if option.startswith(("vplan-", "force-vector-width", "stop-", "start-")):
+                raise MetaCompileError(f"driver owns compiler option: {option}")
+
+
+class Driver:
+    def __init__(self, clang: Path, source: Path, work: Path, flags: list[str],
+                 timeout: int = 120):
+        self.clang = clang.resolve()
+        self.source = source.resolve()
+        self.work = work.resolve()
+        self.flags = flags
+        self.timeout = timeout
+        self.commands = []
+
+    def run(self, label: str, command: list[str]) -> subprocess.CompletedProcess:
+        # Integrated cc1 keeps timeout cancellation from leaving a compiler
+        # grandchild behind. Processes stay in the campaign's process group.
+        command = [str(self.clang), *command, "-fintegrated-cc1"]
+        self.commands.append({"stage": label, "argv": command})
+        write_json(self.work / "commands.json", self.commands)
+        try:
+            result = subprocess.run(command, capture_output=True, text=True,
+                                    errors="replace", timeout=self.timeout)
+        except subprocess.TimeoutExpired as exc:
+            (self.work / f"{label}.stderr").write_text(
+                (exc.stderr or b"").decode(errors="replace")
+                if isinstance(exc.stderr, bytes) else (exc.stderr or ""))
+            raise MetaCompileError(f"{label}: compiler timed out after {self.timeout}s") from exc
+        (self.work / f"{label}.stdout").write_text(result.stdout)
+        (self.work / f"{label}.stderr").write_text(result.stderr)
+        if result.returncode:
+            raise MetaCompileError(
+                f"{label}: compiler failed ({result.returncode}); "
+                f"see {self.work / (label + '.stderr')}\n{result.stderr}")
+        return result
+
+    def manifest(self, path: Path, run_id: str) -> dict:
+        try:
+            value = json.loads(path.read_text())
+            if value["version"] != 1 or value["run_id"] != run_id:
+                raise ValueError("version/run mismatch")
+            rows = value["candidates"]
+            if not isinstance(rows, list) or len({r["id"] for r in rows}) != len(rows):
+                raise ValueError("invalid/duplicate candidates")
+            for row in rows:
+                if type(row["probeable"]) is not bool:
+                    raise ValueError("missing probeability")
+            if not isinstance(value["selections"], list):
+                raise ValueError("missing selections")
+            return value
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise MetaCompileError(f"invalid manifest {path}: {exc}") from exc
+
+    def compile(self, output: Path | None, emit: str, stop_after_ra: bool,
+                detail: bool) -> dict:
+        validate_flags(self.flags)
+        if self.work.exists() and any(self.work.iterdir()):
+            raise MetaCompileError(f"work directory must be empty: {self.work}")
+        self.work.mkdir(parents=True, exist_ok=True)
+        checkpoint = self.work / "pre-vectorize.bc"
+        self.run("prepare", [*self.flags, *llvm_flag("vplan-pipeline", "prepare"),
+                             "-emit-llvm", "-c", str(self.source), "-o", str(checkpoint)])
+        identity = {"checkpoint": digest(checkpoint), "compiler": digest(self.clang),
+                    "flags": self.flags, "protocol": 1}
+        run_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        write_json(self.work / "identity.json", identity | {"run_id": run_id})
+        common = [*resume_flags(self.flags), "-x", "ir", str(checkpoint),
+                  *llvm_flag("vplan-pipeline", "resume"),
+                  *llvm_flag("vplan-ra-run-id", run_id)]
+        manifest_path = self.work / "candidates.json"
+        self.run("discover", [*common, *llvm_flag("vplan-candidates-output", str(manifest_path)),
+                              "-S", "-emit-llvm", "-o", str(self.work / "discovery.ll")])
+        manifest = self.manifest(manifest_path, run_id)
+        feedback = []
+        for index, row in enumerate(manifest["candidates"]):
+            if not row["probeable"]:
+                continue
+            label = f"probe-{index:04d}"
+            features_path = self.work / f"{label}.json"
+            probe_manifest = self.work / f"{label}.manifest.json"
+            mir = self.work / f"{label}.mir"
+            self.run(label, [*common, *llvm_flag("vplan-probe-candidate", row["id"]),
+                             *llvm_flag("vplan-candidates-output", str(probe_manifest)),
+                             *llvm_flag("vplan-ra-features-output", str(features_path)),
+                             *llvm_flag("stop-after", "riscv-vplan-ra-observe"),
+                             "-S", "-o", str(mir)])
+            probe = self.manifest(probe_manifest, run_id)
+            if probe["candidates"] != manifest["candidates"]:
+                raise MetaCompileError(f"{label}: candidate set/context changed during replay")
+            choices = [s for s in probe["selections"] if s["id"] == row["id"]]
+            if len(choices) != 1:
+                raise MetaCompileError(f"{label}: requested candidate was not selected exactly once")
+            try:
+                observation = json.loads(features_path.read_text())
+                if (observation["version"] != 1 or observation["run_id"] != run_id
+                    or observation["id"] != row["id"] or observation["stage"] != "post-ra"
+                    or observation["function"] != row["function"]
+                    or not isinstance(observation["features"], dict)
+                    or not mir.is_file() or not mir.stat().st_size):
+                    raise ValueError("identity, stage, features, or MIR mismatch")
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise MetaCompileError(f"{label}: invalid RA observation: {exc}") from exc
+            feedback.append({"id": row["id"], "features": observation["features"],
+                             "selection": choices[0], "mir": str(mir)})
+        feedback_path = self.work / "feedback.json"
+        write_json(feedback_path, {"version": 1, "run_id": run_id, "candidates": feedback})
+        result = {"version": 1, "run_id": run_id, "candidates": len(feedback),
+                  "manifest": str(manifest_path), "feedback": str(feedback_path),
+                  "stage": "post-ra"}
+        if not stop_after_ra:
+            if output is None:
+                raise MetaCompileError("final compilation requires --output")
+            output = output.resolve()
+            output.parent.mkdir(parents=True, exist_ok=True)
+            final_manifest = self.work / "final.manifest.json"
+            actions = {"llvm": ["-S", "-emit-llvm"], "asm": ["-S"], "obj": ["-c"]}
+            report_flags = ["-mllvm", "-print-vplans"]
+            if detail:
+                report_flags += ["-mllvm", "-print-detailed-vplans"]
+            final = self.run("final", [*common, *llvm_flag("vplan-ra-feedback", str(feedback_path)),
+                                      *llvm_flag("vplan-candidates-output", str(final_manifest)),
+                                      *report_flags, *actions[emit], "-o", str(output)])
+            replay = self.manifest(final_manifest, run_id)
+            if replay["candidates"] != manifest["candidates"]:
+                raise MetaCompileError("final compilation regenerated a different candidate set")
+            sys.stderr.write(final.stderr)
+            result.update(stage="final", output=str(output), final_manifest=str(final_manifest))
+        write_json(self.work / "result.json", result)
+        return result
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--clang", required=True, type=Path)
+    parser.add_argument("--input", required=True, type=Path)
+    parser.add_argument("--work-dir", required=True, type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--emit", choices=("llvm", "asm", "obj"), default="obj")
+    parser.add_argument("--stop-after-ra", action="store_true")
+    parser.add_argument("--detail", action="store_true")
+    parser.add_argument("--timeout", type=int, default=120, help="seconds per compiler invocation")
+    parser.add_argument("flags", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    flags = args.flags[1:] if args.flags[:1] == ["--"] else args.flags
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+    if not args.stop_after_ra and args.output is None:
+        parser.error("--output is required unless --stop-after-ra is used")
+    try:
+        result = Driver(args.clang, args.input, args.work_dir, flags, args.timeout).compile(
+            args.output, args.emit, args.stop_after_ra, args.detail)
+        print(json.dumps(result))
+        return 0
+    except (MetaCompileError, OSError) as exc:
+        print(f"meta-compiler: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
