@@ -1,0 +1,116 @@
+# Packed bits use canonical e8 LMUL metadata, while all operands remain VR.
+# Binary: rd, rs2, rs1, AVL, sew_mask. Clear/set: rd, AVL, sew_mask.
+# sew_mask is exactly 0, not log2(data SEW). No passthrough/policy operands.
+# Setup/exit masks are excluded. Count even known clear/set Boolean results.
+# The before/after comparison checks every instruction and operand unchanged.
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=128 -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-ra-features-output=%t.128.json %s -o %t.128.mir
+# RUN: %python %S/Inputs/check-mask-resource.py logic %t.128.json 128
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=256 -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-ra-features-output=%t.256.json %s -o %t.256.mir
+# RUN: %python %S/Inputs/check-mask-resource.py logic %t.256.json 256
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=1024 -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-ra-features-output=%t.1024.json %s -o %t.1024.mir
+# RUN: %python %S/Inputs/check-mask-resource.py logic %t.1024.json 1024
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=2048 -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-ra-features-output=%t.2048.json %s -o %t.2048.mir
+# RUN: %python %S/Inputs/check-mask-resource.py logic %t.2048.json 2048
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=128 -run-pass=none -verify-machineinstrs %s -o %t.before.mir
+# RUN: diff %t.before.mir %t.128.mir
+# RUN: FileCheck %s < %t.128.json
+# CHECK: {"group8":64,"index_group8":0,"index_sew":0,"kind":"mask_logical","masked":false,"sew":1,"work8":8}
+--- |
+  define void @mask_logic() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="mask_logic:0:0:s4" }
+...
+---
+name: mask_logic
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    $v8 = PseudoVMSET_M_B1 $noreg, 0, implicit $vl, implicit $vtype
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVMAND_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMAND_MM_B2 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMAND_MM_B4 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMAND_MM_B8 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMAND_MM_B16 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMAND_MM_B32 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMAND_MM_B64 $v10, $v11, -1, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNAND_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNAND_MM_B2 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNAND_MM_B4 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNAND_MM_B8 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNAND_MM_B16 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNAND_MM_B32 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNAND_MM_B64 $v10, $v11, -1, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMANDN_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMANDN_MM_B2 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMANDN_MM_B4 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMANDN_MM_B8 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMANDN_MM_B16 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMANDN_MM_B32 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMANDN_MM_B64 $v10, $v11, -1, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXOR_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXOR_MM_B2 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXOR_MM_B4 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXOR_MM_B8 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXOR_MM_B16 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXOR_MM_B32 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXOR_MM_B64 $v10, $v11, -1, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMOR_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMOR_MM_B2 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMOR_MM_B4 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMOR_MM_B8 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMOR_MM_B16 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMOR_MM_B32 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMOR_MM_B64 $v10, $v11, -1, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNOR_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNOR_MM_B2 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNOR_MM_B4 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNOR_MM_B8 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNOR_MM_B16 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNOR_MM_B32 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMNOR_MM_B64 $v10, $v11, -1, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMORN_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMORN_MM_B2 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMORN_MM_B4 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMORN_MM_B8 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMORN_MM_B16 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMORN_MM_B32 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMORN_MM_B64 $v10, $v11, -1, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXNOR_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXNOR_MM_B2 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXNOR_MM_B4 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXNOR_MM_B8 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXNOR_MM_B16 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXNOR_MM_B32 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMXNOR_MM_B64 $v10, $v11, -1, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMCLR_M_B1 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMCLR_M_B2 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMCLR_M_B4 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMCLR_M_B8 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMCLR_M_B16 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMCLR_M_B32 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMCLR_M_B64 -1, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMSET_M_B1 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMSET_M_B2 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMSET_M_B4 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMSET_M_B8 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMSET_M_B16 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMSET_M_B32 $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVMSET_M_B64 -1, 0, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    $v8 = PseudoVMCLR_M_B1 $noreg, 0, implicit $vl, implicit $vtype
+    PseudoRET
+...

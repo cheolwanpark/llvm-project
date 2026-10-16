@@ -1,0 +1,69 @@
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+zvfh -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=division:0:0:s4 -vplan-ra-features-output=%t.json %s -o %t.mir
+# RUN: FileCheck %s --check-prefix=FEATURES < %t.json
+# RUN: FileCheck %s --check-prefix=OPS < %t.json
+# RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; assert len(r['operations']) == 9; assert r['recurrences'] == []"
+#
+# VLEN=128. Divide forms are derived from base instruction metadata, with
+# SEW and fractional LMUL from each pseudo rather than the preceding vset.
+# Fractional operations issue one chunk; M2/M4/M8 issue 2/4/8 chunks.
+# Division uses neither ordinary FP arithmetic nor memory mask service.
+# Setup and exit division instructions must not be collected.
+# FEATURES-DAG: "supported":true
+# FEATURES-DAG: "loop_blocks":1
+# FEATURES-DAG: "fp8":0
+# FEATURES-DAG: "fused8":0
+# FEATURES-DAG: "integer8":0
+# FEATURES-DAG: "masked8":0
+# FEATURES-DAG: "unit8":0
+# FEATURES-DAG: "spill8":0
+# FEATURES-DAG: "scalar8":24
+# FEATURES-DAG: "config8":8
+# OPS-DAG: {"form":"vv","group8":2,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":false,"sew":16,"work8":8}
+# OPS-DAG: {"form":"vv","group8":4,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":true,"sew":32,"work8":8}
+# OPS-DAG: {"form":"vv","group8":64,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":false,"sew":64,"work8":64}
+# OPS-DAG: {"form":"vf","group8":2,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":true,"sew":16,"work8":8}
+# OPS-DAG: {"form":"vf","group8":4,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":false,"sew":32,"work8":8}
+# OPS-DAG: {"form":"vf","group8":8,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":true,"sew":64,"work8":8}
+# OPS-DAG: {"form":"reverse_vf","group8":16,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":false,"sew":16,"work8":16}
+# OPS-DAG: {"form":"reverse_vf","group8":32,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":true,"sew":32,"work8":32}
+# OPS-DAG: {"form":"reverse_vf","group8":64,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":false,"sew":64,"work8":64}
+--- |
+  define void @division() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="division:0:0:s4" }
+...
+---
+name: division
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    $v8 = PseudoVFDIV_VV_M1_E32 undef $v8, $v10, $v11, 7, $noreg, 5, 3, implicit $frm, implicit $vl, implicit $vtype
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFDIV_VV_MF4_E16 undef $v8, $v10, $v11, 7, $noreg, 4, 3, implicit $frm, implicit $vl, implicit $vtype
+    $v8 = PseudoVFDIV_VV_MF2_E32_MASK undef $v8, $v10, $v11, $v0, 7, $noreg, 5, 3, implicit $frm, implicit $vl, implicit $vtype
+    $v8m8 = PseudoVFDIV_VV_M8_E64 undef $v8m8, $v16m8, $v24m8, 7, $noreg, 6, 3, implicit $frm, implicit $vl, implicit $vtype
+    $v8 = PseudoVFDIV_VFPR16_MF4_E16_MASK undef $v8, $v10, $f10_h, $v0, 7, $noreg, 4, 3, implicit $frm, implicit $vl, implicit $vtype
+    $v8 = PseudoVFDIV_VFPR32_MF2_E32 undef $v8, $v10, $f10_f, 7, $noreg, 5, 3, implicit $frm, implicit $vl, implicit $vtype
+    $v8 = PseudoVFDIV_VFPR64_M1_E64_MASK undef $v8, $v10, $f10_d, $v0, 7, $noreg, 6, 3, implicit $frm, implicit $vl, implicit $vtype
+    $v8m2 = PseudoVFRDIV_VFPR16_M2_E16 undef $v8m2, $v12m2, $f10_h, 7, $noreg, 4, 3, implicit $frm, implicit $vl, implicit $vtype
+    $v8m4 = PseudoVFRDIV_VFPR32_M4_E32_MASK undef $v8m4, $v12m4, $f10_f, $v0, 7, $noreg, 5, 3, implicit $frm, implicit $vl, implicit $vtype
+    $v8m8 = PseudoVFRDIV_VFPR64_M8_E64 undef $v8m8, $v16m8, $f10_d, 7, $noreg, 6, 3, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    $v8 = PseudoVFRDIV_VFPR32_M1_E32 undef $v8, $v10, $f10_f, 7, $noreg, 5, 3, implicit $frm, implicit $vl, implicit $vtype
+    PseudoRET
+...

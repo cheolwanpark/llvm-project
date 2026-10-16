@@ -1,0 +1,81 @@
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=reuse:0:0:s4 -vplan-ra-features-output=%t.json %s -o %t.mir
+# RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; assert r['supported']; o=[x for x in r['operations'] if x['kind']=='unit']; p=[x['predicate_id'] for x in o]; assert len(p)==20; assert p[0]>0; assert p[0]==p[1]==p[2]==p[3]==p[5]==p[6]; assert p[4] not in (0,p[0]); assert p[7]==p[8] and p[7] not in (0,p[0],p[4]); assert p[9]==p[12]==p[17]==p[19] and p[9] not in (0,p[0],p[4],p[7]); assert p[10]==p[11] and p[10] not in (0,p[0],p[4],p[7],p[9]); assert p[13]==p[15] and p[13] not in (0,p[0],p[4],p[7],p[9],p[10]); assert p[14]==p[16]==p[18]==0; assert [x['group8'] for x in o[:3]]==[16,32,64]; assert r['unit8']==384 and r['masked8']==384"
+# RUN: FileCheck %s --check-prefix=UNCHANGED < %t.mir
+# UNCHANGED: $v0 = COPY $v1
+# UNCHANGED: $v2m2 = COPY $v4m2
+# UNCHANGED: $v0m2 = COPY $v4m2
+#
+# Masked loads (with explicit defs), stores, and repeated full copies share
+# identity across differing
+# groupings. Source clobbers leave earlier copies intact. Definitions through
+# grouped aliases invalidate both a saved source and the mask destination.
+# Restoring a surviving copy restores identity; a VL-dependent elementwise
+# move is conservatively a new value. An undef predicate has no reuse proof.
+# Neither IMPLICIT_DEF nor a copy with an undef source proves an identity.
+--- |
+  define void @reuse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="reuse:0:0:s4" }
+...
+---
+name: reuse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 209, implicit-def $vl, implicit-def $vtype
+    $v0 = COPY $v1
+    $v8m2 = PseudoVLE32_V_M2_MASK undef $v8m2, $x10, $v0, $noreg, 5, 1, implicit $vl, implicit $vtype
+    PseudoVSE32_V_M4_MASK $v8m4, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = COPY $v1
+    PseudoVSE32_V_M8_MASK $v8m8, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v2 = COPY $v0
+    early-clobber $v1 = PseudoVMSEQ_VI_M1 $v8, 0, $noreg, 5, implicit $vl, implicit $vtype
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = COPY $v1
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = COPY $v2
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v2 = COPY $v3
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = COPY $v2
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v2m2 = COPY $v4m2
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = COPY $v2
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0m2 = COPY $v4m2
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = COPY $v0
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = COPY $v2
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = PseudoVMV_V_V_M1 undef $v0, $v2, $noreg, 5, 3, implicit $vl, implicit $vtype
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, undef $v0, $noreg, 5, implicit $vl, implicit $vtype
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = IMPLICIT_DEF
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = COPY $v2
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = COPY undef $v2
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $v0 = COPY $v2
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...

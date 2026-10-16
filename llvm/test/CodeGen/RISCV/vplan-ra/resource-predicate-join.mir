@@ -1,0 +1,53 @@
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=join:0:0:s4 -vplan-ra-features-output=%t.json %s -o %t.mir
+# RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; assert not r['supported']; assert r['loop_blocks']==0 and r['operations']==[]"
+#
+# An external predecessor of the apparent latch makes this an irreducible
+# region. Preserve the existing conservative unsupported-region result; do
+# not infer predicate equality from textual block order or matching registers.
+--- |
+  define void @join() #0 {
+  entry:
+    br i1 true, label %header, label %outside
+  header:
+    br label %latch
+  outside:
+    br label %latch
+  latch:
+    br i1 true, label %header, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="join:0:0:s4" }
+...
+---
+name: join
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1, %bb.2
+    BNE $x11, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.1.header:
+    successors: %bb.3
+    $x13 = PseudoVSETVLI $x12, 209, implicit-def $vl, implicit-def $vtype
+    $v0 = COPY $v1
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    PseudoBR %bb.3
+
+  bb.2.outside:
+    successors: %bb.3
+    $v0 = COPY $v2
+    PseudoBR %bb.3
+
+  bb.3.latch:
+    successors: %bb.1, %bb.4
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    PseudoVSE32_V_M2_MASK $v8m2, $x10, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.4
+
+  bb.4.exit:
+    PseudoRET
+...

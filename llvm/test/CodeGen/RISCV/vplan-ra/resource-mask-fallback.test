@@ -1,0 +1,164 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-ra-features-output=%t/population.out.json %t/population.mir -o %t/population.out.mir
+# RUN: %python %S/Inputs/check-mask-resource.py fallback %t/population.out.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-ra-features-output=%t/first.out.json %t/first.mir -o %t/first.out.mir
+# RUN: %python %S/Inputs/check-mask-resource.py fallback %t/first.out.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-ra-features-output=%t/prefix.out.json %t/prefix.mir -o %t/prefix.out.mir
+# RUN: %python %S/Inputs/check-mask-resource.py fallback %t/prefix.out.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-ra-features-output=%t/load.out.json %t/load.mir -o %t/load.out.mir
+# RUN: %python %S/Inputs/check-mask-resource.py fallback %t/load.out.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-ra-features-output=%t/store.out.json %t/store.mir -o %t/store.out.mir
+# RUN: %python %S/Inputs/check-mask-resource.py fallback %t/store.out.json
+# All fixtures satisfy the verifier, including mask SEW=0 and single VRs.
+# Accept the Boolean prefix, then retain unsupported fallback for each distinct
+# mask operation. Do not enable general VM families, mask memory or reductions.
+#--- population.mir
+--- |
+  define void @mask_fallback() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+...
+---
+name: mask_fallback
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVMAND_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $x14 = PseudoVCPOP_M_B8 $v10, $noreg, 0, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+#--- first.mir
+--- |
+  define void @mask_fallback() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+...
+---
+name: mask_fallback
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVMAND_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $x14 = PseudoVFIRST_M_B8 $v10, $noreg, 0, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+#--- prefix.mir
+--- |
+  define void @mask_fallback() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+...
+---
+name: mask_fallback
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVMAND_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    early-clobber $v8 = PseudoVMSBF_M_B8 $v10, $noreg, 0, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+#--- load.mir
+--- |
+  define void @mask_fallback() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+...
+---
+name: mask_fallback
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVMAND_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    $v8 = PseudoVLM_V_B8 undef $v8, $x10, $noreg, 0, 3, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+#--- store.mir
+--- |
+  define void @mask_fallback() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+...
+---
+name: mask_fallback
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVMAND_MM_B1 $v10, $v11, $noreg, 0, implicit $vl, implicit $vtype
+    PseudoVSM_V_B8 $v8, $x10, $noreg, 0, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...

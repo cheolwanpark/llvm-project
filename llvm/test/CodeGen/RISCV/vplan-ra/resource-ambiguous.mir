@@ -1,0 +1,58 @@
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=ambiguous:0:0:s4 -vplan-ra-features-output=%t.json %s -o %t.mir
+# RUN: FileCheck %s --check-prefix=FEATURES < %t.json
+#
+# Two plausible strip-mined loops must not be guessed or combined.
+# FEATURES-DAG: "supported":false
+# FEATURES-DAG: "loop_blocks":0
+# FEATURES-DAG: "operations":[]
+# FEATURES-DAG: "recurrences":[]
+# FEATURES-DAG: "unit8":0
+# FEATURES-DAG: "spill8":0
+# FEATURES-DAG: "strided8":0
+# FEATURES-DAG: "indexed8":0
+# FEATURES-DAG: "masked8":0
+# FEATURES-DAG: "integer8":0
+# FEATURES-DAG: "fp8":0
+# FEATURES-DAG: "fused8":0
+# FEATURES-DAG: "scalar8":0
+# FEATURES-DAG: "config8":0
+--- |
+  define void @ambiguous() #0 {
+  entry:
+    br label %first
+  first:
+    br i1 true, label %first, label %second
+  second:
+    br i1 true, label %second, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="ambiguous:0:0:s4" }
+...
+---
+name: ambiguous
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.first:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.second:
+    successors: %bb.2, %bb.3
+    $x15 = PseudoVSETVLI $x14, 208, implicit-def $vl, implicit-def $vtype
+    $v9 = PseudoVLE32_V_M1 undef $v9, $x11, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $x14 = ADDI $x14, -1
+    BNE $x14, $x0, %bb.2
+    PseudoBR %bb.3
+
+  bb.3.exit:
+    PseudoRET
+...

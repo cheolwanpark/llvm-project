@@ -1,0 +1,86 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-ra-features-output=%t.slide.json %t/slide.mir -o %t.slide.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-ra-features-output=%t.gather.json %t/gather.mir -o %t.gather.mir
+# RUN: FileCheck %s --check-prefix=SLIDE < %t.slide.json
+# RUN: FileCheck %s < %t.gather.json
+# RUN: %python -c "import json; s,g=[json.load(open(p))['features']['resource_demand'] for p in ['%t.slide.json','%t.gather.json']]; expected=[dict(group8=16,index_group8=0,index_sew=0,kind='copy',masked=False,sew=0,work8=16),dict(group8=16,index_group8=0,index_sew=0,kind='integer',masked=False,sew=32,work8=16)]; assert g['supported'] is False and g['operations']==expected; assert s['supported'] is True and s['operations']==expected+[dict(group8=16,index_group8=0,index_sew=0,kind='slide',masked=False,sew=32,work8=16)]; assert s['recurrences']==[]"
+#
+# A physical copy and arithmetic precede a now-supported slide or a gather.
+# The gather still rejects the complete loop and retains original costs.
+# Its unsupported instruction and later loop control must not be accumulated.
+# SLIDE-DAG: "supported":true
+# SLIDE-DAG: "loop_blocks":1
+# SLIDE-DAG: "config8":8
+# SLIDE-DAG: "scalar8":16
+# SLIDE-DAG: "integer8":16
+# SLIDE-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":16}
+# SLIDE-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"slide","masked":false,"sew":32,"work8":16}
+# CHECK-DAG: "supported":false
+# CHECK-DAG: "loop_blocks":1
+# CHECK-DAG: "config8":8
+# CHECK-DAG: "scalar8":0
+# CHECK-DAG: "integer8":16
+# CHECK-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":16}
+#
+#--- slide.mir
+--- |
+  define void @fallback() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="fallback:0:0:s4" }
+...
+---
+name: fallback
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8m2 = COPY $v12m2
+    $v8m2 = PseudoVADD_VV_M2 undef $v8m2, $v12m2, $v14m2, $noreg, 5, 1, implicit $vl, implicit $vtype
+    $v8m2 = PseudoVSLIDEDOWN_VI_M2 undef $v8m2, $v12m2, 1, $noreg, 5, 3, implicit $vl, implicit $vtype
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+#--- gather.mir
+--- |
+  define void @fallback() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="fallback:0:0:s4" }
+...
+---
+name: fallback
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8m2 = COPY $v12m2
+    $v8m2 = PseudoVADD_VV_M2 undef $v8m2, $v12m2, $v14m2, $noreg, 5, 1, implicit $vl, implicit $vtype
+    ; Gather: rd, tied passthru, rs2, rs1, vl, sew, policy. All vector
+    ; operands use VRM2; early-clobber rd does not overlap either source.
+    early-clobber $v8m2 = PseudoVRGATHER_VV_M2_E32 undef $v8m2, $v12m2, $v14m2, $noreg, 5, 3, implicit $vl, implicit $vtype
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...

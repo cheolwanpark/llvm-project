@@ -1,0 +1,809 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/chain.json %t/chain.mir -o %t/chain-out.mir
+# RUN: %python %t/check.py %t/chain.json chain
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/independent-loads.json %t/independent-loads.mir -o %t/independent-loads-out.mir
+# RUN: %python %t/check.py %t/independent-loads.json independent-loads
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/fanout-join.json %t/fanout-join.mir -o %t/fanout-join-out.mir
+# RUN: %python %t/check.py %t/fanout-join.json fanout-join
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/two-loads.json %t/two-loads.mir -o %t/two-loads-out.mir
+# RUN: %python %t/check.py %t/two-loads.json two-loads
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/redefinition.json %t/redefinition.mir -o %t/redefinition-out.mir
+# RUN: %python %t/check.py %t/redefinition.json redefinition
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/unsupported-copy.json %t/unsupported-copy.mir -o %t/unsupported-copy-out.mir
+# RUN: %python %t/check.py %t/unsupported-copy.json unsupported-copy
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/partial-overwrite.json %t/partial-overwrite.mir -o %t/partial-overwrite-out.mir
+# RUN: %python %t/check.py %t/partial-overwrite.json partial-overwrite
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/partial-use.json %t/partial-use.mir -o %t/partial-use-out.mir
+# RUN: %python %t/check.py %t/partial-use.json partial-use
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/undef.json %t/undef.mir -o %t/undef-out.mir
+# RUN: %python %t/check.py %t/undef.json undef
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/tail-only.json %t/tail-only.mir -o %t/tail-only-out.mir
+# RUN: %python %t/check.py %t/tail-only.json tail-only
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/tied-fma.json %t/tied-fma.mir -o %t/tied-fma-out.mir
+# RUN: %python %t/check.py %t/tied-fma.json tied-fma
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/tied-fmadd.json %t/tied-fmadd.mir -o %t/tied-fmadd-out.mir
+# RUN: %python %t/check.py %t/tied-fmadd.json tied-fmadd
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/fractional.json %t/fractional.mir -o %t/fractional-out.mir
+# RUN: %python %t/check.py %t/fractional.json fractional
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/m8.json %t/m8.mir -o %t/m8-out.mir
+# RUN: %python %t/check.py %t/m8.json m8
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/e64.json %t/e64.mir -o %t/e64-out.mir
+# RUN: %python %t/check.py %t/e64.json e64
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/integer-multiply.json %t/integer-multiply.mir -o %t/integer-multiply-out.mir
+# RUN: %python %t/check.py %t/integer-multiply.json integer-multiply
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/shape-change.json %t/shape-change.mir -o %t/shape-change-out.mir
+# RUN: %python %t/check.py %t/shape-change.json shape-change
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/implicit-def.json %t/implicit-def.mir -o %t/implicit-def-out.mir
+# RUN: %python %t/check.py %t/implicit-def.json implicit-def
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/reload.json %t/reload.mir -o %t/reload-out.mir
+# RUN: %python %t/check.py %t/reload.json reload
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/masked-load.json %t/masked-load.mir -o %t/masked-load-out.mir
+# RUN: %python %t/check.py %t/masked-load.json masked-load
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/masked-arithmetic.json %t/masked-arithmetic.mir -o %t/masked-arithmetic-out.mir
+# RUN: %python %t/check.py %t/masked-arithmetic.json masked-arithmetic
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/unsupported-resource.json %t/unsupported-resource.mir -o %t/unsupported-resource-out.mir
+# RUN: %python %t/check.py %t/unsupported-resource.json unsupported-resource
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-ra-features-output=%t/no-backedge.json %t/no-backedge.mir -o %t/no-backedge-out.mir
+# RUN: %python %t/check.py %t/no-backedge.json no-backedge
+#
+# Block-local, same-shaped physical reaching definitions. No backedge seed,
+# alias-derived memory edges, or propagation through unsupported operations.
+# Undef and ordinary tail passthrough are ignored; all FMA tied inputs count.
+# Fanout and repeated source uses retain one edge per reaching value.
+
+#--- check.py
+import json, sys
+r = json.load(open(sys.argv[1]))["features"]["resource_demand"]
+expected = {
+    'chain': [('load', 1, []), ('fp', 1, [0]), ('fp', 1, [1])],
+    'independent-loads': [('load', 1, []), ('load', 1, [])],
+    'fanout-join': [('load', 1, []), ('fp', 1, [0]), ('fp', 1, [0]), ('fp', 1, [1, 2])],
+    'two-loads': [('load', 1, []), ('load', 1, []), ('fp', 1, [0, 1])],
+    'redefinition': [('load', 1, [])],
+    'unsupported-copy': [('load', 1, [])],
+    'partial-overwrite': [('load', 2, [])],
+    'partial-use': [('load', 2, [])],
+    'undef': [('load', 1, [])],
+    'tail-only': [('load', 1, [])],
+    'tied-fma': [('load', 1, []), ('fused', 1, [0])],
+    'tied-fmadd': [('load', 1, []), ('fused', 1, [0])],
+    'fractional': [('load', 1, []), ('fp', 1, [0])],
+    'm8': [('load', 8, []), ('fp', 8, [0])],
+    'e64': [('load', 1, []), ('fp', 1, [0])],
+    'integer-multiply': [('load', 1, []), ('integer', 1, [0]), ('multiply', 1, [1])],
+    'shape-change': [('load', 1, [])],
+    'implicit-def': [('load', 1, [])],
+    'reload': [],
+    'masked-load': [],
+    'masked-arithmetic': [('load', 1, [])],
+    'unsupported-resource': [],
+    'no-backedge': [('load', 1, [])],
+}
+actual = [(n["kind"], n["chunks"], n["predecessors"]) for n in r["load_use_nodes"]]
+assert actual == expected[sys.argv[2]], (sys.argv[2], actual)
+assert r["supported"] == (sys.argv[2] != "unsupported-resource")
+
+#--- chain.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v14 = PseudoVFMUL_VV_M1_E32 undef $v14, $v10, $v16, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- independent-loads.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVLE32_V_M1 undef $v10, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v14 = PseudoVFADD_VV_M1_E32 undef $v14, $v12, $v16, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- fanout-join.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v14 = PseudoVFADD_VV_M1_E32 undef $v14, $v8, $v16, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v18 = PseudoVFADD_VV_M1_E32 undef $v18, $v10, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- two-loads.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v12 = PseudoVLE32_V_M1 undef $v12, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- redefinition.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v8 = PseudoVMV_V_I_M1 undef $v8, 0, $noreg, 5, 0, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- unsupported-copy.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = COPY $v8
+    $v14 = PseudoVFADD_VV_M1_E32 undef $v14, $v10, $v16, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- partial-overwrite.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8m2 = PseudoVLE32_V_M2 undef $v8m2, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v9 = IMPLICIT_DEF
+    $v10m2 = PseudoVFADD_VV_M2_E32 undef $v10m2, $v8m2, $v12m2, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- partial-use.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8m2 = PseudoVLE32_V_M2 undef $v8m2, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- undef.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, undef $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- tail-only.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v8 = PseudoVFADD_VV_M1_E32 $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- tied-fma.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v8 = PseudoVFMACC_VV_M1_E32 $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- tied-fmadd.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v8 = PseudoVFMADD_VV_M1_E32 $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- fractional.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_MF2 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_MF2_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- m8.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8m8 = PseudoVLE32_V_M8 undef $v8m8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v16m8 = PseudoVFADD_VV_M8_E32 undef $v16m8, $v8m8, $v24m8, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- e64.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE64_V_M1 undef $v8, $x10, $noreg, 6, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_M1_E64 undef $v10, $v8, $v12, 7, $noreg, 6, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- integer-multiply.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVADD_VV_M1 undef $v10, $v8, $v12, $noreg, 5, 0, implicit $vl, implicit $vtype
+    $v14 = PseudoVMUL_VV_M1 undef $v14, $v10, $v12, $noreg, 5, 0, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- shape-change.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_M1_E64 undef $v10, $v8, $v12, 7, $noreg, 6, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- implicit-def.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v8 = IMPLICIT_DEF
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- reload.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+stack:
+  - { id: 0, type: spill-slot, size: 16, alignment: 8, stack-id: scalable-vector }
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = VL1RE8_V %stack.0
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- masked-load.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1_MASK undef $v8, $x10, $v0, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- masked-arithmetic.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_M1_E32_MASK undef $v10, $v8, $v12, $v0, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- unsupported-resource.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v10 = PseudoVFSQRT_V_M1_E32 undef $v10, $v8, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- no-backedge.mir
+--- |
+  define void @loaduse() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loaduse:0:0:s4" }
+...
+---
+name: loaduse
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v10 = PseudoVLE32_V_M1 undef $v10, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...

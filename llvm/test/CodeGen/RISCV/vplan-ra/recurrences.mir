@@ -1,0 +1,745 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/dependent.json %t/dependent.mir -o %t/dependent-out.mir
+# RUN: FileCheck %s --check-prefix=DEPENDENT < %t/dependent.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/independent.json %t/independent.mir -o %t/independent-out.mir
+# RUN: FileCheck %s --check-prefix=INDEPENDENT < %t/independent.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/tied-dependent.json %t/tied-dependent.mir -o %t/tied-dependent-out.mir
+# RUN: FileCheck %s --check-prefix=TIED-DEPENDENT < %t/tied-dependent.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/tied-independent.json %t/tied-independent.mir -o %t/tied-independent-out.mir
+# RUN: FileCheck %s --check-prefix=TIED-INDEPENDENT < %t/tied-independent.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/grouped.json %t/grouped.mir -o %t/grouped-out.mir
+# RUN: FileCheck %s --check-prefix=GROUPED < %t/grouped.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/alias-overwrite.json %t/alias-overwrite.mir -o %t/alias-overwrite-out.mir
+# RUN: FileCheck %s --check-prefix=ALIAS-OVERWRITE < %t/alias-overwrite.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/alias-reuse.json %t/alias-reuse.mir -o %t/alias-reuse-out.mir
+# RUN: FileCheck %s --check-prefix=ALIAS-REUSE < %t/alias-reuse.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/overwrite.json %t/overwrite.mir -o %t/overwrite-out.mir
+# RUN: FileCheck %s --check-prefix=OVERWRITE < %t/overwrite.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/undef.json %t/undef.mir -o %t/undef-out.mir
+# RUN: FileCheck %s --check-prefix=UNDEF < %t/undef.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/passthrough.json %t/passthrough.mir -o %t/passthrough-out.mir
+# RUN: FileCheck %s --check-prefix=PASSTHROUGH < %t/passthrough.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/load-reuse.json %t/load-reuse.mir -o %t/load-reuse-out.mir
+# RUN: FileCheck %s --check-prefix=LOAD-REUSE < %t/load-reuse.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/implicit-def.json %t/implicit-def.mir -o %t/implicit-def-out.mir
+# RUN: FileCheck %s --check-prefix=IMPLICIT-DEF < %t/implicit-def.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/fractional.json %t/fractional.mir -o %t/fractional-out.mir
+# RUN: FileCheck %s --check-prefix=FRACTIONAL < %t/fractional.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/e64.json %t/e64.mir -o %t/e64-out.mir
+# RUN: FileCheck %s --check-prefix=E64 < %t/e64.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/masked.json %t/masked.mir -o %t/masked-out.mir
+# RUN: FileCheck %s --check-prefix=MASKED < %t/masked.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/integer.json %t/integer.mir -o %t/integer-out.mir
+# RUN: FileCheck %s --check-prefix=INTEGER < %t/integer.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/branching.json %t/branching.mir -o %t/branching-out.mir
+# RUN: FileCheck %s --check-prefix=BRANCHING < %t/branching.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/multiple-backedges.json %t/multiple-backedges.mir -o %t/multiple-backedges-out.mir
+# RUN: FileCheck %s --check-prefix=MULTIPLE-BACKEDGES < %t/multiple-backedges.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/widening.json %t/widening.mir -o %t/widening-out.mir
+# RUN: FileCheck %s --check-prefix=WIDENING < %t/widening.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/reduction.json %t/reduction.mir -o %t/reduction-out.mir
+# RUN: FileCheck %s --check-prefix=REDUCTION < %t/reduction.json
+#
+# Identical instruction totals can describe a two-step recurrence, independent
+# arithmetic, two serial tied FMAs, or two independent FMA accumulators. Only
+# true value dependencies cross the backedge. Partial alias writes, complete
+# overwrites, undef, implicit definitions, and tail passthrough break a chain.
+# LMUL aliases share physical register units: v9 overwrites part of v8m2.
+#
+# DEPENDENT-DAG: "supported":true
+# DEPENDENT-DAG: "recurrences":[{"extra_chunks":0,"fp_steps":2,"fused_steps":0}]
+# DEPENDENT-DAG: "fp8":16
+# INDEPENDENT-DAG: "supported":true
+# INDEPENDENT-DAG: "recurrences":[]
+# INDEPENDENT-DAG: "fp8":16
+# TIED-DEPENDENT-DAG: "supported":true
+# TIED-DEPENDENT-DAG: "recurrences":[{"extra_chunks":0,"fp_steps":0,"fused_steps":2}]
+# TIED-DEPENDENT-DAG: "fused8":16
+# TIED-INDEPENDENT-DAG: "supported":true
+# TIED-INDEPENDENT-DAG: "recurrences":[{"extra_chunks":0,"fp_steps":0,"fused_steps":1},{"extra_chunks":0,"fp_steps":0,"fused_steps":1}]
+# TIED-INDEPENDENT-DAG: "fused8":16
+# GROUPED-DAG: "supported":true
+# GROUPED-DAG: "recurrences":[{"extra_chunks":1,"fp_steps":0,"fused_steps":1}]
+# ALIAS-OVERWRITE-DAG: "supported":true
+# ALIAS-OVERWRITE-DAG: "recurrences":[]
+# ALIAS-REUSE-DAG: "supported":true
+# ALIAS-REUSE-DAG: "recurrences":[]
+# OVERWRITE-DAG: "supported":true
+# OVERWRITE-DAG: "recurrences":[]
+# UNDEF-DAG: "supported":true
+# UNDEF-DAG: "recurrences":[]
+# PASSTHROUGH-DAG: "supported":true
+# PASSTHROUGH-DAG: "recurrences":[]
+# LOAD-REUSE-DAG: "supported":true
+# LOAD-REUSE-DAG: "recurrences":[]
+# IMPLICIT-DEF-DAG: "supported":true
+# IMPLICIT-DEF-DAG: "recurrences":[]
+# FRACTIONAL-DAG: "supported":true
+# FRACTIONAL-DAG: "recurrences":[{"extra_chunks":0,"fp_steps":0,"fused_steps":1}]
+# E64-DAG: "supported":true
+# E64-DAG: "recurrences":[{"extra_chunks":0,"fp_steps":0,"fused_steps":1}]
+# MASKED-DAG: "supported":true
+# MASKED-DAG: "recurrences":[]
+# INTEGER-DAG: "supported":true
+# INTEGER-DAG: "recurrences":[]
+# BRANCHING-DAG: "supported":true
+# BRANCHING-DAG: "recurrences":[]
+# MULTIPLE-BACKEDGES-DAG: "supported":true
+# MULTIPLE-BACKEDGES-DAG: "recurrences":[]
+# WIDENING-DAG: "supported":true
+# WIDENING-DAG: "recurrences":[]
+# REDUCTION-DAG: "supported":false
+# REDUCTION-DAG: "recurrences":[]
+
+#--- dependent.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v8 = PseudoVFADD_VV_M1_E32 undef $v8, $v10, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- independent.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v8 = PseudoVFADD_VV_M1_E32 undef $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- tied-dependent.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFMACC_VV_M1_E32 $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v8 = PseudoVFMACC_VV_M1_E32 $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- tied-independent.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFMACC_VV_M1_E32 $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v9 = PseudoVFMACC_VV_M1_E32 $v9, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- grouped.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8m2 = PseudoVFMACC_VV_M2_E32 $v8m2, $v12m2, $v14m2, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- alias-overwrite.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8m2 = PseudoVFMACC_VV_M2_E32 $v8m2, $v12m2, $v14m2, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v9 = PseudoVLE32_V_M1 undef $v9, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- alias-reuse.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8m2 = PseudoVLE32_V_M2 undef $v8m2, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v8 = PseudoVFMACC_VV_M1_E32 $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- overwrite.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFMACC_VV_M1_E32 $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- undef.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFMACC_VV_M1_E32 undef $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- passthrough.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFADD_VV_M1_E32 $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- load-reuse.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE32_V_M1 undef $v8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v8 = PseudoVFADD_VV_M1_E32 undef $v8, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- implicit-def.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFMACC_VV_M1_E32 $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v8 = IMPLICIT_DEF
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- fractional.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFMACC_VV_MF2_E32 $v8, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- e64.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFMACC_VV_M1_E64 $v8, $v12, $v14, 7, $noreg, 6, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- masked.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFADD_VV_M1_E32_MASK $v8, $v8, $v12, $v0, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- integer.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVADD_VV_M1 undef $v8, $v8, $v12, $noreg, 5, 0, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- branching.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v8, $v12, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v11 = PseudoVFADD_VV_M1_E32 undef $v11, $v8, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v8 = PseudoVFADD_VV_M1_E32 undef $v8, $v10, $v11, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- multiple-backedges.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFADD_VV_M1_E32 undef $v8, $v10, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v10 = PseudoVFADD_VV_M1_E32 undef $v10, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v12 = PseudoVFADD_VV_M1_E32 undef $v12, $v8, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- widening.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    early-clobber $v8m2 = PseudoVFWMACC_VV_M1_E32 $v8m2, $v12, $v14, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- reduction.mir
+--- |
+  define void @recurrence() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+...
+---
+name: recurrence
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 208, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVFREDUSUM_VS_M1_E32 $v8, $v12, $v8, 7, $noreg, 5, 0, implicit $frm, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...

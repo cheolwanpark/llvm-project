@@ -1,0 +1,86 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loads:0:0:s4 -vplan-ra-features-output=%t.loads.json %t/loads.mir -o %t.loads.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=stores:0:0:s4 -vplan-ra-features-output=%t.stores.json %t/stores.mir -o %t.stores.mir
+# RUN: FileCheck %s --check-prefix=LOAD < %t.loads.json
+# RUN: FileCheck %s --check-prefix=STORE < %t.stores.json
+# RUN: %python -c "import json; a=json.load(open('%t.loads.json'))['features']['resource_demand']; b=json.load(open('%t.stores.json'))['features']['resource_demand']; assert a['supported'] and b['supported']; assert all(x['direction']=='load' for x in a['operations']); assert all(x['direction']=='store' for x in b['operations']); assert [{k:v for k,v in x.items() if k!='direction'} for x in a['operations']]==[{k:v for k,v in x.items() if k!='direction'} for x in b['operations']]; assert a['unit8']==b['unit8']==72 and a['strided8']==b['strided8']==128 and a['indexed8']==b['indexed8']==128 and a['masked8']==b['masked8']==256"
+#
+# No MachineMemOperands are supplied: load/store direction must come from
+# instruction descriptor metadata. Identical loads and stores preserve access
+# class, SEW, fractional/integral data grouping, index grouping, masking and
+# predicate provenance. Configuration and loop-control instructions are not
+# operation records. Mixed directions and spill exclusion are checked in
+# resource-demand.mir.
+#
+# LOAD-DAG: {"direction":"load","group8":4,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":16,"work8":8}
+# LOAD-DAG: {"direction":"load","group8":64,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":32,"work8":64}
+# LOAD-DAG: {"direction":"load","group8":32,"index_group8":0,"index_sew":0,"kind":"strided","masked":true,"predicate_id":1,"sew":32,"work8":128}
+# LOAD-DAG: {"direction":"load","group8":32,"index_group8":32,"index_sew":32,"kind":"indexed","masked":true,"predicate_id":1,"sew":32,"work8":128}
+# STORE-DAG: {"direction":"store","group8":4,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":16,"work8":8}
+# STORE-DAG: {"direction":"store","group8":64,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":32,"work8":64}
+# STORE-DAG: {"direction":"store","group8":32,"index_group8":0,"index_sew":0,"kind":"strided","masked":true,"predicate_id":1,"sew":32,"work8":128}
+# STORE-DAG: {"direction":"store","group8":32,"index_group8":32,"index_sew":32,"kind":"indexed","masked":true,"predicate_id":1,"sew":32,"work8":128}
+
+#--- loads.mir
+--- |
+  define void @loads() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="loads:0:0:s4" }
+...
+---
+name: loads
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 210, implicit-def $vl, implicit-def $vtype
+    $v8 = PseudoVLE16_V_MF2 undef $v8, $x10, $noreg, 4, 2, implicit $vl, implicit $vtype
+    $v8m8 = PseudoVLE32_V_M8 undef $v8m8, $x10, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v8m4 = PseudoVLSE32_V_M4_MASK undef $v8m4, $x10, $x11, $v0, $noreg, 5, 2, implicit $vl, implicit $vtype
+    $v8m4 = PseudoVLUXEI32_V_M4_M4_MASK undef $v8m4, $x10, $v16m4, $v0, $noreg, 5, 2, implicit $vl, implicit $vtype
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...
+
+#--- stores.mir
+--- |
+  define void @stores() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="stores:0:0:s4" }
+...
+---
+name: stores
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 210, implicit-def $vl, implicit-def $vtype
+    PseudoVSE16_V_MF2 $v8, $x10, $noreg, 4, implicit $vl, implicit $vtype
+    PseudoVSE32_V_M8 $v8m8, $x10, $noreg, 5, implicit $vl, implicit $vtype
+    PseudoVSSE32_V_M4_MASK $v8m4, $x10, $x11, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    PseudoVSUXEI32_V_M4_M4_MASK $v8m4, $x10, $v16m4, $v0, $noreg, 5, implicit $vl, implicit $vtype
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...

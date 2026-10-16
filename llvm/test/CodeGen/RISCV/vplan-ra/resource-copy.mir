@@ -1,0 +1,87 @@
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=copy:0:0:s4 -vplan-ra-features-output=%t.json %s -o %t.mir
+# RUN: FileCheck %s --check-prefix=FEATURES < %t.json
+# RUN: FileCheck %s --check-prefix=OPS < %t.json
+# RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; ops=r['operations']; copies=[o for o in ops if o['kind']=='copy']; assert len(ops)==16; assert [(o['group8'],o['work8']) for o in copies]==[(8,8),(16,16),(32,32),(64,64),(8,8),(8,0),(16,0),(32,0),(64,0),(8,0)]"
+#
+# Nominal VLEN=128. COPY uses whole physical groups even after mf2 vset.
+# Each group has a non-self and a self copy; v0 mask copies use one register.
+# Supported memory, arithmetic and spills coexist without double counting.
+# Copies in setup and exit are excluded; scalar COPY retains scalar overhead.
+# FEATURES-DAG: "supported":true
+# FEATURES-DAG: "loop_blocks":1
+# FEATURES-DAG: "config8":8
+# FEATURES-DAG: "scalar8":32
+# FEATURES-DAG: "integer8":16
+# FEATURES-DAG: "fp8":8
+# FEATURES-DAG: "fused8":16
+# FEATURES-DAG: "unit8":0
+# FEATURES-DAG: "indexed8":0
+# FEATURES-DAG: "strided8":128
+# FEATURES-DAG: "masked8":128
+# FEATURES-DAG: "spill8":32
+# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":8}
+# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":16}
+# OPS-DAG: {"group8":32,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":32}
+# OPS-DAG: {"group8":64,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":64}
+# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":8}
+# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":0}
+# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":0}
+# OPS-DAG: {"group8":32,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":0}
+# OPS-DAG: {"group8":64,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":0}
+# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":0}
+# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"integer","masked":false,"sew":32,"work8":16}
+# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"fp","masked":false,"sew":32,"work8":8}
+# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"fused","masked":false,"sew":64,"work8":16}
+# OPS-DAG: {"direction":"load","group8":32,"index_group8":0,"index_sew":0,"kind":"strided","masked":true,"predicate_id":2,"sew":32,"work8":128}
+# OPS-DAG: {"group8":0,"index_group8":0,"index_sew":0,"kind":"spill","masked":false,"sew":0,"work8":16}
+# OPS-DAG: {"group8":0,"index_group8":0,"index_sew":0,"kind":"spill","masked":false,"sew":0,"work8":16}
+--- |
+  define void @copy() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.candidate"="copy:0:0:s4" }
+...
+---
+name: copy
+tracksRegLiveness: false
+stack:
+  - { id: 0, type: spill-slot, size: 16, alignment: 8, stack-id: scalable-vector }
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    $v8m8 = COPY $v16m8
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $x13 = PseudoVSETVLI $x12, 215, implicit-def $vl, implicit-def $vtype
+    $v8 = COPY $v10
+    $v8m2 = COPY $v12m2
+    $v8m4 = COPY $v12m4
+    $v8m8 = COPY $v16m8
+    $v0 = COPY $v1
+    $v8 = COPY $v8
+    $v8m2 = COPY $v8m2
+    $v8m4 = COPY $v8m4
+    $v8m8 = COPY $v8m8
+    $v0 = COPY $v0
+    $x11 = COPY $x10
+    $v8m2 = PseudoVADD_VV_M2 undef $v8m2, $v12m2, $v14m2, $noreg, 5, 1, implicit $vl, implicit $vtype
+    $v8 = PseudoVFADD_VV_M1_E32 undef $v8, $v10, $v11, 7, $noreg, 5, 1, implicit $frm, implicit $vl, implicit $vtype
+    $v8m2 = PseudoVFMACC_VV_M2_E64 $v8m2, $v12m2, $v14m2, 7, $noreg, 6, 0, implicit $frm, implicit $vl, implicit $vtype
+    $v8m4 = PseudoVLSE32_V_M4_MASK undef $v8m4, $x10, $x11, $v0, $noreg, 5, 2, implicit $vl, implicit $vtype
+    VS2R_V $v8m2, %stack.0
+    $v8m2 = VL2RE8_V %stack.0
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    $v8m8 = COPY $v16m8
+    PseudoRET
+...
