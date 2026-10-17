@@ -24,6 +24,7 @@
 
 namespace llvm {
 
+class FissionFPReorderingPolicy;
 class InductionDescriptor;
 class Instruction;
 class Loop;
@@ -157,7 +158,8 @@ struct VPlanTransforms {
       const MapVector<PHINode *, InductionDescriptor> &Inductions,
       const MapVector<PHINode *, RecurrenceDescriptor> &Reductions,
       const SmallPtrSetImpl<const PHINode *> &FixedOrderRecurrences,
-      const SmallPtrSetImpl<PHINode *> &InLoopReductions, bool AllowReordering);
+      const SmallPtrSetImpl<PHINode *> &InLoopReductions, bool AllowReordering,
+      const FissionFPReorderingPolicy *FissionFPReordering = nullptr);
 
   /// Finalize SCEV predicates by adding induction predicates from \p Plan to
   /// \p PSE and checking constraints. Returns false if predicated IVs have

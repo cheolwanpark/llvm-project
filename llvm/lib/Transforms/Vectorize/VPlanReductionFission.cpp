@@ -15,6 +15,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/IRBuilder.h"
@@ -22,6 +23,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
 #include <limits>
 
@@ -36,6 +38,8 @@ using namespace llvm;
 static cl::opt<bool> EnableVPlanReductionFission(
     "enable-vplan-reduction-fission", cl::init(false), cl::Hidden,
     cl::desc("Enable experimental VPlan reduction fission planning"));
+
+bool llvm::isReductionFissionEnabled() { return EnableVPlanReductionFission; }
 
 static cl::opt<unsigned> VPlanReductionFissionMinChainDepth(
     "vplan-reduction-fission-min-chain-depth", cl::init(8), cl::Hidden,
@@ -81,10 +85,39 @@ static cl::opt<unsigned> VPlanReductionFissionMaxScalableVFMultiplier(
 
 void llvm::saveReductionFissionPlan(VPlan &Plan,
                                     SmallVectorImpl<VPlanPtr> &Plans) {
-  if (EnableVPlanReductionFission && !Plan.isOuterLoop() &&
+  if (isReductionFissionEnabled() && !Plan.isOuterLoop() &&
       any_of(Plan.vectorFactors(),
              [](ElementCount VF) { return VF.isScalable(); }))
     Plans.emplace_back(Plan.duplicate());
+}
+
+static SmallVector<VPlan *, 4> getStagePlans(VPReductionFissionCandidate &C) {
+  return {C.ProducerPlan.get(), C.AccumulatorPlan.get(),
+          C.ProducerRemainder.Plan.get(), C.AccumulatorRemainder.Plan.get()};
+}
+
+static bool verifyStageInputs(VPReductionFissionCandidate &C,
+                              VPReductionFissionContext &Ctx) {
+  ScalarEvolution &SE = *Ctx.PSE.getSE();
+  SCEVExpander Expander(SE, "fission");
+  for (VPlan *Plan : getStagePlans(C)) {
+    ReversePostOrderTraversal<VPBlockDeepTraversalWrapper<VPBlockBase *>> RPOT(
+        Plan->getEntry());
+    for (VPBasicBlock *BB : VPBlockUtils::blocksOnly<VPBasicBlock>(RPOT))
+      for (VPRecipeBase &R : *BB) {
+        if (auto *S = dyn_cast<VPExpandSCEVRecipe>(&R))
+          if (!SE.isLoopInvariant(S->getSCEV(), &Ctx.L) ||
+              !Expander.isSafeToExpandAt(
+                  S->getSCEV(), Ctx.L.getLoopPreheader()->getTerminator()))
+            return false;
+        for (VPValue *Op : R.operands())
+          if (auto *IR = dyn_cast<VPIRValue>(Op))
+            if (auto *I = dyn_cast<Instruction>(IR->getLiveInIRValue());
+                I && Ctx.L.contains(I))
+              return false;
+      }
+  }
+  return true;
 }
 
 static std::optional<VPReductionFissionCandidate>
@@ -95,6 +128,12 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
   auto &PSE = Ctx.PSE;
   const auto &TTI = Ctx.TTI;
   auto DebugReject = [&](StringRef Reason) {
+    Ctx.ORE.emit([&]() {
+      return OptimizationRemarkMissed(DEBUG_TYPE, "Rejected",
+                                      OrigLoop->getStartLoc(),
+                                      OrigLoop->getHeader())
+             << "reduction fission rejected: " << ore::NV("Reason", Reason);
+    });
     DEBUG_WITH_TYPE("vplan-reduction-fission",
                     dbgs() << "LV-FISSION: "
                            << OrigLoop->getHeader()->getParent()->getName()
@@ -119,14 +158,15 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
     DebugReject("runtime-memory-check");
     return std::nullopt;
   }
-  // Horizontal fission executes all producer reads before any accumulator
-  // work. Until partition dependence directions are modeled, accept only a
-  // read-only loop body. Absence of runtime alias checks is not sufficient.
+  // Simple stores are provisional: the completed stage schedule must prove
+  // whole-loop memory independence before any IR is changed.
   for (Instruction &I : *OrigLoop->getHeader()) {
     if (auto *Load = dyn_cast<LoadInst>(&I); Load && !Load->isSimple()) {
       DebugReject("non-simple-load");
       return std::nullopt;
     }
+    if (auto *Store = dyn_cast<StoreInst>(&I); Store && Store->isSimple())
+      continue;
     if (!I.isTerminator() && I.mayHaveSideEffects()) {
       DebugReject("side-effecting-loop");
       return std::nullopt;
@@ -141,22 +181,34 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
     DebugReject("runtime-scev-check");
     return std::nullopt;
   }
+  if (OrigLoop->getHeader()->getParent()->hasFnAttribute(Attribute::StrictFP)) {
+    DebugReject(getVPReductionFissionRejectReasonName(
+        VPReductionFissionRejectReason::UnsupportedReduction));
+    return std::nullopt;
+  }
 
   ScalarEvolution &SE = *PSE.getSE();
-  const SCEV *BackedgeCount = SE.getBackedgeTakenCount(OrigLoop);
-  if (isa<SCEVCouldNotCompute>(BackedgeCount)) {
-    DebugReject("non-constant-trip-count");
-    return std::nullopt;
-  }
-  const SCEV *ExactTripCount =
-      SE.getAddExpr(BackedgeCount, SE.getOne(BackedgeCount->getType()));
-  if (!isa<SCEVConstant>(ExactTripCount)) {
-    DebugReject("non-constant-trip-count");
-    return std::nullopt;
-  }
-
   for (const VPlanPtr &PlanPtr : VPlans) {
     VPlan &Plan = *PlanPtr;
+    if (any_of(Plan.getVectorLoopRegion()->getEntryBasicBlock()->phis(),
+               [&](VPRecipeBase &R) {
+                 auto *Phi = dyn_cast<VPReductionPHIRecipe>(&R);
+                 if (!Phi || !Phi->isInLoop())
+                   return false;
+                 auto *IRPhi = cast<PHINode>(Phi->getUnderlyingValue());
+                 return !isSupportedFissionFAdd(
+                     *IRPhi, Legal->getRecurrenceDescriptor(IRPhi), *OrigLoop);
+               })) {
+      DebugReject(getVPReductionFissionRejectReasonName(
+          VPReductionFissionRejectReason::UnsupportedReduction));
+      continue;
+    }
+    auto TripCount = analyzeFissionTripCount(
+        *OrigLoop, SE, cast<IntegerType>(Plan.getIndexType()));
+    if (!TripCount) {
+      DebugReject(toString(TripCount.takeError()));
+      continue;
+    }
     SmallVector<ElementCount, 8> VFs;
     for (ElementCount VF : Plan.vectorFactors())
       if (VF.isVector())
@@ -194,6 +246,7 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
 
     SmallVector<VPFissionVFPressure, 8> BaselinePressure;
     std::optional<VPReductionFissionAnalysis> Analysis;
+    bool AttemptedAnalysis = false;
     for (ElementCount VF : VFs) {
       if (!isLegalReductionFissionVF(Plan, VF, TTI))
         continue;
@@ -227,6 +280,7 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
       if (Analysis || !MeetsPressureThreshold)
         continue;
       VPReductionFissionConfig Config;
+      AttemptedAnalysis = true;
       Config.MinimumReductionCount = VPlanReductionFissionMinReductions;
       Config.MinimumLongProducerDepth = VPlanReductionFissionMinChainDepth;
       VPReductionFissionAnalysis A =
@@ -239,13 +293,20 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
           return std::nullopt;
       }
     }
-    if (!Analysis)
+    if (!Analysis) {
+      if (BaselinePressure.empty())
+        DebugReject(getVPReductionFissionRejectReasonName(
+            VPReductionFissionRejectReason::UnsupportedRecipe));
+      else if (!AttemptedAnalysis)
+        DebugReject(getVPReductionFissionRejectReasonName(
+            VPReductionFissionRejectReason::NoAccumulatorPressureOverflow));
       continue;
+    }
 
-    Expected<VPScratchPlan> Scratch =
-        buildScratchPlan(Analysis->Partition.FrontierValues, ExactTripCount,
-                         OrigLoop->getHeader()->getDataLayout(),
-                         VPlanReductionFissionMaxScratchBytes);
+    Expected<VPScratchPlan> Scratch = buildScratchPlan(
+        Analysis->Partition.FrontierValues, TripCount->MaxTripCount,
+        OrigLoop->getHeader()->getDataLayout(),
+        VPlanReductionFissionMaxScratchBytes);
     if (!Scratch) {
       DebugReject(toString(Scratch.takeError()));
       continue;
@@ -255,6 +316,16 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
         buildReductionFissionStagePlans(Plan, *Analysis, *Scratch, VFs);
     if (!Candidate) {
       DebugReject(toString(Candidate.takeError()));
+      continue;
+    }
+    if (!verifyFissionMemorySchedule(*Candidate, Ctx)) {
+      DebugReject(getVPReductionFissionRejectReasonName(
+          VPReductionFissionRejectReason::MemoryDependence));
+      continue;
+    }
+    if (!verifyStageInputs(*Candidate, Ctx)) {
+      DebugReject(getVPReductionFissionRejectReasonName(
+          VPReductionFissionRejectReason::UnsafeStageInput));
       continue;
     }
 
@@ -336,6 +407,8 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
       if (!Combined) {
         DebugReject(toString(Combined.takeError()));
       } else if (Combined->Scratch.TotalBytes < Candidate->Scratch.TotalBytes &&
+                 verifyFissionMemorySchedule(*Combined, Ctx) &&
+                 verifyStageInputs(*Combined, Ctx) &&
                  verifyVPlanIsValid(*Combined->ProducerPlan) &&
                  verifyVPlanIsValid(*Combined->AccumulatorPlan) &&
                  verifyVPlanIsValid(*Combined->ProducerRemainder.Plan) &&
@@ -372,7 +445,16 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
       }
     }
 
+    Candidate->TripCount = *TripCount;
     Candidate->Selected = Decision.Fission;
+    bool HasInLoopReduction = any_of(Analysis->Slices, [](const auto &Slice) {
+      return Slice.Accumulator->isInLoop();
+    });
+    if (Ctx.FPReordering || HasInLoopReduction)
+      if (auto Reason = checkFissionFPCost(Plan, *Candidate, TTI)) {
+        DebugReject(getVPReductionFissionRejectReasonName(*Reason));
+        continue;
+      }
     uint64_t SelectedScratchBytes = Candidate->Scratch.TotalBytes;
     DEBUG_WITH_TYPE(
         "vplan-reduction-fission",
@@ -421,7 +503,33 @@ static VPBasicBlock *prepareStage(VPlan &Plan, ElementCount VF,
 }
 
 static void prepareCandidate(VPReductionFissionCandidate &C,
-                             PredicatedScalarEvolution &PSE) {
+                             PredicatedScalarEvolution &PSE,
+                             Value *ActualTripCount, SCEVExpander &Expander,
+                             Instruction *InsertPt) {
+  // Bind before SCEV lowering, which can reset the plan's trip-count metadata.
+  // All four loops execute the same N, independently of scratch capacity.
+  for (VPlan *Plan : getStagePlans(C)) {
+    VPValue *TC = Plan->getOrAddLiveIn(ActualTripCount);
+    if (Plan->getTripCount() != TC) {
+      Plan->getTripCount()->replaceAllUsesWith(TC);
+      Plan->resetTripCount(TC);
+    }
+    // External induction steps and address expressions may use SCEV forms
+    // that the VPlan-only expander cannot lower. Their safety was checked
+    // before commit. Expand once at the original guarded entry and share the
+    // resulting live-ins, including with both scalar companions.
+    for (VPRecipeBase &R : make_early_inc_range(*Plan->getEntry())) {
+      auto *S = dyn_cast<VPExpandSCEVRecipe>(&R);
+      if (!S)
+        continue;
+      if (!S->user_empty()) {
+        Value *V =
+            Expander.expandCodeFor(S->getSCEV(), S->getScalarType(), InsertPt);
+        S->replaceAllUsesWith(Plan->getOrAddLiveIn(V));
+      }
+      S->eraseFromParent();
+    }
+  }
   C.ProducerMiddle = C.ProducerPlan->getMiddleBlock();
   C.AccumulatorMiddle = C.AccumulatorPlan->getMiddleBlock();
   C.ProducerVectorPH =
@@ -445,7 +553,8 @@ static void bindStageBlock(VPlan &Plan, VPBasicBlock *VPBB, BasicBlock *IRBB) {
 
 static void
 executeReductionFissionCandidate(VPReductionFissionCandidate &Candidate,
-                                 VPReductionFissionContext &Context) {
+                                 VPReductionFissionContext &Context,
+                                 Value *ActualTripCount) {
   const VPFissionConfiguration &Config = *Candidate.Selected;
   Loop *OrigLoop = &Context.L;
   auto *LI = &Context.LI;
@@ -579,7 +688,7 @@ executeReductionFissionCandidate(VPReductionFissionCandidate &Candidate,
     UncondBrInst::Create(Continuation, ScalarExit);
     cast<UncondBrInst>(StageExitPH->getTerminator())->setSuccessor(ScalarCheck);
     IRBuilder<> B(Incoming->getTerminator());
-    Value *TripCount = Plan.getTripCount()->getLiveInIRValue();
+    Value *TripCount = ActualTripCount;
     Value *RuntimeVF = getRuntimeVF(B, TripCount->getType(), VF);
     Value *VectorTC = B.CreateSub(TripCount, B.CreateURem(TripCount, RuntimeVF),
                                   "fission.vector.trip.count");
@@ -667,12 +776,59 @@ executeReductionFissionCandidate(VPReductionFissionCandidate &Candidate,
 bool llvm::tryReductionFission(ArrayRef<VPlanPtr> Plans,
                                ElementCount BaselineVF,
                                VPReductionFissionContext &Context) {
-  if (!EnableVPlanReductionFission)
+  if (!isReductionFissionEnabled())
     return false;
   auto Candidate = planReductionFission(Plans, BaselineVF, Context);
   if (!Candidate)
     return false;
-  prepareCandidate(*Candidate, Context.PSE);
-  executeReductionFissionCandidate(*Candidate, Context);
+  Context.ORE.emit([&]() {
+    return OptimizationRemark(DEBUG_TYPE, "Selected", Context.L.getStartLoc(),
+                              Context.L.getHeader())
+           << "split reduction loop: baseline VF "
+           << ore::NV("BaselineVF", BaselineVF) << ", producer VF "
+           << ore::NV("ProducerVF", Candidate->Selected->ProducerVF)
+           << ", accumulator VF "
+           << ore::NV("AccumulatorVF", Candidate->Selected->AccumulatorVF)
+           << ", trip count "
+           << ore::NV("TripCountKind",
+                      isa<SCEVConstant>(Candidate->TripCount.ExactTripCount)
+                          ? "constant"
+                          : "bounded-runtime")
+           << ", scratch capacity "
+           << ore::NV("MaxTripCount", Candidate->TripCount.MaxTripCount)
+           << ", scratch bytes "
+           << ore::NV("ScratchBytes", Candidate->Scratch.TotalBytes);
+  });
+  for (VPRecipeBase &R : Candidate->AccumulatorPlan->getVectorLoopRegion()
+                             ->getEntryBasicBlock()
+                             ->phis()) {
+    auto *Phi = dyn_cast<VPReductionPHIRecipe>(&R);
+    if (!Phi)
+      continue;
+    auto *IRPhi = cast<PHINode>(Phi->getUnderlyingValue());
+    const auto &Rdx = Context.Legal.getRecurrenceDescriptor(IRPhi);
+    StringRef Source = "IR";
+    if (Phi->getRecurrenceKind() == RecurKind::FAdd && !Phi->isOrdered() &&
+        !Rdx.getFastMathFlags().allowReassoc())
+      Source = Context.HintReordering ? "hint" : "fission-option";
+    Context.ORE.emit([&]() {
+      return OptimizationRemark(DEBUG_TYPE, "Reduction",
+                                Context.L.getStartLoc(), Context.L.getHeader())
+             << "reduction " << ore::NV("Reduction", IRPhi->getName()) << ": "
+             << ore::NV("Mode", Phi->isOrdered() ? "ordered" : "unordered")
+             << ", reordering permission: "
+             << ore::NV("ReorderingSource", Source);
+    });
+  }
+  // Everything that can reject a candidate has completed. Expand N once on
+  // the original guarded entry path, then commit the four-stage transaction.
+  SCEVExpander Expander(*Context.PSE.getSE(), "fission");
+  Value *ActualTripCount =
+      Expander.expandCodeFor(Candidate->TripCount.ExactTripCount,
+                             Candidate->ProducerPlan->getIndexType(),
+                             Context.L.getLoopPreheader()->getTerminator());
+  prepareCandidate(*Candidate, Context.PSE, ActualTripCount, Expander,
+                   Context.L.getLoopPreheader()->getTerminator());
+  executeReductionFissionCandidate(*Candidate, Context, ActualTripCount);
   return true;
 }

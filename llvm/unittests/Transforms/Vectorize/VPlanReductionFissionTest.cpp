@@ -1047,5 +1047,70 @@ TEST_F(VPlanReductionFissionTest, ScratchRecipesPreserveSlotMetadata) {
   delete Load;
 }
 
+TEST_F(VPlanReductionFissionTest, InLoopFAddScalarCompanionAndStartValue) {
+  for (bool Ordered : {false, true}) {
+    VPlan &Plan = getPlan();
+    Plan.resetTripCount(Plan.getConstantInt(64, 17));
+    auto *Body = Plan.createVPBasicBlock("body");
+    auto *Region =
+        Plan.createLoopRegion(Plan.getIndexType(), {}, "loop", Body, Body);
+    auto *Middle = Plan.createVPBasicBlock("middle");
+    VPBlockUtils::connectBlocks(Plan.getEntry(), Region);
+    VPBlockUtils::connectBlocks(Region, Middle);
+    VPBlockUtils::connectBlocks(Middle, Plan.getScalarHeader());
+    auto *Start =
+        Plan.getOrAddLiveIn(ConstantFP::get(Type::getDoubleTy(C), 3.5));
+    FastMathFlags FMF;
+    FMF.setAllowReassoc(!Ordered);
+    ReductionStyle Style =
+        Ordered ? ReductionStyle(RdxOrdered{}) : ReductionStyle(RdxInLoop{});
+    auto *Phi = new VPReductionPHIRecipe(nullptr, RecurKind::FAdd, *Start,
+                                         *Start, Style, FMF);
+    auto *Input =
+        new VPInstruction(Instruction::FMul, {Start, Start}, FastMathFlags());
+    auto *IRAdd = BinaryOperator::CreateFAdd(Start->getLiveInIRValue(),
+                                             Start->getLiveInIRValue(), "",
+                                             ScalarHeader->getTerminator());
+    auto *Update = new VPReductionRecipe(RecurKind::FAdd, FMF, IRAdd, Phi,
+                                         Input, nullptr, Style);
+    Phi->setOperand(1, Update);
+    Body->appendRecipe(Phi);
+    Body->appendRecipe(Input);
+    Body->appendRecipe(Update);
+    auto *Increment = new VPInstruction(
+        Instruction::Add, {Region->getCanonicalIV(), &Plan.getVFxUF()},
+        VPIRFlags::getDefaultFlags(Instruction::Add));
+    Body->appendRecipe(Increment);
+    Body->appendRecipe(new VPInstruction(
+        VPInstruction::BranchOnCount, {Increment, &Plan.getVectorTripCount()}));
+    Middle->appendRecipe(
+        new VPInstruction(VPInstruction::ComputeReductionResult, {Update},
+                          VPIRFlags(RecurKind::FAdd, Ordered, true, FMF)));
+    VPReductionFissionAnalysis Analysis;
+    Analysis.Partition.ProducerRecipes.insert(Input);
+    Analysis.Partition.AccumulatorRecipes.insert(Phi);
+    Analysis.Partition.AccumulatorRecipes.insert(Update);
+    Analysis.Partition.FrontierValues.push_back(Input);
+    auto Scratch = buildScratchPlan({Input}, 17, M->getDataLayout(), 136);
+    ASSERT_TRUE(static_cast<bool>(Scratch));
+    auto Candidate = buildReductionFissionStagePlans(
+        Plan, Analysis, *Scratch, {ElementCount::getScalable(2)});
+    ASSERT_TRUE(static_cast<bool>(Candidate))
+        << toString(Candidate.takeError());
+    ASSERT_EQ(Candidate->AccumulatorRemainder.Reductions.size(), 1u);
+    const auto &Rdx = Candidate->AccumulatorRemainder.Reductions.front();
+    EXPECT_EQ(Rdx.Start->getLiveInIRValue(), Start->getLiveInIRValue());
+    auto *ScalarAdd =
+        dyn_cast<VPInstruction>(Rdx.ScalarPhi->getBackedgeValue());
+    ASSERT_TRUE(ScalarAdd);
+    EXPECT_EQ(ScalarAdd->getOpcode(), Instruction::FAdd);
+    EXPECT_EQ(ScalarAdd->getFastMathFlagsOrNone().allowReassoc(), !Ordered);
+    EXPECT_TRUE(verifyVPlanIsValid(*Candidate->AccumulatorPlan));
+    EXPECT_TRUE(verifyVPlanIsValid(*Candidate->AccumulatorRemainder.Plan));
+    EXPECT_EQ(Phi->getBackedgeValue(), Update);
+    EXPECT_EQ(Phi->isOrdered(), Ordered);
+  }
+}
+
 } // namespace
 } // namespace llvm

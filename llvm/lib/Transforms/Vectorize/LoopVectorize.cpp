@@ -62,6 +62,7 @@
 #include "VPlanHelpers.h"
 #include "VPlanPatternMatch.h"
 #include "VPlanReductionFission.h"
+#include "VPlanReductionFissionFPReordering.h"
 #include "VPlanTransforms.h"
 #include "VPlanUtils.h"
 #include "VPlanVerifier.h"
@@ -5902,11 +5903,13 @@ LoopVectorizationPlanner::computeBestVF() {
 }
 
 bool LoopVectorizationPlanner::tryReductionFission(ElementCount BaselineVF,
-                                                   AssumptionCache &AC) {
+                                                   AssumptionCache &AC,
+                                                   AAResults &AA) {
   VPReductionFissionContext Context{
-      *OrigLoop, *LI,  *DT,
-      PSE,       AC,   TTI,
-      *Legal,    *ORE, Config.getSmallestAndWidestTypes().second};
+      *OrigLoop, *LI, *DT,    PSE,  AC,
+      AA,        TTI, *Legal, *ORE, Config.getSmallestAndWidestTypes().second};
+  Context.FPReordering = Config.isFissionOnly();
+  Context.HintReordering = Hints.allowReordering();
   return llvm::tryReductionFission(ReductionFissionPlans, BaselineVF, Context);
 }
 
@@ -6541,13 +6544,16 @@ VPlanPtr LoopVectorizationPlanner::tryToBuildVPlan1() {
 
   // Create recipes for header phis. For outer loops, reductions, recurrences
   // and in-loop reductions are empty since legality doesn't detect them.
-  if (!RUN_VPLAN_PASS(VPlanTransforms::createHeaderPhiRecipes, *VPlan0, PSE,
-                      *OrigLoop, VPDT, Legal->getInductionVars(),
-                      Legal->getReductionVars(),
-                      Legal->getFixedOrderRecurrences(),
-                      Config.getInLoopReductions(), Hints.allowReordering())) {
+  if (!RUN_VPLAN_PASS(
+          VPlanTransforms::createHeaderPhiRecipes, *VPlan0, PSE, *OrigLoop,
+          VPDT, Legal->getInductionVars(), Legal->getReductionVars(),
+          Legal->getFixedOrderRecurrences(), Config.getInLoopReductions(),
+          Hints.allowReordering(), Config.getFissionFPReorderingPolicy())) {
     return nullptr;
   }
+
+  if (const auto *Policy = Config.getFissionFPReorderingPolicy())
+    Policy->applyToPlan(*VPlan0);
 
   if (const LoopAccessInfo *LAI = Legal->getLAI())
     RUN_VPLAN_PASS(VPlanTransforms::replaceSymbolicStrides, *VPlan0, PSE,
@@ -6615,6 +6621,10 @@ void LoopVectorizationPlanner::buildVPlans(VPlan &VPlan1, ElementCount MinVF,
                    Config.getMinimalBitwidths());
     RUN_VPLAN_PASS(VPlanTransforms::optimize, *Plan);
     saveReductionFissionPlan(*Plan, ReductionFissionPlans);
+    // Private relaxed candidates can only be executed by fission. In
+    // particular, they must never become normal vectorizer fallback plans.
+    if (Config.isFissionOnly())
+      continue;
     // TODO: try to put addExplicitVectorLength close to addActiveLaneMask
     if (CM.foldTailWithEVL()) {
       RUN_VPLAN_PASS(VPlanTransforms::addExplicitVectorLength, *Plan,
@@ -8036,7 +8046,46 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     AllowOrderedReductions = ForceOrderedReductions;
   else
     AllowOrderedReductions = TTI->enableOrderedReductions();
+
+  auto TryReorderedFission = [&](ElementCount BaselineVF) {
+    if (!FissionFPReorderingPolicy::shouldAttempt(*L, Hints, OptForSize))
+      return false;
+    // This adapter stays with the private LoopVectorizationCostModel. All
+    // mutable planning state belongs to this attempt, leaving normal planning
+    // intact on failure. The policy outlives its config and plans.
+    PredicatedScalarEvolution FissionPSE(*SE, *L);
+    LoopVectorizationRequirements FissionRequirements;
+    LoopVectorizationLegality FissionLegal(
+        L, FissionPSE, DT, TTI, TLI, F, *LAIs, LI, ORE, &FissionRequirements,
+        &Hints, DB, AC,
+        /*AllowRuntimeSCEVChecks=*/false, AA);
+    if (!FissionLegal.canVectorize(false))
+      return false;
+    const auto FissionPolicy = FissionFPReorderingPolicy::create(
+        *L, FissionLegal, FissionPSE, Hints, AllowOrderedReductions);
+    if (!FissionPolicy)
+      return false;
+    VFSelectionContext FissionConfig(*TTI, &FissionLegal, L, *F, FissionPSE, DB,
+                                     ORE, &Hints, OptForSize, &*FissionPolicy);
+    InterleavedAccessInfo FissionIAI(FissionPSE, L, DT, LI,
+                                     FissionLegal.getLAI(), OptForSize);
+    LoopVectorizationCostModel FissionCM(
+        CM_EpilogueAllowed, L, FissionPSE, LI, &FissionLegal, *TTI, TLI, AC,
+        ORE, GetBFI, F, &Hints, FissionIAI, FissionConfig);
+    LoopVectorizationPlanner FissionLVP(L, LI, DT, TLI, *TTI, &FissionLegal,
+                                        FissionCM, FissionConfig, FissionIAI,
+                                        FissionPSE, Hints, ORE);
+    FissionLVP.plan(ElementCount::getFixed(0), 1);
+    if (!FissionLVP.tryReductionFission(BaselineVF, *AC, *AA))
+      return false;
+    ++LoopsVectorized;
+    assert(DT->verify(DominatorTree::VerificationLevel::Fast));
+    assert(!verifyFunction(*F, &dbgs()));
+    return true;
+  };
   if (!LVL.canVectorizeFPMath(AllowOrderedReductions)) {
+    if (TryReorderedFission(ElementCount::getFixed(1)))
+      return true;
     ORE->emit([&]() {
       auto *ExactFPMathInst = Requirements.getExactFPInst();
       return OptimizationRemarkAnalysisFPCommute(DEBUG_TYPE, "CantReorderFPOps",
@@ -8230,6 +8279,16 @@ bool LoopVectorizePass::processLoop(Loop *L) {
 
   // Emit diagnostic messages, if any.
   if (!VectorizeLoop && !InterleaveLoop) {
+    if (IsInnerLoop && IC == 1 && !UserVF) {
+      if (TryReorderedFission(VF.Width))
+        return true;
+      if (LVP.tryReductionFission(VF.Width, *AC, *AA)) {
+        ++LoopsVectorized;
+        assert(DT->verify(DominatorTree::VerificationLevel::Fast));
+        assert(!verifyFunction(*F, &dbgs()));
+        return true;
+      }
+    }
     // Do not vectorize or interleaving the loop.
     ORE->emit([&]() {
       return OptimizationRemarkMissed(LV_NAME, VecDiagMsg.first,
@@ -8357,8 +8416,10 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                               ResumeValues);
     ++LoopsEpilogueVectorized;
   } else {
+    if (IsInnerLoop && IC == 1 && !UserVF && TryReorderedFission(VF.Width))
+      return true;
     if (IsInnerLoop && IC == 1 && !UserVF &&
-        LVP.tryReductionFission(VF.Width, *AC)) {
+        LVP.tryReductionFission(VF.Width, *AC, *AA)) {
       ++LoopsVectorized;
       assert(DT->verify(DominatorTree::VerificationLevel::Fast));
       assert(!verifyFunction(*F, &dbgs()));

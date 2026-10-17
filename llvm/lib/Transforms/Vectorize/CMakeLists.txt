@@ -29,6 +29,7 @@ add_llvm_component_library(LLVMVectorize
   VectorCombine.cpp
   VPlanReductionFission.cpp
   VPlanReductionFissionAnalysis.cpp
+  VPlanReductionFissionFPReordering.cpp
   VPlanReductionFissionTransforms.cpp
   VPlan.cpp
   VPlanAnalysis.cpp

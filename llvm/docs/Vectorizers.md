@@ -93,12 +93,43 @@ llc output.ll -mtriple=riscv64 -mattr=+v,+zvl128b -verify-machineinstrs
 ```
 
 Clang accepts the same option through `-mllvm -enable-vplan-reduction-fission`.
-The transform is disabled by default. It currently supports constant-trip-count,
-single-block, read-only loops without runtime alias or SCEV checks. It requires
+The transform is disabled by default. It supports single-block loops with an
+exact constant trip count or an exact runtime trip count with a proven constant
+upper bound. Scratch capacity uses the upper bound; all four stages use the
+actual count. The original zero-trip entry guard is preserved. It requires
 interleave count one, no user-specified VF, and no vectorized epilogue. Unsupported
 candidates fall back to the ordinary vectorizer without modifying its plans.
 Live-outs must be supported reduction results; other last-iteration values
 currently cause the candidate to be rejected.
+
+Integer inductions with invariant start and step retain their modular arithmetic,
+including truncated inductions. Each scalar companion resumes at its own stage's
+vector bound. Simple consecutive stores are placed in the accumulator stage;
+whole-object alias analysis must prove independence from every other memory
+access, and scalar evolution must prove nonoverlapping iterations of each store.
+Potentially overlapping objects, prefix stores, volatile/atomic accesses,
+runtime alias versioning and additional SCEV predicates are not supported.
+
+Ordered and unordered in-loop FP sums support a single ordinary `fadd` update of
+an independent contribution. Ordered sums pass the scalar accumulator through
+chunks in lane order and then through the scalar remainder. Their register
+pressure uses the scalar register class, while contributions and reduction
+temporaries use vector registers. New FP candidates also compare TTI scratch and
+reduction costs with estimated spill traffic. Known constant counts include setup
+and tail costs; dynamic counts use normalized steady-state costs, never the
+scratch capacity as an execution-frequency estimate.
+
+`-vplan-reduction-fission-allow-fp-reordering` additionally permits reassociation
+of eligible FP sums in a private fission planner. Only the sum's adds and final
+reduction gain `reassoc`. No `nnan`, `ninf`, `nsz`, `contract`, reciprocal
+approximation or producer reassociation is implied. The initial value is used
+once, with `-0.0` as the FP-add identity when `nsz` is absent. Rounding and bitwise
+reproducibility may change, including cancellation and overflow results; NaN
+payload equality is not promised. This does not turn NaN/Inf into poison. Strict
+or constrained FP, FP inductions and accumulator-dependent FMA decomposition
+are excluded. The existing `-hints-allow-reordering` policy is unchanged.
+Discarding a private candidate preserves the original IR, recurrence descriptors,
+planning state and ordinary-vectorizer fallback.
 
 The hidden policy options retain the original defaults:
 
@@ -111,12 +142,16 @@ The hidden policy options retain the original defaults:
 | `-vplan-reduction-fission-max-duplicated-recipes` | `8` |
 | `-vplan-reduction-fission-max-scalable-vf-multiplier` | `8` |
 | `-vplan-reduction-fission-combine-add-contributions` | `true` |
+| `-vplan-reduction-fission-allow-fp-reordering` | `false` |
 
 The VF multiplier is relative to the register-width/data-width VF. Stage
 selection reserves register headroom, never reduces the producer VF relative to
 the selected baseline, and requires lower peak pressure. Private unflagged
 integer-add contributions may be combined to save scratch. Floating-point
-producer/update expressions retain their operators, flags and operand order.
+producer/update expressions retain their operators, flags and operand order,
+except for the explicitly opted-in sum reassociation described above. The option
+does not force fission or a particular target instruction. A loop with one or two
+sums may still fail the default reduction-count or pressure thresholds.
 
 For experiments, specify both
 `-vplan-reduction-fission-force-producer-vf=N` and
@@ -125,11 +160,16 @@ and are scalable lane counts, not LMUL values. They bypass the headroom check,
 but retain legality, scratch, duplication and pressure-improvement checks.
 Assertions builds can print selection and rejection reasons with
 `-debug-only=vplan-reduction-fission`.
+`-pass-remarks=vplan-reduction-fission` records selected stage VFs, trip-count
+kind, scratch capacity/bytes and each reduction's mode and permission source
+(IR, hint or fission option). `-pass-remarks-missed=vplan-reduction-fission`
+records rejection reasons.
 
-The implementation is in `VPlanReductionFission.h` and the three
+The implementation is in the `VPlanReductionFission*.h` headers and four
 `VPlanReductionFission*.cpp` files in `lib/Transforms/Vectorize`: the main file
 owns orchestration and IR emission, `Analysis` owns dependency/pressure and
-selection policy, and `Transforms` owns stage construction and scratch recipes.
+selection policy, `Transforms` owns stage construction and scratch recipes,
+and `FPReordering` owns the optional reassociation policy for private candidates.
 The policy is ported from LLVM 21; LLVM 23's baseline costing and VPlan
 representation can change automatic VF choices. Fission retains a VPlan before
 EVL and header-mask lowering, then constructs full-chunk stages and their scalar
@@ -147,6 +187,21 @@ ninja -C build clang opt llc FileCheck llvm-config VectorizeTests
 build/unittests/Transforms/Vectorize/VectorizeTests
 build/bin/llvm-lit -sv llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-*.ll
 ```
+
+With RISCV and the host backend enabled, the optional execution check is:
+
+```sh
+python3 llvm/utils/check-reduction-fission.py --build-dir build \
+  --work-dir build/fission-execution
+```
+
+This specializes scalable IR to several fixed vscales and executes it on the
+host. It is not RVV emulation. It compares bounded trip counts, independent
+stores and canaries, integer wraparound/truncation, and ordered FP against the
+original scalar IR, and checks reassociated FP using classification, signed zero
+and magnitude-based absolute error bounds. Separate RVV machine verification
+and generated assembly complement the host checks. The output directory retains
+IR, assembly, selection remarks and a JSON result for reproducibility.
 
 ### Diagnostics
 

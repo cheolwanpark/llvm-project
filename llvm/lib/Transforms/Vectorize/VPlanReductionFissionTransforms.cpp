@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "LoopVectorizationPlanner.h"
 #include "VPlan.h"
 #include "VPlanCFG.h"
 #include "VPlanHelpers.h"
@@ -61,8 +62,7 @@ struct StagePlanBuildResult {
 VPValue *removeStageTailPredication(StagePlanBuildResult &Stage) {
   VPlan &Plan = *Stage.Plan;
   VPBasicBlock *Body = Plan.getVectorLoopRegion()->getEntryBasicBlock();
-  VPValue *Mask = Plan.getOrAddLiveIn(ConstantInt::getTrue(
-      Plan.getTripCount()->getLiveInIRValue()->getContext()));
+  VPValue *Mask = Plan.getOrAddLiveIn(ConstantInt::getTrue(Plan.getContext()));
   for (VPRecipeBase &R : make_early_inc_range(*Body))
     if (auto *I = dyn_cast<VPInstruction>(&R);
         I && I->getOpcode() == VPInstruction::ActiveLaneMask) {
@@ -86,6 +86,39 @@ VPValue *removeStageTailPredication(StagePlanBuildResult &Stage) {
   }
 
   for (VPRecipeBase &R : make_early_inc_range(*Body)) {
+    if (auto *Reduction = dyn_cast<VPReductionRecipe>(&R);
+        Reduction && Reduction->getCondOp() == Mask) {
+      auto *Unmasked = new VPReductionRecipe(
+          Reduction->getRecurrenceKind(), Reduction->getFastMathFlagsOrNone(),
+          Reduction->getUnderlyingInstr(), Reduction->getChainOp(),
+          Reduction->getVecOp(), nullptr,
+          Reduction->isOrdered() ? ReductionStyle(RdxOrdered{})
+                                 : ReductionStyle(RdxInLoop{}),
+          Reduction->getDebugLoc());
+      Unmasked->insertBefore(Reduction);
+      Reduction->replaceAllUsesWith(Unmasked);
+      for (auto &Entry : Stage.Values)
+        if (Entry.second == Reduction)
+          Entry.second = Unmasked;
+      for (auto &Entry : Stage.Recipes)
+        if (Entry.second == Reduction)
+          Entry.second = Unmasked;
+      Reduction->eraseFromParent();
+      continue;
+    }
+    if (auto *Store = dyn_cast<VPWidenStoreRecipe>(&R);
+        Store && Store->getMask() == Mask) {
+      auto *Unmasked = new VPWidenStoreRecipe(
+          cast<StoreInst>(Store->getIngredient()), Store->getAddr(),
+          Store->getStoredValue(), nullptr, Store->isConsecutive(), *Store,
+          Store->getDebugLoc());
+      Unmasked->insertBefore(Store);
+      for (auto &Entry : Stage.Recipes)
+        if (Entry.second == Store)
+          Entry.second = Unmasked;
+      Store->eraseFromParent();
+      continue;
+    }
     auto *Load = dyn_cast<VPWidenLoadRecipe>(&R);
     if (!Load || Load->getMask() != Mask)
       continue;
@@ -141,13 +174,6 @@ Expected<StagePlanBuildResult> buildStagePlan(
     Result.Values[BTC] = Stage.getOrCreateBackedgeTakenCount();
   Result.Values[&Baseline.getVFxUF()] = &Stage.getVFxUF();
   Result.Values[&Baseline.getVectorTripCount()] = &Stage.getVectorTripCount();
-  if (VPValue *TripCount = Baseline.getTripCount()) {
-    VPValue *MappedTripCount = Result.Values.lookup(TripCount);
-    if (!MappedTripCount)
-      return createStringError(errc::invalid_argument,
-                               "stage trip count is not a mapped live-in");
-    Stage.setTripCount(MappedTripCount);
-  }
 
   VPBasicBlock *VectorPH = Stage.createVPBasicBlock("vector.ph");
   VPBasicBlock *Body = Stage.createVPBasicBlock("vector.body");
@@ -195,6 +221,8 @@ Expected<StagePlanBuildResult> buildStagePlan(
     if (!RecipesToClone.contains(&Recipe))
       continue;
     VPRecipeBase *Clone = Recipe.clone();
+    if (auto *IV = dyn_cast<VPWidenIntOrFpInductionRecipe>(Clone))
+      IV->dropPoisonGeneratingFlags();
     Body->appendRecipe(Clone);
     Result.Recipes[&Recipe] = Clone;
     Clones.push_back({&Recipe, Clone});
@@ -231,7 +259,10 @@ Expected<StagePlanBuildResult> buildStagePlan(
       return createStringError(errc::invalid_argument,
                                "scratch crossing is used outside stage body");
     VPRecipeBase *Clone = OldRecipe->clone();
-    VectorPH->appendRecipe(Clone);
+    if (isa<VPExpandSCEVRecipe>(Clone))
+      Stage.getEntry()->appendRecipe(Clone);
+    else
+      VectorPH->appendRecipe(Clone);
     Result.Recipes[OldRecipe] = Clone;
     for (unsigned I = 0, E = OldRecipe->getNumOperands(); I != E; ++I)
       Clone->setOperand(I, Result.Values.lookup(OldRecipe->getOperand(I)));
@@ -240,6 +271,11 @@ Expected<StagePlanBuildResult> buildStagePlan(
       Result.Values[OldDef] = NewDef;
     return Error::success();
   };
+  if (VPValue *TC = Baseline.getTripCount()) {
+    if (Error E = MapExternalValue(TC))
+      return E;
+    Stage.setTripCount(Result.Values.lookup(TC));
+  }
   for (auto [OldRecipe, NewRecipe] : Clones)
     for (VPValue *Operand : OldRecipe->operands())
       if (!Result.Values.contains(Operand))
@@ -467,7 +503,8 @@ Expected<VPFissionScalarRemainder> buildScalarRemainder(VPlan &VectorPlan) {
         StartVector->getOpcode() == VPInstruction::ReductionStartVector)
       Start = StartVector->getOperand(0);
     if (!Result || !isa<VPIRValue>(Start) || Result->getNumOperands() != 1 ||
-        Phi->isInLoop() || Phi->getVFScaleFactor() != 1 ||
+        (Phi->isInLoop() && Phi->getRecurrenceKind() != RecurKind::FAdd) ||
+        Phi->getVFScaleFactor() != 1 ||
         Result->getOperand(0)->getScalarType() != Phi->getScalarType())
       return createStringError(errc::invalid_argument,
                                "unsupported scalar remainder reduction");
@@ -482,7 +519,54 @@ Expected<VPFissionScalarRemainder> buildScalarRemainder(VPlan &VectorPlan) {
   for (VPRecipeBase &R : make_early_inc_range(
            *Plan.getVectorLoopRegion()->getEntryBasicBlock())) {
     VPSingleDefRecipe *Scalar = nullptr;
-    if (auto *Widen = dyn_cast<VPWidenRecipe>(&R)) {
+    if (auto *Store = dyn_cast<VPWidenStoreRecipe>(&R)) {
+      if (Store->getMask())
+        return createStringError(errc::invalid_argument,
+                                 "predicated scalar remainder store");
+      auto *ScalarStore = new VPReplicateRecipe(
+          &Store->getIngredient(), {Store->getStoredValue(), Store->getAddr()},
+          true, nullptr, {}, *Store, Store->getDebugLoc());
+      ScalarStore->insertBefore(Store);
+      Store->eraseFromParent();
+      continue;
+    }
+    if (auto *IV = dyn_cast<VPWidenIntOrFpInductionRecipe>(&R)) {
+      if (IV->getInductionDescriptor().getKind() !=
+          InductionDescriptor::IK_IntInduction)
+        return createStringError(errc::invalid_argument,
+                                 "unsupported scalar remainder induction");
+      // Derive this stage's value from its canonical resume index, not from
+      // the original start. Modular arithmetic also handles truncated IVs.
+      auto *Body = Plan.getVectorLoopRegion()->getEntryBasicBlock();
+      VPBuilder Builder(Body, Body->getFirstNonPhi());
+      Type *Ty = IV->getScalarType();
+      auto Cast = [&](VPValue *V) {
+        return Builder.createScalarZExtOrTrunc(V, Ty, V->getScalarType(),
+                                               IV->getDebugLoc());
+      };
+      VPValue *Index = Cast(Plan.getVectorLoopRegion()->getCanonicalIV());
+      VPValue *Start = Cast(IV->getStartValue());
+      VPValue *Step = Cast(IV->getStepValue());
+      VPValue *Value = Builder.createNaryOp(
+          Instruction::Add,
+          {Start,
+           Builder.createNaryOp(Instruction::Mul, {Step, Index},
+                                VPIRFlags::getDefaultFlags(Instruction::Mul))},
+          VPIRFlags::getDefaultFlags(Instruction::Add));
+      IV->replaceAllUsesWith(Value);
+      IV->eraseFromParent();
+      continue;
+    } else if (auto *Reduction = dyn_cast<VPReductionRecipe>(&R)) {
+      if (Reduction->getRecurrenceKind() != RecurKind::FAdd ||
+          Reduction->isConditional() || !Reduction->isInLoop())
+        return createStringError(errc::invalid_argument,
+                                 "unsupported scalar remainder reduction");
+      // Unordered in-loop lowering is vector-only. The companion performs
+      // exactly one scalar add for this original iteration.
+      Scalar = new VPInstruction(
+          Instruction::FAdd, {Reduction->getChainOp(), Reduction->getVecOp()},
+          *Reduction, {}, Reduction->getDebugLoc());
+    } else if (auto *Widen = dyn_cast<VPWidenRecipe>(&R)) {
       if (auto *I = dyn_cast_or_null<Instruction>(Widen->getUnderlyingValue()))
         Scalar = new VPReplicateRecipe(I, Widen->operands(), true, nullptr,
                                        *Widen, *Widen, Widen->getDebugLoc());
@@ -695,10 +779,9 @@ Expected<VPReductionFissionCandidate> llvm::buildReductionFissionStagePlans(
 
 Expected<VPScratchPlan>
 llvm::buildScratchPlan(ArrayRef<VPValue *> FrontierValues,
-                       const SCEV *ExactTripCount, const DataLayout &DL,
+                       const SCEV *MaxTripCount, const DataLayout &DL,
                        uint64_t MaximumBytes) {
-  const auto *ConstantTripCount =
-      dyn_cast_or_null<SCEVConstant>(ExactTripCount);
+  const auto *ConstantTripCount = dyn_cast_or_null<SCEVConstant>(MaxTripCount);
   if (!ConstantTripCount || ConstantTripCount->getAPInt().getActiveBits() > 64)
     return buildScratchPlan(FrontierValues, std::nullopt, DL, MaximumBytes);
   return buildScratchPlan(FrontierValues,
@@ -708,12 +791,12 @@ llvm::buildScratchPlan(ArrayRef<VPValue *> FrontierValues,
 
 Expected<VPScratchPlan>
 llvm::buildScratchPlan(ArrayRef<VPValue *> FrontierValues,
-                       std::optional<uint64_t> ExactTripCount,
+                       std::optional<uint64_t> MaxTripCount,
                        const DataLayout &DL, uint64_t MaximumBytes) {
-  if (!ExactTripCount)
+  if (!MaxTripCount)
     return createStringError(errc::invalid_argument,
-                             "trip count is not an exact constant");
-  if (*ExactTripCount == 0)
+                             "trip count has no constant upper bound");
+  if (*MaxTripCount == 0)
     return createStringError(errc::invalid_argument,
                              "zero trip count has no scratch layout");
 
@@ -729,10 +812,10 @@ llvm::buildScratchPlan(ArrayRef<VPValue *> FrontierValues,
                                "scalable scratch element size");
     uint64_t ElementBytes = ElementSize.getFixedValue();
     if (ElementBytes != 0 &&
-        *ExactTripCount > std::numeric_limits<uint64_t>::max() / ElementBytes)
+        *MaxTripCount > std::numeric_limits<uint64_t>::max() / ElementBytes)
       return createStringError(errc::result_out_of_range,
                                "scratch slot size overflow");
-    uint64_t Bytes = *ExactTripCount * ElementBytes;
+    uint64_t Bytes = *MaxTripCount * ElementBytes;
     Align Alignment = DL.getABITypeAlign(ElementType);
     uint64_t AlignValue = Alignment.value();
     uint64_t Padding =
@@ -749,7 +832,7 @@ llvm::buildScratchPlan(ArrayRef<VPValue *> FrontierValues,
       return createStringError(errc::result_out_of_range,
                                "scratch byte limit exceeded");
     Result.Slots.push_back(
-        {Frontier, ElementType, *ExactTripCount, Alignment, Offset, Bytes});
+        {Frontier, ElementType, *MaxTripCount, Alignment, Offset, Bytes});
     Result.TotalBytes = End;
   }
   return Result;
@@ -779,7 +862,9 @@ void VPFissionScratchLoadRecipe::execute(VPTransformState &State) {
 InstructionCost
 VPFissionScratchLoadRecipe::computeCost(ElementCount VF,
                                         VPCostContext &Ctx) const {
-  return 0;
+  return Ctx.TTI.getMemoryOpCost(Instruction::Load,
+                                 toVectorizedTy(ElementType, VF), Alignment, 0,
+                                 Ctx.CostKind);
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -812,7 +897,9 @@ void VPFissionScratchStoreRecipe::execute(VPTransformState &State) {
 InstructionCost
 VPFissionScratchStoreRecipe::computeCost(ElementCount VF,
                                          VPCostContext &Ctx) const {
-  return 0;
+  return Ctx.TTI.getMemoryOpCost(Instruction::Store,
+                                 toVectorizedTy(ElementType, VF), Alignment, 0,
+                                 Ctx.CostKind);
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)

@@ -9,6 +9,7 @@
 #include "../lib/Transforms/Vectorize/VPlan.h"
 #include "../lib/Transforms/Vectorize/VPlanReductionFission.h"
 #include "VPlanTestBase.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetTransformInfoImpl.h"
 #include "llvm/IR/Constants.h"
 #include "gtest/gtest.h"
@@ -375,6 +376,142 @@ TEST_F(VPlanReductionFissionAnalysisTest,
   EXPECT_EQ(Breakdown.PeakTotalRegs.lookup(2), 4u);
   EXPECT_EQ(Breakdown.Capacity.lookup(1), 4u);
   EXPECT_EQ(Breakdown.Capacity.lookup(2), 8u);
+}
+
+TEST_F(VPlanReductionFissionAnalysisTest,
+       ScalarInLoopAccumulatorsUseScalarClass) {
+  for (bool Ordered : {false, true}) {
+    VPlan &Plan = getPlan();
+    auto *Body = Plan.createVPBasicBlock("body");
+    auto *Region =
+        Plan.createLoopRegion(Plan.getIndexType(), {}, "loop", Body, Body);
+    VPBlockUtils::connectBlocks(Plan.getEntry(), Region);
+    VPBlockUtils::connectBlocks(Region, Plan.getScalarHeader());
+    auto *Zero = Plan.getOrAddLiveIn(ConstantFP::get(Type::getDoubleTy(C), 0));
+    FastMathFlags FMF;
+    FMF.setAllowReassoc(!Ordered);
+    ReductionStyle Style =
+        Ordered ? ReductionStyle(RdxOrdered{}) : ReductionStyle(RdxInLoop{});
+    auto *Phi = new VPReductionPHIRecipe(nullptr, RecurKind::FAdd, *Zero, *Zero,
+                                         Style, FMF);
+    auto *Update =
+        new VPReductionRecipe(RecurKind::FAdd, FMF, Phi, Zero, nullptr, Style);
+    Phi->setOperand(1, Update);
+    Body->appendRecipe(Phi);
+    Body->appendRecipe(Update);
+    DataLayout DL("");
+    TargetTransformInfo TTI(std::make_unique<RegisterPressureTTI>(DL));
+    for (unsigned Width : {2, 8, 16}) {
+      auto Pressure = calculateRegisterPressureForPlan(
+          Plan, ElementCount::getFixed(Width), TTI);
+      EXPECT_EQ(Pressure.AccumulatorRegs.lookup(0), 1u);
+      EXPECT_EQ(Pressure.AccumulatorRegs.lookup(1), 0u);
+      EXPECT_GE(Pressure.PeakTotalRegs.lookup(0), 1u);
+      EXPECT_GE(Pressure.PeakNonAccumulatorRegs.lookup(1), 1u);
+    }
+  }
+}
+
+TEST_F(VPlanReductionFissionAnalysisTest, TripCountBoundsAndNarrowOverflow) {
+  SMDiagnostic Error;
+  auto Mod = parseAssemblyString(R"(
+    define void @narrow() {
+    entry:
+      br label %loop
+    loop:
+      %i = phi i8 [ 0, %entry ], [ %next, %loop ]
+      %next = add i8 %i, 1
+      %done = icmp eq i8 %next, 0
+      br i1 %done, label %exit, label %loop
+    exit:
+      ret void
+    }
+    define void @bounded(i64 %n) {
+    entry:
+      %nonzero = icmp ne i64 %n, 0
+      %bounded = icmp ule i64 %n, 1024
+      %valid = and i1 %nonzero, %bounded
+      br i1 %valid, label %preheader, label %exit
+    preheader:
+      br label %loop
+    loop:
+      %i = phi i64 [ 0, %preheader ], [ %next, %loop ]
+      %next = add nuw i64 %i, 1
+      %done = icmp eq i64 %next, %n
+      br i1 %done, label %exit, label %loop
+    exit:
+      ret void
+    }
+    define void @narrow_runtime(i8 %n) {
+    entry:
+      br label %loop
+    loop:
+      %i = phi i8 [ 0, %entry ], [ %next, %loop ]
+      %next = add i8 %i, 1
+      %done = icmp eq i8 %next, %n
+      br i1 %done, label %exit, label %loop
+    exit:
+      ret void
+    }
+    define void @overflow() {
+    entry:
+      br label %loop
+    loop:
+      %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+      %next = add i64 %i, 1
+      %done = icmp eq i64 %next, 0
+      br i1 %done, label %exit, label %loop
+    exit:
+      ret void
+    }
+    define void @unknown(ptr %a) {
+    entry:
+      br label %loop
+    loop:
+      %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+      %p = getelementptr i8, ptr %a, i64 %i
+      %x = load i8, ptr %p
+      %next = add i64 %i, 1
+      %done = icmp eq i8 %x, 0
+      br i1 %done, label %exit, label %loop
+    exit:
+      ret void
+    }
+  )",
+                                 Error, C);
+  ASSERT_TRUE(Mod);
+  for (Function &F : *Mod) {
+    DominatorTree DT(F);
+    LoopInfo LI(DT);
+    AssumptionCache AC(F);
+    TargetLibraryInfoImpl TLII(Mod->getTargetTriple());
+    TargetLibraryInfo TLI(TLII);
+    ScalarEvolution SE(F, TLI, AC, DT, LI);
+    Loop &L = **LI.begin();
+    auto TC = analyzeFissionTripCount(L, SE, Type::getInt64Ty(C));
+    if (F.getName() == "overflow" || F.getName() == "unknown") {
+      ASSERT_FALSE(static_cast<bool>(TC));
+      EXPECT_EQ(toString(TC.takeError()), F.getName() == "overflow"
+                                              ? "trip-count-overflow"
+                                              : "non-constant-trip-count");
+      continue;
+    }
+    ASSERT_TRUE(static_cast<bool>(TC));
+    if (F.getName() == "narrow" || F.getName() == "narrow_runtime") {
+      EXPECT_EQ(TC->MaxTripCount, 256u);
+      if (F.getName() == "narrow")
+        EXPECT_EQ(cast<SCEVConstant>(TC->ExactTripCount)->getAPInt(),
+                  APInt(64, 256));
+      else
+        EXPECT_FALSE(isa<SCEVConstant>(TC->ExactTripCount));
+      auto Narrow = analyzeFissionTripCount(L, SE, Type::getInt8Ty(C));
+      ASSERT_FALSE(static_cast<bool>(Narrow));
+      EXPECT_EQ(toString(Narrow.takeError()), "trip-count-overflow");
+    } else {
+      EXPECT_EQ(TC->MaxTripCount, 1024u);
+      EXPECT_EQ(TC->ExactTripCount, SE.getSCEV(F.getArg(0)));
+    }
+  }
 }
 
 } // namespace

@@ -169,6 +169,7 @@ public:
 };
 
 class AssumptionCache;
+class AAResults;
 class LoopVectorizationLegality;
 class OptimizationRemarkEmitter;
 class PredicatedScalarEvolution;
@@ -217,16 +218,27 @@ struct VPReductionFissionContext {
   DominatorTree &DT;
   PredicatedScalarEvolution &PSE;
   AssumptionCache &AC;
+  AAResults &AA;
   const TargetTransformInfo &TTI;
   LoopVectorizationLegality &Legal;
   OptimizationRemarkEmitter &ORE;
   unsigned WidestType;
+  bool FPReordering = false;
+  bool HintReordering = false;
 };
 
 /// When enabled, retain a scalable plan before target-specific tail lowering.
 /// Fission builds full-chunk stages with independent scalar remainders, so it
 /// must not inherit EVL induction or tail-specific memory recipes.
 void saveReductionFissionPlan(VPlan &Plan, SmallVectorImpl<VPlanPtr> &Plans);
+
+/// Whether the optional reduction-fission pipeline is enabled.
+bool isReductionFissionEnabled();
+
+/// A single ordinary fadd of an independent contribution. Accumulator FMA,
+/// prefix uses and strict FP require separate support.
+bool isSupportedFissionFAdd(PHINode &Phi, const RecurrenceDescriptor &Rdx,
+                            const Loop &L);
 
 /// Returns false without changing IR or baseline plans when no candidate is
 /// selected. On success the original loop is erased and must not be used again.
@@ -269,6 +281,13 @@ enum class VPReductionFissionRejectReason {
   NotSingleBlock,
   EarlyExit,
   NonConstantTripCount,
+  TripCountOverflow,
+  UnsafeTripCountExpansion,
+  UnsafeStageInput,
+  MemoryDependence,
+  UnsupportedReduction,
+  InvalidFissionCost,
+  FissionCostNotReduced,
   TooFewReductions,
   NoLongProducer,
   NoAccumulatorPressureOverflow,
@@ -342,6 +361,15 @@ struct VPFissionConfiguration {
   ElementCount AccumulatorVF;
 };
 
+/// Execution uses ExactTripCount; scratch allocation uses MaxTripCount only.
+struct VPFissionTripCountInfo {
+  const SCEV *ExactTripCount = nullptr;
+  uint64_t MaxTripCount = 0;
+};
+
+Expected<VPFissionTripCountInfo>
+analyzeFissionTripCount(Loop &L, ScalarEvolution &SE, IntegerType *IndexTy);
+
 /// A VF=1 copy of a stage, entered at that stage's rounded-down vector bound.
 struct VPFissionScalarRemainder {
   std::unique_ptr<VPlan> Plan;
@@ -360,6 +388,7 @@ struct VPFissionScalarRemainder {
 
 /// Atomic producer and accumulator VPlan pair.
 struct VPReductionFissionCandidate {
+  VPFissionTripCountInfo TripCount;
   std::unique_ptr<VPlan> ProducerPlan;
   std::unique_ptr<VPlan> AccumulatorPlan;
   VPFissionScalarRemainder ProducerRemainder;
@@ -374,6 +403,18 @@ struct VPReductionFissionCandidate {
   VPBasicBlock *AccumulatorMiddle = nullptr;
   std::optional<VPFissionConfiguration> Selected;
 };
+
+/// Validate the final stage bodies, including dependencies cloned into both
+/// stages. No run-time alias checks or new SCEV predicates are introduced.
+bool verifyFissionMemorySchedule(const VPReductionFissionCandidate &Candidate,
+                                 VPReductionFissionContext &Context);
+
+/// Additional traffic/reduction cost gate for the new FP paths. Existing
+/// unordered candidates keep their pressure-based selection policy.
+std::optional<VPReductionFissionRejectReason>
+checkFissionFPCost(VPlan &Baseline,
+                   const VPReductionFissionCandidate &Candidate,
+                   const TargetTransformInfo &TTI);
 
 struct VPFissionVFPressure {
   ElementCount VF;
@@ -400,15 +441,15 @@ bool isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
 /// Remove only reduction tail selects whose scratch identity is proven safe.
 void simplifyReductionFissionTail(VPlan &Plan);
 
-/// Build full-trip-count stack scratch storage. A missing trip count denotes
-/// a non-constant exact count and is rejected.
+/// Build stack scratch storage for a proven constant capacity. This is not
+/// necessarily the number of iterations executed by either stage.
 Expected<VPScratchPlan> buildScratchPlan(ArrayRef<VPValue *> FrontierValues,
-                                         std::optional<uint64_t> ExactTripCount,
+                                         std::optional<uint64_t> MaxTripCount,
                                          const DataLayout &DL,
                                          uint64_t MaximumBytes);
 
 Expected<VPScratchPlan> buildScratchPlan(ArrayRef<VPValue *> FrontierValues,
-                                         const SCEV *ExactTripCount,
+                                         const SCEV *MaxTripCount,
                                          const DataLayout &DL,
                                          uint64_t MaximumBytes);
 

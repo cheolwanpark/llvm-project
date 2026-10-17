@@ -12,12 +12,18 @@
 #include "VPlanReductionFission.h"
 #include "VPlanUtils.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/LoopAccessAnalysis.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/AttributeMask.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include <functional>
 
 using namespace llvm;
@@ -45,6 +51,244 @@ void collectVPProducerSliceImpl(
 }
 
 } // namespace
+
+Expected<VPFissionTripCountInfo>
+llvm::analyzeFissionTripCount(Loop &L, ScalarEvolution &SE,
+                              IntegerType *IndexTy) {
+  auto Fail =
+      [](VPReductionFissionRejectReason R) -> Expected<VPFissionTripCountInfo> {
+    return createStringError(errc::invalid_argument,
+                             getVPReductionFissionRejectReasonName(R));
+  };
+  const SCEV *BTC = SE.getBackedgeTakenCount(&L);
+  if (isa<SCEVCouldNotCompute>(BTC))
+    return Fail(VPReductionFissionRejectReason::NonConstantTripCount);
+  const auto *MaxBTC = dyn_cast<SCEVConstant>(BTC);
+  if (!MaxBTC)
+    MaxBTC = dyn_cast<SCEVConstant>(SE.getConstantMaxBackedgeTakenCount(&L));
+  if (!MaxBTC)
+    return Fail(VPReductionFissionRejectReason::NonConstantTripCount);
+  // An unconstrained 64-bit count cannot have a representable capacity. A
+  // narrow all-ones maximum is useful, however: i8 255 backedges needs 256
+  // scratch elements, not zero and not an unknown-size allocation.
+  if (!isa<SCEVConstant>(BTC) && MaxBTC->getAPInt().isAllOnes() &&
+      MaxBTC->getAPInt().getBitWidth() >= 64)
+    return Fail(VPReductionFissionRejectReason::NonConstantTripCount);
+
+  // Extend before adding: an i8 backedge count of 255 means 256 iterations.
+  APInt MaxTC = MaxBTC->getAPInt().zext(MaxBTC->getAPInt().getBitWidth() + 1);
+  ++MaxTC;
+  if (MaxTC.getActiveBits() > 64 ||
+      MaxTC.getActiveBits() > IndexTy->getBitWidth())
+    return Fail(VPReductionFissionRejectReason::TripCountOverflow);
+  const SCEV *TC = SE.getTripCountFromExitCount(BTC);
+  TC = SE.getTruncateOrZeroExtend(TC, IndexTy);
+  SCEVExpander Expander(SE, "fission");
+  if (!SE.isLoopInvariant(TC, &L) || !L.getLoopPreheader() ||
+      !Expander.isSafeToExpandAt(TC, L.getLoopPreheader()->getTerminator()))
+    return Fail(VPReductionFissionRejectReason::UnsafeTripCountExpansion);
+  return VPFissionTripCountInfo{TC, MaxTC.getZExtValue()};
+}
+
+bool llvm::verifyFissionMemorySchedule(
+    const VPReductionFissionCandidate &Candidate,
+    VPReductionFissionContext &Ctx) {
+  SmallVector<Instruction *> Accesses;
+  SmallPtrSet<StoreInst *, 8> Stores;
+  for (Instruction &I : *Ctx.L.getHeader()) {
+    if (isa<LoadInst, StoreInst>(I))
+      Accesses.push_back(&I);
+    if (auto *S = dyn_cast<StoreInst>(&I))
+      Stores.insert(S);
+  }
+  for (StoreInst *S : Stores) {
+    if (!S->isSimple())
+      return false;
+    // A nonzero, nonwrapping stride proves independence between this store's
+    // iterations. This query must not introduce unverified predicates.
+    auto Stride = getPtrStride(Ctx.PSE, S->getValueOperand()->getType(),
+                               S->getPointerOperand(), &Ctx.L, Ctx.DT,
+                               DenseMap<Value *, const SCEV *>(),
+                               /*Assume=*/false, /*ShouldCheckWrap=*/true);
+    if (!Stride || *Stride == 0)
+      return false;
+    // Compare entire underlying objects, not the two addresses at one
+    // iteration (A[i] and A[i+1] can be NoAlias and still carry dependence).
+    MemoryLocation StoreObject = MemoryLocation::getBeforeOrAfter(
+        getUnderlyingObject(S->getPointerOperand()));
+    for (Instruction *I : Accesses) {
+      if (I == S)
+        continue;
+      MemoryLocation OtherObject = MemoryLocation::getBeforeOrAfter(
+          getUnderlyingObject(getLoadStorePointerOperand(I)));
+      if (!Ctx.AA.isNoAlias(StoreObject, OtherObject))
+        return false;
+    }
+  }
+
+  for (auto [Plan, IsProducer] :
+       {std::pair{Candidate.ProducerPlan.get(), true},
+        {Candidate.ProducerRemainder.Plan.get(), true},
+        {Candidate.AccumulatorPlan.get(), false},
+        {Candidate.AccumulatorRemainder.Plan.get(), false}}) {
+    SmallPtrSet<StoreInst *, 8> Seen;
+    for (VPRecipeBase &R : *Plan->getVectorLoopRegion()->getEntryBasicBlock()) {
+      Instruction *I = nullptr;
+      if (auto *S = dyn_cast<VPWidenStoreRecipe>(&R))
+        I = &S->getIngredient();
+      else if (auto *L = dyn_cast<VPWidenLoadRecipe>(&R))
+        I = &L->getIngredient();
+      else if (auto *Rep = dyn_cast<VPReplicateRecipe>(&R))
+        I = dyn_cast_or_null<Instruction>(Rep->getUnderlyingValue());
+      if (!I || !isa<LoadInst, StoreInst>(I))
+        continue;
+      if (!is_contained(Accesses, I))
+        return false;
+      if (auto *S = dyn_cast<StoreInst>(I))
+        if (IsProducer || !Seen.insert(S).second)
+          return false;
+    }
+    if (!IsProducer && Seen.size() != Stores.size())
+      return false;
+  }
+  return true;
+}
+
+bool llvm::isSupportedFissionFAdd(PHINode &Phi, const RecurrenceDescriptor &Rdx,
+                                  const Loop &L) {
+  if (Rdx.getRecurrenceKind() != RecurKind::FAdd ||
+      Rdx.getRecurrenceType() != Phi.getType() ||
+      Rdx.hasUsesOutsideReductionChain() || Rdx.IntermediateStore ||
+      Phi.getFunction()->hasFnAttribute(Attribute::StrictFP))
+    return false;
+  auto *Update = dyn_cast<BinaryOperator>(Rdx.getLoopExitInstr());
+  if (!Update || Update->getOpcode() != Instruction::FAdd ||
+      count(Update->operands(), &Phi) != 1 ||
+      Phi.getIncomingValueForBlock(L.getLoopLatch()) != Update)
+    return false;
+  for (User *U : Phi.users())
+    if (U != Update)
+      return false;
+  for (User *U : Update->users())
+    if (U != &Phi && L.contains(cast<Instruction>(U)))
+      return false;
+  return true;
+}
+
+std::optional<VPReductionFissionRejectReason>
+llvm::checkFissionFPCost(VPlan &Baseline,
+                         const VPReductionFissionCandidate &Candidate,
+                         const TargetTransformInfo &TTI) {
+  // Compare the costs affected by the split: scratch traffic, FP accumulation
+  // and register spills. Producer arithmetic is common at ProducerVF. This is
+  // deliberately a supplement to, rather than a replacement for, the existing
+  // pressure/duplication policy. MaxTripCount is never a frequency estimate.
+  struct CostSummary {
+    double PerElement = 0;
+    double Setup = 0;
+    double Tail = 0;
+    bool Valid = true;
+  };
+  auto *Exact = dyn_cast<SCEVConstant>(Candidate.TripCount.ExactTripCount);
+  auto Summarize = [&](VPlan &Plan, ElementCount VF) {
+    CostSummary Result;
+    uint64_t Width =
+        uint64_t(VF.getKnownMinValue()) *
+        (VF.isScalable() ? TTI.getVScaleForTuning().value_or(1) : 1);
+    uint64_t Tail = Exact ? Exact->getAPInt().getZExtValue() % Width : 0;
+    auto Add = [&](InstructionCost Cost, double &To, double Divisor = 1) {
+      if (!Cost.isValid())
+        Result.Valid = false;
+      else
+        To += double(Cost.getValue()) / Divisor;
+    };
+    constexpr auto Kind = TTI::TCK_RecipThroughput;
+    Type *SpillTy = Candidate.Scratch.Slots.front().ElementType;
+    for (VPRecipeBase &R : *Plan.getVectorLoopRegion()->getEntryBasicBlock()) {
+      if (auto *L = dyn_cast<VPFissionScratchLoadRecipe>(&R)) {
+        Add(TTI.getMemoryOpCost(Instruction::Load,
+                                VectorType::get(L->getElementType(), VF),
+                                L->getAlignment(), 0, Kind),
+            Result.PerElement, Width);
+        Add(TTI.getMemoryOpCost(Instruction::Load, L->getElementType(),
+                                L->getAlignment(), 0, Kind) *
+                Tail,
+            Result.Tail);
+      }
+      if (auto *S = dyn_cast<VPFissionScratchStoreRecipe>(&R)) {
+        Add(TTI.getMemoryOpCost(Instruction::Store,
+                                VectorType::get(S->getElementType(), VF),
+                                S->getAlignment(), 0, Kind),
+            Result.PerElement, Width);
+        Add(TTI.getMemoryOpCost(Instruction::Store, S->getElementType(),
+                                S->getAlignment(), 0, Kind) *
+                Tail,
+            Result.Tail);
+      }
+      auto *Phi = dyn_cast<VPReductionPHIRecipe>(&R);
+      if (!Phi || Phi->getRecurrenceKind() != RecurKind::FAdd)
+        continue;
+      auto *Ty = VectorType::get(Phi->getScalarType(), VF);
+      InstructionCost Reduction = TTI.getArithmeticReductionCost(
+          Instruction::FAdd, Ty, Phi->getFastMathFlagsOrNone(), Kind);
+      if (Phi->isInLoop())
+        Add(Reduction, Result.PerElement, Width);
+      else {
+        Add(TTI.getArithmeticInstrCost(Instruction::FAdd, Ty, Kind),
+            Result.PerElement, Width);
+        Add(Reduction, Result.Setup);
+      }
+      if (Exact)
+        Add(TTI.getArithmeticInstrCost(Instruction::FAdd, Phi->getScalarType(),
+                                       Kind) *
+                Tail,
+            Result.Tail);
+    }
+    auto Pressure = calculateRegisterPressureForPlan(Plan, VF, TTI);
+    for (const auto &[Class, Total] : Pressure.PeakTotalRegs) {
+      unsigned Capacity = Pressure.Capacity.lookup(Class);
+      if (Total <= Capacity)
+        continue;
+      bool Vector = Class == TTI.getRegisterClassForType(true, SpillTy);
+      Type *Ty = SpillTy;
+      if (Vector) {
+        unsigned RegBits =
+            TTI.getRegisterBitWidth(TargetTransformInfo::RGK_ScalableVector)
+                .getKnownMinValue();
+        Ty = VectorType::get(
+            SpillTy, ElementCount::getScalable(std::max(
+                         1u, RegBits / SpillTy->getScalarSizeInBits())));
+      }
+      InstructionCost Spill =
+          TTI.getMemoryOpCost(Instruction::Load, Ty, Align(1), 0, Kind) +
+          TTI.getMemoryOpCost(Instruction::Store, Ty, Align(1), 0, Kind);
+      Add(Spill * (Total - Capacity), Result.PerElement, Width);
+    }
+    if (Exact) {
+      double N = Exact->getAPInt().getZExtValue();
+      Result.PerElement *= (N - Tail) / N;
+    }
+    return Result;
+  };
+  auto B = Summarize(Baseline, Candidate.Selected->ProducerVF);
+  auto P = Summarize(*Candidate.ProducerPlan, Candidate.Selected->ProducerVF);
+  auto A =
+      Summarize(*Candidate.AccumulatorPlan, Candidate.Selected->AccumulatorVF);
+  if (!B.Valid || !P.Valid || !A.Valid)
+    return VPReductionFissionRejectReason::InvalidFissionCost;
+  double Before = B.PerElement;
+  double After = P.PerElement + A.PerElement;
+  if (Exact) {
+    double N = Exact->getAPInt().getZExtValue();
+    Before += (B.Setup + B.Tail) / N;
+    // Two additional entry checks and scalar-tail dispatches. For a dynamic
+    // N use steady-state costs; no static capacity is used to amortize these.
+    After += (P.Setup + A.Setup + P.Tail + A.Tail + 4) / N;
+  }
+  if (After >= Before)
+    return VPReductionFissionRejectReason::FissionCostNotReduced;
+  return std::nullopt;
+}
 
 void llvm::collectVPProducerSlice(
     VPValue &Root, SmallPtrSetImpl<const VPRecipeBase *> &Slice,
@@ -152,12 +396,17 @@ VPRegisterPressureBreakdown llvm::calculateRegisterPressureForPlan(
     if (Def == Plan.getVectorLoopRegion()->getCanonicalIV())
       return;
     Type *ScalarTy = Def->getScalarType();
-    unsigned ClassID = TTI.getRegisterClassForType(true, ScalarTy);
-    if (!VectorType::isValidElementType(ScalarTy) ||
-        (VF.isScalable() && !ScalarTy->isIntegerTy(1) &&
-         !TTI.isElementTypeLegalForScalableVector(ScalarTy)))
+    const auto *Phi = dyn_cast<VPReductionPHIRecipe>(Def);
+    const auto *Reduction = dyn_cast<VPReductionRecipe>(Def);
+    bool IsScalar =
+        (Phi && Phi->isInLoop()) || (Reduction && Reduction->isInLoop());
+    unsigned ClassID = TTI.getRegisterClassForType(!IsScalar, ScalarTy);
+    if (!IsScalar && (!VectorType::isValidElementType(ScalarTy) ||
+                      (VF.isScalable() && !ScalarTy->isIntegerTy(1) &&
+                       !TTI.isElementTypeLegalForScalableVector(ScalarTy))))
       return;
-    unsigned Registers = TTI.getRegUsageForType(VectorType::get(ScalarTy, VF));
+    unsigned Registers = TTI.getRegUsageForType(
+        IsScalar ? ScalarTy : VectorType::get(ScalarTy, VF));
     Usage[ClassID] = SaturatingAdd(Usage[ClassID], Registers);
   };
   auto AddRecipeUsage = [&](const VPRecipeBase *Recipe,
@@ -167,7 +416,8 @@ VPRegisterPressureBreakdown llvm::calculateRegisterPressureForPlan(
     for (VPValue *Def : Recipe->definedValues()) {
       // Scalar addresses, canonical indices and loop-control values do not
       // occupy vector register groups. This analysis models vector pressure.
-      if (!isa<VPReductionPHIRecipe, VPWidenLoadRecipe>(Recipe) &&
+      if (!isa<VPReductionPHIRecipe, VPReductionRecipe, VPWidenLoadRecipe>(
+              Recipe) &&
           vputils::onlyFirstLaneUsed(Def))
         continue;
       AddValueUsage(Def, Usage);
@@ -235,8 +485,16 @@ VPRegisterPressureBreakdown llvm::calculateRegisterPressureForPlan(
 
   for (unsigned Index = 0; Index < Recipes.size(); ++Index) {
     SmallMapVector<unsigned, unsigned, 4> NonAccumulatorUsage;
+    if (auto *Rdx = dyn_cast<VPReductionRecipe>(Recipes[Index]);
+        Rdx && Rdx->isInLoop()) {
+      // The scalar chain does not eliminate the vector temporary used by
+      // horizontal reduction lowering.
+      Type *Ty = Rdx->getScalarType();
+      NonAccumulatorUsage[TTI.getRegisterClassForType(true, Ty)] +=
+          TTI.getRegUsageForType(VectorType::get(Ty, VF));
+    }
     for (const auto &Entry : Result.LoopInvariantRegs)
-      NonAccumulatorUsage[Entry.first] = 0;
+      NonAccumulatorUsage.try_emplace(Entry.first, 0);
     for (VPRecipeBase *Recipe : Recipes) {
       if (LoopLiveAccumulators && LoopLiveAccumulators->contains(
                                       dyn_cast<VPReductionPHIRecipe>(Recipe)))
@@ -300,6 +558,13 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
   VPBasicBlock *Body = Plan.getVectorLoopRegion()->getEntryBasicBlock();
   if (Body != Plan.getVectorLoopRegion()->getExitingBasicBlock())
     return false;
+  auto IsTailMask = [&](VPValue *Mask) {
+    if (!Mask || Mask == Plan.getVectorLoopRegion()->getHeaderMask() ||
+        Mask == Plan.getTrue())
+      return true;
+    auto *I = dyn_cast<VPInstruction>(Mask);
+    return I && I->getOpcode() == VPInstruction::ActiveLaneMask;
+  };
   SmallVector<VPRecipeBase *, 64> Recipes;
   for (VPBasicBlock *Block : {Plan.getVectorPreheader(), Body})
     for (VPRecipeBase &R : *Block)
@@ -310,15 +575,29 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
     // groups, scaled/ordered reductions, recurrences) need separate replanning.
     if (!isa<VPInstruction, VPReductionPHIRecipe, VPWidenRecipe,
              VPWidenCastRecipe, VPWidenGEPRecipe, VPWidenLoadRecipe,
-             VPWidenCallRecipe, VPWidenIntrinsicRecipe,
-             VPWidenCanonicalIVRecipe, VPScalarIVStepsRecipe, VPDerivedIVRecipe,
-             VPVectorPointerRecipe, VPReplicateRecipe,
-             VPFissionScratchLoadRecipe, VPFissionScratchStoreRecipe>(R)) {
+             VPWidenIntOrFpInductionRecipe, VPWidenStoreRecipe,
+             VPReductionRecipe, VPExpandSCEVRecipe, VPWidenCallRecipe,
+             VPWidenIntrinsicRecipe, VPWidenCanonicalIVRecipe,
+             VPScalarIVStepsRecipe, VPDerivedIVRecipe, VPVectorPointerRecipe,
+             VPReplicateRecipe, VPFissionScratchLoadRecipe,
+             VPFissionScratchStoreRecipe>(R)) {
       LLVM_DEBUG({
         dbgs() << "LV-FISSION: unsupported recipe at VF " << VF << "\n";
         R.dump();
       });
       return false;
+    }
+    if (isa<VPExpandSCEVRecipe>(R) && R.getParent() == Body)
+      return false;
+    if (auto *IV = dyn_cast<VPWidenIntOrFpInductionRecipe>(&R)) {
+      if (IV->getInductionDescriptor().getKind() !=
+              InductionDescriptor::IK_IntInduction ||
+          !IV->getScalarType()->isIntegerTy() ||
+          !IV->getStartValue()->isDefinedOutsideLoopRegions() ||
+          !IV->getStepValue()->isDefinedOutsideLoopRegions() ||
+          !IV->getNoWrapPredicates().empty() ||
+          IV->getVFValue() != &Plan.getVF())
+        return false;
     }
     // Consecutive addresses are represented by a uniform scalar GEP even in
     // an otherwise fully widened plan. Do not admit lane-wise replication.
@@ -327,10 +606,42 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
           !isa<GetElementPtrInst>(Replicate->getUnderlyingValue()))
         return false;
     if (auto *Phi = dyn_cast<VPReductionPHIRecipe>(&R)) {
-      if (Phi->isInLoop() || Phi->isOrdered() || Phi->getVFScaleFactor() != 1 ||
+      if (Phi->getVFScaleFactor() != 1 ||
           Phi->getRecurrenceKind() == RecurKind::AnyOf ||
           RecurrenceDescriptor::isFindIVRecurrenceKind(
               Phi->getRecurrenceKind()))
+        return false;
+      if (Phi->isInLoop()) {
+        auto *Update = dyn_cast<VPReductionRecipe>(Phi->getBackedgeValue());
+        if (Phi->getRecurrenceKind() != RecurKind::FAdd ||
+            Phi->hasUsesOutsideReductionChain() || !Update ||
+            Update->getChainOp() != Phi ||
+            Update->isOrdered() != Phi->isOrdered() ||
+            (!Phi->isOrdered() &&
+             !Phi->getFastMathFlagsOrNone().allowReassoc()))
+          return false;
+      }
+    }
+    if (auto *Rdx = dyn_cast<VPReductionRecipe>(&R)) {
+      auto *Phi = dyn_cast<VPReductionPHIRecipe>(Rdx->getChainOp());
+      auto *I = Rdx->getUnderlyingInstr();
+      if (!Phi || !Rdx->isInLoop() || Rdx->isPartialReduction() ||
+          !IsTailMask(Rdx->getCondOp()) ||
+          Rdx->getRecurrenceKind() != RecurKind::FAdd ||
+          (!Rdx->isOrdered() &&
+           !Rdx->getFastMathFlagsOrNone().allowReassoc()) ||
+          (I && (I->getOpcode() != Instruction::FAdd ||
+                 I->getFunction()->hasFnAttribute(Attribute::StrictFP))))
+        return false;
+      if (!TTI.getArithmeticReductionCost(
+                  Instruction::FAdd, VectorType::get(Rdx->getScalarType(), VF),
+                  Rdx->getFastMathFlagsOrNone(), TTI::TCK_RecipThroughput)
+               .isValid())
+        return false;
+      if (any_of(Rdx->users(), [&](VPUser *U) {
+            auto *UserR = cast<VPRecipeBase>(U);
+            return UserR != Phi && UserR->getParent() == Body;
+          }))
         return false;
     }
     // Stage tails may replace operands with zero or poison in inactive lanes.
@@ -392,6 +703,10 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
     for (VPValue *Def : R.definedValues()) {
       Type *Ty = Def->getScalarType();
       if (isa<VPDerivedIVRecipe, VPScalarIVStepsRecipe>(R) ||
+          (isa<VPReductionPHIRecipe>(R) &&
+           cast<VPReductionPHIRecipe>(R).isInLoop()) ||
+          (isa<VPReductionRecipe>(R) &&
+           cast<VPReductionRecipe>(R).isInLoop()) ||
           vputils::onlyFirstLaneUsed(Def))
         continue;
       if (!VectorType::isValidElementType(Ty) ||
@@ -414,6 +729,28 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
                                  IRLoad->getPointerAddressSpace()))
         return false;
     }
+    if (auto *Store = dyn_cast<VPWidenStoreRecipe>(&R)) {
+      auto &IRStore = cast<StoreInst>(Store->getIngredient());
+      if (!IRStore.isSimple() || !Store->isConsecutive() ||
+          !TTI.isLegalMaskedStore(
+              VectorType::get(Store->getStoredValue()->getScalarType(), VF),
+              IRStore.getAlign(), IRStore.getPointerAddressSpace()))
+        return false;
+      // Prefix stores require a scan, not a reduction of a complete chunk.
+      SmallPtrSet<VPValue *, 16> Seen;
+      SmallVector<VPValue *> Worklist{Store->getStoredValue(),
+                                      Store->getAddr()};
+      while (!Worklist.empty()) {
+        VPValue *V = Worklist.pop_back_val();
+        if (!Seen.insert(V).second)
+          continue;
+        if (auto *Def = V->getDefiningRecipe()) {
+          if (isa<VPReductionPHIRecipe>(Def))
+            return false;
+          append_range(Worklist, Def->operands());
+        }
+      }
+    }
     if (auto *Load = dyn_cast<VPFissionScratchLoadRecipe>(&R))
       if (!TTI.isLegalMaskedLoad(VectorType::get(Load->getElementType(), VF),
                                  Load->getAlignment(), 0))
@@ -435,6 +772,20 @@ StringRef llvm::getVPReductionFissionRejectReasonName(
     return "early-exit";
   case VPReductionFissionRejectReason::NonConstantTripCount:
     return "non-constant-trip-count";
+  case VPReductionFissionRejectReason::TripCountOverflow:
+    return "trip-count-overflow";
+  case VPReductionFissionRejectReason::UnsafeTripCountExpansion:
+    return "unsafe-trip-count-expansion";
+  case VPReductionFissionRejectReason::UnsafeStageInput:
+    return "unsafe-stage-input";
+  case VPReductionFissionRejectReason::MemoryDependence:
+    return "memory-dependence";
+  case VPReductionFissionRejectReason::UnsupportedReduction:
+    return "unsupported-reduction";
+  case VPReductionFissionRejectReason::InvalidFissionCost:
+    return "invalid-fission-cost";
+  case VPReductionFissionRejectReason::FissionCostNotReduced:
+    return "fission-cost-not-reduced";
   case VPReductionFissionRejectReason::TooFewReductions:
     return "too-few-reductions";
   case VPReductionFissionRejectReason::NoLongProducer:

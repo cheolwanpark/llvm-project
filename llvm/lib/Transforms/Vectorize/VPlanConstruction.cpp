@@ -18,6 +18,7 @@
 #include "VPlanDominatorTree.h"
 #include "VPlanHelpers.h"
 #include "VPlanPatternMatch.h"
+#include "VPlanReductionFissionFPReordering.h"
 #include "VPlanTransforms.h"
 #include "VPlanUtils.h"
 #include "llvm/ADT/SmallVectorExtras.h"
@@ -920,7 +921,8 @@ bool VPlanTransforms::createHeaderPhiRecipes(
     const MapVector<PHINode *, InductionDescriptor> &Inductions,
     const MapVector<PHINode *, RecurrenceDescriptor> &Reductions,
     const SmallPtrSetImpl<const PHINode *> &FixedOrderRecurrences,
-    const SmallPtrSetImpl<PHINode *> &InLoopReductions, bool AllowReordering) {
+    const SmallPtrSetImpl<PHINode *> &InLoopReductions, bool AllowReordering,
+    const FissionFPReorderingPolicy *FissionFPReordering) {
   // Retrieve the header manually from the intial plain-CFG VPlan.
   auto [HeaderVPBB, LatchVPBB] = VPBlockUtils::getPlainCFGHeaderAndLatch(Plan);
   assert(VPDT.dominates(HeaderVPBB, LatchVPBB) &&
@@ -958,7 +960,9 @@ bool VPlanTransforms::createHeaderPhiRecipes(
            "incoming value must match start value");
     // Will be updated later to >1 if reduction is partial.
     unsigned ScaleFactor = 1;
-    bool UseOrderedReductions = !AllowReordering && RdxDesc.isOrdered();
+    bool UseOrderedReductions =
+        !AllowReordering && RdxDesc.isOrdered() &&
+        !(FissionFPReordering && FissionFPReordering->allows(Phi));
     return new VPReductionPHIRecipe(
         Phi, RdxDesc.getRecurrenceKind(), *Start, *BackedgeValue,
         getReductionStyle(InLoopReductions.contains(Phi), UseOrderedReductions,

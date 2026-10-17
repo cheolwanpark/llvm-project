@@ -35,6 +35,7 @@ class GeneratedRTChecks;
 
 namespace llvm {
 
+class FissionFPReorderingPolicy;
 class LoopInfo;
 class DominatorTree;
 class LoopVectorizationLegality;
@@ -689,6 +690,10 @@ class VFSelectionContext {
   /// collectInLoopReductions.
   SmallPtrSet<PHINode *, 4> InLoopReductions;
 
+  /// Optional, immutable policy owned by the private fission attempt. Ordinary
+  /// planners have no policy. It is fixed before any VF selection caches.
+  const FissionFPReorderingPolicy *const FissionFPReordering;
+
   /// A Map of inloop reduction operations and their immediate chain operand.
   /// FIXME: This can be removed once reductions can be costed correctly in
   /// VPlan. This was added to allow quick lookup of the inloop operations.
@@ -715,14 +720,14 @@ public:
   /// or profile information.
   const bool OptForSize;
 
-  VFSelectionContext(const TargetTransformInfo &TTI,
-                     const LoopVectorizationLegality *Legal,
-                     const Loop *TheLoop, const Function &F,
-                     PredicatedScalarEvolution &PSE, DemandedBits *DB,
-                     OptimizationRemarkEmitter *ORE,
-                     const LoopVectorizeHints *Hints, bool OptForSize)
+  VFSelectionContext(
+      const TargetTransformInfo &TTI, const LoopVectorizationLegality *Legal,
+      const Loop *TheLoop, const Function &F, PredicatedScalarEvolution &PSE,
+      DemandedBits *DB, OptimizationRemarkEmitter *ORE,
+      const LoopVectorizeHints *Hints, bool OptForSize,
+      const FissionFPReorderingPolicy *FissionFPReordering = nullptr)
       : TTI(TTI), Legal(Legal), TheLoop(TheLoop), F(F), PSE(PSE), DB(DB),
-        ORE(ORE), Hints(Hints),
+        ORE(ORE), Hints(Hints), FissionFPReordering(FissionFPReordering),
         CostKind(F.hasMinSize() ? TTI::TCK_CodeSize : TTI::TCK_RecipThroughput),
         OptForSize(OptForSize) {
     initializeVScaleForTuning();
@@ -770,6 +775,13 @@ public:
   /// the IsOrdered flag of RdxDesc is set and we do not allow reordering
   /// of FP operations.
   bool useOrderedReductions(const RecurrenceDescriptor &RdxDesc) const;
+
+  bool isFissionOnly() const { return FissionFPReordering != nullptr; }
+  const FissionFPReorderingPolicy *getFissionFPReorderingPolicy() const {
+    return FissionFPReordering;
+  }
+  bool canReorderFissionReduction(const PHINode *Phi) const;
+  bool canReorderFissionReduction(const RecurrenceDescriptor &Rdx) const;
 
   /// Returns true if the target machine supports masked loads or stores
   /// for \p I's data type and alignment. The caller must ensure the access is
@@ -900,7 +912,8 @@ public:
   void plan(ElementCount UserVF, unsigned UserIC);
 
   /// Try the optional fission pipeline; success erases OrigLoop.
-  bool tryReductionFission(ElementCount BaselineVF, AssumptionCache &AC);
+  bool tryReductionFission(ElementCount BaselineVF, AssumptionCache &AC,
+                           AAResults &AA);
 
   /// Return the VPlan for \p VF. At the moment, there is always a single VPlan
   /// for each VF.

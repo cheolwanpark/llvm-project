@@ -1,0 +1,146 @@
+//===-- reduction-fission-execution.c - Host execution reference checks -----===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+// Instantiated by check-reduction-fission.py; @...@ are template substitutions.
+// The original scalar IR is compiled by the same backend as the specializations.
+
+#include <float.h>
+#include <math.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef void CombinedFn(const uint32_t *, uint32_t *, uint64_t, double *, double,
+                        const double *, uint32_t *, uint32_t *, int32_t);
+typedef void InductionFn(const uint32_t *, uint32_t *, int32_t);
+typedef void FPFn(const double *, double *);
+extern CombinedFn ref_combined;
+extern InductionFn ref_induction, ref_negative_step, ref_truncated;
+extern FPFn ref_fp_reordering;
+@DECLARATIONS@
+
+static const struct {
+  const char *Name;
+  bool Relaxed;
+  CombinedFn *Fn;
+} Combined[] = {@COMBINED@};
+static const struct {
+  const char *Name;
+  InductionFn *Fn, *Reference;
+} Inductions[] = {@INDUCTIONS@};
+static const struct {
+  const char *Name;
+  FPFn *Fn;
+} FP[] = {@FP@};
+
+static uint32_t Seed = 314159265;
+static double MaxError;
+static unsigned Runs;
+static uint32_t random_value(void) {
+  Seed = 1664525 * Seed + 1013904223;
+  return Seed;
+}
+static void fail(const char *Name, unsigned N, unsigned Trial, const char *What) {
+  fprintf(stderr, "%s: N=%u trial=%u: %s\n", Name, N, Trial, What);
+  exit(1);
+}
+static void fill_fp(double *A, unsigned Count, unsigned Trial) {
+  for (unsigned I = 0; I < Count; ++I) {
+    switch (Trial % 8) {
+    case 1: A[I] = 0.0; break;
+    case 2: A[I] = -0.0; break;
+    case 3: A[I] = (double[]){1e16, 1.0, -1e16, 0.0}[I % 4]; break;
+    default: A[I] = (double)(int32_t)random_value() / 1024.0; break;
+    }
+  }
+  if (Trial % 8 == 4) A[0] = NAN;
+  if (Trial % 8 == 5) A[0] = INFINITY;
+  if (Trial % 8 == 6) { A[0] = INFINITY; A[1] = -INFINITY; }
+}
+static bool equal_fp(double Actual, double Expected, bool Relaxed,
+                     const double *Input, unsigned N, double Start,
+                     unsigned Trial) {
+  if (!Relaxed)
+    return memcmp(&Actual, &Expected, sizeof(double)) == 0;
+  if (isnan(Expected)) return isnan(Actual);
+  if (isinf(Expected)) return Actual == Expected;
+  if (!isfinite(Actual)) return false;
+  if ((Trial % 8 == 1 || Trial % 8 == 2) && Expected == 0)
+    return Actual == 0 && signbit(Actual) == signbit(Expected);
+  // Absolute forward-error bound scaled by the sum of magnitudes, including
+  // cancellation. A small relative error against a near-zero sum is invalid.
+  double Magnitude = fabs(Start);
+  for (unsigned I = 0; I < N; ++I) Magnitude += fabs(Input[I] * 120.0);
+  double Error = fabs(Actual - Expected);
+  if (Error > MaxError) MaxError = Error;
+  return Error <= 16 * DBL_EPSILON * (N + 1) * Magnitude;
+}
+
+int main(void) {
+  static const unsigned Counts[] = {
+      0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 257, 1023, 1024, 1025};
+  static const int32_t Steps[] = {0, 1, -3, INT32_MAX, INT32_MIN};
+  uint32_t Input[1026], Out[10], RefOut[10], Dst[1026], RefDst[1026];
+  uint32_t Dst2[1026], RefDst2[1026];
+  double FPInput[1026], Result[7], RefResult[7];
+  for (unsigned C = 0; C < sizeof(Combined) / sizeof(*Combined); ++C)
+    for (unsigned K = 0; K < sizeof(Counts) / sizeof(*Counts); ++K)
+      for (unsigned Trial = 0; Trial < 20; ++Trial) {
+        unsigned N = Counts[K];
+        int32_t Step = Steps[Trial % 5];
+        double Start = Trial % 8 == 2 ? -0.0 : Trial % 8 == 3 ? 1.0 : 3.5;
+        for (unsigned I = 0; I < 1026; ++I) {
+          Input[I] = random_value();
+          Dst[I] = RefDst[I] = random_value();
+          Dst2[I] = RefDst2[I] = random_value();
+        }
+        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        for (unsigned I = 0; I < 7; ++I) Result[I] = RefResult[I] = I + 0.25;
+        fill_fp(FPInput, 1026, Trial);
+        ref_combined(Input, RefOut + 1, N, RefResult + 1, Start, FPInput,
+                     RefDst + 1, RefDst2 + 1, Step);
+        Combined[C].Fn(Input, Out + 1, N, Result + 1, Start, FPInput,
+                       Dst + 1, Dst2 + 1, Step);
+        if (memcmp(Out, RefOut, sizeof(Out)) ||
+            memcmp(Dst, RefDst, sizeof(Dst)) ||
+            memcmp(Dst2, RefDst2, sizeof(Dst2)))
+          fail(Combined[C].Name, N, Trial, "integer output or canary mismatch");
+        if (Result[0] != RefResult[0] || Result[2] != RefResult[2] ||
+            !equal_fp(Result[1], RefResult[1], Combined[C].Relaxed,
+                      FPInput, N <= 1024 ? N : 0, Start, Trial))
+          fail(Combined[C].Name, N, Trial, "FP result or canary mismatch");
+        ++Runs;
+      }
+  for (unsigned C = 0; C < sizeof(Inductions) / sizeof(*Inductions); ++C)
+    for (unsigned Trial = 0; Trial < 200; ++Trial) {
+      for (unsigned I = 0; I < 1026; ++I) Input[I] = random_value();
+      for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+      Inductions[C].Reference(Input, RefOut + 1, Steps[Trial % 5]);
+      Inductions[C].Fn(Input, Out + 1, Steps[Trial % 5]);
+      if (memcmp(Out, RefOut, sizeof(Out)))
+        fail(Inductions[C].Name, 257, Trial, "induction result mismatch");
+      ++Runs;
+    }
+  for (unsigned C = 0; C < sizeof(FP) / sizeof(*FP); ++C)
+    for (unsigned Trial = 0; Trial < 200; ++Trial) {
+      fill_fp(FPInput, 1026, Trial);
+      for (unsigned I = 0; I < 7; ++I) Result[I] = RefResult[I] = I + 0.25;
+      ref_fp_reordering(FPInput, RefResult + 1);
+      FP[C].Fn(FPInput, Result + 1);
+      if (Result[0] != RefResult[0] || Result[6] != RefResult[6])
+        fail(FP[C].Name, 65, Trial, "FP output canary mismatch");
+      for (unsigned I = 1; I <= 5; ++I)
+        if (!equal_fp(Result[I], RefResult[I], true, FPInput, 65, -0.0, Trial))
+          fail(FP[C].Name, 65, Trial, "reordered FP mismatch");
+      ++Runs;
+    }
+  printf("PASS: %u executions; integer and ordered FP exact; relaxed FP "
+         "classification/signed-zero/error bounds; max absolute FP difference %.17g\n",
+         Runs, MaxError);
+  return 0;
+}
