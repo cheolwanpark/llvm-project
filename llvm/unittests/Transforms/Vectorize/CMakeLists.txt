@@ -9,6 +9,8 @@ set(LLVM_LINK_COMPONENTS
   )
 
 add_llvm_unittest(VectorizeTests
+  VPlanReductionFissionTest.cpp
+  VPlanReductionFissionAnalysisTest.cpp
   VPlanTest.cpp
   VPDomTreeTest.cpp
   VPPostDomFrontierTest.cpp

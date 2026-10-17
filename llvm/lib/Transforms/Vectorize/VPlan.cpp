@@ -1212,7 +1212,7 @@ static void remapOperands(VPBlockBase *Entry, VPBlockBase *NewEntry,
   }
 }
 
-VPlan *VPlan::duplicate() {
+VPlan *VPlan::duplicate(DenseMap<VPValue *, VPValue *> *ValueMap) {
   unsigned NumBlocksBeforeCloning = CreatedBlocks.size();
   // Clone blocks.
   const auto &[NewEntry, __] = VPBlockUtils::cloneFrom(Entry);
@@ -1299,6 +1299,8 @@ VPlan *VPlan::duplicate() {
       NewPlan->ExitBlocks.push_back(cast<VPIRBasicBlock>(VPB));
   }
 
+  if (ValueMap)
+    *ValueMap = std::move(Old2NewVPValues);
   return NewPlan;
 }
 

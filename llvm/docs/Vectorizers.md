@@ -77,6 +77,77 @@ See the Clang
 [language extensions](https://clang.llvm.org/docs/LanguageExtensions.html#extensions-for-loop-hint-optimizations)
 for details.
 
+### Experimental reduction fission
+
+Reduction fission is an opt-in part of `loop-vectorize`. It separates expensive
+reduction inputs into a producer loop, stores those inputs in stack scratch
+arrays, and consumes them in an accumulator loop. Each stage selects its own
+scalable vectorization factor (VF) and has a scalar remainder. All producer
+iterations, including its remainder, finish before the accumulator starts.
+
+```sh
+opt input.ll -S -o output.ll -passes=loop-vectorize \
+  -mtriple=riscv64 -mattr=+v,+zvl128b -force-vector-interleave=1 \
+  -enable-vplan-reduction-fission
+llc output.ll -mtriple=riscv64 -mattr=+v,+zvl128b -verify-machineinstrs
+```
+
+Clang accepts the same option through `-mllvm -enable-vplan-reduction-fission`.
+The transform is disabled by default. It currently supports constant-trip-count,
+single-block, read-only loops without runtime alias or SCEV checks. It requires
+interleave count one, no user-specified VF, and no vectorized epilogue. Unsupported
+candidates fall back to the ordinary vectorizer without modifying its plans.
+Live-outs must be supported reduction results; other last-iteration values
+currently cause the candidate to be rejected.
+
+The hidden policy options retain the original defaults:
+
+| Option | Default |
+| --- | --- |
+| `-vplan-reduction-fission-min-reductions` | `4` |
+| `-vplan-reduction-fission-min-chain-depth` | `8` |
+| `-vplan-reduction-fission-min-pressure-percent` | `100` |
+| `-vplan-reduction-fission-max-scratch-bytes` | `65536` |
+| `-vplan-reduction-fission-max-duplicated-recipes` | `8` |
+| `-vplan-reduction-fission-max-scalable-vf-multiplier` | `8` |
+| `-vplan-reduction-fission-combine-add-contributions` | `true` |
+
+The VF multiplier is relative to the register-width/data-width VF. Stage
+selection reserves register headroom, never reduces the producer VF relative to
+the selected baseline, and requires lower peak pressure. Private unflagged
+integer-add contributions may be combined to save scratch. Floating-point
+producer/update expressions retain their operators, flags and operand order.
+
+For experiments, specify both
+`-vplan-reduction-fission-force-producer-vf=N` and
+`-vplan-reduction-fission-force-accumulator-vf=M`. The values must be powers of two
+and are scalable lane counts, not LMUL values. They bypass the headroom check,
+but retain legality, scratch, duplication and pressure-improvement checks.
+Assertions builds can print selection and rejection reasons with
+`-debug-only=vplan-reduction-fission`.
+
+The implementation is in `VPlanReductionFission.h` and the three
+`VPlanReductionFission*.cpp` files in `lib/Transforms/Vectorize`: the main file
+owns orchestration and IR emission, `Analysis` owns dependency/pressure and
+selection policy, and `Transforms` owns stage construction and scratch recipes.
+The policy is ported from LLVM 21; LLVM 23's baseline costing and VPlan
+representation can change automatic VF choices. Fission retains a VPlan before
+EVL and header-mask lowering, then constructs full-chunk stages and their scalar
+companions. This leaves the ordinary vectorizer's target-specific tail policy
+intact. Tests use LLVM 23's `-tail-folding-policy` option in place of the removed
+`-prefer-predicate-over-epilogue` option.
+
+To build and test with assertions:
+
+```sh
+cmake -G Ninja -S llvm -B build -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_PROJECTS=clang \
+  -DLLVM_TARGETS_TO_BUILD=RISCV -DLLVM_INCLUDE_TESTS=ON
+ninja -C build clang opt llc FileCheck llvm-config VectorizeTests
+build/unittests/Transforms/Vectorize/VectorizeTests
+build/bin/llvm-lit -sv llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-*.ll
+```
+
 ### Diagnostics
 
 Many loops cannot be vectorized including loops with complicated control flow,

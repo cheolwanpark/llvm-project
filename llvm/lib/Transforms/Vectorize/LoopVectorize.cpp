@@ -61,6 +61,7 @@
 #include "VPlanCFG.h"
 #include "VPlanHelpers.h"
 #include "VPlanPatternMatch.h"
+#include "VPlanReductionFission.h"
 #include "VPlanTransforms.h"
 #include "VPlanUtils.h"
 #include "VPlanVerifier.h"
@@ -5900,6 +5901,15 @@ LoopVectorizationPlanner::computeBestVF() {
   return {BestFactor, &BestPlan};
 }
 
+bool LoopVectorizationPlanner::tryReductionFission(ElementCount BaselineVF,
+                                                   AssumptionCache &AC) {
+  VPReductionFissionContext Context{
+      *OrigLoop, *LI,  *DT,
+      PSE,       AC,   TTI,
+      *Legal,    *ORE, Config.getSmallestAndWidestTypes().second};
+  return llvm::tryReductionFission(ReductionFissionPlans, BaselineVF, Context);
+}
+
 DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
     ElementCount BestVF, unsigned BestUF, VPlan &BestVPlan,
     InnerLoopVectorizer &ILV, DominatorTree *DT,
@@ -6604,6 +6614,7 @@ void LoopVectorizationPlanner::buildVPlans(VPlan &VPlan1, ElementCount MinVF,
     RUN_VPLAN_PASS(VPlanTransforms::truncateToMinimalBitwidths, *Plan,
                    Config.getMinimalBitwidths());
     RUN_VPLAN_PASS(VPlanTransforms::optimize, *Plan);
+    saveReductionFissionPlan(*Plan, ReductionFissionPlans);
     // TODO: try to put addExplicitVectorLength close to addActiveLaneMask
     if (CM.foldTailWithEVL()) {
       RUN_VPLAN_PASS(VPlanTransforms::addExplicitVectorLength, *Plan,
@@ -8346,6 +8357,13 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                               ResumeValues);
     ++LoopsEpilogueVectorized;
   } else {
+    if (IsInnerLoop && IC == 1 && !UserVF &&
+        LVP.tryReductionFission(VF.Width, *AC)) {
+      ++LoopsVectorized;
+      assert(DT->verify(DominatorTree::VerificationLevel::Fast));
+      assert(!verifyFunction(*F, &dbgs()));
+      return true;
+    }
     InnerLoopVectorizer LB(L, PSE, LI, DT, TTI, AC, VF.Width, IC, &CM, Checks,
                            BestPlan);
     LVP.addMinimumIterationCheck(BestPlan, VF.Width, IC,

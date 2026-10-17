@@ -859,6 +859,9 @@ class LoopVectorizationPlanner {
 
   SmallVector<VPlanPtr, 4> VPlans;
 
+  /// Optional snapshots before target-specific tail lowering, for fission.
+  SmallVector<VPlanPtr, 4> ReductionFissionPlans;
+
   /// Profitable vector factors.
   SmallVector<VectorizationFactor, 8> ProfitableVFs;
 
@@ -895,6 +898,9 @@ public:
   /// non-zero or all applicable candidate VFs otherwise. If vectorization and
   /// interleaving should be avoided up-front, no plans are generated.
   void plan(ElementCount UserVF, unsigned UserIC);
+
+  /// Try the optional fission pipeline; success erases OrigLoop.
+  bool tryReductionFission(ElementCount BaselineVF, AssumptionCache &AC);
 
   /// Return the VPlan for \p VF. At the moment, there is always a single VPlan
   /// for each VF.

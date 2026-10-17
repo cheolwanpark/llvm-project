@@ -413,6 +413,10 @@ public:
   /// SubclassID field of the VPRecipeBase objects. They are used for concrete
   /// type identification.
   using VPRecipeTy = enum : unsigned char {
+    VPFissionLiveOutSC,
+    VPFissionScalarIntrinsicSC,
+    VPFissionScratchLoadSC,
+    VPFissionScratchStoreSC,
     VPBranchOnMaskSC,
     VPDerivedIVSC,
     VPExpandSCEVSC,
@@ -621,6 +625,8 @@ public:
 
   static inline bool classof(const VPRecipeBase *R) {
     switch (R->getVPRecipeID()) {
+    case VPRecipeBase::VPFissionScratchLoadSC:
+    case VPRecipeBase::VPFissionScalarIntrinsicSC:
     case VPRecipeBase::VPDerivedIVSC:
     case VPRecipeBase::VPExpandSCEVSC:
     case VPRecipeBase::VPExpressionSC:
@@ -650,6 +656,8 @@ public:
     case VPRecipeBase::VPWidenLoadEVLSC:
     case VPRecipeBase::VPWidenLoadSC:
       return true;
+    case VPRecipeBase::VPFissionLiveOutSC:
+    case VPRecipeBase::VPFissionScratchStoreSC:
     case VPRecipeBase::VPBranchOnMaskSC:
     case VPRecipeBase::VPInterleaveEVLSC:
     case VPRecipeBase::VPInterleaveSC:
@@ -1122,7 +1130,8 @@ struct VPRecipeWithIRFlags : public VPSingleDefRecipe, public VPIRFlags {
         VPIRFlags(Flags) {}
 
   static inline bool classof(const VPRecipeBase *R) {
-    return R->getVPRecipeID() == VPRecipeBase::VPBlendSC ||
+    return R->getVPRecipeID() == VPRecipeBase::VPFissionScalarIntrinsicSC ||
+           R->getVPRecipeID() == VPRecipeBase::VPBlendSC ||
            R->getVPRecipeID() == VPRecipeBase::VPInstructionSC ||
            R->getVPRecipeID() == VPRecipeBase::VPWidenSC ||
            R->getVPRecipeID() == VPRecipeBase::VPWidenGEPSC ||
@@ -2130,6 +2139,8 @@ public:
 
   /// Return the cost of widening a call using the vector function \p Variant.
   static InstructionCost computeCallCost(Function *Variant, VPCostContext &Ctx);
+
+  Function *getVectorVariant() const { return Variant; }
 
   Function *getCalledScalarFunction() const {
     return cast<Function>(getOperand(getNumOperands() - 1)->getLiveInIRValue());
@@ -4533,6 +4544,15 @@ public:
   VPIRBasicBlock *clone() override;
 
   BasicBlock *getIRBasicBlock() const { return IRBB; }
+
+  /// Rebind a synthetic stage wrapper, which must not wrap existing IR recipes.
+  void setIRBasicBlock(BasicBlock *BB) {
+    assert(none_of(
+               *this,
+               [](const VPRecipeBase &R) { return isa<VPIRInstruction>(R); }) &&
+           "cannot rebind recipes wrapping existing IR");
+    IRBB = BB;
+  }
 };
 
 /// Track information about the canonical IV and header mask of a loop region.
@@ -5111,8 +5131,11 @@ public:
 #endif
 
   /// Clone the current VPlan, update all VPValues of the new VPlan and cloned
-  /// recipes to refer to the clones, and return it.
-  LLVM_ABI_FOR_TEST VPlan *duplicate();
+  /// recipes to refer to the clones, and return it. Optionally return a map
+  /// from original values (including symbolic and region values) to their
+  /// copies.
+  LLVM_ABI_FOR_TEST VPlan *
+  duplicate(DenseMap<VPValue *, VPValue *> *ValueMap = nullptr);
 
   /// Create a new VPBasicBlock with \p Name and containing \p Recipe if
   /// present. The returned block is owned by the VPlan and deleted once the

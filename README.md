@@ -1,44 +1,77 @@
-# The LLVM Compiler Infrastructure
+# LLVM Reduction Fission
 
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/llvm/llvm-project/badge)](https://securityscorecards.dev/viewer/?uri=github.com/llvm/llvm-project)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/8273/badge)](https://www.bestpractices.dev/projects/8273)
-[![libc++](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml/badge.svg?branch=main&event=schedule)](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml?query=event%3Aschedule)
+LLVM 23의 Loop Vectorizer에 추가한 실험적 VPlan Reduction Fission입니다.
+Reduction 입력 계산(producer)과 누적(accumulator)을 별도 루프로 분리하고,
+각 단계의 scalable vectorization factor(VF)를 선택해 레지스터 압박을 줄입니다.
+기본값은 비활성화입니다. LLVM 프로젝트 소개는 [LLVM_README.md](LLVM_README.md)를 참고하세요.
 
-Welcome to the LLVM project!
+## 빌드
 
-This repository contains the source code for LLVM, a toolkit for the
-construction of highly optimized compilers, optimizers, and run-time
-environments.
+CMake 3.20 이상, Ninja, C++ 컴파일러, Python 3가 필요합니다.
+저장소 루트에서 실행하면 RISC-V 타깃을 지원하는 Clang과 LLVM 도구를 빌드합니다.
 
-The LLVM project has multiple components. The core of the project is
-itself called "LLVM". This contains all of the tools, libraries, and header
-files needed to process intermediate representations and convert them into
-object files. Tools include an assembler, disassembler, bitcode analyzer, and
-bitcode optimizer.
+```sh
+cmake -G Ninja -S llvm -B build-fission \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_ENABLE_PROJECTS=clang \
+  -DLLVM_TARGETS_TO_BUILD=RISCV \
+  -DLLVM_ENABLE_ASSERTIONS=ON \
+  -DLLVM_INCLUDE_TESTS=ON
+ninja -C build-fission clang opt llc FileCheck llvm-config VectorizeTests
+```
 
-C-like languages use the [Clang](https://clang.llvm.org/) frontend. This
-component compiles C, C++, Objective-C, and Objective-C++ code into LLVM bitcode
--- and from there into object files, using LLVM.
+메모리가 부족하면 Ninja에 `-j2`를 추가하세요.
 
-Other components include:
-the [libc++ C++ standard library](https://libcxx.llvm.org),
-the [LLD linker](https://lld.llvm.org), and more.
+## 사용법
 
-## Getting the Source Code and Building LLVM
+```sh
+build-fission/bin/opt input.ll -S -o output.ll -passes=loop-vectorize \
+  -mtriple=riscv64 -mattr=+v,+zvl128b -force-vector-interleave=1 \
+  -enable-vplan-reduction-fission
+```
 
-Consult the
-[Getting Started with LLVM](https://llvm.org/docs/GettingStarted.html#getting-the-source-code-and-building-llvm)
-page for information on building and running LLVM.
+Clang에서는 `-mllvm`으로 각 LLVM 옵션을 전달합니다.
 
-For information on how to contribute to the LLVM project, please take a look at
-the [Contributing to LLVM](https://llvm.org/docs/Contributing.html) guide.
+```sh
+build-fission/bin/clang --target=riscv64 -march=rv64gcv -O3 \
+  -S -emit-llvm input.c -o output.ll \
+  -mllvm -force-vector-interleave=1 \
+  -mllvm -enable-vplan-reduction-fission
+```
 
-## Getting in touch
+현재는 반복 횟수가 상수인 단일 블록의 읽기 전용 루프를 대상으로 합니다.
+Interleave count는 1이어야 하며, VF를 직접 지정하는 `-force-vector-width`는 사용하지 않습니다.
+적용 조건을 만족하지 않으면 일반 벡터화를 사용합니다.
 
-Join the [LLVM Discourse forums](https://discourse.llvm.org/), [Discord
-chat](https://discord.gg/xS7Z362),
-[LLVM Office Hours](https://llvm.org/docs/GettingInvolved.html#office-hours) or
-[Regular sync-ups](https://llvm.org/docs/GettingInvolved.html#online-sync-ups).
+## 추가된 옵션
 
-The LLVM project has adopted a [code of conduct](https://llvm.org/docs/CodeOfConduct.html) for
-participants to all modes of communication within the project.
+모두 숨김 옵션이며 `opt --help-hidden`으로 확인할 수 있습니다.
+
+| 옵션 | 기본값 | 설명 |
+| --- | --- | --- |
+| `-enable-vplan-reduction-fission` | `false` | Reduction Fission 활성화 |
+| `-vplan-reduction-fission-min-reductions=N` | `4` | 필요한 최소 reduction 개수 |
+| `-vplan-reduction-fission-min-chain-depth=N` | `8` | Producer의 최소 의존성 깊이 |
+| `-vplan-reduction-fission-min-pressure-percent=N` | `100` | 레지스터 용량 대비 최소 압박 비율(%) |
+| `-vplan-reduction-fission-max-scratch-bytes=N` | `65536` | 스택 임시 저장 공간의 최대 크기(바이트) |
+| `-vplan-reduction-fission-max-duplicated-recipes=N` | `8` | 단계 사이에 복제할 수 있는 최대 VPlan recipe 수 |
+| `-vplan-reduction-fission-max-scalable-vf-multiplier=N` | `8` | 레지스터 폭과 데이터 폭으로 구한 VF 대비 탐색 상한 배수 |
+| `-vplan-reduction-fission-combine-add-contributions=true/false` | `true` | 가능한 경우 정수 덧셈 기여분을 합쳐 임시 저장 공간 절약 |
+| `-vplan-reduction-fission-force-producer-vf=N` | `0` | Producer의 scalable VF 지정 (`0`: 자동) |
+| `-vplan-reduction-fission-force-accumulator-vf=N` | `0` | Accumulator의 scalable VF 지정 (`0`: 자동) |
+
+두 `force-*-vf` 옵션은 양의 2의 거듭제곱으로 함께 지정해야 합니다.
+예를 들어 producer에 `4`, accumulator에 `2`를 주면 각각 `vscale × 4`, `vscale × 2`를
+요청합니다. 값의 단위는 LMUL이 아니며, 지정한 VF는 탐색 가능한 합법적인 후보여야 합니다.
+레지스터 여유 검사만 생략하고 안전성, 임시 저장 공간·복제 예산, 압박 개선 검사는 유지합니다.
+
+위 빌드처럼 assertions를 켜면 `-debug-only=vplan-reduction-fission`으로
+선택·거절 사유를 확인할 수 있습니다. 상세 조건과 구현 구조는
+[Vectorizers 문서](llvm/docs/Vectorizers.md#experimental-reduction-fission)를 참고하세요.
+
+## 테스트
+
+```sh
+build-fission/unittests/Transforms/Vectorize/VectorizeTests
+build-fission/bin/llvm-lit -sv llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-*.ll
+```
