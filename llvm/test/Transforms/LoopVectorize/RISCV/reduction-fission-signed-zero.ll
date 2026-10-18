@@ -1,6 +1,6 @@
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 -S %s | FileCheck %s
 ;
 ; Scalar remainders preserve signed-zero initializers without inactive lanes.

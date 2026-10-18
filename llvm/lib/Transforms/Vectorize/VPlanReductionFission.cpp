@@ -37,7 +37,7 @@ using namespace llvm;
 
 static cl::opt<bool> EnableVPlanReductionFission(
     "enable-vplan-reduction-fission", cl::init(false), cl::Hidden,
-    cl::desc("Enable experimental VPlan reduction fission planning"));
+    cl::desc("Enable experimental scalar-IR and VPlan reduction fission"));
 
 bool llvm::isReductionFissionEnabled() { return EnableVPlanReductionFission; }
 
@@ -73,6 +73,10 @@ static cl::opt<unsigned long long> VPlanReductionFissionMaxScratchBytes(
     "vplan-reduction-fission-max-scratch-bytes", cl::init(64 * 1024),
     cl::Hidden,
     cl::desc("Maximum static scratch storage for reduction fission"));
+
+uint64_t llvm::getReductionFissionMaxScratchBytes() {
+  return VPlanReductionFissionMaxScratchBytes;
+}
 
 static cl::opt<unsigned> VPlanReductionFissionMaxDuplicatedRecipes(
     "vplan-reduction-fission-max-duplicated-recipes", cl::init(8), cl::Hidden,
@@ -776,7 +780,8 @@ executeReductionFissionCandidate(VPReductionFissionCandidate &Candidate,
 bool llvm::tryReductionFission(ArrayRef<VPlanPtr> Plans,
                                ElementCount BaselineVF,
                                VPReductionFissionContext &Context) {
-  if (!isReductionFissionEnabled())
+  if (!isReductionFissionEnabled() ||
+      !getScalarReductionFissionStage(Context.L).empty())
     return false;
   auto Candidate = planReductionFission(Plans, BaselineVF, Context);
   if (!Candidate)

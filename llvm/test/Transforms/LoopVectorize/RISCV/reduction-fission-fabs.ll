@@ -1,7 +1,7 @@
 ; RUN: opt -verify-each -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
 ; RUN:   -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -S %s -o %t
 ; RUN: FileCheck %s < %t
 ; RUN: llc -verify-machineinstrs -mtriple=riscv64 -mattr=+v %t -o - \
@@ -9,7 +9,7 @@
 ; RUN: sed 's/llvm.fabs/llvm.sqrt/g' %s | opt -passes=loop-vectorize \
 ; RUN:   -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -S -o %t.sqrt
 ; RUN: FileCheck %s --check-prefix=SQRT < %t.sqrt
 ; RUN: llc -verify-machineinstrs -mtriple=riscv64 -mattr=+v %t.sqrt -o /dev/null

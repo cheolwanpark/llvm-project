@@ -1,19 +1,19 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=16 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 -S %s -o %t
 ; RUN: FileCheck %s < %t
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
 
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=8192 -S %s | FileCheck %s
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=8191 -S %s | FileCheck %s --check-prefix=REJECT
 ; RUN: sed 's/icmp ule i64 %n, 1024/icmp ule i64 %n, -1/' %s | opt -passes=loop-vectorize -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission \
+; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 -S | FileCheck %s --check-prefix=REJECT
 ; REJECT-LABEL: define void @bounded(
 ; REJECT-NOT: fission

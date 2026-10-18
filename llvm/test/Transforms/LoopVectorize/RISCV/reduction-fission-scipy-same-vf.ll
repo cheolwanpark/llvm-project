@@ -2,7 +2,7 @@
 ; RUN: opt -verify-each -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
 ; RUN:   -mtriple=riscv64 -mattr=+v,+f,+d,+zvl128b \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -debug-only=vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -debug-only=vplan-reduction-fission \
 ; RUN:   -S %s -o %t 2>&1 | FileCheck %s --check-prefix=SELECT
 ; RUN: FileCheck %s --check-prefix=IR < %t
 ; RUN: llc -verify-machineinstrs -mtriple=riscv64 -mattr=+v,+f,+d,+zvl128b %t -o /dev/null

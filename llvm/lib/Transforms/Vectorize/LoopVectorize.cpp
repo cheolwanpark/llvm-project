@@ -72,6 +72,7 @@
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -6620,7 +6621,8 @@ void LoopVectorizationPlanner::buildVPlans(VPlan &VPlan1, ElementCount MinVF,
     RUN_VPLAN_PASS(VPlanTransforms::truncateToMinimalBitwidths, *Plan,
                    Config.getMinimalBitwidths());
     RUN_VPLAN_PASS(VPlanTransforms::optimize, *Plan);
-    saveReductionFissionPlan(*Plan, ReductionFissionPlans);
+    if (getScalarReductionFissionStage(*OrigLoop).empty())
+      saveReductionFissionPlan(*Plan, ReductionFissionPlans);
     // Private relaxed candidates can only be executed by fission. In
     // particular, they must never become normal vectorizer fallback plans.
     if (Config.isFissionOnly())
@@ -7907,6 +7909,25 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // Function containing loop
   Function *F = L->getHeader()->getParent();
 
+  StringRef FissionStage = getScalarReductionFissionStage(*L);
+  DebugLoc FissionStageLoc = L->getStartLoc();
+  ElementCount FissionStageVF = ElementCount::getFixed(1);
+  scope_exit EmitFissionStage([&] {
+    if (FissionStage.empty())
+      return;
+    ORE->emit([&]() {
+      // Normal VPlan execution may retire the original scalar loop. Retain
+      // its source location, but anchor this final remark in a live block.
+      return OptimizationRemark("vplan-reduction-fission", "Stage",
+                                FissionStageLoc, &F->getEntryBlock())
+             << "scalar-IR fission " << ore::NV("Stage", FissionStage)
+             << " VF "
+             << ore::NV(FissionStage == "producer" ? "ProducerVF"
+                                                   : "AccumulatorVF",
+                        FissionStageVF);
+    });
+  });
+
   // Looking at the diagnostic output is the only way to determine if a loop
   // was vectorized (other than looking at the IR or machine code), so it
   // is important to generate an optimization remark for each loop. Most of
@@ -8325,6 +8346,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   }
 
   // Report the vectorization decision.
+  FissionStageVF = VF.Width;
   if (VF.Width.isScalar()) {
     using namespace ore;
     assert(IC > 1);
@@ -8487,6 +8509,23 @@ LoopVectorizeResult LoopVectorizePass::runImpl(Function &F) {
     // For the inner loops we actually process, form LCSSA to simplify the
     // transform.
     Changed |= formLCSSARecursively(*L, *DT, LI, SE);
+
+    // Scalar fission has its own bounded legality check and does not require
+    // canVectorize or a VPlan for the original loop. Queue the two scalar
+    // stages for ordinary, independent vectorization without recursively
+    // invoking a pass or rebuilding the surrounding loop worklist.
+    if (isReductionFissionEnabled()) {
+      LoopVectorizeHints Hints(L, InterleaveOnlyWhenForced, *ORE, TTI);
+      if (Hints.allowVectorization(&F, L, VectorizeOnlyWhenForced)) {
+        if (Loop *Consumer = tryScalarReductionFission(*L, *LI, *DT, *SE, *ORE)) {
+          Changed = CFGChanged = true;
+          LAIs->clear();
+          Worklist.push_back(Consumer);
+          Worklist.push_back(L);
+          continue;
+        }
+      }
+    }
 
     Changed |= CFGChanged |= processLoop(L);
 

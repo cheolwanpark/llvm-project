@@ -1,12 +1,12 @@
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=6 \
 ; RUN:   -vplan-reduction-fission-max-duplicated-recipes=0 -S %s \
 ; RUN:   | FileCheck %s --implicit-check-not=fission.scratch
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=6 \
 ; RUN:   -vplan-reduction-fission-max-duplicated-recipes=8 -S %s \
 ; RUN:   | FileCheck %s --check-prefix=SPLIT

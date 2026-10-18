@@ -1,6 +1,6 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=16 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 \
 ; RUN:   -S %S/reduction-fission-general.ll -o %t
@@ -8,7 +8,7 @@
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=16 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 \
 ; RUN:   -tail-folding-policy=must-fold-tail -force-tail-folding-style=data \
@@ -17,7 +17,7 @@
 ; RUN: sed 's/257/7/g' %S/reduction-fission-general.ll | opt \
 ; RUN:   -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vectorizer-min-trip-count=0 -vplan-reduction-fission-force-producer-vf=16 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=4 -S -o %t.small
 ; RUN: FileCheck %s --check-prefix=SMALL --implicit-check-not=llvm.masked < %t.small
@@ -25,14 +25,14 @@
 ; RUN: sed 's/257/32/g' %S/reduction-fission-general.ll | opt \
 ; RUN:   -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=16 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 -S -o %t.exact
 ; RUN: FileCheck %s --implicit-check-not=llvm.masked < %t.exact
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.exact -o /dev/null
 ; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<loops>,verify<domtree>' \
 ; RUN:   -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=16 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 \
 ; RUN:   -S %S/reduction-fission-general.ll | FileCheck %s \

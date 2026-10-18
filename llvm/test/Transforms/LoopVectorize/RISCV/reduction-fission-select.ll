@@ -1,7 +1,7 @@
 ; RUN: opt -verify-each -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
 ; RUN:   -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -S %s -o %t
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -S %s -o %t
 ; RUN: FileCheck %s < %t
 ; RUN: llc -verify-machineinstrs -mtriple=riscv64 -mattr=+v %t -o - \
 ; RUN:   | FileCheck %s --check-prefix=ASM

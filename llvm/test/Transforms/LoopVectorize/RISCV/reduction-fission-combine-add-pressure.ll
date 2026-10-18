@@ -1,9 +1,9 @@
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 -S %s -o %t
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 -vplan-reduction-fission-combine-add-contributions=false -S %s -o %t.old
+; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 -S %s -o %t
+; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 -vplan-reduction-fission-combine-add-contributions=false -S %s -o %t.old
 ; RUN: diff %t %t.old
 ; RUN: FileCheck %s < %t
 ; RUN: llc -mtriple=riscv64 -mattr=+v,+m -verify-machineinstrs %t -o /dev/null
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 -vplan-reduction-fission-force-producer-vf=8 -vplan-reduction-fission-force-accumulator-vf=8 -S %s | FileCheck %s --check-prefix=FORCED
+; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 -vplan-reduction-fission-force-producer-vf=8 -vplan-reduction-fission-force-accumulator-vf=8 -S %s | FileCheck %s --check-prefix=FORCED
 ;
 ; Combining six private terms keeps too many producer values live at the
 ; original producer VF. Reject that candidate and retain the original cut/VFs.

@@ -27,6 +27,7 @@ class VPBasicBlock;
 class VPValue;
 class VPlan;
 class DataLayout;
+class ScalarEvolution;
 class SCEV;
 class Type;
 
@@ -234,6 +235,18 @@ void saveReductionFissionPlan(VPlan &Plan, SmallVectorImpl<VPlanPtr> &Plans);
 
 /// Whether the optional reduction-fission pipeline is enabled.
 bool isReductionFissionEnabled();
+
+/// Split a bounded scalar loop before querying whole-loop vectorizability.
+/// On success L remains the producer; the returned sibling is the consumer.
+/// Neither stage has been vectorized. Both must go through normal LV planning.
+Loop *tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
+                               ScalarEvolution &SE,
+                               OptimizationRemarkEmitter &ORE);
+
+/// Empty for ordinary loops; otherwise the scalar-IR fission stage name.
+StringRef getScalarReductionFissionStage(const Loop &L);
+
+uint64_t getReductionFissionMaxScratchBytes();
 
 /// A single ordinary fadd of an independent contribution. Accumulator FMA,
 /// prefix uses and strict FP require separate support.

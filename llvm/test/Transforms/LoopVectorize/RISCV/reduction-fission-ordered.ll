@@ -1,6 +1,6 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=8 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 -S %s -o %t
 ; RUN: FileCheck %s < %t
@@ -8,11 +8,11 @@
 
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o - | FileCheck %s --check-prefix=ASM
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
+; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 -tail-folding-policy=must-fold-tail \
 ; RUN:   -force-tail-folding-style=data -S %s | FileCheck %s
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
+; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 -pass-remarks=vplan-reduction-fission \
 ; RUN:   -disable-output %s 2>&1 | FileCheck %s --check-prefix=REMARK
 ; REMARK: trip count bounded-runtime, scratch capacity 1024

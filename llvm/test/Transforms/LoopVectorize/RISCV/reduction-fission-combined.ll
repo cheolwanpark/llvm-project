@@ -1,13 +1,13 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=8 -vplan-reduction-fission-force-accumulator-vf=2 \
 ; RUN:   -S %s -o %t
 ; RUN: FileCheck %s < %t
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=8 -vplan-reduction-fission-force-accumulator-vf=2 \
 ; RUN:   -vplan-reduction-fission-allow-fp-reordering -S %s -o %t.relaxed
 ; RUN: FileCheck %s --check-prefix=RELAXED < %t.relaxed

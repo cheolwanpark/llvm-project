@@ -1,6 +1,6 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
 ; RUN:   -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -S %s | FileCheck %s
 ;
 ; All stage skeleton and scalar remainder blocks must belong to the existing

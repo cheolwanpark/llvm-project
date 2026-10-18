@@ -1,11 +1,11 @@
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -enable-vplan-reduction-fission \
+; RUN:   -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=4 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=4 -S %s | FileCheck %s
 ; RUN: sed 's/> noundef/>/' %s | opt -passes=loop-vectorize -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=4 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=4 -S | FileCheck %s --check-prefix=SAFE
 ; SAFE: vector.fission.producer.body:

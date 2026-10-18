@@ -1,7 +1,7 @@
 ; REQUIRES: asserts
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-reductions=17 \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -debug-only=vplan-reduction-fission -disable-output %s 2>&1 \
@@ -12,13 +12,13 @@
 ; RUN:   | FileCheck %s --allow-empty --implicit-check-not=LV-FISSION
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-reductions=17 \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 -S %s \
 ; RUN:   | FileCheck %s --check-prefix=CODEGEN
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-reductions=17 \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 -S %s \
 ; RUN:   | llc -mtriple=riscv64 -mattr=+v \

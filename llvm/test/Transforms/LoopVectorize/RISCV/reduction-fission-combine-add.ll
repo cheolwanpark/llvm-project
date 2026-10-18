@@ -1,8 +1,8 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -tail-folding-policy=dont-fold-tail -S %s -o %t
+; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -tail-folding-policy=dont-fold-tail -S %s -o %t
 ; RUN: FileCheck %s < %t
 ; RUN: llc -mtriple=riscv64 -mattr=+v,+m -verify-machineinstrs %t -o /dev/null
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-combine-add-contributions=false -S %s | FileCheck %s --check-prefix=OLD
-; RUN: sed 's/, 1024$/, 257/' %s | opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -S -o %t.tail
+; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-combine-add-contributions=false -S %s | FileCheck %s --check-prefix=OLD
+; RUN: sed 's/, 1024$/, 257/' %s | opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -S -o %t.tail
 ; RUN: FileCheck %s --check-prefix=TAIL < %t.tail
 ; RUN: llc -mtriple=riscv64 -mattr=+v,+m -verify-machineinstrs %t.tail -o /dev/null
 ;

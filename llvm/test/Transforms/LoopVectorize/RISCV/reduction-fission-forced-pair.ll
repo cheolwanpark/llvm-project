@@ -2,7 +2,7 @@
 ; RUN: opt -verify-each -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
 ; RUN:   -mtriple=riscv64 -mattr=+v,+f,+d,+zvl128b \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=4 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 \
 ; RUN:   -S %S/reduction-fission-scipy-same-vf.ll -o %t
@@ -12,32 +12,32 @@
 ; RUN:   -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
 ; RUN:   -mtriple=riscv64 -mattr=+v,+f,+d,+zvl128b \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=4 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 -S -o %t.tail
 ; RUN: FileCheck %s < %t.tail
 ; RUN: llc -verify-machineinstrs -mtriple=riscv64 -mattr=+v,+f,+d,+zvl128b %t.tail -o /dev/null
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=16 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 \
 ; RUN:   -S %S/reduction-fission-scipy-same-vf.ll | FileCheck %s --check-prefix=REJECT
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=4 \
 ; RUN:   -S %S/reduction-fission-scipy-same-vf.ll | FileCheck %s --check-prefix=REJECT
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=4 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 \
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=8 \
 ; RUN:   -S %S/reduction-fission-scipy-same-vf.ll | FileCheck %s --check-prefix=REJECT
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-force-producer-vf=4 \
 ; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 \

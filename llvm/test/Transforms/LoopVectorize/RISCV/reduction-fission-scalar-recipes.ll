@@ -1,7 +1,7 @@
 ; RUN: sed 's/getelementptr i32, ptr %base/getelementptr i16, ptr %base/' %S/reduction-fission-general.ll \
 ; RUN:   | sed 's/%x = load i32, ptr %%p, align 4/%raw = load i16, ptr %%p, align 2 %x = sext i16 %raw to i32/' \
 ; RUN:   | opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:     -force-vector-interleave=1 -enable-vplan-reduction-fission \
+; RUN:     -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:     -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:     -vplan-reduction-fission-force-producer-vf=16 \
 ; RUN:     -vplan-reduction-fission-force-accumulator-vf=2 -S -o %t.cast
@@ -9,7 +9,7 @@
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.cast -o /dev/null
 ; RUN: sed 's/%n5 = call i32 @llvm.umax.i32(i32 %r5, i32 %c5)/%cmp = icmp ugt i32 %r5, %c5 %n5 = select i1 %cmp, i32 %r5, i32 %c5/' %S/reduction-fission-general.ll \
 ; RUN:   | opt -passes='instcombine,loop-vectorize' -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:     -force-vector-interleave=1 -enable-vplan-reduction-fission \
+; RUN:     -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:     -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:     -vplan-reduction-fission-force-producer-vf=16 \
 ; RUN:     -vplan-reduction-fission-force-accumulator-vf=2 -S -o %t.minmax

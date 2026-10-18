@@ -50,11 +50,14 @@ def check(args, work):
     triple = run([args.cc, '-dumpmachine']).stdout.strip()
     objects, records = [], []
     declarations, combined_rows, induction_rows, fp_rows = [], [], [], []
+    scalar_rows, mixed_rows, constant_rows = [], [], []
     common = [
         '-passes=loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>',
         '-verify-each', '-mtriple=riscv64', '-mattr=+v',
         '-force-vector-interleave=1', '-hints-allow-reordering=false',
         '-enable-vplan-reduction-fission', '-vplan-reduction-fission-min-chain-depth=4',
+        # Existing fixtures deliberately exercise the VPlan-only architecture.
+        '-enable-scalar-reduction-fission=false',
         '-pass-remarks=vplan-reduction-fission', '-S', '-o', '-',
     ]
 
@@ -116,9 +119,84 @@ def check(args, work):
                                 'selection_remarks': result.stderr})
                 print(f'Built {tag}, vscale={scale}', flush=True)
 
+    # Exercise the early path with a helper which has no vector mapping. The
+    # scalar helper is supplied by the C harness, not optimized into the IR.
+    source = (tests / 'reduction-fission-scalar-ir.ll').read_text()
+    functions = ['scalar_helper_sum', 'arithmetic_sum', 'scalar_mixed',
+                 'narrow_constant', 'one_iteration']
+    reference = source
+    for function in functions:
+        reference = reference.replace(f'@{function}(', f'@ref_{function}(')
+    compile_ir('reference_scalar_ir', reference)
+    flags = [flag for flag in common
+             if flag != '-enable-scalar-reduction-fission=false']
+    flags += ['-force-vector-width=4', '-scalable-vectorization=always']
+    # The early path always retains ordinary ordered FP, independently of the
+    # separate, opt-in VPlan reassociation policy.
+    for relaxed in (False, True):
+        options = flags + (['-vplan-reduction-fission-allow-fp-reordering']
+                           if relaxed else [])
+        result = run([opt, *options], input=source)
+        tag = f'scalar_ir_{"option_on" if relaxed else "ordered"}'
+        (work / f'{tag}.remarks').write_text(result.stderr)
+        (work / f'{tag}.rvv.ll').write_text(result.stdout)
+        assert result.stderr.count('split scalar-IR reduction loop;') == len(functions), result.stderr
+        assert 'scalar-ir.c:12:3: split scalar-IR reduction loop;' in result.stderr, result.stderr
+        assert 'scalar-IR fission producer VF 1' in result.stderr, result.stderr
+        assert 'scalar-IR fission consumer VF vscale x 4' in result.stderr, result.stderr
+        assert not re.search(r'\bfadd\s+[^\n]*\breassoc\b', result.stdout), result.stdout
+        instrumented = result.stdout
+        for function in functions:
+            body = re.search(rf'^define[^\n]*@{function}\([^\n]*\{{.*?^}}',
+                             result.stdout, re.M | re.S).group(0)
+            assert body.count('scalar.fission.consumer.ph:') == 1, body
+            producer, consumer = body.split('scalar.fission.consumer.ph:')
+            if function in ('scalar_helper_sum', 'scalar_mixed'):
+                assert producer.count('call i32 @scalar_helper(') == 1, producer
+                assert '<vscale x' not in producer, producer
+            if function in ('scalar_helper_sum', 'arithmetic_sum', 'scalar_mixed'):
+                assert re.search(r'@llvm.vector.reduce.(?:add|fadd).nxv4', consumer), consumer
+                # A host-only probe after the vector header PHIs establishes
+                # that executable comparisons enter the actual vector consumer.
+                consumer, probes = re.subn(
+                    r'(^vector\.body[^:]*:[^\n]*\n(?:[^\n]* = phi [^\n]*\n)*)',
+                    r'\1  call void @record_scalar_consumer_vector()\n',
+                    consumer, count=1, flags=re.M)
+                assert probes == 1, consumer
+                instrumented = instrumented.replace(
+                    body, producer + 'scalar.fission.consumer.ph:' + consumer)
+        instrumented += '\ndeclare void @record_scalar_consumer_vector()\n'
+        # RVV machine verification remains separate from fixed-vscale host
+        # execution; neither check is a target speedup measurement.
+        run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
+             '-o', str(work / f'{tag}.s')], input=result.stdout)
+        for scale in args.vscales:
+            fixed = specialize(instrumented, scale)
+            for function in functions:
+                name = f'{function}_{"option_on" if relaxed else "o"}_s{scale}'
+                fixed = fixed.replace(f'@{function}(', f'@{name}(')
+                if function in ('scalar_helper_sum', 'arithmetic_sum'):
+                    declarations.append(f'extern ScalarSumFn {name};')
+                    scalar_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}}}')
+                elif function == 'scalar_mixed':
+                    declarations.append(f'extern ScalarMixedFn {name};')
+                    mixed_rows.append(f'{{"{name}", {name}, {4 * scale}}}')
+                else:
+                    declarations.append(f'extern ScalarConstantFn {name};')
+                    constant_rows.append(f'{{"{name}", {name}, ref_{function}}}')
+            compile_ir(f'{tag}_s{scale}', fixed)
+            records.append({'fixture': 'scalar-ir', 'fp_reordering_option': relaxed,
+                            'comparison': 'exact, including ordered FP',
+                            'vector_execution': 'host-only consumer entry probe',
+                            'vscale': scale, 'options': options,
+                            'selection_remarks': result.stderr})
+            print(f'Built {tag}, vscale={scale}', flush=True)
+
     harness = (root / 'llvm/utils/reduction-fission-execution.c.in').read_text()
     for key, rows in [('DECLARATIONS', declarations), ('COMBINED', combined_rows),
-                      ('INDUCTIONS', induction_rows), ('FP', fp_rows)]:
+                      ('INDUCTIONS', induction_rows), ('FP', fp_rows),
+                      ('SCALARS', scalar_rows), ('SCALAR_MIXED', mixed_rows),
+                      ('SCALAR_CONSTANTS', constant_rows)]:
         harness = harness.replace(f'@{key}@', '\n'.join(rows) if key == 'DECLARATIONS'
                                    else ',\n'.join(rows))
     harness_path = work / 'harness.c'
@@ -133,6 +211,9 @@ def check(args, work):
         'host_triple': triple, 'cases': records, 'result': result.stdout,
         'runtime_trip_counts': [0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33,
                                 63, 64, 65, 257, 1023, 1024, 1025],
+        'scalar_ir_runtime_trip_counts': [0, 1, 2, 3, 7, 15, 16, 17, 31,
+                                         32, 33, 63, 64, 65, 66, 2**64 - 1],
+        'scalar_ir_constant_trip_counts': [1, 200],
         'comparison': {
             'integer_and_ordered_fp': 'exact against scalar IR',
             'relaxed_fp': 'NaN/Inf classification, signed zero, absolute error '

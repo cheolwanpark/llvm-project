@@ -1,29 +1,29 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-allow-fp-reordering -S %s -o %t
 ; RUN: FileCheck %s --check-prefix=RELAXED < %t
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o - | FileCheck %s --check-prefix=ASM
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
+; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 -S %s -o %t.default
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
+; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 -vplan-reduction-fission-allow-fp-reordering=false \
 ; RUN:   -S %s -o %t.false
 ; RUN: diff %t.default %t.false
 ; RUN: FileCheck %s --check-prefix=DEFAULT < %t.default
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -force-ordered-reductions=false -enable-vplan-reduction-fission \
+; RUN:   -force-ordered-reductions=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=4 -vplan-reduction-fission-allow-fp-reordering \
 ; RUN:   -S %s -o %t.early
 ; RUN: FileCheck %s --check-prefix=RELAXED < %t.early
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
+; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=1 -S %s -o %t.reject
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
+; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=1 -vplan-reduction-fission-allow-fp-reordering \
 ; RUN:   -S %s -o %t.reject-relaxed
 ; RUN: diff %t.reject %t.reject-relaxed
@@ -32,15 +32,15 @@
 ; RUN:   -S %s -o %t.disabled
 ; RUN: diff %t.default %t.disabled
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
+; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-allow-fp-reordering -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -force-vector-width=2 -S %s | FileCheck %s --check-prefix=NOFISSION
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=2 -hints-allow-reordering=false -enable-vplan-reduction-fission \
+; RUN:   -force-vector-interleave=2 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-allow-fp-reordering -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -S %s | FileCheck %s --check-prefix=NOFISSION
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
+; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-allow-fp-reordering -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -pass-remarks=vplan-reduction-fission -disable-output %s 2>&1 | FileCheck %s --check-prefix=REMARK
 ; NOFISSION-LABEL: define void @fp_reordering(

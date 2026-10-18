@@ -19,9 +19,16 @@ typedef void CombinedFn(const uint32_t *, uint32_t *, uint64_t, double *, double
                         const double *, uint32_t *, uint32_t *, int32_t);
 typedef void InductionFn(const uint32_t *, uint32_t *, int32_t);
 typedef void FPFn(const double *, double *);
+typedef void ScalarSumFn(const uint32_t *, void *, uint64_t, uint32_t);
+typedef void ScalarMixedFn(const uint32_t *, const double *, uint32_t *,
+                           double *, float *, uint64_t, double);
+typedef uint32_t ScalarConstantFn(uint32_t);
 extern CombinedFn ref_combined;
 extern InductionFn ref_induction, ref_negative_step, ref_truncated;
 extern FPFn ref_fp_reordering;
+extern ScalarSumFn ref_scalar_helper_sum, ref_arithmetic_sum;
+extern ScalarMixedFn ref_scalar_mixed;
+extern ScalarConstantFn ref_narrow_constant, ref_one_iteration;
 @DECLARATIONS@
 
 static const struct {
@@ -37,6 +44,31 @@ static const struct {
   const char *Name;
   FPFn *Fn;
 } FP[] = {@FP@};
+static const struct {
+  const char *Name;
+  ScalarSumFn *Fn, *Reference;
+  unsigned VectorLanes;
+} Scalars[] = {@SCALARS@};
+static const struct {
+  const char *Name;
+  ScalarMixedFn *Fn;
+  unsigned VectorLanes;
+} ScalarMixed[] = {@SCALAR_MIXED@};
+static const struct {
+  const char *Name;
+  ScalarConstantFn *Fn, *Reference;
+} ScalarConstants[] = {@SCALAR_CONSTANTS@};
+
+// No memory access, exceptions, convergence, or FP-environment effects. opt
+// only sees the explicitly attributed declaration, with no vector mapping.
+uint32_t scalar_helper(uint32_t X) {
+  X ^= X >> 13;
+  X *= UINT32_C(0x85ebca6b);
+  return X ^ (X >> 16);
+}
+
+static unsigned ScalarVectorVisits, ScalarVectorRuns;
+void record_scalar_consumer_vector(void) { ++ScalarVectorVisits; }
 
 static uint32_t Seed = 314159265;
 static double MaxError;
@@ -139,8 +171,74 @@ int main(void) {
           fail(FP[C].Name, 65, Trial, "reordered FP mismatch");
       ++Runs;
     }
+  static const uint64_t ScalarCounts[] = {
+      0, 1, 2, 3, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65, 66, UINT64_MAX};
+  for (unsigned C = 0; C < sizeof(Scalars) / sizeof(*Scalars); ++C)
+    for (unsigned K = 0; K < sizeof(ScalarCounts) / sizeof(*ScalarCounts); ++K)
+      for (unsigned Trial = 0; Trial < 20; ++Trial) {
+        uint64_t N = ScalarCounts[K];
+        uint32_t Start = random_value();
+        for (unsigned I = 0; I < 1026; ++I) Input[I] = random_value();
+        // Null input exercises the entry guard for zero and invalid counts.
+        const uint32_t *A = N && N <= 65 ? Input : NULL;
+        uint64_t Actual[3] = {UINT64_MAX, UINT64_MAX, UINT64_MAX};
+        uint64_t Expected[3] = {UINT64_MAX, UINT64_MAX, UINT64_MAX};
+        Scalars[C].Reference(A, Expected + 1, N, Start);
+        ScalarVectorVisits = 0;
+        Scalars[C].Fn(A, Actual + 1, N, Start);
+        if (N == 65 && Scalars[C].VectorLanes <= 65 && !ScalarVectorVisits)
+          fail(Scalars[C].Name, (unsigned)N, Trial, "vector consumer did not execute");
+        ScalarVectorRuns += ScalarVectorVisits != 0;
+        if (memcmp(Actual, Expected, sizeof(Actual)))
+          fail(Scalars[C].Name, (unsigned)N, Trial,
+               "early scalar integer result or canary mismatch");
+        // Also exercise input/output aliasing: the original loop is read-only,
+        // so scratch cannot require an invented noalias contract.
+        _Alignas(uint64_t) uint32_t Alias[66], RefAlias[66];
+        memcpy(Alias, Input, sizeof(Alias));
+        memcpy(RefAlias, Input, sizeof(RefAlias));
+        Scalars[C].Reference(RefAlias, RefAlias, N, Start);
+        Scalars[C].Fn(Alias, Alias, N, Start);
+        if (memcmp(Alias, RefAlias, sizeof(Alias)))
+          fail(Scalars[C].Name, (unsigned)N, Trial, "input/output alias mismatch");
+        Runs += 2;
+      }
+  for (unsigned C = 0; C < sizeof(ScalarMixed) / sizeof(*ScalarMixed); ++C)
+    for (unsigned K = 0; K < sizeof(ScalarCounts) / sizeof(*ScalarCounts); ++K)
+      for (unsigned Trial = 0; Trial < 20; ++Trial) {
+        uint64_t N = ScalarCounts[K];
+        double Start = Trial % 8 == 2 ? -0.0 : Trial % 8 == 3 ? 1.0 : 3.5;
+        for (unsigned I = 0; I < 1026; ++I) Input[I] = random_value();
+        fill_fp(FPInput, 1026, Trial);
+        const uint32_t *A = N && N <= 65 ? Input : NULL;
+        const double *D = N && N <= 65 ? FPInput : NULL;
+        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        double ActualD[3] = {19.5, 7.0, 3.25}, ExpectedD[3] = {19.5, 7.0, 3.25};
+        float ActualF[3] = {19.5f, 7.0f, 3.25f}, ExpectedF[3] = {19.5f, 7.0f, 3.25f};
+        ref_scalar_mixed(A, D, RefOut + 1, ExpectedD + 1, ExpectedF + 1, N, Start);
+        ScalarVectorVisits = 0;
+        ScalarMixed[C].Fn(A, D, Out + 1, ActualD + 1, ActualF + 1, N, Start);
+        if (N == 65 && ScalarMixed[C].VectorLanes <= 65 && !ScalarVectorVisits)
+          fail(ScalarMixed[C].Name, (unsigned)N, Trial, "vector FP consumer did not execute");
+        ScalarVectorRuns += ScalarVectorVisits != 0;
+        if (memcmp(Out, RefOut, sizeof(Out)) ||
+            memcmp(ActualD, ExpectedD, sizeof(ActualD)) ||
+            memcmp(ActualF, ExpectedF, sizeof(ActualF)))
+          fail(ScalarMixed[C].Name, (unsigned)N, Trial,
+               "early scalar ordered FP, integer, or canary mismatch");
+        ++Runs;
+      }
+  for (unsigned C = 0; C < sizeof(ScalarConstants) / sizeof(*ScalarConstants); ++C)
+    for (unsigned Trial = 0; Trial < 200; ++Trial) {
+      uint32_t X = random_value();
+      if (ScalarConstants[C].Fn(X) != ScalarConstants[C].Reference(X))
+        fail(ScalarConstants[C].Name, 200, Trial, "constant/narrow trip mismatch");
+      ++Runs;
+    }
   printf("PASS: %u executions; integer and ordered FP exact; relaxed FP "
          "classification/signed-zero/error bounds; max absolute FP difference %.17g\n",
          Runs, MaxError);
+  printf("Early scalar fission: %u host comparisons entered a vector consumer\n",
+         ScalarVectorRuns);
   return 0;
 }

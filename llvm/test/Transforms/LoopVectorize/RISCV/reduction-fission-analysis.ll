@@ -1,7 +1,7 @@
 ; REQUIRES: asserts
 ;
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=8 \
 ; RUN:   -vplan-reduction-fission-min-reductions=5 \
 ; RUN:   -vplan-reduction-fission-min-pressure-percent=100 \
@@ -9,10 +9,10 @@
 ; RUN:   -vplan-reduction-fission-max-duplicated-recipes=2 \
 ; RUN:   -disable-output %s
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -enable-vplan-reduction-fission -debug-only=vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -debug-only=vplan-reduction-fission \
 ; RUN:   -disable-output %s 2>&1 | FileCheck %s --check-prefix=DEBUG
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -enable-vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-min-pressure-percent=0 \
 ; RUN:   -vplan-reduction-fission-min-reductions=2 \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=1 \

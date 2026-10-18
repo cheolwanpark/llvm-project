@@ -1,6 +1,6 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=520 -vplan-reduction-fission-allow-fp-reordering \
 ; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t.on 2> %t.remarks
 ; RUN: FileCheck %s < %t.on
@@ -9,7 +9,7 @@
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.on -o /dev/null
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 \
+; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=520 -vplan-reduction-fission-allow-fp-reordering=false \
 ; RUN:   -S %s -o %t.off
 ; RUN: FileCheck %s --check-prefix=ORDERED --implicit-check-not=reassoc < %t.off

@@ -81,9 +81,8 @@ for details.
 
 Reduction fission is an opt-in part of `loop-vectorize`. It separates expensive
 reduction inputs into a producer loop, stores those inputs in stack scratch
-arrays, and consumes them in an accumulator loop. Each stage selects its own
-scalable vectorization factor (VF) and has a scalar remainder. All producer
-iterations, including its remainder, finish before the accumulator starts.
+arrays, and consumes them in an accumulator loop. All producer iterations,
+including its remainder, finish before the accumulator starts.
 
 ```sh
 opt input.ll -S -o output.ll -passes=loop-vectorize \
@@ -93,7 +92,39 @@ llc output.ll -mtriple=riscv64 -mattr=+v,+zvl128b -verify-machineinstrs
 ```
 
 Clang accepts the same option through `-mllvm -enable-vplan-reduction-fission`.
-The transform is disabled by default. It supports single-block loops with an
+The transform is disabled by default. Before whole-loop vectorization legality
+or VPlan construction, a small scalar-IR path handles canonical, single-block,
+read-only loops with unconditional integer-add or ordinary float/double-add
+reductions. It requires an exact constant count or a proven constant maximum
+runtime count, and keeps the entry guard and exact participating iterations.
+Only final reduction updates may escape. Each distinct original contribution
+gets a static scratch array, with checked capacity, alignment and byte arithmetic
+under the existing scratch ceiling. Narrow iteration indices are zero-extended
+for scratch addressing. Reductions retain operand order, grouping, initial values
+and flags; this path does not add FP reassociation permissions.
+
+Scalar calls need explicit `memory(none)`, `nounwind`, `willreturn` and
+`speculatable` contracts. Indirect, convergent, nonduplicable, tail, strict-FP and
+operand-bundle calls are excluded. No libm name establishes purity or an errno
+contract. Constrained FP, writes, volatile/atomic loads, feedback into producers,
+other recurrences and unsupported exits are rejected. No alias guards are needed:
+input accesses are read-only and the new scratch is private.
+
+Both generated scalar stages enter the normal vectorizer worklist independently.
+A helper without a vector mapping can leave the producer scalar while allowing
+the consumer to vectorize. There is no minimum reduction count, chain depth,
+pressure threshold or new profitability model in this path. Normal vectorization
+costing still decides each stage's VF and tail handling. Each distinct contribution
+adds one store and one load per participating iteration; original input loads and
+helper calls execute once, with no rereads or producer recomputation. The loop
+control is repeated. Legality uses linear instruction/use checks and existing SCEV
+trip bounds, followed by dominator-tree recalculation. Stage loop metadata prevents
+repeated fission, including through the VPlan path. `Selected` records original
+source location and scratch capacity/bytes; separate `Stage` remarks identify
+producer and consumer VFs. `-enable-scalar-reduction-fission=false` isolates the
+older VPlan path and is used by its existing regression and execution fixtures.
+
+The VPlan path supports single-block loops with an
 exact constant trip count or an exact runtime trip count with a proven constant
 upper bound. Scratch capacity uses the upper bound; all four stages use the
 actual count. The original zero-trip entry guard is preserved. It requires
@@ -131,7 +162,7 @@ are excluded. The existing `-hints-allow-reordering` policy is unchanged.
 Discarding a private candidate preserves the original IR, recurrence descriptors,
 planning state and ordinary-vectorizer fallback.
 
-The hidden policy options retain the original defaults:
+The VPlan path's hidden policy options retain the original defaults:
 
 | Option | Default |
 | --- | --- |
@@ -153,7 +184,8 @@ except for the explicitly opted-in sum reassociation described above. The option
 does not force fission or a particular target instruction. A loop with one or two
 sums may still fail the default reduction-count or pressure thresholds.
 
-For experiments, specify both
+For VPlan-path experiments, set `-enable-scalar-reduction-fission=false` and
+specify both
 `-vplan-reduction-fission-force-producer-vf=N` and
 `-vplan-reduction-fission-force-accumulator-vf=M`. The values must be powers of two
 and are scalable lane counts, not LMUL values. They bypass the headroom check,
@@ -165,7 +197,8 @@ kind, scratch capacity/bytes and each reduction's mode and permission source
 (IR, hint or fission option). `-pass-remarks-missed=vplan-reduction-fission`
 records rejection reasons.
 
-The implementation is in the `VPlanReductionFission*.h` headers and four
+The early path is in `ScalarReductionFission.cpp`. The VPlan implementation is
+in the `VPlanReductionFission*.h` headers and four
 `VPlanReductionFission*.cpp` files in `lib/Transforms/Vectorize`: the main file
 owns orchestration and IR emission, `Analysis` owns dependency/pressure and
 selection policy, `Transforms` owns stage construction and scratch recipes,
@@ -199,7 +232,13 @@ This specializes scalable IR to several fixed vscales and executes it on the
 host. It is not RVV emulation. It compares bounded trip counts, independent
 stores and canaries, integer wraparound/truncation, and ordered FP against the
 original scalar IR, and checks reassociated FP using classification, signed zero
-and magnitude-based absolute error bounds. Separate RVV machine verification
+and magnitude-based absolute error bounds. Early scalar cases additionally cover
+unknown pure helpers, arithmetic producers, mixed float/double/integer sums,
+input/output aliasing, zero/one/odd/maximum counts, invalid guarded counts and
+narrow indices. They assert the generated scalar producer/vector consumer path,
+then use host-only vector-consumer entry probes to verify execution, with exact
+ordered comparisons under both settings of the separate FP-reordering option.
+Separate RVV machine verification
 and generated assembly complement the host checks. The output directory retains
 IR, assembly, selection remarks and a JSON result for reproducibility.
 
