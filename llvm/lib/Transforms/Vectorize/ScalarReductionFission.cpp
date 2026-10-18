@@ -19,6 +19,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
@@ -47,6 +48,33 @@ StringRef llvm::getScalarReductionFissionStage(const Loop &L) {
   return {};
 }
 
+// Accept just one diamond, not general if-conversion. Every path visits the
+// latch exactly once per iteration. Keeping these blocks in place preserves
+// arm-local loads/arithmetic, including operations unsafe on the other arm.
+static bool hasSupportedProducerCFG(const Loop &L, BasicBlock *Latch) {
+  BasicBlock *Header = L.getHeader();
+  if (L.getNumBlocks() == 1)
+    return Latch == Header;
+  if (L.getNumBlocks() != 4 || !Latch || Latch == Header)
+    return false;
+  auto *Branch = dyn_cast<BranchInst>(Header->getTerminator());
+  if (!Branch || !Branch->isConditional())
+    return false;
+  BasicBlock *Left = Branch->getSuccessor(0);
+  BasicBlock *Right = Branch->getSuccessor(1);
+  if (Left == Right || Left == Header || Right == Header || Left == Latch ||
+      Right == Latch || !L.contains(Left) || !L.contains(Right) ||
+      pred_size(Latch) != 2)
+    return false;
+  for (BasicBlock *Arm : {Left, Right}) {
+    auto *ArmBranch = dyn_cast<BranchInst>(Arm->getTerminator());
+    if (Arm->getSinglePredecessor() != Header || !ArmBranch ||
+        !ArmBranch->isUnconditional() || ArmBranch->getSuccessor(0) != Latch)
+      return false;
+  }
+  return L.getExitingBlock() == Latch;
+}
+
 Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                      ScalarEvolution &SE,
                                      OptimizationRemarkEmitter &ORE) {
@@ -66,18 +94,21 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     return nullptr;
   };
 
-  if (L.getNumBlocks() != 1 || !L.isLoopSimplifyForm() ||
+  BasicBlock *Latch = L.getLoopLatch();
+  if (!hasSupportedProducerCFG(L, Latch) || !L.isLoopSimplifyForm() ||
       !L.hasDedicatedExits() || !L.isLCSSAForm(DT))
     return Reject("scalar-unsupported-cfg");
   if (F->hasFnAttribute(Attribute::StrictFP))
     return Reject("scalar-strict-fp");
-  auto *Branch = dyn_cast<BranchInst>(Header->getTerminator());
+  auto *Branch = dyn_cast<BranchInst>(Latch->getTerminator());
   BasicBlock *Exit = L.getUniqueExitBlock();
   PHINode *IV = L.getCanonicalInductionVariable();
-  if (!Branch || !Branch->isConditional() || !Exit || !IV)
+  if (!Branch || !Branch->isConditional() || !Exit || !IV ||
+      !((Branch->getSuccessor(0) == Header && Branch->getSuccessor(1) == Exit) ||
+        (Branch->getSuccessor(1) == Header && Branch->getSuccessor(0) == Exit)))
     return Reject("scalar-unsupported-exit");
   BasicBlock *Preheader = L.getLoopPreheader();
-  auto *Next = dyn_cast<BinaryOperator>(IV->getIncomingValueForBlock(Header));
+  auto *Next = dyn_cast<BinaryOperator>(IV->getIncomingValueForBlock(Latch));
   auto *Compare = dyn_cast<ICmpInst>(Branch->getCondition());
   // Reuse the original invariant bound and exit test rather than speculatively
   // expanding a new SCEV expression. A canonical IV starts at zero and adds one.
@@ -100,10 +131,13 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     if (&Phi == IV)
       continue;
     auto *Update =
-        dyn_cast<BinaryOperator>(Phi.getIncomingValueForBlock(Header));
+        dyn_cast<BinaryOperator>(Phi.getIncomingValueForBlock(Latch));
     Type *Ty = Phi.getType();
-    if (!Update || Update->getParent() != Header || !Phi.hasOneUse() ||
-        *Phi.user_begin() != Update ||
+    // Header and latch updates execute once on every iteration. An arm-local
+    // update or a PHI of updated/unchanged accumulators is not unconditional.
+    if (!Update ||
+        (Update->getParent() != Header && Update->getParent() != Latch) ||
+        !Phi.hasOneUse() || *Phi.user_begin() != Update ||
         !((Ty->isIntegerTy() && Update->getOpcode() == Instruction::Add) ||
           ((Ty->isFloatTy() || Ty->isDoubleTy()) &&
            Update->getOpcode() == Instruction::FAdd)))
@@ -133,46 +167,48 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     }
   }
 
-  for (Instruction &I : *Header) {
-    for (User *U : I.users()) {
-      auto *UI = dyn_cast<Instruction>(U);
-      if ((!UI || !L.contains(UI)) && !ReductionInsts.contains(&I))
-        return Reject("scalar-unsupported-live-out");
+  for (BasicBlock *BB : L.blocks()) {
+    for (Instruction &I : *BB) {
+      for (User *U : I.users()) {
+        auto *UI = dyn_cast<Instruction>(U);
+        if ((!UI || !L.contains(UI)) && !ReductionInsts.contains(&I))
+          return Reject("scalar-unsupported-live-out");
+      }
+      if (isa<ConstrainedFPIntrinsic>(I))
+        return Reject("scalar-strict-fp");
+      if (auto *Load = dyn_cast<LoadInst>(&I)) {
+        if (!Load->isSimple() || !Load->getType()->isSingleValueType() ||
+            Load->getType()->isVectorTy())
+          return Reject("scalar-non-simple-load");
+        continue;
+      }
+      if (auto *Call = dyn_cast<CallInst>(&I)) {
+        // No name-based libm contracts, errno assumptions, or vector mappings.
+        // speculatable excludes observable effects beyond memory (e.g. FP
+        // environment observation); willreturn and nounwind exclude termination
+        // and exception ordering changes. Keep calls once in the producer.
+        if (!Call->getCalledFunction() || Call->isInlineAsm() ||
+            Call->hasOperandBundles() || Call->isTailCall() ||
+            Call->isConvergent() || Call->cannotDuplicate() ||
+            Call->cannotMerge() || Call->isStrictFP() ||
+            Call->hasFnAttr(Attribute::ReturnsTwice) ||
+            !Call->doesNotAccessMemory() || !Call->doesNotThrow() ||
+            !Call->hasFnAttr(Attribute::WillReturn) ||
+            !Call->hasFnAttr(Attribute::Speculatable) ||
+            !Call->getType()->isSingleValueType() ||
+            Call->getType()->isVectorTy())
+          return Reject("scalar-unsafe-call");
+        continue;
+      }
+      // A whitelist also excludes fences, stores, atomics, allocas, EH, and
+      // special control operations. All retained producer operations execute
+      // on precisely the original iterations, in their original order.
+      if (isa<PHINode, BinaryOperator, CastInst, GetElementPtrInst, CmpInst,
+              SelectInst, FreezeInst, BranchInst>(I) &&
+          !I.getType()->isVectorTy())
+        continue;
+      return Reject("scalar-unsupported-instruction");
     }
-    if (isa<ConstrainedFPIntrinsic>(I))
-      return Reject("scalar-strict-fp");
-    if (auto *Load = dyn_cast<LoadInst>(&I)) {
-      if (!Load->isSimple() || !Load->getType()->isSingleValueType() ||
-          Load->getType()->isVectorTy())
-        return Reject("scalar-non-simple-load");
-      continue;
-    }
-    if (auto *Call = dyn_cast<CallInst>(&I)) {
-      // No name-based libm contracts, errno assumptions, or vector mappings.
-      // speculatable excludes observable effects beyond memory (e.g. FP
-      // environment observation); willreturn and nounwind exclude termination
-      // and exception ordering changes. Keep calls once in the producer.
-      if (!Call->getCalledFunction() || Call->isInlineAsm() ||
-          Call->hasOperandBundles() || Call->isTailCall() ||
-          Call->isConvergent() || Call->cannotDuplicate() ||
-          Call->cannotMerge() || Call->isStrictFP() ||
-          Call->hasFnAttr(Attribute::ReturnsTwice) ||
-          !Call->doesNotAccessMemory() || !Call->doesNotThrow() ||
-          !Call->hasFnAttr(Attribute::WillReturn) ||
-          !Call->hasFnAttr(Attribute::Speculatable) ||
-          !Call->getType()->isSingleValueType() ||
-          Call->getType()->isVectorTy())
-        return Reject("scalar-unsafe-call");
-      continue;
-    }
-    // A whitelist also excludes fences, stores, atomics, allocas, EH, and
-    // special control operations. All retained producer operations execute
-    // on precisely the original iterations, in their original order.
-    if (isa<PHINode, BinaryOperator, CastInst, GetElementPtrInst, CmpInst,
-            SelectInst, FreezeInst, BranchInst>(I) &&
-        !I.getType()->isVectorTy())
-      continue;
-    return Reject("scalar-unsupported-instruction");
   }
 
   auto Trip = analyzeFissionTripCount(L, SE, cast<IntegerType>(IV->getType()));
@@ -230,6 +266,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   Consumer->addBasicBlockToLoop(ConsumerBody, LI);
 
   IRBuilder<> EntryBuilder(&*F->getEntryBlock().getFirstInsertionPt());
+  // Header values and latch PHIs are available here without moving any
+  // arm-local computation or changing which arm participates.
   IRBuilder<> ProducerBuilder(Branch);
   for (auto &[Contribution, Slot] : Scratch) {
     auto *Array = ArrayType::get(Contribution->getType(), Trip->MaxTripCount);
@@ -271,7 +309,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     ConsumerUpdates[R.Update] = Update;
   }
   for (PHINode &Export : Exit->phis()) {
-    int Index = Export.getBasicBlockIndex(Header);
+    int Index = Export.getBasicBlockIndex(Latch);
     if (Index >= 0)
       if (Value *Update = ConsumerUpdates.lookup(Export.getIncomingValue(Index)))
         Export.setIncomingValue(Index, Update);
@@ -289,7 +327,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                  Branch->getSuccessor(1) == Header ? ConsumerBody : Exit);
   Branch->setSuccessor(Branch->getSuccessor(0) == Exit ? 0 : 1, ConsumerPH);
   for (PHINode &Export : Exit->phis())
-    Export.replaceIncomingBlockWith(Header, ConsumerBody);
+    Export.replaceIncomingBlockWith(Latch, ConsumerBody);
   for (Reduction &R : Reductions) {
     R.Update->dropAllReferences();
     R.Phi->dropAllReferences();

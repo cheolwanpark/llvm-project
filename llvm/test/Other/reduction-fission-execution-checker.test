@@ -45,6 +45,24 @@ except AssertionError as error:
 else:
     raise AssertionError('producer reduction accepted as consumer evidence')
 
+# A diamond must retain its control, unsafe operations and merge. Instrument
+# both exact consumer headers after their PHIs, including the scalar tail.
+diamond = checker.check_scalar_function(source, 'scalar_diamond', evl=False, probe=True)
+assert diamond.count('call void @record_scalar_consumer_vector()') == 1
+assert diamond.count('call void @record_scalar_consumer_tail()') == 1
+assert ('%vi = phi i64 [ 0, %scalar.fission.consumer.ph ]\n'
+        '  call void @record_scalar_consumer_vector()') in diamond
+assert ('%ti = phi i64 [ 0, %vector.body ]\n'
+        '  call void @record_scalar_consumer_tail()') in diamond
+hoisted = source.replace('left:\n  %q = sdiv i32 840, %x\n',
+                         '  %q = sdiv i32 840, %x\nleft:\n')
+try:
+    checker.check_scalar_function(hoisted, 'scalar_diamond', evl=False)
+except AssertionError:
+    pass
+else:
+    raise AssertionError('speculated diamond division accepted as producer evidence')
+
 # Fixed-vscale specialization must fail before handing unsupported EVL/VP
 # operations to a host backend. Renaming scalable types alone is not sound.
 for intrinsic in ('llvm.experimental.get.vector.length.i64',
@@ -79,3 +97,41 @@ scalar.fission.consumer.body:
 }
 
 declare i64 @llvm.vector.reduce.add.nxv4i64(<vscale x 4 x i64>)
+
+; Parser/probe fixture only. Executable comparisons use the real transformed
+; reduction-fission-scalar-diamond.ll, not this synthetic consumer.
+define void @scalar_diamond(ptr %a, ptr %fp) {
+entry:
+  %s = alloca [65 x i32]
+  %d = alloca [65 x double]
+  %f = alloca [65 x float]
+  %x = load i32, ptr %a
+  %choose = icmp ne i32 %x, 0
+  br i1 %choose, label %left, label %right
+left:
+  %q = sdiv i32 840, %x
+  %lc = call i32 @scalar_helper(i32 %q)
+  br label %latch
+right:
+  %dp = getelementptr double, ptr %fp, i64 0
+  %dx = load double, ptr %dp
+  br label %latch
+latch:
+  %c = phi i32 [ %lc, %left ], [ 17, %right ]
+  store i32 %c, ptr %s
+  br label %scalar.fission.consumer.ph
+scalar.fission.consumer.ph:
+  br label %vector.body
+vector.body:
+  %vi = phi i64 [ 0, %scalar.fission.consumer.ph ]
+  %il = load <vscale x 4 x i32>, ptr %s
+  %dl = load <vscale x 4 x double>, ptr %d
+  %fl = load <vscale x 4 x float>, ptr %f
+  %dr = call double @llvm.vector.reduce.fadd.nxv4f64(double 0.0, <vscale x 4 x double> %dl)
+  %fr = call float @llvm.vector.reduce.fadd.nxv4f32(float 0.0, <vscale x 4 x float> %fl)
+  %ir = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %il)
+  br label %scalar.fission.consumer.body
+scalar.fission.consumer.body:
+  %ti = phi i64 [ 0, %vector.body ]
+  ret void
+}

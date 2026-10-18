@@ -75,28 +75,46 @@ def scalar_consumer(body, name):
 def check_scalar_function(ir, name, evl, probe=False, fixed_narrow=False):
     body = function_definition(ir, name)
     producer, consumer = scalar_consumer(body, name)
-    if name in ('scalar_helper_sum', 'scalar_mixed', 'scalar_nested'):
+    if name in ('scalar_helper_sum', 'scalar_mixed', 'scalar_nested',
+                'scalar_diamond', 'scalar_diamond_nested'):
         assert producer.count('call i32 @scalar_helper(') == 1, body
         assert '<vscale x' not in producer, producer
-    if name == 'scalar_mixed':
+    if name in ('scalar_mixed', 'scalar_diamond'):
         assert body.count('alloca [65 x i32]') == 1, body
         assert body.count('alloca [65 x double]') == 1, body
         assert body.count('alloca [65 x float]') == 1, body
-    if name == 'scalar_nested':
+    if name in ('scalar_nested', 'scalar_diamond_nested'):
         assert body.count('alloca [65 x i32]') == 1, body
         assert body.count('alloca [65 x double]') == 1, body
-    # All checks refer to this function's consumer, never another function or
-    # the (possibly vectorized) arithmetic producer. A width too large for a
+    if name in ('scalar_diamond', 'scalar_diamond_nested'):
+        # Check actual preserved control and merge placement, independently of
+        # the vector consumer. Unsafe arm operations must remain conditional.
+        header, arms = re.split(r'^left:[^\n]*\n', producer, maxsplit=1, flags=re.M)
+        left, rest = re.split(r'^right:[^\n]*\n', arms, maxsplit=1, flags=re.M)
+        right, latch = re.split(r'^latch:[^\n]*\n', rest, maxsplit=1, flags=re.M)
+        assert 'br i1 %choose, label %left, label %right' in header, header
+        assert 'call i32 @scalar_helper(' in left, left
+        assert '%c = phi i32' in latch and latch.count('store i32 %c,') == 1, latch
+        assert 'store i32' not in left + right, producer
+        if name == 'scalar_diamond':
+            assert 'sdiv i32 840, %x' in left, left
+            assert 'load double, ptr %dp' in right, right
+            assert 'sdiv ' not in header + right + latch, producer
+            assert 'load double' not in header + left + latch, producer
+    # Reduction checks refer to this consumer, never another function or the
+    # (possibly vectorized) arithmetic producer. A width too large for a
     # constant/one-iteration loop is allowed to leave its consumer scalar.
     vectorized = name in ('scalar_helper_sum', 'arithmetic_sum', 'scalar_mixed',
-                          'scalar_nested') or fixed_narrow
+                          'scalar_nested', 'scalar_diamond',
+                          'diamond_arithmetic', 'scalar_diamond_nested') or fixed_narrow
     if vectorized:
         vector = re.search(r'^vector\.body[^:]*:[^\n]*\n(.*?)(?=^[\w.$-]+:|^})',
                            consumer, re.M | re.S)
         assert vector, f'@{name}: missing vector consumer\n{consumer}'
-        if name in ('scalar_mixed', 'scalar_nested'):
+        if name in ('scalar_mixed', 'scalar_nested', 'scalar_diamond',
+                    'scalar_diamond_nested'):
             types = [('double', 'f64')]
-            if name == 'scalar_mixed':
+            if name in ('scalar_mixed', 'scalar_diamond'):
                 types.append(('float', 'f32'))
             for ty, suffix in types:
                 intrinsic = r'vp\.reduce' if evl else r'vector\.reduce'
@@ -115,7 +133,7 @@ def check_scalar_function(ir, name, evl, probe=False, fixed_narrow=False):
                 assert 'scalar.fission.consumer.body:' in consumer, consumer
             lanes = '4' if fixed_narrow else 'vscale x 4'
             assert f'load <{lanes} x' in vector[0], consumer
-        if name == 'scalar_mixed':
+        if name in ('scalar_mixed', 'scalar_diamond'):
             loads = (r'call <vscale x 4 x i32> @llvm\.vp\.load\.' if evl
                      else r'load <vscale x 4 x i32>')
             assert len(re.findall(loads, vector[0])) == 1, consumer
@@ -127,6 +145,12 @@ def check_scalar_function(ir, name, evl, probe=False, fixed_narrow=False):
                 r'\1  call void @record_scalar_consumer_vector()\n',
                 consumer, count=1, flags=re.M)
             assert probes == 1, f'@{name}: missing vector-consumer probe site'
+            if name in ('scalar_diamond', 'scalar_diamond_nested'):
+                instrumented, tails = re.subn(
+                    r'(^scalar\.fission\.consumer\.body:[^\n]*\n(?:[^\n]* = phi [^\n]*\n)*)',
+                    r'\1  call void @record_scalar_consumer_tail()\n',
+                    instrumented, count=1, flags=re.M)
+                assert tails == 1, f'@{name}: missing scalar-tail probe site'
             return body.replace(consumer, instrumented, 1)
     return body
 
@@ -148,7 +172,7 @@ def check(args, work):
     triple = run([args.cc, '-dumpmachine']).stdout.strip()
     objects, records = [], []
     declarations, combined_rows, induction_rows, fp_rows = [], [], [], []
-    scalar_rows, mixed_rows, constant_rows, nested_rows = [], [], [], []
+    scalar_rows, mixed_rows, constant_rows, nested_rows, diamond_rows = [], [], [], [], []
     common = [
         '-passes=loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>',
         '-verify-each', '-mtriple=riscv64', '-mattr=+v',
@@ -229,6 +253,8 @@ def check(args, work):
         ('scalar-ir', ['scalar_helper_sum', 'arithmetic_sum', 'scalar_mixed',
                        'narrow_constant', 'one_iteration'], 'scalar-ir.c:12:3'),
         ('scalar-ir-nested', ['scalar_nested'], 'scalar-nested.c:22:5'),
+        ('scalar-diamond', ['scalar_diamond', 'diamond_arithmetic',
+                            'scalar_diamond_nested'], 'scalar-diamond.c:32:7'),
     ]:
         source = keep_functions((tests / f'reduction-fission-{fixture}.ll').read_text(),
                                 functions)
@@ -255,6 +281,17 @@ def check(args, work):
                 assert f'{location}: split scalar-IR reduction loop;' in result.stderr, result.stderr
                 assert f'{location}: scalar-IR fission producer VF 1' in result.stderr, result.stderr
                 assert f'{location}: scalar-IR fission consumer VF vscale x 4' in result.stderr, result.stderr
+                if fixture == 'scalar-diamond':
+                    for loc, size in [('32:7', 1044), ('42:3', 1040), ('62:5', 784)]:
+                        assert re.search(
+                            rf'scalar-diamond.c:{loc}: split scalar-IR reduction loop;[^\n]*'
+                            rf'scratch capacity 65, scratch bytes {size}\b', result.stderr), result.stderr
+                        assert (f'scalar-diamond.c:{loc}: scalar-IR fission consumer VF '
+                                'vscale x 4') in result.stderr, result.stderr
+                        assert (f'scalar-diamond.c:{loc}: scalar-IR fission producer VF '
+                                in result.stderr), result.stderr
+                    assert ('scalar-diamond.c:62:5: scalar-IR fission producer VF 1'
+                            in result.stderr), result.stderr
                 assert not re.search(r'\b(?:fadd|call)\s+[^\n]*\breassoc\b', result.stdout), result.stdout
                 instrumented = result.stdout
                 for function in functions:
@@ -274,20 +311,27 @@ def check(args, work):
                     print(f'RVV codegen verified {tag} (not executed)', flush=True)
                     continue
                 instrumented += '\ndeclare void @record_scalar_consumer_vector()\n'
+                if fixture == 'scalar-diamond':
+                    instrumented += '\ndeclare void @record_scalar_consumer_tail()\n'
                 for scale in args.vscales:
                     fixed = specialize(instrumented, scale)
                     for function in functions:
                         name = f'{function}_{"option_on" if relaxed else "o"}_s{scale}'
                         fixed = fixed.replace(f'@{function}(', f'@{name}(')
-                        if function in ('scalar_helper_sum', 'arithmetic_sum'):
+                        if function in ('scalar_helper_sum', 'arithmetic_sum',
+                                        'diamond_arithmetic'):
                             declarations.append(f'extern ScalarSumFn {name};')
                             scalar_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}}}')
                         elif function == 'scalar_mixed':
                             declarations.append(f'extern ScalarMixedFn {name};')
                             mixed_rows.append(f'{{"{name}", {name}, {4 * scale}}}')
-                        elif function == 'scalar_nested':
+                        elif function == 'scalar_diamond':
+                            declarations.append(f'extern ScalarMixedFn {name};')
+                            diamond_rows.append(f'{{"{name}", {name}, {4 * scale}}}')
+                        elif function in ('scalar_nested', 'scalar_diamond_nested'):
                             declarations.append(f'extern ScalarNestedFn {name};')
-                            nested_rows.append(f'{{"{name}", {name}, {4 * scale}}}')
+                            nested_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}, '
+                                               f'{str(function == "scalar_diamond_nested").lower()}}}')
                         else:
                             declarations.append(f'extern ScalarConstantFn {name};')
                             constant_rows.append(f'{{"{name}", {name}, ref_{function}, false}}')
@@ -296,6 +340,7 @@ def check(args, work):
                                     'tail_policy': tail_policy,
                                     'comparison': 'exact, including ordered FP',
                                     'vector_execution': 'host-only consumer entry probe',
+                                    'scalar_tail_probe': fixture == 'scalar-diamond',
                                     'vscale': scale, 'options': options,
                                     'selection_remarks': result.stderr})
                     print(f'Built host scalar-tail variant {tag}, vscale={scale}', flush=True)
@@ -339,7 +384,7 @@ def check(args, work):
                       ('INDUCTIONS', induction_rows), ('FP', fp_rows),
                       ('SCALARS', scalar_rows), ('SCALAR_MIXED', mixed_rows),
                       ('SCALAR_CONSTANTS', constant_rows),
-                      ('SCALAR_NESTED', nested_rows)]:
+                      ('SCALAR_NESTED', nested_rows), ('SCALAR_DIAMOND', diamond_rows)]:
         harness = harness.replace(f'@{key}@', '\n'.join(rows) if key == 'DECLARATIONS'
                                    else ',\n'.join(rows))
     harness_path = work / 'harness.c'
@@ -354,10 +399,13 @@ def check(args, work):
         'host_triple': triple, 'cases': records, 'result': result.stdout,
         'runtime_trip_counts': [0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33,
                                 63, 64, 65, 257, 1023, 1024, 1025],
-        'scalar_ir_runtime_trip_counts': [0, 1, 2, 3, 7, 15, 16, 17, 31,
+        'scalar_ir_runtime_trip_counts': [0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31,
                                          32, 33, 63, 64, 65, 66, 2**64 - 1],
         'scalar_ir_constant_trip_counts': [1, 200],
         'scalar_ir_nested_outer_counts': [0, 1, 2, 4, 5, 2**64 - 1],
+        'scalar_diamond_branch_sequences': ['all division (null FP input)',
+                                            'all load (zero divisors)',
+                                            'alternating', 'runs', 'random'],
         'scalar_ir_host_tail_policy': 'dont-fold-tail, scalar remainder',
         'scalar_ir_default_evl': 'RVV codegen/machine verification only, not executed',
         'comparison': {

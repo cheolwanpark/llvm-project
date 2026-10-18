@@ -32,6 +32,9 @@ extern ScalarSumFn ref_scalar_helper_sum, ref_arithmetic_sum;
 extern ScalarMixedFn ref_scalar_mixed;
 extern ScalarConstantFn ref_narrow_constant, ref_one_iteration;
 extern ScalarNestedFn ref_scalar_nested;
+extern ScalarMixedFn ref_scalar_diamond;
+extern ScalarSumFn ref_diamond_arithmetic;
+extern ScalarNestedFn ref_scalar_diamond_nested;
 @DECLARATIONS@
 
 static const struct {
@@ -59,13 +62,19 @@ static const struct {
 } ScalarMixed[] = {@SCALAR_MIXED@};
 static const struct {
   const char *Name;
+  ScalarMixedFn *Fn;
+  unsigned VectorLanes;
+} ScalarDiamond[] = {@SCALAR_DIAMOND@};
+static const struct {
+  const char *Name;
   ScalarConstantFn *Fn, *Reference;
   bool RequireVector;
 } ScalarConstants[] = {@SCALAR_CONSTANTS@};
 static const struct {
   const char *Name;
-  ScalarNestedFn *Fn;
+  ScalarNestedFn *Fn, *Reference;
   unsigned VectorLanes;
+  bool ProbeTail;
 } ScalarNested[] = {@SCALAR_NESTED@};
 
 // No memory access, exceptions, convergence, or FP-environment effects. opt
@@ -76,8 +85,9 @@ uint32_t scalar_helper(uint32_t X) {
   return X ^ (X >> 16);
 }
 
-static unsigned ScalarVectorVisits, ScalarVectorRuns;
+static unsigned ScalarVectorVisits, ScalarVectorRuns, ScalarTailVisits;
 void record_scalar_consumer_vector(void) { ++ScalarVectorVisits; }
+void record_scalar_consumer_tail(void) { ++ScalarTailVisits; }
 
 static uint32_t Seed = 314159265;
 static double MaxError;
@@ -181,7 +191,7 @@ int main(void) {
       ++Runs;
     }
   static const uint64_t ScalarCounts[] = {
-      0, 1, 2, 3, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65, 66, UINT64_MAX};
+      0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 66, UINT64_MAX};
   for (unsigned C = 0; C < sizeof(Scalars) / sizeof(*Scalars); ++C)
     for (unsigned K = 0; K < sizeof(ScalarCounts) / sizeof(*ScalarCounts); ++K)
       for (unsigned Trial = 0; Trial < 20; ++Trial) {
@@ -241,6 +251,56 @@ int main(void) {
                "early scalar ordered FP, integer, or canary mismatch");
         ++Runs;
       }
+  for (unsigned C = 0; C < sizeof(ScalarDiamond) / sizeof(*ScalarDiamond); ++C)
+    for (unsigned K = 0; K < sizeof(ScalarCounts) / sizeof(*ScalarCounts); ++K)
+      for (unsigned Trial = 0; Trial < 40; ++Trial) {
+        uint64_t N = ScalarCounts[K];
+        bool Enter = N && N <= 65;
+        unsigned Pattern = Trial % 5;
+        double Start = Trial % 8 == 2 ? -0.0 : Trial % 8 == 3 ? 1.0 : 3.5;
+        for (unsigned I = 0; I < 1026; ++I) {
+          bool Divide = Pattern == 0 ? true : Pattern == 1 ? false :
+                        Pattern == 2 ? I % 2 : Pattern == 3 ? (I / 7) % 2 :
+                        random_value() % 2;
+          int32_t Denominator = (int32_t)(I % 31 + 1);
+          if (Trial % 2) Denominator = -Denominator;
+          Input[I] = Divide ? (uint32_t)Denominator : 0;
+        }
+        fill_fp(FPInput, 1026, Trial);
+        // All-divide calls supply null for the untaken load arm. All-load
+        // calls supply zero divisors for the untaken arithmetic arm.
+        const uint32_t *A = Enter ? Input : NULL;
+        const double *D = Enter && Pattern != 0 ? FPInput : NULL;
+        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        double ActualD[3] = {19.5, 7.0, 3.25}, ExpectedD[3] = {19.5, 7.0, 3.25};
+        float ActualF[3] = {19.5f, 7.0f, 3.25f}, ExpectedF[3] = {19.5f, 7.0f, 3.25f};
+        ref_scalar_diamond(A, D, RefOut + 1, ExpectedD + 1, ExpectedF + 1, N, Start);
+        ScalarVectorVisits = ScalarTailVisits = 0;
+        ScalarDiamond[C].Fn(A, D, Out + 1, ActualD + 1, ActualF + 1, N, Start);
+        unsigned Lanes = ScalarDiamond[C].VectorLanes;
+        if (!Enter && (ScalarVectorVisits || ScalarTailVisits))
+          fail(ScalarDiamond[C].Name, (unsigned)N, Trial, "diamond guard entered consumer");
+        if (Enter && (N == 1 || N == 65) &&
+            (ScalarVectorVisits != N / Lanes || ScalarTailVisits != N % Lanes))
+          fail(ScalarDiamond[C].Name, (unsigned)N, Trial,
+               "diamond vector/scalar consumer participation mismatch");
+        ScalarVectorRuns += ScalarVectorVisits != 0;
+        if (memcmp(Out, RefOut, sizeof(Out)) ||
+            memcmp(ActualD, ExpectedD, sizeof(ActualD)) ||
+            memcmp(ActualF, ExpectedF, sizeof(ActualF)))
+          fail(ScalarDiamond[C].Name, (unsigned)N, Trial,
+               "diamond shared integer, ordered FP or canary mismatch");
+        uint32_t Alias[66], RefAlias[66];
+        memcpy(Alias, Input, sizeof(Alias));
+        memcpy(RefAlias, Input, sizeof(RefAlias));
+        ref_scalar_diamond(RefAlias, D, RefAlias, ExpectedD + 1, ExpectedF + 1, N, Start);
+        ScalarDiamond[C].Fn(Alias, D, Alias, ActualD + 1, ActualF + 1, N, Start);
+        if (memcmp(Alias, RefAlias, sizeof(Alias)) ||
+            memcmp(ActualD, ExpectedD, sizeof(ActualD)) ||
+            memcmp(ActualF, ExpectedF, sizeof(ActualF)))
+          fail(ScalarDiamond[C].Name, (unsigned)N, Trial, "diamond alias mismatch");
+        Runs += 2;
+      }
   for (unsigned C = 0; C < sizeof(ScalarConstants) / sizeof(*ScalarConstants); ++C)
     for (unsigned Trial = 0; Trial < 200; ++Trial) {
       uint32_t X = random_value();
@@ -266,16 +326,23 @@ int main(void) {
           for (unsigned I = 0; I < 7; ++I) Result[I] = RefResult[I] = I + 0.25;
           // With rejected row/inner guards even the output pointers may be
           // null: no row, producer or consumer may execute.
-          ref_scalar_nested(Enter ? Input : NULL, Enter ? FPInput : NULL,
-                            Enter ? RefOut + 1 : NULL,
-                            Enter ? RefResult + 1 : NULL, Rows, N, Start);
+          ScalarNested[C].Reference(Enter ? Input : NULL, Enter ? FPInput : NULL,
+                                    Enter ? RefOut + 1 : NULL,
+                                    Enter ? RefResult + 1 : NULL, Rows, N, Start);
           ScalarVectorVisits = 0;
+          ScalarTailVisits = 0;
           ScalarNested[C].Fn(Enter ? Input : NULL, Enter ? FPInput : NULL,
                              Enter ? Out + 1 : NULL, Enter ? Result + 1 : NULL,
                              Rows, N, Start);
           if (!Enter && ScalarVectorVisits)
             fail(ScalarNested[C].Name, (unsigned)N, Trial,
                  "nested entry guard entered consumer");
+          if (ScalarNested[C].ProbeTail &&
+              ((!Enter && ScalarTailVisits) ||
+               (Enter && (N == 1 || N == 65) &&
+                ScalarTailVisits != Rows * (N % ScalarNested[C].VectorLanes))))
+            fail(ScalarNested[C].Name, (unsigned)N, Trial,
+                 "nested diamond scalar-tail participation mismatch");
           if (Enter && N == 65 && ScalarNested[C].VectorLanes <= N) {
             // There must be at least one vector-header visit per row, not
             // merely a single entry somewhere in the enclosing function.
@@ -297,8 +364,8 @@ int main(void) {
           memcpy(RefAlias, Input, sizeof(RefAlias));
           memcpy(DAlias, FPInput, sizeof(DAlias));
           memcpy(RefDAlias, FPInput, sizeof(RefDAlias));
-          ref_scalar_nested(RefAlias, RefDAlias, RefAlias + 65, RefDAlias + 65,
-                            Rows, N, Start);
+          ScalarNested[C].Reference(RefAlias, RefDAlias, RefAlias + 65, RefDAlias + 65,
+                                    Rows, N, Start);
           ScalarNested[C].Fn(Alias, DAlias, Alias + 65, DAlias + 65, Rows, N, Start);
           if (memcmp(Alias, RefAlias, sizeof(Alias)) ||
               memcmp(DAlias, RefDAlias, sizeof(DAlias)))
