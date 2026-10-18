@@ -1,0 +1,365 @@
+# REQUIRES: riscv-registered-target
+# RUN: split-file %s %t
+# RUN: %python %t/check.py opt llc %S/../../utils/check-reduction-fission.py %S/../Transforms/LoopVectorize/RISCV %t
+
+# Actual transformations, complete probe verification and RVV machine
+# verification. Execution belongs to the mandatory host checker, which lowers
+# these exact originals and these certified transformed paths independently.
+
+#--- check.py
+import importlib.util
+from itertools import product
+import json
+from pathlib import Path
+import re
+import sys
+
+sys.dont_write_bytecode = True
+opt, llc, utility, fixtures, work = sys.argv[1:]
+fixtures, work = Path(fixtures), Path(work)
+spec = importlib.util.spec_from_file_location('checker', utility)
+checker = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = checker
+spec.loader.exec_module(checker)
+checker.command_log_dir = work
+counts = dict(modules=0, bodies=0, rejections=0, probe_rejections=0,
+              fixed_vector_bodies=0, scalable_vector_bodies=0,
+              initializer_sites={}, initializer_rejections=dict(seed=0, neutral=0, placement=0),
+              observations=[], complete=False)
+(work / 'checker-counts.json').write_text(json.dumps(counts, indent=2) + '\n')
+
+
+def replace_one(text, old, new):
+    assert old != new and text.count(old) == 1, ('mutation anchor', old)
+    changed = text.replace(old, new, 1)
+    assert changed != text
+    return changed
+
+
+def initializer_anchor(body, shape, ty, start, op):
+    # Locate the incoming value on the real vector PHI, then its unique
+    # definition if necessary. Do not assume a seed SSA name or insertelement
+    # syntax: full-trip fixed seeds are normally folded into element lists.
+    vty = shape.vector_type(ty)
+    neutral = '-1' if op == 'and' else '1' if op == 'mul' else '0'
+    base = 'zeroinitializer' if neutral == '0' else f'splat ({ty} {neutral})'
+    instruction = f'insertelement {vty} {base}, {ty} {start}, i32 0'
+    expression = f'insertelement ({vty} {base}, {ty} {start}, i32 0)'
+    literal = '<' + ', '.join(f'{ty} {v}' for v in (start, neutral, neutral, neutral)) + '>'
+    matches = []
+    for phi, value in re.findall(r'^(  %[-\w.$]+ = phi ' + re.escape(vty) +
+                                 r' \[ (.+), %vector.ph \], \[ %[-\w.$]+, %vector.body \][^\n]*)$',
+                                 body, re.M):
+        if value.startswith('%'):
+            definitions = re.findall(r'^  ' + re.escape(value) + r' = [^\n]*$', body, re.M)
+            assert len(definitions) == 1, value
+            anchor = definitions[0]
+            if anchor.split(' = ', 1)[1].split(', !', 1)[0] == instruction:
+                assert anchor in checker.loop_blocks(body)['vector.ph']
+                matches.append((anchor, instruction, 'instruction', neutral))
+        elif value == expression:
+            matches.append((phi, value, 'constant_expression', neutral))
+        elif not shape.scalable and not start.startswith('%') and value == literal:
+            matches.append((phi, value, 'fixed_vector', neutral))
+    assert len(matches) == 1, (ty, start, op, matches)
+    return matches[0]
+
+
+for defined in (False, True):
+    fixture = 'reduction-fission-scalar-multiply' + ('-defined' if defined else '') + '.ll'
+    source = (fixtures / fixture).read_text()
+    for capacity, ceiling in ((1, 17), (8, 104), (9, 121), (65, 849)):
+        functions = (['multiply_defined'] if defined else
+                     [n for n in checker.MULTIPLY_FUNCTIONS
+                      if capacity == 65 or n != 'multiply_affine'])
+        for scalar, reordered, repeated in product((True,) if defined else (True, False),
+                                                   (False, True), (False, True)):
+            options = (checker.subtraction_options(ceiling, reordered, repeated) if scalar else
+                       checker.fneg_vector_options(ceiling, reordered, repeated))
+            transform_result = checker.run([opt, *options], input=checker.keep_functions(source, functions))
+            ir = transform_result.stdout
+            tag = f'd{int(defined)}-c{capacity}-s{int(scalar)}-r{int(reordered)}-lv{1 + repeated}'
+            (work / (tag + '.ll')).write_text(ir)
+            (work / (tag + '.remarks')).write_text(transform_result.stderr)
+            checker.run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
+                         '-o', str(work / (tag + '.s'))], input=ir)
+            probed = ir
+            # Keep these functions in one module: every body must retain
+            # access to the same transform diagnostics after carry mutations.
+            for name in functions:
+                kind = 'defined' if defined else True
+                body = checker.check_bitwise(ir, source, name, capacity, scalar, multiply=kind)
+                blocks = checker.loop_blocks(body)
+                shape = checker.consumer_vf4(body, allow_fixed=True)
+                vector = bool(shape)
+                loc = ('scalar-multiply-defined.c:72:3:' if defined else
+                       f'scalar-multiply.c:{12 + 20 * checker.MULTIPLY_FUNCTIONS.index(name)}:3:')
+                for role, vf in (('producer', '1'), ('consumer', shape.remark if shape else '1')):
+                    assert f'{loc} scalar-IR fission {role} VF {vf}\n' in transform_result.stderr, transform_result.stderr
+                assert re.search(re.escape(loc) + r' split scalar-IR reduction loop;[^\n]*'
+                                 rf'scratch capacity {capacity}, scratch bytes {ceiling}', transform_result.stderr)
+                if vector:
+                    counts['scalable_vector_bodies' if shape.scalable else 'fixed_vector_bodies'] += 1
+                assert scalar or vector or capacity == 1
+                checked = checker.check_bitwise(ir, source, name, capacity, scalar,
+                                                probe=True, multiply=kind)
+                probed = replace_one(probed, body, checked)
+                for hook, sites in (('begin', 1), ('producer', 1), ('store', 1),
+                                    ('guard', 1), ('consume', 2 if vector else 1), ('end', 1)):
+                    assert checked.count('call void @record_mul_' + hook + '(') == sites
+
+                def reject(candidate):
+                    assert candidate != body
+                    module = replace_one(ir, body, candidate)
+                    try:
+                        checker.check_bitwise(module, source, name, capacity, scalar, multiply=kind)
+                    except AssertionError:
+                        counts['rejections'] += 1
+                    else:
+                        failure = f'{tag}.{name}.accepted-mutation.ll'
+                        (work / failure).write_text(module)
+                        counts['failure'] = dict(kind='accepted product mutation', module=failure)
+                        (work / 'checker-counts.json').write_text(json.dumps(counts, indent=2) + '\n')
+                        raise AssertionError(name + ': accepted product mutation; saved ' + failure)
+
+                def change(value, old, new):
+                    anchor = re.findall(r'^  %' + re.escape(value) + r' = [^\n]*$', body, re.M)
+                    assert len(anchor) == 1, (name, value)
+                    reject(replace_one(body, anchor[0], replace_one(anchor[0], old, new)))
+
+                reductions = checker.MULTIPLY_DEFINED_REDUCTIONS if defined else checker.MULTIPLY_REDUCTIONS
+                for r, ty, seed, op, reverse in reductions:
+                    change('u.' + r + '.consume', op + ' ' + ty, 'add ' + ty)
+                    if op.startswith('mul'):
+                        flag_change = op.replace(' nuw', '', 1).replace(' nsw', '', 1) if defined else 'mul nuw'
+                        change('u.' + r + '.consume', op + ' ' + ty, flag_change + ' ' + ty)
+                if not vector:
+                    for r, ty, seed, op, _ in reductions:
+                        start = f'%{r}.chunk.carry' if capacity < 65 else seed
+                        neutral = '1' if op.startswith('mul') else '0'
+                        change(r + '.consume', '[ ' + start + ',', '[ ' + neutral + ',')
+                else:
+                    placements = []
+                    for r, ty, seed, op, _ in reductions:
+                        start = f'%{r}.chunk.carry' if capacity < 65 else seed
+                        anchor, initializer, form, neutral = initializer_anchor(body, shape, ty, start, op)
+                        key = f'{form}:{ty}:{op}'
+                        counts['initializer_sites'][key] = counts['initializer_sites'].get(key, 0) + 1
+
+                        def corrupt_initializer(changed, group):
+                            candidate = replace_one(body, anchor, replace_one(anchor, initializer, changed))
+                            reject(candidate)
+                            counts['initializer_rejections'][group] += 1
+
+                        if form == 'fixed_vector':
+                            lanes = [start, neutral, neutral, neutral]
+
+                            def literal(values):
+                                return '<' + ', '.join(f'{ty} {v}' for v in values) + '>'
+
+                            corrupt_initializer(literal([neutral, *lanes[1:]]), 'seed')
+                            # Each remaining neutral lane is an independent
+                            # obligation, even when its spelling is repeated.
+                            for lane in range(1, 4):
+                                values = lanes.copy()
+                                values[lane] = '0' if neutral != '0' else '1'
+                                corrupt_initializer(literal(values), 'neutral')
+                            misplaced = literal([neutral, start, neutral, neutral])
+                        else:
+                            corrupt_initializer(replace_one(initializer, f'{ty} {start}, i32 0',
+                                                            f'{ty} {neutral}, i32 0'), 'seed')
+                            base = 'zeroinitializer' if neutral == '0' else f'splat ({ty} {neutral})'
+                            wrong = f'splat ({ty} 1)' if neutral == '0' else 'zeroinitializer'
+                            corrupt_initializer(replace_one(initializer, base, wrong), 'neutral')
+                            misplaced = replace_one(initializer, ', i32 0', ', i32 1')
+                        placements.append((anchor, initializer, misplaced))
+                    change('index.next', 'add ', 'sub ')
+                    change('n.mod.vf', 'urem ', 'udiv ')
+                    # The actual load shape must agree with every dispatch,
+                    # rounding and step width; none is an independent hint.
+                    dispatch = re.search(r'%min.iters.check = icmp ult i64 (%[-\w.$]+), (%[-\w.$]+|\d+)',
+                                         blocks['scalar.fission.consumer.ph'])
+                    assert dispatch
+                    count, width = dispatch.groups()
+                    step = re.search(r'%index.next = add(?: nuw)? i64 %index, (%[-\w.$]+|\d+)',
+                                     blocks['vector.body'])[1]
+                    change('min.iters.check', ', ' + width, ', 8')
+                    change('index.next', ', ' + step, ', 8')
+                    change('n.mod.vf', ', ' + step, ', 8')
+                    change('min.iters.check', count + ',', '%seed,')
+                    change('n.mod.vf', count + ',', '%seed,')
+                    change('cmp.n', count + ',', '%seed,')
+                    change('n.vec', 'sub ', 'add ')
+                    change('bc.resume.val', '[ %n.vec,', '[ 0,')
+                    change('fission.consumer.iv', '[ %bc.resume.val,', '[ 0,')
+                    for ty in ('i8', 'i32', 'i64'):
+                        vty = shape.vector_type(ty)
+                        load = re.findall(r'^  (%[-\w.$]+) = load ' + re.escape(vty) + ',', blocks['vector.body'], re.M)
+                        assert len(load) == 1
+                        change(load[0][1:], vty, '<8 x ' + ty + '>')
+                        change(load[0][1:], vty, '<' + ('' if shape.scalable else 'vscale x ') + '4 x ' + ty + '>')
+                        reduced_values = re.findall(r'^  (%[-\w.$]+) = call ' + ty +
+                                                r' @llvm.vector.reduce.mul\.' + shape.suffix(ty) + r'\(', body, re.M)
+                        assert len(reduced_values) == 2
+                        for reduced in reduced_values:
+                            change(reduced[1:], '.' + shape.suffix(ty) + '(',
+                                   '.' + ('v4' if shape.scalable else 'nxv4') + ty + '(')
+                            change(reduced[1:], vty, '<8 x ' + ty + '>')
+                    # Keep the later seed-placement mutations live for every
+                    # representation, after the schedule/type/intrinsic checks.
+                    for anchor, initializer, misplaced in placements:
+                        reject(replace_one(body, anchor, replace_one(anchor, initializer, misplaced)))
+                        counts['initializer_rejections']['placement'] += 1
+
+                def reject_probe(candidate):
+                    assert candidate != checked
+                    try:
+                        checker.check_consumer_lane_probes(candidate, shape, 'record_mul_')
+                    except AssertionError:
+                        counts['probe_rejections'] += 1
+                    else:
+                        failure = f'{tag}.{name}.accepted-probe-mutation.ll'
+                        (work / failure).write_text(replace_one(ir, body, candidate) + checker.MULTIPLY_DECLARATIONS)
+                        counts['failure'] = dict(kind='accepted incorrect probe width', module=failure)
+                        (work / 'checker-counts.json').write_text(json.dumps(counts, indent=2) + '\n')
+                        raise AssertionError(name + ': accepted incorrect probe width; saved ' + failure)
+                scalar_hook = re.findall(r'^  call void @record_mul_consume\([^\n]*, i64 1, i1 false\)$',
+                                         checked, re.M)
+                assert len(scalar_hook) == 1
+                reject_probe(replace_one(checked, scalar_hook[0],
+                                         replace_one(scalar_hook[0], ', i64 1,', ', i64 4,')))
+                if vector:
+                    prefix, lanes = shape.probe()
+                    vector_hook = re.findall(r'^  call void @record_mul_consume\([^\n]*, i64 ' +
+                                             re.escape(lanes) + r', i1 true\)$', checked, re.M)
+                    assert len(vector_hook) == 1
+                    reject_probe(replace_one(checked, vector_hook[0],
+                                             replace_one(vector_hook[0], ', i64 ' + lanes + ',', ', i64 8,')))
+                    if not shape.scalable:
+                        # The old bug: a fixed probe incorrectly multiplied
+                        # four by host vscale, even though its loads stay fixed.
+                        bad = ('  %bw.scale = call i64 @llvm.vscale.i64()\n'
+                               '  %bw.lanes = mul i64 %bw.scale, 4\n')
+                        reject_probe(replace_one(checked, vector_hook[0], bad +
+                            replace_one(vector_hook[0], ', i64 4,', ', i64 %bw.lanes,')))
+                if capacity < 65:
+                    change('a0.chunk.carry', '[ ' + reductions[0][2] + ',', '[ 1,')
+                    chunk_result = '%a0.result' if name == 'multiply_compact' else '%a0.chunk.result'
+                    change('a0.chunk.carry', '[ ' + chunk_result + ',', '[ 1,')
+                    change('state.chunk.backedge', '[ %state.next,', '[ %state,')
+                    change('fission.chunk.next', '%fission.producer.completed' if name == 'multiply_compact'
+                           else '%fission.chunk.count', '1')
+                if name == 'multiply_compact':
+                    change('fission.participating', '[ 0,', '[ 1,')
+                    change('fission.participating.count', '%fission.participating.merge', '%next')
+                    change('fission.empty', 'icmp eq ', 'icmp ne ')
+                change('state.fission.export', '[ %state,', '[ %state.next,')
+                byte_slot = re.findall(r'^  (%[-\w.$]+) = alloca \[' + str(capacity) + r' x i8\]', body, re.M)
+                assert len(byte_slot) == 1
+                change(byte_slot[0][1:], f'[{capacity} x i8]', f'[{capacity + 1} x i8]')
+                # Follow actual observable byte and wide results; arithmetic
+                # left unused by a broken export is not successful reduction.
+                for r, ty in (('b0', 'i8'), ('x0', 'i64')):
+                    anchor = re.findall(r'^  %out\.' + r + r' = phi ' + ty + r' [^\n]*$', body, re.M)
+                    assert len(anchor) == 1
+                    changed, n = re.subn(r'\[ %[-\w.$]+,', '[ 1,', anchor[0], count=1)
+                    assert n == 1
+                    reject(replace_one(body, anchor[0], changed))
+                counts['bodies'] += 1
+                counts['observations'].append(dict(module=tag, function=name, defined=defined,
+                                                   capacity=capacity, scalar_requested=scalar,
+                                                   policy='reordered' if reordered else 'strict',
+                                                   lv_invocations=1 + repeated,
+                                                   emitted_shape=shape.remark if shape else None))
+                (work / 'checker-counts.json').write_text(json.dumps(counts, indent=2) + '\n')
+            probed += checker.MULTIPLY_DECLARATIONS
+            (work / (tag + '.probe.ll')).write_text(probed)
+            checker.run([opt, '-passes=verify', '-disable-output'], input=probed)
+            counts['modules'] += 1
+            (work / 'checker-counts.json').write_text(json.dumps(counts, indent=2) + '\n')
+
+# Padded capacity lies strictly below nine although the logical bytes (117)
+# fit. Check exact source-located decisions rather than incidental allocas.
+source = (fixtures / 'reduction-fission-scalar-multiply.ll').read_text()
+limit_result = checker.run([opt, *checker.subtraction_options(120),
+                            '-pass-remarks-missed=vplan-reduction-fission'], input=source)
+for line in (12, 32, 52):
+    assert re.search(rf'scalar-multiply.c:{line}:3: split scalar-IR reduction loop;[^\n]*'
+                     r'scratch capacity 8, scratch bytes 104', limit_result.stderr)
+# Affine controls now use the actual original continuation and carried IV.
+# Keep every inherited body/mutation, and certify this newly admitted boundary.
+checker.check_original_chunk_control(limit_result.stdout, source, 'multiply_affine', 8)
+assert counts['modules'] == 48 and counts['bodies'] == 88, counts
+assert counts['rejections'] > 1000 and counts['probe_rejections'] >= 88, counts
+assert counts['fixed_vector_bodies'] > 0, counts
+assert any(key.startswith('instruction:') for key in counts['initializer_sites']), counts
+assert any(key.startswith('fixed_vector:') for key in counts['initializer_sites']), counts
+assert all(counts['initializer_rejections'].values()), counts
+
+# Synthetic stdout only checks the accounting parser. It is separate from
+# actual original/transformed/oracle executions and their address/path hooks.
+name = 'multiply_observation'
+fields = dict(comparisons=34816, producer=512 * sum(range(1, 66)),
+              consumer=512 * sum(range(1, 66)), chunks=512 * 65, empty=0,
+              vector=0, tail=512 * sum(range(1, 66)), fallback=512 * 65,
+              zero=1536, lanes=0, scalable=0, vscale=1, **{'vector-iterations': 0})
+line = 'Multiply ' + name + ': ' + ' '.join(f'{k}={v}' for k, v in fields.items())
+total = 'Multiply: 34816 original/transformed/unsigned-oracle host comparisons (not RVV)'
+stdout = line + '\n' + total + '\n'
+assert checker.bitwise_execution_counts(stdout, {name: checker.BitwiseExecutionConfig(0, 65, None, 1)}, multiply=True)[name] == fields
+counts['parser_rejections'] = 0
+for candidate in (replace_one(stdout, line + '\n', ''), stdout + line + '\n',
+                  replace_one(stdout, 'vector=0', 'vector=1'),
+                  replace_one(stdout, 'zero=1536', 'zero=0'),
+                  replace_one(stdout, 'consumer=' + str(fields['consumer']), 'consumer=1'),
+                  replace_one(stdout, 'chunks=' + str(fields['chunks']), 'chunks=1')):
+    assert candidate != stdout
+    try:
+        checker.bitwise_execution_counts(candidate, {name: checker.BitwiseExecutionConfig(0, 65, None, 1)}, multiply=True)
+    except AssertionError:
+        counts['parser_rejections'] += 1
+    else:
+        raise AssertionError('accepted incomplete product observation')
+assert counts['parser_rejections'] == 6
+
+# Synthetic lane/accounting inputs only. These do not establish execution.
+counts['shape_accounting_rejections'] = 0
+fixed_shape, scalable_shape = checker.ConsumerVF4(False), checker.ConsumerVF4(True)
+assert [fixed_shape.lanes(s) for s in (1, 2, 32)] == [4, 4, 4]
+assert [scalable_shape.lanes(s) for s in (1, 2, 32)] == [4, 8, 128]
+assert fixed_shape.scales((1, 2, 4, 8, 32)) == (1,)
+assert scalable_shape.scales((1, 2, 4, 8, 32)) == (1, 2, 4, 8, 32)
+for vector_shape, scale, capacity in ((fixed_shape, 1, 65), (scalable_shape, 2, 65),
+                                      (fixed_shape, 1, 1), (None, 1, 1)):
+    config = checker.BitwiseExecutionConfig(0, capacity, vector_shape, scale)
+    lanes = config.lanes
+    visits = sum(n // lanes for n in range(1, 66)) * 512 if lanes and capacity == 65 else 0
+    vector_chunks = (66 - lanes) * 512 if visits else 0
+    chunks = 512 * sum((n + capacity - 1) // capacity for n in range(1, 66))
+    row = dict(comparisons=34816, producer=512 * sum(range(1, 66)),
+               consumer=512 * sum(range(1, 66)), chunks=chunks, empty=0,
+               vector=vector_chunks, tail=512 * sum(range(1, 66)) - visits * lanes,
+               fallback=chunks - vector_chunks, zero=1536, lanes=lanes,
+               scalable=int(config.scalable), vscale=scale, **{'vector-iterations': visits})
+    line = 'Multiply ' + name + ': ' + ' '.join(f'{k}={v}' for k, v in row.items())
+    text = line + '\n' + total + '\n'
+    assert checker.bitwise_execution_counts(text, {name: config}, multiply=True)[name] == row
+    for key, wrong in (('lanes', lanes + 4), ('scalable', 1 - int(config.scalable)),
+                       ('vscale', scale + 1), ('vector-iterations', visits + 1),
+                       ('vector', vector_chunks + 1)):
+        candidate = replace_one(text, key + '=' + str(row[key]), key + '=' + str(wrong))
+        try:
+            checker.bitwise_execution_counts(candidate, {name: config}, multiply=True)
+        except AssertionError:
+            counts['shape_accounting_rejections'] += 1
+        else:
+            raise AssertionError('accepted wrong lane/accounting observation')
+try:
+    checker.BitwiseExecutionConfig(0, 65, fixed_shape, 2)
+except AssertionError:
+    counts['shape_accounting_rejections'] += 1
+else:
+    raise AssertionError('fixed width repeated as scalable coverage')
+assert counts['shape_accounting_rejections'] == 21, counts
+counts['complete'] = True
+(work / 'checker-counts.json').write_text(json.dumps(counts, indent=2) + '\n')

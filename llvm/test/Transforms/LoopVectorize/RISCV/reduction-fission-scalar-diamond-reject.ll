@@ -295,9 +295,11 @@ bypass:
 }
 
 
-; Writes in either arm are observable effects.
+; An ordinary arm-local store now stays with all original producer accesses.
+; The accumulator-use proof excludes any feedback through that write.
 ; CHECK-LABEL: define i32 @reject_arm_store(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [65 x i32]
+; CHECK: scalar.fission.consumer.ph:
 ; CHECK: ret i32
 define i32 @reject_arm_store(ptr %a, i64 %n) {
 entry:

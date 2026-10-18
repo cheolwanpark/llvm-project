@@ -379,12 +379,22 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-acyclic-reject.c:72:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
+; The arm-local self-store is now legal and stays in right2. The exact
+; capacity boundary chunks at 259 and splits full-trip at 260 bytes.
+; REASON: scalar-acyclic-reject.c:72:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256
 ; CHECK-LABEL: define i32 @reject_acyclic_store(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [64 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: right2:
+; CHECK: store i32 %x, ptr %p
+; CHECK: scalar.fission.consumer.ph:
 ; CHECK: ret i32
-; CHECK-NOT: scalar.fission
-; CHECK: }
+; EXPORT-LABEL: define i32 @reject_acyclic_store(
+; EXPORT: alloca [65 x i32]
+; EXPORT: right2:
+; EXPORT: store i32 %x, ptr %p
+; EXPORT: scalar.fission.consumer.ph:
+; EXPORT: ret i32
 define i32 @reject_acyclic_store(ptr %a, i64 %n) !dbg !18 {
 entry:
   %valid = icmp ule i64 %n, 65

@@ -331,8 +331,12 @@ bypass:
 }
 
 ; CHECK-LABEL: define i32 @reject_compact_store(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [65 x i32]
+; CHECK: scalar.fission.consumer.guard:
+; CHECK: scalar.fission.consumer.ph:
 ; CHECK: ret i32
+; Historical store rejection is now positive. The write stays on the original
+; participating path; it cannot observe or alter the extracted accumulator.
 define i32 @reject_compact_store(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -561,10 +565,10 @@ bypass:
 }
 
 
-; CHECK-LABEL: define i32 @reject_compact_non_add(
+; CHECK-LABEL: define i32 @reject_compact_unsupported_division(
 ; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
-define i32 @reject_compact_non_add(ptr %a, i64 %n) {
+define i32 @reject_compact_unsupported_division(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
   %nonzero = icmp ne i64 %n, 0
@@ -580,7 +584,7 @@ loop:
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %latch
 left:
-  %update = mul i32 %sum, %x
+  %update = udiv i32 %sum, %x
   br label %latch
 latch:
   %merged = phi i32 [%update, %left], [%sum, %loop]

@@ -444,9 +444,13 @@ exit:
   ret void
 }
 
-; REASON: scalar-compact-recurrence.c:62:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
+; An ordinary producer store composes with retained state. It stays in its
+; original block/order; volatile and atomic siblings remain true rejections.
+; REASON: scalar-compact-recurrence.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
 ; CHECK-LABEL: define void @compact_recurrence_reject_store(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [65 x i32]
+; CHECK: store i32 %ax, ptr %out
+; CHECK: scalar.fission.consumer.guard:
 ; CHECK: ret void
 define void @compact_recurrence_reject_store(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !22 {

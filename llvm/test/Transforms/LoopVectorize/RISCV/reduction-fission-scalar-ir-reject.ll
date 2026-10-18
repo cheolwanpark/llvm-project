@@ -493,11 +493,16 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-unsupported-instruction
+; Historical reject_write is now positive: %x is independent of the extracted
+; accumulator, and both its load and self-store remain ordered in the producer.
+; Unsupported stores remain explicitly rejected in scalar-stores-reject.ll.
+; FINITE: scalar-reject.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260
 ; CHECK-LABEL: define i32 @reject_write(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [65 x i32]
+; CHECK: store i32 %x, ptr %p
+; CHECK: scalar.fission.consumer.ph:
 ; CHECK: ret i32
-define i32 @reject_write(ptr %a, i64 %n) {
+define i32 @reject_write(ptr %a, i64 %n) !dbg !12 {
 entry:
   %valid = icmp ule i64 %n, 65
   %nonzero = icmp ne i64 %n, 0
@@ -515,7 +520,7 @@ loop:
   store i32 %x, ptr %p
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, %n
-  br i1 %done, label %exit, label %loop
+  br i1 %done, label %exit, label %loop, !dbg !13
 exit:
   ret i32 %update
 bypass:
@@ -578,9 +583,13 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
+; Historical reject_other_recurrence is now a direct XOR positive. The safe
+; helper stays in the producer and the exact XOR update moves to the consumer.
 ; CHECK-LABEL: define i32 @reject_other_recurrence(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [65 x i32]
+; CHECK: call i32 @safe(
+; CHECK: scalar.fission.consumer.ph:
+; CHECK: xor
 ; CHECK: ret i32
 define i32 @reject_other_recurrence(ptr %a, i64 %n) {
 entry:
@@ -726,3 +735,5 @@ bypass:
 
 !10 = distinct !DISubprogram(name: "reject_unbounded", scope: !1, file: !1, line: 30, type: !5, scopeLine: 30, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
 !11 = !DILocation(line: 32, column: 3, scope: !10)
+!12 = distinct !DISubprogram(name: "reject_write", scope: !1, file: !1, line: 50, type: !5, scopeLine: 50, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!13 = !DILocation(line: 52, column: 3, scope: !12)

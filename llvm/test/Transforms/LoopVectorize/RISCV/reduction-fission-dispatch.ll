@@ -33,9 +33,9 @@
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 -S %s -o %t.retained.exact
 ; RUN: FileCheck %s --check-prefix=RETAINED-EXACT < %t.retained.exact
 ;
-; Default dispatch retains each XOR recurrence in the producer and extracts
-; only the closed add reduction. Failed optional recognition is transactional:
-; retaining XOR must not block the independent accumulator or change its uses.
+; Default dispatch moves both closed add and XOR updates into the consumer.
+; They share one unchanged producer contribution stream. Feedback-dependent
+; producer state remains covered by the scalar recurrence fixtures.
 ; The ordered two-sum AoS loop also splits early exactly once. The nested
 ; compact stream retains outer feedback and reuses bounded scratch per row.
 ; Volatile input rejects early splitting and ordinary LV.
@@ -49,11 +49,11 @@
 ; Actual default scalar-fission stages execute under both FP policies, once/
 ; twice LV and every inherited fixed vscale, with independent C sum/XOR formulas.
 ;
-; REMARK: dispatch.c:10:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 1
+; REMARK: dispatch.c:10:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 0
 ; REMARK-SAME: scratch store bytes/iteration 4, scratch load bytes/iteration 4, producer reread bytes/iteration 0, duplicated producer instructions 0
 ; REMARK-DAG: dispatch.c:10:5: scalar-IR fission producer VF vscale x {{[1-9][0-9]*}}
 ; REMARK-DAG: dispatch.c:10:5: scalar-IR fission consumer VF vscale x {{[1-9][0-9]*}}
-; REMARK: dispatch.c:20:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 1
+; REMARK: dispatch.c:20:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 0
 ; REMARK-SAME: scratch store bytes/iteration 4, scratch load bytes/iteration 4, producer reread bytes/iteration 0, duplicated producer instructions 0
 ; REMARK-DAG: dispatch.c:20:5: scalar-IR fission producer VF vscale x {{[1-9][0-9]*}}
 ; REMARK-DAG: dispatch.c:20:5: scalar-IR fission consumer VF vscale x {{[1-9][0-9]*}}
@@ -69,22 +69,29 @@
 ; SELECTED-COUNT-4: : split
 ; SELECTED-NOT: : split
 ;
-; Intentional change: 259 bytes admits C=64 with a scalar XOR carry. Exactly
-; 260 still admits the full stream. Both preserve the exact exported XOR.
-; RETAINED-CHUNK: dispatch.c:10:5: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256, producer live-outs 1, chunked schedule
-; RETAINED-CHUNK-SAME: producer state carries 1
-; RETAINED-CHUNK: dispatch.c:20:5: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256, producer live-outs 1, chunked schedule
-; RETAINED-CHUNK-SAME: producer state carries 1
+; Intentional change: XOR now has a consumer accumulator carry. Shared
+; scratch still uses C=64 at259 and C=65 at260; producer state carries are zero.
+; RETAINED-CHUNK: dispatch.c:10:5: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256, producer live-outs 0, chunked schedule
+; RETAINED-CHUNK-SAME: producer state carries 0
+; RETAINED-CHUNK: dispatch.c:20:5: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256, producer live-outs 0, chunked schedule
+; RETAINED-CHUNK-SAME: producer state carries 0
 ; RETAINED-LIMIT-LABEL: define void @interleave2(
-; RETAINED-LIMIT: %bits.chunk.carry = phi i32 [ 23, %preheader ], [ %bits.chunk.backedge, %scalar.fission.chunk.latch ]
-; RETAINED-LIMIT: %bits = phi i32 [ %bits.chunk.carry, %scalar.fission.producer.ph ], [ %updated.bits, %loop ]
-; RETAINED-LIMIT: %updated.bits = xor i32 %bits, %term
-; RETAINED-LIMIT-DAG: %updated.bits.fission.export = phi i32 [ %updated.bits, %loop ]
-; RETAINED-LIMIT-DAG: %bits.chunk.backedge = phi i32 [ %updated.bits, %loop ]
+; RETAINED-LIMIT: %scalar.fission.scratch = alloca [64 x i32]
+; RETAINED-LIMIT: %bits.chunk.carry = phi i32 [ 23, %preheader ], [ %bits.chunk.result, %scalar.fission.chunk.latch ]
+; RETAINED-LIMIT-NOT: %updated.bits = xor
+; RETAINED-LIMIT: scalar.fission.consumer.body:
+; RETAINED-LIMIT: %update.consume = add i32 %sum.consume, %fission.contribution
+; RETAINED-LIMIT: %updated.bits.consume = xor i32 %bits.consume, %fission.contribution
+; RETAINED-LIMIT: %bits.chunk.result = phi i32 [ %updated.bits.consume, %scalar.fission.consumer.body ]
 ; RETAINED-LIMIT: ret void
 ; RETAINED-LIMIT-LABEL: define void @interleave3(
-; RETAINED-LIMIT: %bits.chunk.carry = phi i32 [ 23, %preheader ], [ %bits.chunk.backedge, %scalar.fission.chunk.latch ]
-; RETAINED-LIMIT: %bits.chunk.backedge = phi i32 [ %updated.bits, %loop ]
+; RETAINED-LIMIT: %scalar.fission.scratch = alloca [64 x i32]
+; RETAINED-LIMIT: %bits.chunk.carry = phi i32 [ 23, %preheader ], [ %bits.chunk.result, %scalar.fission.chunk.latch ]
+; RETAINED-LIMIT-NOT: %updated.bits = xor
+; RETAINED-LIMIT: scalar.fission.consumer.body:
+; RETAINED-LIMIT: %update.consume = add i32 %sum.consume, %fission.contribution
+; RETAINED-LIMIT: %updated.bits.consume = xor i32 %bits.consume, %fission.contribution
+; RETAINED-LIMIT: %bits.chunk.result = phi i32 [ %updated.bits.consume, %scalar.fission.consumer.body ]
 ; RETAINED-LIMIT: ret void
 ; RETAINED-LIMIT-LABEL: define void @interleave2_ordered(
 ; RETAINED-LIMIT-LABEL: define void @compact_nested(
@@ -96,29 +103,26 @@
 ; RETAINED-CHUNK: dispatch.c:50:5: split scalar-IR reduction loop; {{.*}}scratch capacity 21, scratch bytes 256, producer live-outs 0, chunked schedule, trip bound 65
 ; RETAINED-EXACT-LABEL: define void @interleave2(
 ; RETAINED-EXACT: %scalar.fission.scratch = alloca [65 x i32]
-; RETAINED-EXACT: %bits = phi i32 [ 23, %preheader ], [ %updated.bits, %loop ]
-; RETAINED-EXACT: %updated.bits = xor i32 %bits, %term
-; RETAINED-EXACT: scalar.fission.consumer.ph:
-; RETAINED-EXACT: [[XOR_EXPORT:%[-a-zA-Z$._0-9]+]] = phi i32 [ %updated.bits, %loop ]
+; RETAINED-EXACT-NOT: %updated.bits = xor
 ; RETAINED-EXACT: scalar.fission.consumer.body:
 ; RETAINED-EXACT: %update.consume = add i32 %sum.consume, %fission.contribution
-; RETAINED-EXACT: exit:
-; RETAINED-EXACT-DAG: [[SUM_RESULT:%[-a-zA-Z$._0-9]+]] = phi i32 [ %update.consume, %scalar.fission.consumer.body ]
-; RETAINED-EXACT-DAG: [[XOR_RESULT:%[-a-zA-Z$._0-9]+]] = phi i32 [ [[XOR_EXPORT]], %scalar.fission.consumer.body ]
-; RETAINED-EXACT: store i32 [[SUM_RESULT]], ptr %out
-; RETAINED-EXACT: store i32 [[XOR_RESULT]], ptr %o1
+; RETAINED-EXACT: %updated.bits.consume = xor i32 %bits.consume, %fission.contribution
+; RETAINED-EXACT: [[SUM0:%[-a-zA-Z$._0-9]+]] = phi i32 [ %update.consume, %scalar.fission.consumer.body ]
+; RETAINED-EXACT: [[BITS0:%[-a-zA-Z$._0-9]+]] = phi i32 [ %updated.bits.consume, %scalar.fission.consumer.body ]
+; RETAINED-EXACT: store i32 [[SUM0]], ptr %out
+; RETAINED-EXACT: store i32 [[BITS0]], ptr %o1
+; RETAINED-EXACT: ret void
 ; RETAINED-EXACT-LABEL: define void @interleave3(
 ; RETAINED-EXACT: %scalar.fission.scratch = alloca [65 x i32]
-; RETAINED-EXACT: %updated.bits = xor i32 %bits, %term
-; RETAINED-EXACT: scalar.fission.consumer.ph:
-; RETAINED-EXACT: [[XOR3_EXPORT:%[-a-zA-Z$._0-9]+]] = phi i32 [ %updated.bits, %loop ]
+; RETAINED-EXACT-NOT: %updated.bits = xor
 ; RETAINED-EXACT: scalar.fission.consumer.body:
 ; RETAINED-EXACT: %update.consume = add i32 %sum.consume, %fission.contribution
-; RETAINED-EXACT: exit:
-; RETAINED-EXACT-DAG: [[SUM3_RESULT:%[-a-zA-Z$._0-9]+]] = phi i32 [ %update.consume, %scalar.fission.consumer.body ]
-; RETAINED-EXACT-DAG: [[XOR3_RESULT:%[-a-zA-Z$._0-9]+]] = phi i32 [ [[XOR3_EXPORT]], %scalar.fission.consumer.body ]
-; RETAINED-EXACT: store i32 [[SUM3_RESULT]], ptr %out
-; RETAINED-EXACT: store i32 [[XOR3_RESULT]], ptr %o1
+; RETAINED-EXACT: %updated.bits.consume = xor i32 %bits.consume, %fission.contribution
+; RETAINED-EXACT: [[SUM1:%[-a-zA-Z$._0-9]+]] = phi i32 [ %update.consume, %scalar.fission.consumer.body ]
+; RETAINED-EXACT: [[BITS1:%[-a-zA-Z$._0-9]+]] = phi i32 [ %updated.bits.consume, %scalar.fission.consumer.body ]
+; RETAINED-EXACT: store i32 [[SUM1]], ptr %out
+; RETAINED-EXACT: store i32 [[BITS1]], ptr %o1
+; RETAINED-EXACT: ret void
 ;
 ; DEFAULT-LABEL: define void @interleave2(
 ; DEFAULT: %scalar.fission.scratch = alloca [65 x i32]
@@ -126,11 +130,10 @@
 ; DEFAULT: vector.body{{[0-9]*}}:
 ; DEFAULT: @llvm.vector.deinterleave2.
 ; DEFAULT: @llvm.vp.store.nxv{{[1-9][0-9]*}}i32
-; DEFAULT: @llvm.vector.reduce.xor.nxv{{[1-9][0-9]*}}i32
 ; DEFAULT: scalar.fission.consumer.ph:
-; DEFAULT-NOT: @llvm.vector.reduce.xor.
 ; DEFAULT: @llvm.vp.load.nxv{{[1-9][0-9]*}}i32
 ; DEFAULT: @llvm.vector.reduce.add.nxv{{[1-9][0-9]*}}i32
+; DEFAULT: @llvm.vector.reduce.xor.
 ; DEFAULT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
 ; DEFAULT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
 ; DEFAULT-NOT: vector.fission.
@@ -140,11 +143,10 @@
 ; DEFAULT: vector.body{{[0-9]*}}:
 ; DEFAULT: @llvm.vector.deinterleave3.
 ; DEFAULT: @llvm.vp.store.nxv{{[1-9][0-9]*}}i32
-; DEFAULT: @llvm.vector.reduce.xor.nxv{{[1-9][0-9]*}}i32
 ; DEFAULT: scalar.fission.consumer.ph:
-; DEFAULT-NOT: @llvm.vector.reduce.xor.
 ; DEFAULT: @llvm.vp.load.nxv{{[1-9][0-9]*}}i32
 ; DEFAULT: @llvm.vector.reduce.add.nxv{{[1-9][0-9]*}}i32
+; DEFAULT: @llvm.vector.reduce.xor.
 ; DEFAULT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
 ; DEFAULT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
 ; DEFAULT-NOT: vector.fission.
@@ -178,24 +180,24 @@
 ;
 ; TAIL-LABEL: define void @interleave2(
 ; TAIL: %scalar.fission.scratch = alloca [65 x i32]
-; TAIL: @llvm.vector.reduce.xor.
-; TAIL: loop:
-; TAIL: %updated.bits = xor i32 %bits, %term
+; TAIL-NOT: %updated.bits = xor
 ; TAIL: scalar.fission.consumer.ph:
 ; TAIL: @llvm.vector.reduce.add.
+; TAIL: @llvm.vector.reduce.xor.
 ; TAIL: scalar.fission.consumer.body:
 ; TAIL: %update.consume = add i32 %sum.consume, %fission.contribution
+; TAIL: %updated.bits.consume = xor i32 %bits.consume, %fission.contribution
 ; TAIL: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
 ; TAIL: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
 ; TAIL-LABEL: define void @interleave3(
 ; TAIL: %scalar.fission.scratch = alloca [65 x i32]
-; TAIL: @llvm.vector.reduce.xor.
-; TAIL: loop:
-; TAIL: %updated.bits = xor i32 %bits, %term
+; TAIL-NOT: %updated.bits = xor
 ; TAIL: scalar.fission.consumer.ph:
 ; TAIL: @llvm.vector.reduce.add.
+; TAIL: @llvm.vector.reduce.xor.
 ; TAIL: scalar.fission.consumer.body:
 ; TAIL: %update.consume = add i32 %sum.consume, %fission.contribution
+; TAIL: %updated.bits.consume = xor i32 %bits.consume, %fission.contribution
 ; TAIL: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
 ; TAIL: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
 ; TAIL-LABEL: define void @interleave2_ordered(
@@ -208,7 +210,7 @@
 ; TAIL: @llvm.vector.reduce.fadd.nxv4f64
 ; TAIL: scalar.fission.consumer.body:
 ;
-; At 519 bytes, both retained-XOR scalar splits still use 260 bytes. The ordered
+; At 519 bytes, both shared-stream scalar splits still use 260 bytes. The ordered
 ; single-block producer now uses C=64/B=512 instead of rejecting its 520-byte
 ; full-trip allocation. The compact CFG uses C=42/B=504 with its own P guard.
 ; Check the scalar schedule separately so ordinary LV cannot hide its exact
@@ -216,17 +218,17 @@
 ; LIMIT-LABEL: define void @interleave2(
 ; LIMIT: %scalar.fission.scratch = alloca [65 x i32]
 ; LIMIT-NOT: scalar.fission.chunk:
-; LIMIT: @llvm.vector.reduce.xor.
 ; LIMIT: scalar.fission.consumer.ph:
 ; LIMIT: @llvm.vector.reduce.add.
+; LIMIT: @llvm.vector.reduce.xor.
 ; LIMIT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
 ; LIMIT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
 ; LIMIT-LABEL: define void @interleave3(
 ; LIMIT: %scalar.fission.scratch = alloca [65 x i32]
 ; LIMIT-NOT: scalar.fission.chunk:
-; LIMIT: @llvm.vector.reduce.xor.
 ; LIMIT: scalar.fission.consumer.ph:
 ; LIMIT: @llvm.vector.reduce.add.
+; LIMIT: @llvm.vector.reduce.xor.
 ; LIMIT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
 ; LIMIT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
 ; LIMIT-LABEL: define void @interleave2_ordered(
@@ -267,8 +269,8 @@
 ; LIMIT: scalar.fission.consumer.exit:
 ; LIMIT: scalar.fission.chunk.latch:
 ; LIMIT: ret void
-; LIMIT-REMARK: dispatch.c:10:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 1
-; LIMIT-REMARK: dispatch.c:20:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 1
+; LIMIT-REMARK: dispatch.c:10:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 0
+; LIMIT-REMARK: dispatch.c:20:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 0
 ; LIMIT-REMARK: dispatch.c:30:5: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 512, producer live-outs 0, chunked schedule, trip bound 65
 ; LIMIT-REMARK-SAME: scratch store bytes/iteration 8, scratch load bytes/iteration 8, producer reread bytes/iteration 0, duplicated producer instructions 0
 ; LIMIT-REMARK-DAG: dispatch.c:30:5: scalar-IR fission producer VF vscale x {{[1-9][0-9]*}}

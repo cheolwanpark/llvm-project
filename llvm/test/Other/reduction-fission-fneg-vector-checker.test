@@ -1,0 +1,97 @@
+# REQUIRES: riscv-registered-target
+# RUN: split-file %s %t
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py \
+# RUN:   %S/Inputs/reduction-fission-fneg-vector.ll %t opt | FileCheck %s
+# CHECK: Vector negation: 12 probe modules, 16 stage certificates; sign/participation/start/tail mutations rejected
+
+# These are static certificates, not execution evidence. The complete existing
+# execution framework additionally runs original/transformed/sign-bit oracles
+# with actual stage/address probes for each strict/reordered and once/twice row.
+# All inherited scalar fneg fixtures/assertions/rejections remain mandatory.
+
+#--- check.py
+import importlib.util
+from itertools import product
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = checker
+spec.loader.exec_module(checker)
+source = Path(sys.argv[2]).read_text()
+directory, opt = Path(sys.argv[3]), sys.argv[4]
+modules = certificates = mutations = 0
+
+
+def reject(module, name, capacity):
+    global mutations
+    try:
+        checker.check_fneg_vector_function(module, source, name, capacity)
+    except AssertionError:
+        mutations += 1
+        return
+    raise AssertionError('accepted corrupted vector negation stage: ' + name)
+
+
+for functions, capacity, ceiling in checker.FNEG_VECTOR_CONFIGURATIONS:
+    selected = checker.keep_functions(source, functions)
+    for repeated, reordered in product((False, True), repeat=2):
+        result = subprocess.run([opt, *checker.fneg_vector_options(ceiling, reordered, repeated)],
+                                input=selected, text=True, check=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert result.stderr.count('split scalar-IR reduction loop;') == len(functions)
+        module, instrumented = result.stdout, result.stdout
+        for name in functions:
+            body, widths = checker.check_fneg_vector_function(module, source, name, capacity)
+            probed, probe_widths = checker.check_fneg_vector_function(module, source, name, capacity, probe=True)
+            assert widths == probe_widths
+            instrumented = instrumented.replace(body, probed, 1)
+            certificates += 1
+            if repeated or reordered:
+                continue
+            neg = re.search(r'^  %dc = fneg double %dx, !dbg !\d+$', body, re.M)
+            assert neg, body
+            reject(module.replace(body, body.replace(neg[0], neg[0].replace('%dx', '%start'), 1), 1),
+                   name, capacity)
+            wrong_sign = body.replace('fneg double %dx', 'fadd double %dx, 0.0', 1)
+            assert wrong_sign != body
+            reject(module.replace(body, wrong_sign, 1), name, capacity)
+            if name == 'neg_full' and capacity > 1:
+                vector_neg = re.search(r'fneg <vscale x 4 x double> (%[-\w.$]+)', body)
+                assert vector_neg, body
+                changed = body.replace(vector_neg[0],
+                    'fadd <vscale x 4 x double> ' + vector_neg[1] + ', zeroinitializer', 1)
+                reject(module.replace(body, changed, 1), name, capacity)
+            # A wrong actual scalar-tail bound must not count as vector coverage.
+            bound = re.search(r'%fission.consumer.(?:more = icmp ne|done = icmp eq) i64 '
+                              r'%fission.consumer.next, (%[-\w.$]+)', body)
+            assert bound, body
+            changed = body[:bound.start(1)] + '65' + body[bound.end(1):]
+            reject(module.replace(body, changed, 1), name, capacity)
+            if name == 'neg_compact':
+                changed = body.replace('right:', 'right:\n  store float 1.0, ptr %out', 1)
+                reject(module.replace(body, changed, 1), name, capacity)
+                empty = re.search(r'%fission.empty = icmp eq i64 (%[-\w.$]+), 0', body)
+                assert empty, body
+                changed = body[:empty.start(1)] + '%n' + body[empty.end(1):]
+                reject(module.replace(body, changed, 1), name, capacity)
+                changed = body.replace('[ %start, %scalar.fission.consumer.guard ]',
+                                       '[ 0.0, %scalar.fission.consumer.guard ]', 1)
+                assert changed != body
+                reject(module.replace(body, changed, 1), name, capacity)
+            elif capacity < 65:
+                changed = body.replace('[ %start, %preheader ]', '[ 0.0, %preheader ]', 1)
+                assert changed != body
+                reject(module.replace(body, changed, 1), name, capacity)
+        path = directory / f'probe_{modules}.ll'
+        path.write_text(instrumented + checker.FNEG_VECTOR_PROBE_DECLARATIONS)
+        verified = subprocess.run([opt, '-passes=verify', '-disable-output', str(path)],
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert verified.returncode == 0, verified.stderr
+        modules += 1
+assert (modules, certificates, mutations) == (12, 16, 19), (modules, certificates, mutations)
+print('Vector negation: 12 probe modules, 16 stage certificates; sign/participation/start/tail mutations rejected')

@@ -404,11 +404,25 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
         return Fail("scalar-unsupported-recurrence");
     }
     Type *Ty = Phi.getType();
-    if (!((Ty->isIntegerTy() && Update->getOpcode() == Instruction::Add) ||
+    unsigned Opcode = Update->getOpcode();
+    bool Subtract = Opcode == Instruction::Sub || Opcode == Instruction::FSub;
+    if (!((Ty->isIntegerTy() &&
+           (Opcode == Instruction::Add || Opcode == Instruction::Sub ||
+            Opcode == Instruction::Mul ||
+            Opcode == Instruction::And || Opcode == Instruction::Or ||
+            Opcode == Instruction::Xor)) ||
           ((Ty->isFloatTy() || Ty->isDoubleTy()) &&
-           Update->getOpcode() == Instruction::FAdd)) ||
-        (Update->getOperand(0) != &Phi && Update->getOperand(1) != &Phi))
+           (Opcode == Instruction::FAdd || Opcode == Instruction::FSub))) ||
+        (Update->getOperand(0) != &Phi &&
+         (Subtract || Update->getOperand(1) != &Phi)))
       return Fail("scalar-unsupported-recurrence");
+    // Integer multiply and bitwise updates accept either accumulator operand.
+    // Multiplication needs no identity or reassociation here: the scalar
+    // consumer clones the update (including nowrap flags) in original order.
+    // All updates use the same edge-closure and participation proof; skipped
+    // iterations supply no identity contribution. Subtraction is ordered. Move
+    // only accumulator - contribution; the consumer clones the original
+    // instruction and visits the same participating iterations in order.
     unsigned ContributionOperand = Update->getOperand(0) == &Phi ? 1 : 0;
     Value *Contribution = Update->getOperand(ContributionOperand);
     if (Merge) {
@@ -524,6 +538,21 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
           return Reject("scalar-non-simple-load");
         continue;
       }
+      if (auto *Store = dyn_cast<StoreInst>(&I)) {
+        Type *Ty = Store->getValueOperand()->getType();
+        if (!Store->isSimple() || !Ty->isSingleValueType() || Ty->isVectorTy())
+          return Reject("scalar-non-simple-store");
+        // The complete recurrence-use proof above excludes moved accumulator
+        // state from every retained instruction, including store values,
+        // addresses and controlling predicates. Leave all original accesses
+        // together, on their original paths and in their original order. Dependences
+        // between them (including across iterations or chunk boundaries) do
+        // not need alias analysis: consumers access only contribution scratch.
+        // Its fresh entry allocas have no original users; only generated GEPs,
+        // stores and loads use them, and no address escapes. Original accesses
+        // therefore cannot alias scratch, even when their arguments overlap.
+        continue;
+      }
       if (auto *Call = dyn_cast<CallInst>(&I)) {
         // No name-based libm contracts, errno assumptions, or vector mappings.
         // speculatable excludes observable effects beyond memory (e.g. FP
@@ -542,9 +571,14 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
           return Reject("scalar-unsafe-call");
         continue;
       }
-      // A whitelist also excludes fences, stores, atomics, allocas, EH, and
+      // A whitelist also excludes fences, other atomics, allocas, EH, and
       // special control operations. All retained producer operations execute
       // on precisely the original iterations, in their original order.
+      // Admit only scalar fneg among unary operations. Keep the instruction
+      // itself in its original block, with its operand, flags and location;
+      // this neither recognizes a recurrence nor rewrites FP arithmetic.
+      if (I.getOpcode() == Instruction::FNeg && !I.getType()->isVectorTy())
+        continue;
       if (isa<PHINode, BinaryOperator, CastInst, GetElementPtrInst, CmpInst,
               SelectInst, FreezeInst, BranchInst>(I) &&
           !I.getType()->isVectorTy())
@@ -1004,6 +1038,9 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     Update->setOperand(R.ContributionOperand, Contributions[R.Contribution]);
     Update->setOperand(1 - R.ContributionOperand, R.ConsumerPhi);
     B.Insert(Update, R.Update->getName() + ".consume");
+    // Insert() applies the builder's latch location. Keep the source update's
+    // own location, including an absent location, on the cloned operation.
+    Update->setDebugLoc(R.Update->getDebugLoc());
     R.ConsumerPhi->addIncoming(Update, ConsumerBody);
     if (ParticipationArm) {
       auto *LoopResult = PHINode::Create(R.Phi->getType(), 1,

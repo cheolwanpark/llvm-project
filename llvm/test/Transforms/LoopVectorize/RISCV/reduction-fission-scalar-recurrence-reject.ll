@@ -422,9 +422,13 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
+; An ordinary producer store composes with retained state. It stays in its
+; original block/order; volatile and atomic siblings remain true rejections.
+; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
 ; CHECK-LABEL: define void @recurrence_store(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [65 x i32]
+; CHECK: store i32 %x, ptr %p
+; CHECK: scalar.fission.consumer.ph:
 ; CHECK: ret void
 define void @recurrence_store(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !34 {
@@ -731,12 +735,16 @@ exit:
   ret void
 }
 
-; A producer-local delay alongside a compact reduction is deliberately outside
-; this extension. Existing compact tests still cover their original contract.
-; A split must extract at least one supported add/fadd accumulator.
-; REASON: scalar-recurrence.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
+; Both closed XOR recurrences now move alongside ordered subtraction and
+; share one i32 stream. Retained feedback state stays in the producer.
+; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
 ; CHECK-LABEL: define void @recurrence_no_extractable(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [65 x i32]
+; CHECK: alloca [65 x double]
+; CHECK: scalar.fission.consumer.body:
+; CHECK: %u0.consume = xor i32 %r0.consume,
+; CHECK: %u1.consume = xor i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
+; CHECK: %ud.consume = fsub double %rd.consume,
 ; CHECK: ret void
 define void @recurrence_no_extractable(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !46 {
@@ -772,6 +780,169 @@ loop:
   %next = add nuw nsw i64 %iv, 1
   %done = icmp eq i64 %next, %n
   br i1 %done, label %exit, label %loop, !dbg !47
+exit:
+  %result0 = phi i32 [17, %entry], [%u0, %loop]
+  %result1 = phi i32 [-7, %entry], [%u1, %loop]
+  %resultd = phi double [%start, %entry], [%ud, %loop]
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %result0, ptr %out
+  store i32 %result1, ptr %o1
+  store double %resultd, ptr %dout
+  ret void
+}
+
+; Closed XOR moves even when the unsupported fdiv stays as producer state.
+; CHECK-LABEL: define void @recurrence_no_supported_update(
+; CHECK: alloca [65 x i32]
+; CHECK: %ud = fdiv double %rd, %dc
+; CHECK: scalar.fission.consumer.body:
+; CHECK: %u0.consume = xor i32 %r0.consume,
+; CHECK: %u1.consume = xor i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
+; CHECK: ret void
+define void @recurrence_no_supported_update(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
+                                i64 %n, i64 %rows, double %start, i64 %begin) {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %enter = and i1 %valid, %nonzero
+  br i1 %enter, label %preheader, label %exit
+preheader:
+  br label %loop
+loop:
+  %iv = phi i64 [0, %preheader], [%next, %loop]
+  %prev = phi i32 [23, %preheader], [%state.next, %loop]
+  %older = phi i32 [11, %preheader], [%prev, %loop]
+  %r0 = phi i32 [17, %preheader], [%u0, %loop]
+  %dprev = phi double [-0.0, %preheader], [%dstate.next, %loop]
+  %r1 = phi i32 [-7, %preheader], [%u1, %loop]
+  %rd = phi double [%start, %preheader], [%ud, %loop]
+  %dolder = phi double [0.5, %preheader], [%dprev, %loop]
+  %p = getelementptr i32, ptr %a, i64 %iv
+  %x = load i32, ptr %p, align 4
+  %dp = getelementptr double, ptr %fp, i64 %iv
+  %dx = load double, ptr %dp, align 8
+  %raw = xor i32 %prev, %x
+  %c = call i32 @scalar_helper(i32 %raw)
+  %dc = fsub double %dx, %dprev
+  %bounded = and i32 %x, 127
+  %state.next = add nuw nsw i32 %bounded, %older
+  %dstate.next = fsub double %dx, %dolder
+  %u0 = xor i32 %r0, %c
+  %u1 = xor i32 %c, %r1
+  %ud = fdiv double %rd, %dc
+  %next = add nuw nsw i64 %iv, 1
+  %done = icmp eq i64 %next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  %result0 = phi i32 [17, %entry], [%u0, %loop]
+  %result1 = phi i32 [-7, %entry], [%u1, %loop]
+  %resultd = phi double [%start, %entry], [%ud, %loop]
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %result0, ptr %out
+  store i32 %result1, ptr %o1
+  store double %resultd, ptr %dout
+  ret void
+}
+
+; The exact former unsupported product now moves; fdiv and observed state stay.
+; CHECK-LABEL: define void @recurrence_unsupported_multiply(
+; CHECK: alloca [65 x i32]
+; CHECK: %ud = fdiv double %rd, %dc
+; CHECK: scalar.fission.consumer.body:
+; CHECK: %u0.consume = mul i32 %r0.consume,
+; CHECK: %u1.consume = mul i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
+; CHECK: ret void
+define void @recurrence_unsupported_multiply(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
+                                i64 %n, i64 %rows, double %start, i64 %begin) {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %enter = and i1 %valid, %nonzero
+  br i1 %enter, label %preheader, label %exit
+preheader:
+  br label %loop
+loop:
+  %iv = phi i64 [0, %preheader], [%next, %loop]
+  %prev = phi i32 [23, %preheader], [%state.next, %loop]
+  %older = phi i32 [11, %preheader], [%prev, %loop]
+  %r0 = phi i32 [17, %preheader], [%u0, %loop]
+  %dprev = phi double [-0.0, %preheader], [%dstate.next, %loop]
+  %r1 = phi i32 [-7, %preheader], [%u1, %loop]
+  %rd = phi double [%start, %preheader], [%ud, %loop]
+  %dolder = phi double [0.5, %preheader], [%dprev, %loop]
+  %p = getelementptr i32, ptr %a, i64 %iv
+  %x = load i32, ptr %p, align 4
+  %dp = getelementptr double, ptr %fp, i64 %iv
+  %dx = load double, ptr %dp, align 8
+  %raw = xor i32 %prev, %x
+  %c = call i32 @scalar_helper(i32 %raw)
+  %dc = fsub double %dx, %dprev
+  %bounded = and i32 %x, 127
+  %state.next = add nuw nsw i32 %bounded, %older
+  %dstate.next = fsub double %dx, %dolder
+  %u0 = mul i32 %r0, %c
+  %u1 = mul i32 %c, %r1
+  %ud = fdiv double %rd, %dc
+  %next = add nuw nsw i64 %iv, 1
+  %done = icmp eq i64 %next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  %result0 = phi i32 [17, %entry], [%u0, %loop]
+  %result1 = phi i32 [-7, %entry], [%u1, %loop]
+  %resultd = phi double [%start, %entry], [%ud, %loop]
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %result0, ptr %out
+  store i32 %result1, ptr %o1
+  store double %resultd, ptr %dout
+  ret void
+}
+
+; Keep a genuine unsupported-update rejection with the same retained state.
+; CHECK-LABEL: define void @recurrence_unsupported_division(
+; CHECK-NOT: scalar.fission
+; CHECK: %u0 = udiv i32 %r0, %c
+; CHECK-NOT: scalar.fission
+; CHECK: %u1 = udiv i32 %c, %r1
+; CHECK-NOT: scalar.fission
+; CHECK: %ud = fdiv double %rd, %dc
+; CHECK-NOT: scalar.fission
+; CHECK: ret void
+; CHECK-NOT: scalar.fission
+; CHECK: }
+define void @recurrence_unsupported_division(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
+                                i64 %n, i64 %rows, double %start, i64 %begin) {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %enter = and i1 %valid, %nonzero
+  br i1 %enter, label %preheader, label %exit
+preheader:
+  br label %loop
+loop:
+  %iv = phi i64 [0, %preheader], [%next, %loop]
+  %prev = phi i32 [23, %preheader], [%state.next, %loop]
+  %older = phi i32 [11, %preheader], [%prev, %loop]
+  %r0 = phi i32 [17, %preheader], [%u0, %loop]
+  %dprev = phi double [-0.0, %preheader], [%dstate.next, %loop]
+  %r1 = phi i32 [-7, %preheader], [%u1, %loop]
+  %rd = phi double [%start, %preheader], [%ud, %loop]
+  %dolder = phi double [0.5, %preheader], [%dprev, %loop]
+  %p = getelementptr i32, ptr %a, i64 %iv
+  %x = load i32, ptr %p, align 4
+  %dp = getelementptr double, ptr %fp, i64 %iv
+  %dx = load double, ptr %dp, align 8
+  %raw = xor i32 %prev, %x
+  %c = call i32 @scalar_helper(i32 %raw)
+  %dc = fsub double %dx, %dprev
+  %bounded = and i32 %x, 127
+  %state.next = add nuw nsw i32 %bounded, %older
+  %dstate.next = fsub double %dx, %dolder
+  %u0 = udiv i32 %r0, %c
+  %u1 = udiv i32 %c, %r1
+  %ud = fdiv double %rd, %dc
+  %next = add nuw nsw i64 %iv, 1
+  %done = icmp eq i64 %next, %n
+  br i1 %done, label %exit, label %loop
 exit:
   %result0 = phi i32 [17, %entry], [%u0, %loop]
   %result1 = phi i32 [-7, %entry], [%u1, %loop]

@@ -1,0 +1,333 @@
+# REQUIRES: riscv-registered-target
+# RUN: split-file %s %t
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-subtraction.ll %t opt \
+# RUN:   | FileCheck %s
+# CHECK: Subtraction: 32 modules, 88 scalar stage certificates; mutations rejected
+# CHECK: PHI permutations: 88 certificates; all PHIs mutated in 7 representative rows
+# CHECK: Probe modules: 192 LLVM verifications, 528 rows; 60 malformed modules rejected
+# CHECK: Bypass rewrites: missing and duplicated branches, labels and PHI predecessors rejected
+
+# This is an IR certificate/mutation test. Mandatory actual execution is added
+# to the complete host driver with an independent C oracle and path probes.
+# Natural ordinary LV cannot vectorize ordered fsub; VF1 is a valid consumer.
+# The separate forced-scalar matrix checks exact cloned opcodes/nowrap/debug
+# locations, not vector reduction intrinsics. Strict and explicitly enabled
+# fission reordering use identical original IR and no extra math assumptions.
+# Incoming-list order has no semantics: the predecessor selects the value.
+# Reverse every multi-input PHI in all 88 rows, including retained producer
+# PHIs, ordinal/count PHIs, recurrence seeds/carries, P=0 results and exports.
+# Mutations keep values and predecessors individually unchanged when swapping
+# their associations. Missing/extra/duplicate entries, types and values must
+# still reject, including single-input forwarding PHIs. The representative
+# rows cover every full/compact/affine/flagged and EQ/NE chunk vocabulary.
+# Verify complete instrumented modules with declarations, not callback counts
+# alone: all 32 configurations / 88 rows, three label spellings and both PHI
+# orders. This includes zero-entry forwarding, compact P=0 result joins,
+# affine completed counts and C=1/9/16 chunk controllers. LLVM verification
+# and the independent bypass certificate must reject dangling bypass targets
+# and stale exit PHI predecessors. Actual N/P/chunk execution is mandatory in
+# the complete host driver; this lit test does not claim dynamic comparisons.
+
+#--- check.py
+import importlib.util
+from itertools import product
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = checker
+spec.loader.exec_module(checker)
+source = Path(sys.argv[2]).read_text()
+directory, opt = Path(sys.argv[3]), sys.argv[4]
+modules = certificates = 0
+permutations = phi_mutation_rows = 0
+verified_modules = verified_rows = rejected_modules = 0
+
+
+def reject(module, name, capacity, why):
+    try:
+        checker.check_subtraction_function(module, source, name, capacity)
+    except AssertionError:
+        return
+    raise AssertionError('accepted ' + why + ' in ' + name)
+
+
+def change(module, name, old, new):
+    body = checker.function_definition(module, name)
+    assert old in body, (name, old)
+    changed = body.replace(old, new, 1)
+    assert body != changed
+    return module.replace(body, changed, 1)
+
+
+def phis(body):
+    # Independent test-side extraction; do not use the certificate's parser to
+    # choose what to test. Require the entire printed list, including repeats.
+    for label, block in checker.loop_blocks(body).items():
+        for line in checker.chunk_instructions(block):
+            if ' = phi ' not in line:
+                continue
+            match = re.fullmatch(r'(%[-\w.$]+) = phi (i\d+|double|float) (.+)', line)
+            assert match, (label, line)
+            inputs = re.findall(r'\[ ([^,\]]+), %([-\w.$]+) \]', match[3])
+            assert inputs and render_phi(match[1], match[2], inputs) == line
+            yield match[1], match[2], inputs, line
+
+
+def render_phi(value, ty, inputs):
+    return f'{value} = phi {ty} ' + ', '.join(f'[ {v}, %{edge} ]' for v, edge in inputs)
+
+
+def verify(module, tag, diagnostic=None):
+    path = directory / (tag + '.ll')
+    path.write_text(module)
+    result = subprocess.run([opt, '-passes=verify', '-disable-output', str(path)],
+                            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (directory / (tag + '.verify')).write_text(result.stderr)
+    if diagnostic is None:
+        assert result.returncode == 0, (path, result.stderr)
+    else:
+        assert result.returncode != 0 and diagnostic in result.stderr, (path, result.stderr)
+
+
+def reject_bypass(before, after):
+    try:
+        checker.check_subtraction_bypass(before, after)
+    except AssertionError:
+        return
+    raise AssertionError('accepted incomplete subtraction bypass instrumentation')
+
+
+def reject_rewrite(body, diagnostic):
+    try:
+        checker.instrument_subtraction_bypass(body)
+    except AssertionError as error:
+        assert diagnostic in str(error), str(error)
+        return
+    raise AssertionError('accepted missing/duplicated bypass rewrite: ' + diagnostic)
+
+
+# Multiplicity is meaningful even if two pairs are identical (as with
+# parallel CFG edges). These are parser checks, not executable fixtures.
+repeated_inputs = [('17', 'entry'), ('17', 'entry'), ('%next', 'loop')]
+signature = checker.fixture_phi_signature(render_phi('%v', 'i32', repeated_inputs))
+assert signature is not None
+assert signature == checker.fixture_phi_signature(render_phi('%v', 'i32', repeated_inputs[::-1]))
+for wrong in (repeated_inputs[1:], repeated_inputs + [repeated_inputs[0]],
+              [repeated_inputs[0], repeated_inputs[2], repeated_inputs[2]]):
+    assert signature != checker.fixture_phi_signature(render_phi('%v', 'i32', wrong))
+
+
+for names, capacity, ceiling in [
+        (('stores_full', 'stores_raw', 'stores_compact', 'stores_affine', 'stores_flags'), 65, 1044),
+        (tuple(checker.STORE_CHUNK_BASES), 1, 20),
+        (tuple(checker.STORE_CHUNK_BASES), 9, 148),
+        (tuple(checker.STORE_CHUNK_BASES), 16, 256)]:
+    original = checker.keep_functions(source, names)
+    for repeated, reordered, natural in product((False, True), repeat=3):
+        options = checker.subtraction_options(ceiling, reordered, repeated, natural)
+        result = subprocess.run([opt, *options], input=original, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        tag = f'c{capacity}.lv{2 if repeated else 1}.{reordered}.{natural}'
+        (directory / (tag + '.ll')).write_text(result.stdout)
+        (directory / (tag + '.remarks')).write_text(result.stderr)
+        modules += 1
+        module = result.stdout
+        assert result.stderr.count('split scalar-IR reduction loop;') == len(names), result.stderr
+        for name in names:
+            body = checker.function_definition(module, name)
+            assert checker.check_subtraction_function(module, source, name, capacity) == body
+            checked = checker.check_subtraction_function(module, source, name, capacity, probe=True)
+            assert checked.count('call void @record_chunk_tail()' if capacity < 65 else
+                                 'call void @record_scalar_consumer_tail()') == 1
+            if capacity == 65:
+                checker.check_subtraction_bypass(body, checked)
+            mode = checker.SUBTRACTION_FUNCTIONS.index(name)
+            loc = f'scalar-subtraction.c:{12 + 10 * mode}:3'
+            assert re.search(rf'{re.escape(loc)}: split scalar-IR reduction loop;[^\n]*'
+                             rf'scratch capacity {capacity}, scratch bytes {ceiling}, '
+                             r'producer live-outs 6\b', result.stderr), result.stderr
+            for stage in ('producer', 'consumer'):
+                assert re.findall(rf'{re.escape(loc)}: scalar-IR fission {stage} VF ([^\n]+)',
+                                  result.stderr) == ['1'] * (2 if repeated else 1), result.stderr
+            certificates += 1
+
+            permuted = module
+            entries = list(phis(body))
+            assert entries
+            for value, ty, inputs, old in entries:
+                if len(inputs) > 1:
+                    permuted = change(permuted, name, old, render_phi(value, ty, inputs[::-1]))
+            assert checker.check_subtraction_function(permuted, source, name, capacity) == \
+                checker.function_definition(permuted, name)
+            permuted_probe = checker.check_subtraction_function(
+                permuted, source, name, capacity, probe=True)
+            assert permuted_probe.count('call void @record_chunk_tail()' if capacity < 65 else
+                                        'call void @record_scalar_consumer_tail()') == 1
+            permutations += 1
+
+            # Mutate every PHI, not just the one that originally exposed the
+            # printing-order issue. One representative per schedule/opcode
+            # vocabulary bounds test cost; the 88-row matrix above is intact.
+            if not (repeated or reordered or natural) and capacity in (65, 9):
+                phi_mutation_rows += 1
+                for value, ty, inputs, old in entries:
+                    wrong_type = {'i32': 'i64', 'i64': 'i32',
+                                  'double': 'float', 'float': 'double'}[ty]
+                    changed_value = '2' if inputs[0][0] == '1' else '1'
+                    if ty in ('double', 'float'):
+                        changed_value = '1.000000e+00'
+                    mutations = [
+                        (wrong_type, inputs, 'wrong PHI type'),
+                        (ty, inputs[:-1], 'missing PHI entry'),
+                        (ty, inputs + [('%unexpected', 'unexpected')], 'extra PHI entry'),
+                        (ty, inputs + [inputs[0]], 'duplicated PHI entry'),
+                        (ty, [(changed_value, inputs[0][1])] + inputs[1:], 'changed PHI value'),
+                        (ty, [(inputs[0][0], 'unexpected')] + inputs[1:], 'changed PHI edge'),
+                    ]
+                    if len(inputs) > 1:
+                        mutations += [
+                            (ty, inputs[:-1] + [inputs[0]], 'duplicated PHI entry at same count'),
+                            (ty, [(inputs[1][0], inputs[0][1]),
+                                  (inputs[0][0], inputs[1][1])] + inputs[2:],
+                             'swapped PHI edge/value associations'),
+                        ]
+                    for new_type, incoming, why in mutations:
+                        new = render_phi(value, new_type, incoming)
+                        assert new != old, (name, why, old)
+                        reject(change(module, name, old, new), name, capacity, why)
+                    reject(change(module, name, old, old + ', malformed'),
+                           name, capacity, 'unparsed PHI suffix')
+
+            for update, ty in [('u0', 'i32'), ('ud', 'double'), ('uf', 'float')]:
+                expression = re.search(
+                    rf'^  %{update}\.consume = (sub(?: nuw nsw)?|fsub) {ty} '
+                    r'(%[-\w.$]+), (%[-\w.$]+)', body, re.M)
+                assert expression
+                old = expression[0]
+                swapped = old[:old.index(f'{ty} ') + len(ty) + 1] + expression[3] + ', ' + expression[2]
+                reject(change(module, name, old, swapped), name, capacity, 'reversed operands')
+                reject(change(module, name, old, old.replace(expression[1].split()[0],
+                       'add' if ty == 'i32' else 'fadd', 1)),
+                       name, capacity, 'wrong reduction opcode')
+
+            seed = '4096' if name == 'stores_flags' else '17'
+            r0 = '%r0.chunk.carry' if capacity < 65 else '%r0.consume'
+            reject(change(module, name, r0 + ' = phi i32 [ ' + seed + ',',
+                          r0 + ' = phi i32 [ 18,'), name, capacity, 'changed initial value')
+            load = re.search(r'^  %[-\w.$]+ = load double, ptr (%[-\w.$]+),',
+                             checker.loop_blocks(body)['scalar.fission.consumer.body'], re.M)
+            assert load
+            reject(change(module, name, load[0], load[0].replace('ptr ' + load[1], 'ptr %fp')),
+                   name, capacity, 'consumer reread')
+            if name == 'stores_flags':
+                reject(change(module, name, '%u0.consume = sub nuw nsw i32',
+                              '%u0.consume = sub i32'), name, capacity, 'lost nowrap flags')
+            if name == 'stores_compact':
+                for old, new in [
+                        ('%fission.participating.next = add nuw i64 %fission.participating, 1',
+                         '%fission.participating.next = add nuw i64 %fission.participating, 0'),
+                        ('%fission.empty = icmp eq i64', '%fission.empty = icmp ne i64'),
+                        ('gate:\n  br label %left', 'gate:\n  br label %right')]:
+                    # Printed labels have predecessor comments; mutate their
+                    # branch inside the real gate block rather than its header.
+                    if old.startswith('gate:'):
+                        old = checker.loop_blocks(body)['gate']
+                        new = old.replace('br label %left', 'br label %right')
+                    reject(change(module, name, old, new), name, capacity, 'skipped participation')
+                reject(change(module, name,
+                              '%r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ]',
+                              '%r0.result = phi i32 [ 18, %scalar.fission.consumer.guard ]'),
+                       name, capacity, 'changed empty-stream start')
+            if capacity < 65:
+                reject(change(module, name,
+                              '%fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.chunk.count',
+                              '%fission.consumer.more = icmp ne i64 %fission.consumer.next, %n'),
+                       name, capacity, 'consumer ignores chunk boundary')
+
+        # The production opt output is unchanged. Vary only label whitespace,
+        # predecessor comments and whole PHI incoming-pair order on copies.
+        for spelling, reverse in product(('commented', 'bare', 'whitespace'), (False, True)):
+            variant = module
+            originals = {}
+            for name in names:
+                body = checker.function_definition(variant, name)
+                label = re.search(r'^exit:[^\n]*$', body, re.M)
+                assert label and '; preds =' in label[0], body
+                header = {'commented': label[0], 'bare': 'exit:',
+                          'whitespace': '\t exit:\t  ' + label[0].split(':', 1)[1] + '\t  '}[spelling]
+                # The commented spelling is the identity case: keep opt's
+                # original label verbatim. change() requires a real mutation.
+                if spelling != 'commented':
+                    variant = change(variant, name, label[0], header)
+                if reverse:
+                    for value, ty, inputs, old in phis(checker.function_definition(variant, name)):
+                        if len(inputs) > 1:
+                            variant = change(variant, name, old, render_phi(value, ty, inputs[::-1]))
+                originals[name] = checker.function_definition(variant, name)
+                checked = checker.check_subtraction_function(variant, source, name, capacity, probe=True)
+                if capacity == 65:
+                    checker.check_subtraction_bypass(originals[name], checked)
+                variant = change(variant, name, originals[name], checked)
+                verified_rows += 1
+            variant += checker.SUBTRACTION_PROBE_DECLARATIONS
+            probe_tag = f'{tag}.probe.{spelling}.reverse{int(reverse)}'
+            verify(variant, probe_tag)
+            verified_modules += 1
+
+            # Bound negative LLVM invocations to the five full/compact/affine/
+            # flagged rows, in both orders and all label spellings. Every exit
+            # PHI is also mutated individually against the bypass certificate.
+            if capacity == 65 and not (repeated or reordered or natural):
+                for name in names:
+                    before, after = originals[name], checker.function_definition(variant, name)
+                    blocks = checker.loop_blocks(after)
+                    missing, count = re.subn(
+                        r'^export\.zero\.entry:[^\n]*\n' + re.escape(blocks['export.zero.entry']),
+                        '', after, flags=re.M)
+                    assert count == 1
+                    reject_bypass(before, missing)
+                    verify(change(variant, name, after, missing),
+                           f'{probe_tag}.{name}.missing', "undefined value '%export.zero.entry'")
+                    rejected_modules += 1
+                    exit_phis = list(phis('exit:\n' + blocks['exit']))
+                    assert len(exit_phis) == 11, (name, exit_phis)
+                    for index, (value, ty, inputs, old) in enumerate(exit_phis):
+                        stale = render_phi(value, ty, [(v, 'entry' if edge == 'export.zero.entry' else edge)
+                                                       for v, edge in inputs])
+                        assert old != stale
+                        mutated = after.replace(old, stale, 1)
+                        reject_bypass(before, mutated)
+                        if index == 0:
+                            verify(change(variant, name, after, mutated),
+                                   f'{probe_tag}.{name}.stale', 'PHI')
+                            rejected_modules += 1
+
+        if capacity == 65 and not (repeated or reordered or natural):
+            body = checker.function_definition(module, 'stores_full')
+            branch = 'br i1 %inner.enter, label %preheader, label %exit'
+            assert branch in body
+            reject_rewrite(body.replace(branch, 'br label %preheader'), 'entry branch')
+            reject_rewrite(body.replace(branch, branch + '\n  ' + branch), 'entry branch')
+            reject_rewrite(re.sub(r'^exit:[^\n]*\n', '', body, flags=re.M), 'block insertion')
+            # loop_blocks must also reject duplicate block labels before a
+            # callback can silently rewrite one of them.
+            reject_rewrite(body.replace('\n}', '\nexit:\n  ret void\n}'), 'exit:')
+            first_phi = next(phis('exit:\n' + checker.loop_blocks(body)['exit']))
+            value, ty, inputs, old = first_phi
+            absent = render_phi(value, ty, [(v, 'unexpected' if edge == 'entry' else edge)
+                                            for v, edge in inputs])
+            reject_rewrite(body.replace(old, absent, 1), 'entry PHI predecessor')
+assert (modules, certificates) == (32, 88)
+assert (permutations, phi_mutation_rows) == (88, 7)
+assert (verified_modules, verified_rows, rejected_modules) == (192, 528, 60)
+print(f'Subtraction: {modules} modules, {certificates} scalar stage certificates; mutations rejected')
+print(f'PHI permutations: {permutations} certificates; all PHIs mutated in {phi_mutation_rows} representative rows')
+print(f'Probe modules: {verified_modules} LLVM verifications, {verified_rows} rows; '
+      f'{rejected_modules} malformed modules rejected')
+print('Bypass rewrites: missing and duplicated branches, labels and PHI predecessors rejected')

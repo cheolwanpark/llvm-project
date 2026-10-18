@@ -1,0 +1,164 @@
+# REQUIRES: riscv-registered-target
+# RUN: split-file %s %t
+# RUN: %python %t/prepare.py %S/../../utils/check-reduction-fission.py %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-composition.ll %t/neg.ll
+# RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -vplan-reduction-fission-max-scratch-bytes=112 -S %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-composition.ll -o %t/scalar.ll
+# RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=4 -force-vector-interleave=1 -scalable-vectorization=always -hints-allow-reordering=false -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false -vplan-reduction-fission-allow-fp-reordering -vplan-reduction-fission-max-scratch-bytes=112 -S %t/neg.ll -o %t/vector.ll
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-composition.ll %t/scalar.ll %t/vector.ll %t
+# RUN: opt -passes=verify -disable-output %t/scalar.probe.ll
+# RUN: opt -passes=verify -disable-output %t/vector.probe.ll
+# RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t/scalar.ll -o /dev/null
+# RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t/vector.ll -o /dev/null
+
+#--- prepare.py
+import importlib.util
+from pathlib import Path
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = checker
+spec.loader.exec_module(checker)
+Path(sys.argv[3]).write_text(checker.keep_functions(Path(sys.argv[2]).read_text(), ['compose_neg']))
+
+#--- check.py
+import importlib.util
+from pathlib import Path
+import re
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = checker
+spec.loader.exec_module(checker)
+source, scalar, vector = (Path(p).read_text() for p in sys.argv[2:5])
+work = Path(sys.argv[5])
+declarations = '''
+declare void @record_cc_begin(i64, i64, i32, i32, i32, i32, double)
+declare void @record_cc_producer(i64, i64)
+declare void @record_cc_participant(i64)
+declare void @record_cc_guard(i64, i64, i32, i32, i32, double)
+declare void @record_cc_end(i32, i32, double)
+declare void @record_cc_vector()
+declare void @record_cc_tail()
+declare void @record_composition_producer(ptr, ptr, ptr, ptr, i64)
+declare void @record_composition_consumer(ptr, ptr, ptr, ptr, i64)
+'''
+memory_sites = 0
+for ir, is_scalar, tag, names in [(scalar, True, 'scalar', checker.COMPOSITION_FUNCTIONS),
+                                  (vector, False, 'vector', ('compose_neg',))]:
+    instrumented = ir
+    for name in names:
+        body = checker.function_definition(ir, name)
+        checked = checker.check_composition(ir, source, name, 9, is_scalar, probe=True)
+        assert checked.count('call void @record_composition_producer(') == 1
+        assert checked.count('call void @record_composition_consumer(') == (1 if is_scalar else 2)
+        instrumented = instrumented.replace(body, checked, 1)
+
+        def mutate(value, old, new):
+            line = re.search(r'^  %' + re.escape(value) + r' = [^\n]*$', body, re.M)
+            assert line and line[0].count(old) == 1, (name, value, old)
+            return ir.replace(body, body[:line.start()] + line[0].replace(old, new, 1) + body[line.end():], 1)
+
+        def reject(candidate, reason):
+            try:
+                checker.check_composition(candidate, source, name, 9, is_scalar)
+            except AssertionError:
+                return
+            raise AssertionError(name + ': accepted ' + reason)
+
+        for label, code in checker.loop_blocks(body).items():
+            if not (label.startswith('vector.body') or label == 'scalar.fission.consumer.body'):
+                continue
+            loads = list(re.finditer(r'^  (%[-\w.$]+) = load '
+                                     r'(?:i32|double|<vscale x 4 x (?:i32|double)>), '
+                                     r'ptr (%[-\w.$]+),[^\n]*$', code, re.M))
+            assert len(loads) == 2, (name, label, code)
+            # Load-like and store-like names in arithmetic operands are legal
+            # in both the scalar consumer and the actual LV vector/tail path.
+            renamed = body
+            for index, load in enumerate(loads):
+                new = f'%composition.{label}.{index}.load.store'
+                assert new not in body
+                renamed = re.sub(re.escape(load[1]) + r'(?![-\w.$])', new, renamed)
+            assert renamed != body
+            assert checker.check_composition(ir.replace(body, renamed, 1), source, name,
+                                             9, is_scalar) == renamed
+            memory_sites += 1
+
+            def insert_access(instruction):
+                changed, count = re.subn(r'(?=^  br )', lambda _: instruction, code, flags=re.M)
+                assert count == 1
+                return ir.replace(body, body.replace(code, changed, 1), 1)
+
+            # Genuine extra reads (original or private memory) and writes
+            # must still fail the exact two-load/no-store certificate.
+            for address in ('%a', loads[0][2]):
+                reject(insert_access(f'  %composition.extra.load = load i32, ptr {address}, align 4\n'),
+                       'extra consumer load')
+            reject(insert_access(f'  store i32 0, ptr {loads[0][2]}, align 4\n'),
+                   'extra consumer scratch store')
+            for load, original_pointer in zip(loads, ('%a', '%fp')):
+                changed = code[:load.start(2)] + original_pointer + code[load.end(2):]
+                reject(ir.replace(body, body.replace(code, changed, 1), 1),
+                       'redirected consumer scratch load')
+
+        for value, old, new in [
+            ('dc', 'fneg double %dx', 'fneg double %as.double'),
+            ('dc', 'fneg double', 'fneg nsz double'),
+            ('state.next', 'add i32 %x, %older', 'add i32 %x, %prev'),
+            ('older.chunk.backedge', '[ %prev,', '[ %state.next,'),
+            ('prev.fission.export', '[ %prev,', '[ %state.next,'),
+            ('fission.participating', '[ 0,', '[ %fission.chunk.base,'),
+            ('fission.chunk.next', '%fission.producer.completed', '%fission.participating.count'),
+            ('rd.result', '%rd.chunk.carry,', '%start,'),
+        ]:
+            reject(mutate(value, old, new), value)
+        for old, new in [('store i32 %state.next, ptr %wp', 'store i32 %prev, ptr %wp'),
+                         ('store double %dc, ptr %dp', 'store double %dx, ptr %dp'),
+                         ('store double %dc, ptr %dp', 'store double %dc, ptr %wp')]:
+            assert body.count(old) == 1
+            reject(ir.replace(body, body.replace(old, new, 1), 1), old)
+        scratch = re.search(r'^  (%[-\w.$]+) = getelementptr inbounds \[9 x double\], '
+                            r'ptr %[-\w.$]+, i32 0, i64 %fission.participating', body, re.M)
+        assert scratch
+        reject(mutate(scratch[1][1:], '%fission.participating', '%iv'), 'global scratch index')
+        if is_scalar:
+            op = 'fsub' if name == 'compose_sub' else 'fadd'
+            reject(mutate('ud.consume', op + ' double %rd.consume,',
+                          op + ' double %start,'), 'arithmetic seed')
+            if name == 'compose_sub':
+                reject(mutate('u0.consume', 'sub i32', 'add i32'), 'sub opcode')
+                reject(mutate('ud.consume', 'fsub double', 'fadd double'), 'fsub opcode')
+    (work / (tag + '.probe.ll')).write_text(instrumented + declarations)
+
+assert memory_sites == 4  # Two scalar functions, vector body and real scalar tail.
+
+# Observation parsing must reject missing/duplicate configurations and false
+# vector evidence. These synthetic totals test parsing, not dynamic execution.
+name = 'composition_observation'
+fields = dict(comparisons=68 * 2 * 10 * 8 * 4,
+              producer=2 * 10 * 8 * 4 * sum(range(1, 66)), consumer=17,
+              chunks=10, empty=1, vector=4, tail=1, zero=3 * 2 * 10 * 8 * 4,
+              multi=1, partial=1, full=1, **{'final-inactive': 1, 'empty-then-active': 1})
+repetitions = 2 * 10 * 8 * 4
+fields['full'] = repetitions * sum(n // 9 for n in range(1, 66))
+fields['partial'] = repetitions * sum(n % 9 != 0 for n in range(1, 66))
+fields['chunks'] = fields['full'] + fields['partial']
+fields['multi'] = (65 - 9) * repetitions
+line = 'Composition ' + name + ': ' + ' '.join(f'{k}={v}' for k, v in fields.items())
+total = f'Composition: {fields["comparisons"]} original/transformed/oracle host comparisons (not RVV)'
+text = line + '\n' + total + '\n'
+assert checker.composition_execution_counts(text, {name: (9, 4)})['comparisons'] == fields['comparisons']
+for candidate in (text.replace(line + '\n', ''), text + line + '\n',
+                  text.replace('vector=4', 'vector=0'), text.replace('empty=1', 'empty=0'),
+                  text.replace('final-inactive=1', 'final-inactive=0'),
+                  text.replace('empty-then-active=1', 'empty-then-active=0'),
+                  text.replace('consumer=17', 'consumer=18')):
+    try:
+        checker.composition_execution_counts(candidate, {name: (9, 4)})
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('accepted incomplete composition observations')

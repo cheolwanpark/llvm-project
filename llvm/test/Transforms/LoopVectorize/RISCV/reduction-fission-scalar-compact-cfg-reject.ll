@@ -1,17 +1,18 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
 ; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission \
+; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=3 -pass-remarks-missed=vplan-reduction-fission \
 ; RUN:   -S %s -o %t.strict 2> %t.strict.remarks
 ; RUN: FileCheck %s --check-prefix=IR --implicit-check-not=scalar.fission < %t.strict
 ; RUN: FileCheck %s --check-prefix=REJECT < %t.strict.remarks
 ; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
 ; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
+; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=3 -vplan-reduction-fission-allow-fp-reordering \
 ; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.reordered 2> %t.reordered.remarks
 ; RUN: FileCheck %s --check-prefix=IR --implicit-check-not=scalar.fission < %t.reordered
 ; RUN: FileCheck %s --check-prefix=REJECT < %t.reordered.remarks
+; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 -S %s | FileCheck %s --check-prefix=SELECTED
 ;
 ; Larger producer admission does not justify propagating updates to a later
 ; edge, conditional update exits, multiple update sites/streams or feedback.
@@ -363,7 +364,13 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:92:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
+; An ordinary bypass store remains in the producer. C=1 needs four bytes;
+; three still rejects, while the full-capacity run below admits this function.
+; REJECT: scalar-compact-cfg-reject.c:92:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; SELECTED-LABEL: define i32 @reject_cfg_bypass_store(
+; SELECTED: alloca [65 x i32]
+; SELECTED: store i32 %x, ptr %p
+; SELECTED: scalar.fission.consumer.guard:
 ; IR-LABEL: define i32 @reject_cfg_bypass_store(
 ; IR: ret i32
 define i32 @reject_cfg_bypass_store(ptr %a, i64 %n) !dbg !26 {

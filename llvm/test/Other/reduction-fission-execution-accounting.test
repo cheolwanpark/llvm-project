@@ -1,0 +1,140 @@
+# RUN: split-file %s %t
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py
+
+# Parser boundaries for observed execution evidence. Synthetic stdout tests the
+# accounting only; actual stage entry still requires the complete C comparison
+# harness. Emitted lanes and remarks cannot supply observed vector/tail counts.
+
+#--- check.py
+import importlib.util
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = checker
+spec.loader.exec_module(checker)
+
+producer = ('Producer stores remainder_c1: 3 comparisons; C=1 emitted-lanes=16 '
+            'vector=0 tail=9 empty=0 final-inactive=0 zero=1 complete=9 partial=0 multi=1')
+strict = ('Subtraction stores sub_strict: 5 comparisons; C=65 emitted-lanes=0 '
+          'vector=0 tail=17 empty=1 final-inactive=1 zero=1 complete=0 partial=0 multi=0')
+reordered = ('Subtraction stores sub_reordered: 7 comparisons; C=9 emitted-lanes=0 '
+             'vector=0 tail=31 empty=0 final-inactive=0 zero=1 complete=3 partial=1 multi=1')
+totals = [
+    'PASS: 41 executions; independent main cases',
+    'PASS: 2 host deinterleave adapter comparisons against scalar indexing',
+    'Producer exports: 11 additional host comparisons (not RVV execution)',
+    'Bounded chunks: 13 additional host comparisons (not RVV execution)',
+    'Vectorizable producer chunks: 17 additional host comparisons (not RVV execution)',
+    'Integration: 19 additional original/transformed/independent host comparisons',
+    'Producer stores: 3 additional original/transformed/independent host comparisons',
+    'Direct subtraction: 12 additional original/transformed/independent host comparisons',
+]
+stdout = '\n'.join([producer, strict, reordered, *totals]) + '\n'
+expected = {'remainder_c1': 'Producer', 'sub_strict': 'Subtraction',
+            'sub_reordered': 'Subtraction'}
+observed = checker.execution_evidence(stdout, expected)
+assert observed['completion_counts'] == dict(
+    main_executions=41, host_adapter_comparisons=2, producer_export_comparisons=11,
+    bounded_chunk_comparisons=13, vectorizable_producer_chunk_comparisons=17,
+    integration_comparisons=19, producer_store_comparisons=3,
+    direct_subtraction_comparisons=12)
+assert (observed['producer_store_rows'], observed['subtraction_rows']) == (1, 2)
+rows = observed['store_stage_entries']
+assert rows['remainder_c1']['emitted_lanes'] == 16
+assert rows['remainder_c1']['capacity'] == 1
+assert 'emitted-lanes' not in rows['remainder_c1']['actual_counters']
+assert rows['remainder_c1']['actual_counters']['vector'] == 0
+assert rows['sub_strict']['actual_counters']['tail'] == 17
+assert rows['sub_reordered']['actual_counters']['tail'] == 31
+assert rows['sub_strict']['comparisons'] == 5
+assert rows['sub_reordered']['comparisons'] == 7
+# Output order does not establish phase or row identity.
+assert checker.execution_evidence('\n'.join(reversed(stdout.splitlines())), expected) == observed
+
+
+def reject(text):
+    try:
+        checker.execution_evidence(text, expected)
+    except AssertionError:
+        return
+    raise AssertionError('accepted incomplete or inconsistent execution accounting')
+
+
+for line in (producer, strict, reordered, *totals):
+    reject(stdout.replace(line + '\n', ''))
+    reject(stdout + line + '\n')
+for old, new in [
+        ('sub_strict:', 'unplanned:'),
+        ('Subtraction stores sub_strict:', 'Producer stores sub_strict:'),
+        ('tail=17', 'tail=missing'),
+        ('sub_strict: 5 comparisons', 'sub_strict: 0 comparisons'),
+        ('Direct subtraction: 12', 'Direct subtraction: 13'),
+        ('Producer stores: 3', 'Producer stores: 4'),
+        ('PASS: 41 executions', 'PASS: 0 executions')]:
+    assert old in stdout
+    reject(stdout.replace(old, new))
+
+# New negation rows have their own observed total; retain all inherited
+# accounting assertions above. A phase plan cannot stand in for stdout.
+negation = ('Negation stores neg_strict: 9 comparisons; C=9 emitted-lanes=0 '
+            'vector=0 tail=23 empty=0 final-inactive=0 zero=1 complete=2 partial=1 multi=1')
+negation_total = 'Producer negation: 9 additional original/transformed/independent host comparisons'
+stdout += negation + '\n' + negation_total + '\n'
+expected['neg_strict'] = 'Negation'
+observed = checker.execution_evidence(stdout, expected)
+assert observed['completion_counts']['producer_negation_comparisons'] == 9
+assert observed['store_stage_entries']['neg_strict']['family'] == 'Negation'
+assert observed['negation_rows'] == 1
+for line in (negation, negation_total):
+    reject(stdout.replace(line + '\n', ''))
+    reject(stdout + line + '\n')
+reject(stdout.replace('Producer negation: 9', 'Producer negation: 8'))
+reject(stdout.replace('Negation stores neg_strict:', 'Subtraction stores neg_strict:'))
+
+# Vector fneg observations are separate from every inherited scalar row and
+# total. Widths alone must never certify vector execution, especially at C=1.
+vector_lines = [
+    'Vector negation full_strict: 3 comparisons; C=65 PV=4 CV=4 '
+    'producer-vector=7 producer-tail=3 consumer-vector=7 consumer-tail=3 '
+    'participants=31 empty=0 final-inactive=0 zero=1 complete=0 partial=2 multi=0',
+    'Vector negation compact_reordered: 5 comparisons; C=65 PV=0 CV=4 '
+    'producer-vector=0 producer-tail=19 consumer-vector=4 consumer-tail=3 '
+    'participants=19 empty=1 final-inactive=1 zero=1 complete=0 partial=2 multi=0',
+    'Vector negation boundary: 7 comparisons; C=1 PV=4 CV=4 '
+    'producer-vector=0 producer-tail=23 consumer-vector=0 consumer-tail=23 '
+    'participants=23 empty=0 final-inactive=0 zero=1 complete=23 partial=0 multi=1',
+    'Vector producer negation: 15 additional original/transformed/independent host comparisons',
+]
+vector_stdout = '\n'.join(vector_lines) + '\n'
+vector_expected = {'full_strict': (65, 4, 4, False),
+                   'compact_reordered': (65, 0, 4, True), 'boundary': (1, 4, 4, False)}
+observed = checker.fneg_vector_execution_evidence(vector_stdout, vector_expected)
+assert observed['comparisons'] == 15 and len(observed['rows']) == 3
+assert observed['rows']['boundary']['actual_counters']['producer-vector'] == 0
+assert checker.fneg_vector_execution_evidence(
+    '\n'.join(reversed(vector_lines)), vector_expected) == observed
+
+
+def reject_vector(text):
+    try:
+        checker.fneg_vector_execution_evidence(text, vector_expected)
+    except AssertionError:
+        return
+    raise AssertionError('accepted absent or inconsistent vector fneg execution evidence')
+
+
+for line in vector_lines:
+    reject_vector(vector_stdout.replace(line + '\n', ''))
+    reject_vector(vector_stdout + line + '\n')
+for old, new in [('producer-vector=7', 'producer-vector=0'),
+                 ('consumer-vector=7', 'consumer-vector=0'),
+                 ('producer-vector=0 producer-tail=23', 'producer-vector=1 producer-tail=23'),
+                 ('producer-tail=3 ', 'producer-tail=0 '),
+                 ('CV=4', 'CV=8'), ('empty=1', 'empty=0'),
+                 ('final-inactive=1', 'final-inactive=0'),
+                 ('complete=23', 'complete=0'), ('multi=1', 'multi=0'),
+                 ('Vector producer negation: 15', 'Vector producer negation: 16')]:
+    assert old in vector_stdout
+    reject_vector(vector_stdout.replace(old, new))

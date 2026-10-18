@@ -1,28 +1,40 @@
 {
-  "task_id": "t000081",
+  "task_id": "t000084",
   "direction_id": "d1",
-  "base_revision": "eb15ef04a112cc32b7a4bc9c9fbe864c2e03e892",
-  "hypothesis": "Complete the bounded affine-chunk validation repair requested after t000079. The general production class remains reductions with finite representable affine control, retained state and optional conditional participation, whose full-trip scratch exceeds the ceiling: the inherited scheduler stops after the actual original exit or C completed iterations, consumes initialized contributions and resumes from the actual IV/state. This task changes validation only. Compact scalar tails must be certified as full recurrences, and equivalent vscale-times-four definitions must be accepted wherever they dominate their actual uses, including a shared consumer-preheader definition. Neither SSA spelling nor the original loop vectorizability, pressure or profitability is a legality prerequisite.",
-  "semantics": "Production legality and transformation are unchanged: preserve original IV operations/comparison/polarity, exact participating iterations and order, real dependences/effects/alias behavior, simultaneous retained-state carries, empty-compact-chunk guards and final current/next/state/live-out exports. Within an entered chunk, 1<=K<=C completed iterations and 0<=P<=K participants bound initialized scratch; consumer count is actual K or P, not capacity or an equality witness. Strict ordinary FP and explicitly enabled fission FP reordering remain separate contracts, with no added fast-math/errno/fenv assumptions. In check_compact_count, the export_compact/export_nested vector-tail branch now proves exact CFG predecessor multiplicity, two and only two tail induction incoming edges, entry through the checked resume PHI, zero on vector bypass and n.vec on the middle edge, actual fission.consumer.next on the self edge, a unique local unit add before the exact next-versus-actual-count compare and correct branch polarity. Each scalar scratch GEP uses that PHI; each exactly aligned typed load uses that GEP; each scalar reduction update consumes its corresponding load, with checked definition order and unchanged ordered FP operand order/seeds/result joins. Direct and one-hop typed scalar LCSSA exits remain supported. The VF proof resolves each requested SSA definition uniquely across the function, then checks availability on the fixed consumer.ph -> vector.ph -> vector.body chain and instruction order within a block, after counting actual stage predecessor edges. The only admitted VF expression is an available i64 vscale call shifted by two. Shared definitions and equivalent stage-local vscale calls/width expressions therefore prove the same width at entry, rounding and increment. Unrelated expressions, duplicate requested definitions, definitions after use and definitions on a bypass/non-dominating path fail. The vector ordinal PHI still requires exactly vector.ph/self incoming edges, zero entry and its actual unique local add backedge; EVL requires the exact actual length, a dominating zext and a single checked length call, with unchanged AVL/load/reduction linkage. Both add operand orders and no-flags/nuw/nuw+nsw spellings are admitted for these bounded integer recurrences; FP checks remain exact. Executable verification remains harness-only: freshly transform and verify original definitions under both FP policies and LV1/LV2, execute actual scalar/vector-tail transformed code against exact original IR and independent nonchunked C oracles, and retain initialized-scratch/address/value/order, exact K/P/vector/tail visits, retained state, final live-outs, alias, input and canary checks. All new mutations are constructed and asserted nonidentical before any rejection handler; the original zero-backedge mutation is retained.",
-  "costs": "No production C++ changes, runtime storage, guards, traffic, input rereads, producer duplication or recomputation are added. The inherited capacity binary search is bounded by 64 iterations over unique streams; there is no new analysis solver or profitability model. For mixed i32/double affine/retained-state chunks, padded scratch is alignTo(4*C,8)+8*C: capacities 1/8/9/16 allocate 16/96/112/192 bytes, with padding 4/0/4/0 bytes and ceilings 16/111/112/192; ceiling 15 cannot fit one padded mixed slot. Logical scratch traffic is 12 stored plus 12 loaded bytes per completed unconditional iteration or participating compact iteration; nonparticipants add no scratch traffic. Original input/condition guards, compact-empty guards, consumer entry/tail/EVL controls and continuation-after-consumption guards remain. The private-count freeze and actual-control scheduler are inherited. Validation adds a fixed three-block availability check with whole-fixture unique-definition scans, local scalar-tail PHI/order/GEP/load checks, and shared helper mutations/LLVM-verifier positive variants. These are finite fixture scans, not a general dominator/equivalence framework. The parser/probe-only synthetic compact fixture now has connected indexed producer/vector/tail GEPs and a distinct width SSA name; those instructions are never used as execution/speed evidence. The actual transformed execution matrix and independent oracle remain intact. Physical stack layout, machine traffic, register pressure, spills and speedup are unmeasured.",
+  "base_revision": "ef2cbb48bbdddc96849a3a44d1d6abda93b17668",
+  "merge_revision": "ca6a7925a06c26ad9cb82e20887b7af95ceda629",
+  "hypothesis": "Closed integer multiplication/bitwise reductions and ordered subtraction/FP reductions can compose with bounded affine fission, retained producer state and original producer stores. Original-control scheduling bounds scratch independently of the full-trip allocation, carrying the actual induction and termination result rather than treating an endpoint or equality witness as a count. This integrates both independently accepted heads without requiring original-loop vectorizability, pressure, chain-depth or reduction-count thresholds, or a new profitability model.",
+  "semantics": "Production is the union of the accepted implementations. Preserve finite representable bounds, constant nonzero affine induction steps, acyclic per-iteration producer CFGs, closed accumulator-use proofs, common participation, available live-outs and effect rejection. Ordinary original loads/stores remain together in their original blocks and order, including stores feeding the next iteration across a chunk boundary. Fresh nonescaping contribution allocas cannot alias original accesses. Unsupported calls, atomics, volatile accesses, strictfp/constrained FP and observable unsafe effects retain their rejection checks. A producer-visible recurrence remains producer-local; no moved accumulator may feed retained state, addresses, predicates or contributions.\n\nKeep canonical N-base scheduling only where N is the actual entering count. Otherwise stop after original termination or C completed iterations, export the original continuation and actual next IV, consume K completed or P participating initialized slots, and resume only after consumption. 1<=K<=C and 0<=P<=K; P=0 bypasses the consumer without reading scratch. Simultaneous retained backedges, exact original seeds, neutral lanes, reduction carries, original branch polarity, tails and current/next/final live-outs remain checked. Subtraction clones accumulator-minus-contribution without normalization; multiplication clones flags, and only unflagged modular products use ordinary LV reassociation. The defined fixture uses c&1, so both nuw/nsw hold at every prefix for seeds 17 and -7. Strict ordinary FP and explicitly enabled fission reordering remain separate policies with no new fast-math, errno, alias or fenv assumptions. Exact fneg is retained and its direct stores are checked bitwise.\n\nCertificates reuse the controller, state/result, compact-count, typed initializer, unique-definition, checked predecessor and consumer-induction helpers. Adapt the small VF4 schedule proof to actual SSA recurrences and dominating width definitions, preserving fixed width 4 versus scalable 4*vscale. Retain both heads' scalar-tail, seed/neutral/placement, carry, participation, scratch provenance and mutation-anchor obligations. New composed fixtures additionally bind actual vector finalizers through their updates, PHIs, exact carried initializers and typed private loads, and compare all remaining memory operations with the complete original block/order lists. No normalized replacement IR is executed.\n\nExecutable strategy is harness-only: freshly transform the exact six new original definitions, verify every original/uninstrumented/probed/specialized module, lower actual emitted scalar/fixed/scalable paths and compare entire states with exact original IR and a separate literal nonchunked C oracle. The oracle follows modular IV/current-or-next comparisons and original state/memory changes; it never substitutes N for original termination. Independent sign-bit operations implement fneg. Actual hooks check incoming IV/state, global/local producer ordinals, original continuation, every initialized scratch address/value and participant order, complete production before consumption, and actual vector/tail visits. Record exact producer/consumer/chunk/full/partial/empty/multi/zero/early/empty-then-active/final-inactive counters. Every mutation anchor and module splice is unique and nonidentical before rejection handling.",
+  "costs": "No new production analysis, profitability model, unbounded storage, rereads, duplication or alias guards. The existing capacity search takes at most 64 monotone iterations over unique streams, including ABI padding and index limits. Noncanonical chunks use original comparison plus a capacity comparison/and, actual-IV/continuation exports, a defined private-count freeze and outer continuation after consumption. Compact chunks add their existing P==0 guard; ordinary LV supplies its independent vector/tail dispatch. Retained state uses a bounded number of PHIs, not state arrays.\n\nNew mixed i32/double composition scratch is alignTo(4*C,8)+8*C: C=1/8/9/16 uses 16/96/112/192 bytes at ceilings 16/111/112/192, padding 4/0/4/0. Fifteen bytes cannot hold one padded slot. Scratch traffic is 12 stored plus 12 loaded bytes per participant, zero for empty compact chunks. Original traffic is 12 bytes loaded per completed iteration and 12 bytes written per participant (next i32 input and direct double fneg store), plus 60 bytes of final outputs per entered fixture; these are preserved accesses, not added fission traffic. Alias outputs overlap the inputs only as the originals permit.\n\nInherited multiplication i32/i64/i8 scratch remains alignTo(4*C,8)+9*C: C=1/8/9/65 costs 17/104/121/849 bytes, 13 stored plus 13 loaded bytes per participant. The 120-byte boundary selects C8/104; 16 still rejects. Inherited three-stream i32/double/float stores/subtraction/fneg use alignTo(4*C,8)+12*C: C1/8/9/16/64/65 costs 20/128/148/256/1024/1044 bytes, traffic 16+16 bytes per participant. One-stream analogous products remain 4*C and 4+4 bytes. Newly admitted native affine fixtures use these same capacity costs.\n\nProduction changes beyond both heads are conflict resolution and comments only. Composition adds finite fixture scans, one exact memory/fneg/vector wrapper, operation/shape parameters on existing small certificates, six regression functions, one lit driver and C oracle/probe accounting. Fixed/scalar functions execute once; scalable functions alone receive requested vscale repetitions. Emitted code and actual entries remain separate. Stack layout, machine traffic, pressure, spills, RVV execution and speedup are not measured.",
   "tests": [
     "llvm/test/Other/reduction-fission-acyclic-chunk-checker.test",
+    "llvm/test/Other/reduction-fission-affine-chunk-checker.test",
+    "llvm/test/Other/reduction-fission-affine-composition-checker.test",
+    "llvm/test/Other/reduction-fission-bitwise-checker.test",
     "llvm/test/Other/reduction-fission-chunk-checker.test",
     "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
     "llvm/test/Other/reduction-fission-compact-chunk-checker.test",
     "llvm/test/Other/reduction-fission-compact-recurrence-checker.test",
     "llvm/test/Other/reduction-fission-compact-tail-checker.test",
+    "llvm/test/Other/reduction-fission-composition-checker.test",
     "llvm/test/Other/reduction-fission-dispatch-checker.test",
+    "llvm/test/Other/reduction-fission-execution-accounting.test",
     "llvm/test/Other/reduction-fission-execution-checker.test",
     "llvm/test/Other/reduction-fission-execution-symbols.test",
     "llvm/test/Other/reduction-fission-export-checker.test",
     "llvm/test/Other/reduction-fission-export-symbols.test",
+    "llvm/test/Other/reduction-fission-fneg-checker.test",
+    "llvm/test/Other/reduction-fission-fneg-vector-checker.test",
     "llvm/test/Other/reduction-fission-host-adapter.test",
+    "llvm/test/Other/reduction-fission-initializer-checker.test",
+    "llvm/test/Other/reduction-fission-multiply-checker.test",
     "llvm/test/Other/reduction-fission-recurrence-checker.test",
     "llvm/test/Other/reduction-fission-source-locations.test",
     "llvm/test/Other/reduction-fission-state-cfg-checker.test",
     "llvm/test/Other/reduction-fission-state-chunk-checker.test",
     "llvm/test/Other/reduction-fission-state-consumer-checker.test",
+    "llvm/test/Other/reduction-fission-store-checker.test",
+    "llvm/test/Other/reduction-fission-subtraction-checker.test",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-trip-count.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-call-tail.ll",
@@ -55,8 +67,12 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-chunks.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-composition.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-bitwise-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-bitwise.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunk-cfg.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunk-state.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-bounds.ll",
@@ -71,16 +87,26 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-composition-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-composition.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-controls.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-poison.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-exports.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg-patterns.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg-vector.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-nested.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-analogous.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-defined.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recipes.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
@@ -89,6 +115,10 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder-nested.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-stores-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-stores.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-subtraction-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-subtraction.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-fma8.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-same-vf.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-select.ll",
@@ -96,137 +126,62 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-signed-zero.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-speculation.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stage-metadata.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll",
-    "llvm/test/Other/reduction-fission-affine-chunk-checker.test",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-chunks.ll"
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
   ],
-  "limitations": "No compiler, build, test runner, opt/llc, host execution, try.sh or primary corpus evaluation was run by this worker. Only source/immutable-evidence/diff inspection, Python/embedded-Python AST parsing, JSON/path inventories and whitespace review were performed. t000079 compiled but failed two mandatory lit tests (91/93 passed); no subsequent mandatory execution or primary result validates that revision. All t000081 build/test/execution/primary outcomes are pending the harness. Certificates remain limited to the demonstrated scalar/tail/EVL fixture CFGs and stream layouts, including one compact stream per element type; they are not general LLVM IR analyses or alpha-equivalence proofs. Finite representable bounds and constant nonzero affine steps remain required; unsupported effects/CFG/feedback/participation, unavailable bounds, counter overflow, strictfp and constrained FP remain rejected. The hand-written compact EVL fragment remains parser/probe-only; the valid unflagged step-first increment was preserved. Narrow i8 cases execute scalar consumers; real EVL generation and RVV machine verification are separate mandatory checks. Positive variants and negative certificates have been added but not executed here. The host fixed-vscale adapter is not RVV execution, and code generation is not a speedup measurement. No corpus input, d2 integration, new numerical assumption or profitability prerequisite changes; no current primary outcome or maturity claim.",
+  "limitations": "Worker invoked no compiler, cmake/ninja/make, opt/llc, test runner, executable checker, VectorizeTests, try.sh or primary evaluation. Only source/diff/frozen-record inspection, Python AST grammar parsing, static inventories/delimiter scans, JSON and whitespace review were performed. All current build/test/execution outcomes are pending the harness. Historical acceptance belongs to the separate heads and does not validate this merge. No Git history/index/refs, common checkout, compiler binaries, corpus inputs or external artifacts were changed.\n\nCertificates deliberately recognize demonstrated fixture CFGs, VF4 shapes, limited initializer forms and a bounded LCSSA vocabulary, not arbitrary IR equivalence. Defined-flag multiplication and subtraction execute scalar consumers; wrapping multiplication additionally requests actual fixed/scalable consumers, with shape certified from emission. Current RISC-V scalable multiplication support remains a backend restriction; fixed emission must not count as scalable coverage. EVL/VP host execution remains unsupported, with inherited EVL code generation/machine verification separate. New composition FP inputs are finite signed-zero/cancellation cases; inherited raw-NaN/direct-negation matrices and their distinct subsequent-arithmetic comparison rules remain mandatory. Unsupported bounds, counter overflow, effects, feedback, incompatible participation, cyclic/early-exit CFGs and unavailable live-outs remain restricted. No target execution, performance gain, additional corpus selection or merged maturity is claimed.",
+  "new_test_paths": [
+    "llvm/test/Other/reduction-fission-affine-composition-checker.test",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-composition.ll"
+  ],
   "changed_expectations": [
-    {
-      "tests": [
-        "reduction-fission-scalar-chunks-reject.ll"
-      ],
-      "explanation": "chunk_noncanonical now uses capacity1 with actual start7 and original equality; chunk_reverse_equality also uses capacity1 but retains equality-continuation and actually executes twice despite operand1. Their exact original definitions are checked by the new control certificate and compiled unchanged as references, alongside actual transformed code and independent formulas under LV1/LV2 and both FP policies. Unsafe effects, feedback and strict-FP rejections remain."
-    },
-    {
-      "tests": [
-        "reduction-fission-scalar-integration-reject.ll",
-        "reduction-fission-scalar-integration.ll"
-      ],
-      "explanation": "Former offset/stride/current/swapped/witness scratch-only rejections now select original-control chunks C1/B4; at ceiling259 the affine integration case uses C64/B256. Existing canonical cross-edge checks, full-trip export checks and ceiling3 rejection remain."
-    },
-    {
-      "tests": [
-        "reduction-fission-scalar-export-controls.ll",
-        "reduction-fission-scalar-compact-cfg.ll",
-        "reduction-fission-scalar-state-cfg.ll"
-      ],
-      "explanation": "1043-byte scratch-only affine/nested rejections become C64/B1024 chunk selections, with checked bounded arrays/controller and preserved compact guard. Existing canonical scheduling expectations and sufficient-capacity consumer/export checks remain."
-    },
-    {
-      "tests": [
-        "reduction-fission-scalar-affine-bounds.ll",
-        "reduction-fission-scalar-affine-reject.ll",
-        "reduction-fission-scalar-relational-reject.ll",
-        "reduction-fission-scalar-compact-chunks-reject.ll"
-      ],
-      "explanation": "Over-full-trip limits, a huge but finite representable bound, producer-local observed recurrences and legal final exports no longer imply scratch rejection. They use bounded actual-control chunks. Genuine unavailable-bound/counter-overflow/feedback/effects/CFG/participation/strict-FP rejection obligations remain; global implicit negatives were replaced by explicit function-scoped negatives for genuine rejection cases and positive scheduling checks."
-    },
-    {
-      "tests": [
-        "reduction-fission-acyclic-chunk-checker.test"
-      ],
-      "explanation": "All seven original mutation constructions and comment-collision/preservation assertions remain. Offset and swapped controls are now admission probes using check_original_chunk_control; the other five retain their rejection reasons. No mutation construction or semantic comparison is swallowed by a rejection handler."
-    },
-    {
-      "tests": [
-        "reduction-fission-scalar-affine-chunks.ll",
-        "reduction-fission-affine-chunk-checker.test"
-      ],
-      "explanation": "Final output alignments now explicitly match their original riscv64 ABI implication. No Selected/Rejected expectation changes in this repair. All previously documented scratch-only rejection-to-selection changes and genuine semantic rejections remain mandatory; new sequence/alignment mutations strengthen correctness."
-    },
-    {
-      "tests": [
-        "reduction-fission-scalar-affine-chunks.ll",
-        "reduction-fission-affine-chunk-checker.test",
-        "reduction-fission-state-consumer-checker.test",
-        "reduction-fission-compact-chunk-checker.test"
-      ],
-      "explanation": "No Selected/Rejected, numerical, alignment, output-order or cost expectation changes. Two affine fixture producer ordinals use SSA-only names index.next/current.iteration.next to cover increment-result collisions alongside the existing index collision. Certificates now accept consistent local consumer PHI/update alpha-renaming after proving all relationships, and reject wrong identities/edges/steps/termination/scratch indices. All inherited rejection-to-selection explanations and correctness mutations remain mandatory."
-    },
-    {
-      "tests": [
-        "reduction-fission-execution-checker.test",
-        "reduction-fission-affine-chunk-checker.test",
-        "reduction-fission-state-consumer-checker.test",
-        "reduction-fission-compact-chunk-checker.test"
-      ],
-      "explanation": "t000081: shared consumer-preheader and equivalent stage-local vscale-times-four widths, plus either bounded integer add operand order/flag spelling, are positive when unique and dominating. Compact tail corruptions formerly accepted now reject. No semantic negative or original zero-backedge mutation was removed. The hand-written parser fixture alone had a duplicate %vf definition and unindexed scratch placeholders; rename only that width and connect its scratch ordinals. Valid transformed fixtures and the unflagged step-first EVL increment are unchanged."
-    }
+    "Keep d1 bounded-affine and unconditional acyclic chunk expectations; keep d2 producer-store, exact-fneg, subtraction, bitwise and multiplication admission, operation flags and source locations. Broad recognition changes dispatch XOR from retained producer state to a shared-stream consumer reduction, as in accepted d2; its source-located VF/scratch/live-out checks and output obligations remain.",
+    "Native bitwise_affine and multiply_affine now select bounded C9 chunks instead of scratch-only rejection. The multiplication padded-budget case also selects C8/104 at its exact original location 52:3. Check actual original continuation/next-IV/completed counts and moved operations. Keep C65 full-trip matrices and every inherited mutation, parser and probe rejection unchanged in size/scope.",
+    "Native stores_affine in subtraction/fneg now selects C64/1024 under ceiling1043 rather than requiring full-trip1044. Check original control IV/next export, fneg and ordered fsub in the actual chunked IR. The independent 19-byte minimum-slot rejection remains.",
+    "The acyclic arm-local store now chunks C64/256 at259, while260 retains the full-trip positive. Three bytes still reject the one-stream compact-CFG store case; ordinary stores compose with retained state while volatile/atomic/unsafe siblings remain rejections.",
+    "Retain d1 connected vector/tail scratch GEPs and distinct consumer width names in the synthetic execution-checker IR. Resolve the textual conflict without duplicate SSA loads/increments from the older d2 template. This preserves correctness checks rather than deleting them."
   ],
-  "prior_immutable_evidence": {
-    "read": [
-      "harness/BENCHMARKS_ANALYSIS.md",
-      "harness/benchmark-search/evidence/t000174-healpix-weighted-dipole-ring/candidate.json",
-      "tasks/t000073.json review",
-      "builds/t000073/progress.json",
-      "diffs/t000073.patch",
-      "accepted source at base_revision",
-      "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
-      "tasks/t000076.json implementation and revision review",
-      "jobs/t000076/000002-build/result.json",
-      "builds/t000076/lit.log",
-      "diffs/t000076.patch and accepted-base-to-t000076 source diff",
-      "harness/benchmark-search/evidence/t000174-healpix-weighted-dipole-ring/candidate.json (reread frozen evidence)",
-      "tasks/t000078.json review and build fields",
-      "builds/t000078/lit.log failing affine certificate and printed IR",
-      "diffs/t000078.patch",
-      "current ScalarReductionFission.cpp original-control/count/scratch construction",
-      "builds/t000079/lit.log",
-      "diffs/t000079.patch",
-      "tasks/t000079.json",
-      "evaluations/t000073/primary/result.json",
-      "harness/BENCHMARKS_ANALYSIS.md",
-      "harness/benchmark-search/evidence/t000073-gnss-rotator-real-generic/check.json"
-    ],
-    "accepted_base": "t000073 review records accepted build, 91 mandatory lit tests, 106 unit tests, inherited executable comparisons including acyclic chunks and all234 original benchmark compilations. Those are historical results only; they do not validate this new fallback.",
-    "interpretation": "Frozen corpus analysis motivates scalar producers and original-control/participation handling. No fixture-specific transformation or corpus source rewrite is added; no target speedup follows from its compile/codegen evidence.",
-    "t000079": {
-      "revision": "eb15ef04a112cc32b7a4bc9c9fbe864c2e03e892",
-      "build": "succeeded",
-      "lit_passed": 91,
-      "lit_total": 93,
-      "eligible": false,
-      "failures": [
-        "affine-chunk checker accepted scalar compact PHI zero backedge",
-        "execution checker required shared VF definition in vector.ph"
-      ],
-      "later_execution_and_primary_evidence": "absent"
-    },
-    "accepted_primary_summary": {
-      "revision": "89ee078f645435f7b303667f81c4ff214614c92f",
-      "source": "evaluations/t000073/primary/result.json",
-      "each_policy": {
-        "selected": 3,
-        "rejected": 88,
-        "no_decision": 26,
-        "total": 117,
-        "vectorized": 12,
-        "unresolved": 0
+  "immutable_evidence": {
+    "analysis": "harness/BENCHMARKS_ANALYSIS.md; immutable benchmark-search targets/candidates/evidence; primary corpus remains 117 original files.",
+    "accepted_heads": [
+      {
+        "task": "t000081",
+        "revision": "ef2cbb48bbdddc96849a3a44d1d6abda93b17668",
+        "review": "accept",
+        "lit_files": 93,
+        "unit_tests": 106,
+        "primary": "evaluations/t000081/primary/result.json",
+        "per_policy_summary": {
+          "selected": 3,
+          "rejected": 88,
+          "no_decision": 26,
+          "vectorized": 12
+        }
       },
-      "interpretation": "Historical immutable baseline only. Fresh exact-source-location comparison is mandatory; counts alone cannot establish parity."
-    }
+      {
+        "task": "t000083",
+        "revision": "ca6a7925a06c26ad9cb82e20887b7af95ceda629",
+        "review": "accept",
+        "lit_files": 113,
+        "unit_tests": 106,
+        "primary": "evaluations/t000083/primary/result.json",
+        "per_policy_summary": {
+          "selected": 7,
+          "rejected": 84,
+          "no_decision": 26,
+          "vectorized": 13
+        }
+      }
+    ],
+    "interpretation": "Read frozen task reviews, build/evaluation summaries, prior reports and immutable repair diffs. Both heads passed their own mandatory validations and 234 primary compilations. Their historical report fields saying pending predate harness acceptance; none is a current merged pass."
   },
-  "new_execution_obligations": {
-    "fixture": "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-chunks.ll",
+  "new_execution_plan": {
     "functions": [
-      "nc_offset",
-      "nc_stride",
-      "nc_down",
-      "nc_early",
-      "nc_current",
-      "nc_compact",
-      "nc_narrow"
+      "nc_mul_store",
+      "nc_bits_store",
+      "nc_compact_bits_store",
+      "nc_sub_store",
+      "nc_defined_store",
+      "nc_compact_mul_store"
     ],
     "capacities": [
       1,
@@ -248,264 +203,71 @@
       1,
       2
     ],
-    "kinds": [
-      "scalar",
-      "vector/scalar-tail",
-      "EVL codegen only"
+    "original_controls": [
+      "runtime start/nonunit equality",
+      "unsigned descending/nonunit with early modular termination",
+      "signed descending compact/nonunit with early modular termination",
+      "current-IV descending equality (N+1 actual iterations)",
+      "nonzero offset/unit equality"
     ],
-    "matrix": "48 uninstrumented transformation/codegen modules: four capacities x two LV counts x two FP contracts x three policies. Scalar rows include all seven functions, vector policies include the six i64 cases. Narrow i8 vector-policy codegen additionally runs on the full fixture.",
-    "per_host_configuration": "3264 exact-original/transformed/oracle comparisons: N=0..67 x six starts x four data/FP seeds x two alias layouts. Invalid entries pass null input pointers. All configured vscales execute tail-policy code; scalar rows use scale1.",
-    "default_vscales": [
+    "source_transformations": 32,
+    "transformed_bodies": 160,
+    "vector_requested_functions": [
+      "nc_mul_store",
+      "nc_bits_store",
+      "nc_compact_bits_store",
+      "nc_compact_mul_store"
+    ],
+    "vscales_for_scalable_emission": [
       1,
       2,
       4,
       8,
       32
     ],
-    "planned_new_comparisons_default_vscales": 1932288,
-    "historical_originals": "Four LV/policy configurations additionally execute each exact original chunk_noncanonical (N0..67) and chunk_reverse_equality (128 uint32 inputs), with independent sum formulas: 784 comparisons.",
-    "actual_results": "Require all new per-configuration stdout rows exactly once, 3264 comparisons each and all runtime certificates before accepting. results.json records noncanonical_chunk_execution; records retain options and exact source-located stage/scratch remarks.",
-    "mutations": [
-      "capacity+1",
-      "wrong actual next IV",
-      "wrong simultaneous older carry",
-      "unconditional final exit instead of original continuation",
-      "current/next final export swap",
-      "capacity substituted for actual completion",
-      "initial ordinal1",
-      "nonunit completed increment",
-      "consumer uses capacity/global N",
-      "compact uses completed count",
-      "wrong empty guard",
-      "nonunit participation increment",
-      "scratch index0",
-      "original predicate changed",
-      "original branch destinations reversed",
-      "constant original continuation export",
-      "consumer PHI backedge zero",
-      "global N vector entry guard/EVL AVL",
-      "every final store changed value/destination/align1/align16",
-      "final store order changed",
-      "retained producer load alignment changed",
-      "narrow consumer load incompatible alignment and numeric-prefix collision",
-      "producer ordinal substituted for the consumer PHI/update operand",
-      "consumer zero entry1; wrong or duplicate PHI entry/backedge predecessor",
-      "producer value substituted for PHI backedge",
-      "vector stride1 or subtract instead of add",
-      "scratch GEP indexed by producer ordinal, next consumer ordinal or zero",
-      "tail termination compares producer/current ordinal or wrong bound instead of actual consumer update",
-      "EVL termination compares producer/current/next ordinal instead of remaining-AVL update",
-      "compact scalar-tail wrong entry, zero backedge, duplicate/wrong PHI and resume edges, nonunit/negative stride, compare operands/bound/polarity, swapped branch, scratch indices and disconnected loads",
-      "VF width/scale unrelated or duplicate definitions, non-dominating stage or after-use definitions",
-      "shared and separate dominating vscale-times-four computations, either bounded integer add operand order and no-flags/nuw/nuw+nsw positives"
-    ],
-    "early_exit_evidence": "Require nonzero early-termination counts for unsigned descending and signed ascending/descending rows. Starts four units from signed boundaries exercise an exit before the modular equality witness; actual producer and consumer counts must match that shorter traversal.",
-    "ssa_name_collisions": {
-      "index": "nc_offset and nc_compact retain producer index; other cases also retain it",
-      "index.next": "nc_stride producer ordinal (tail increment name collision)",
-      "current.iteration.next": "nc_down producer ordinal (EVL increment name collision)",
-      "local_consumer_renames": "increment alone and PHI+increment are renamed consistently in positive lit modules; actual producer identity and all semantic operations remain"
-    }
+    "fixed_and_scalar_execution": "Exactly once per distinct policy/LV/capacity/function/requested-mode configuration; width4 is independent of host vscale. No fixed/scalar row counts as scalable coverage.",
+    "comparisons_per_host_configuration": 6528,
+    "comparison_domain": "68 N values (0..67), six original IV starts including signed/unsigned wrap boundaries, four input/FP trials, four disjoint/equal/+1/-1 output aliases. Each comparison checks exact original IR, actual transformed code and independent C, entire inputs/outputs/live-outs/canaries.",
+    "predicted_if_wrapping_mul_is_fixed_and_bitwise_is_scalable_at_every_requested_capacity": {
+      "host_configurations": 288,
+      "comparisons": 1880064,
+      "per_policy_comparisons": 940032,
+      "note": "Plan, not observation. C1 may emit only scalar code; actual shape determines specialization rows. Reconcile observed exact keys and explain any discrepancy; never fabricate vector entry from emitted code."
+    },
+    "evidence": "composition-counts.json and execution/results.json observed_execution.affine_composition; exact policy/LV/capacity/function/shape/vscale/lanes keys, actual producer/consumer/vector/tail/chunk/empty/full/partial/multi/early/zero/final-inactive/empty-then-active counters."
   },
-  "validation_requested": {
-    "task_id": "t000081",
+  "validation_request": {
+    "task_id": "t000084",
+    "executor": "harness only",
     "worker_executed": false,
+    "fresh_snapshot_required": true,
     "fresh_build_required": true,
-    "build": {
+    "compilation": {
       "required": true,
-      "harness_only": true,
-      "fresh_LLVM_build_required": true,
-      "fresh_c_harness_compilation_and_link_required": true,
-      "preserve_accepted_heads_if_failed": true
+      "targets": [
+        "clang",
+        "opt",
+        "llc",
+        "FileCheck",
+        "split-file",
+        "not",
+        "VectorizeTests"
+      ],
+      "require": "Compile the merged worktree freshly. Existing accepted direction refs/toolchains stay intact until independent acceptance; no worker build or Git operation."
     },
-    "mandatory_lit": {
+    "lit": {
       "required": true,
-      "explicit_paths": [
-        "llvm/test/Other/reduction-fission-acyclic-chunk-checker.test",
-        "llvm/test/Other/reduction-fission-chunk-checker.test",
-        "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
-        "llvm/test/Other/reduction-fission-compact-chunk-checker.test",
-        "llvm/test/Other/reduction-fission-compact-recurrence-checker.test",
-        "llvm/test/Other/reduction-fission-compact-tail-checker.test",
-        "llvm/test/Other/reduction-fission-dispatch-checker.test",
-        "llvm/test/Other/reduction-fission-execution-checker.test",
-        "llvm/test/Other/reduction-fission-execution-symbols.test",
-        "llvm/test/Other/reduction-fission-export-checker.test",
-        "llvm/test/Other/reduction-fission-export-symbols.test",
-        "llvm/test/Other/reduction-fission-host-adapter.test",
-        "llvm/test/Other/reduction-fission-recurrence-checker.test",
-        "llvm/test/Other/reduction-fission-source-locations.test",
-        "llvm/test/Other/reduction-fission-state-cfg-checker.test",
-        "llvm/test/Other/reduction-fission-state-chunk-checker.test",
-        "llvm/test/Other/reduction-fission-state-consumer-checker.test",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-trip-count.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-call-tail.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add-pressure.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combined.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-disabled.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-dispatch.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-duplication.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fabs.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-forced-pair.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering-isolation.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-general.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-independent-vfs.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-induction.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-duplication.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-plan.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-ordered.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-reread.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-invariant-frontier.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-legality.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-live-out.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-ordered.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-preview.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-bounds.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunk-cfg.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunk-state.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-bounds.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-bounds.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-chunks-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-chunks.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-controls.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-poison.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-exports.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-nested.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recipes.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder-nested.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-fma8.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-same-vf.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-select.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-short-producers.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-signed-zero.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-speculation.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stage-metadata.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll",
-        "llvm/test/Other/reduction-fission-affine-chunk-checker.test",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-chunks.ll"
-      ],
-      "preserve_all_inherited": true,
-      "all_inherited_run_lines": true,
-      "additional_runnable_files": [
-        "llvm/test/Other/reduction-fission-affine-chunk-checker.test",
-        "llvm/test/Other/reduction-fission-state-consumer-checker.test",
-        "llvm/test/Other/reduction-fission-compact-chunk-checker.test",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-chunks.ll",
-        "llvm/test/Other/reduction-fission-execution-checker.test"
-      ],
-      "intentional_changed_expectations": "As documented above; retain all semantic negatives and update scratch-only expectations to positive actual-control checks.",
-      "alignment_repair_coverage": "Run every parse/print positive, omitted-input transformed certificate, final output/load mutation and retained semantic rejection. Complete the matrix beyond the first row.",
-      "consumer_identity_coverage": "Run all consistent local SSA-renaming positives (including increment-only), actual producer index/increment-name collision fixtures, LLVM verification of renamed and instrumented positives, and every nonidentical identity/PHI/stride/termination/scratch mutation. Cover affine C1/8/9/16 with strict/reordered scalar/tail/EVL, plus analogous retained-state/multiblock/compact paths. Preserve all inherited alignment/order/result/semantic mutations.",
-      "supporting_inputs": [
-        "llvm/test/Other/Inputs/reduction-fission-consumer-identity.py"
-      ],
-      "supporting_input_policy": "Import Python helpers through their owning .test RUN lines. Do not pass helper .py files to llvm-lit as standalone tests. No inherited RUN line/check is suppressed.",
-      "compact_tail_vf_repair_coverage": "Complete every inherited and new mandatory lit test, including all C1/8/9/16 scalar/tail/EVL rows under strict/reordered policies, SSA renames/name collisions, zero entry/full/partial/empty compact chunks, original zero-backedge and new full-tail traversal mutations, shared/stage-local widths, definition uniqueness/dominance/order, and integer flag/operand-order positives. LLVM-verify every positive actual transformed module yielded by the helper."
+      "paths_source": "tests",
+      "union_of_mature_head_mandatory_files": 118,
+      "new_files": 2,
+      "total_files": 120,
+      "require": "All union files without filtering, all added/changed RUN lines, original and repeated-LV analysis verification, source-location/VF/scratch checks, complete inherited mutation/parser/probe/initializer matrices and the new 32-module/160-body composition matrix. Preserve both checker-counts.json files, initializer-counts.json, composition-counts.json and all partial counts (complete=false). Require unique nonidentity mutation anchors and reject all corruptions. Missing or failed rows block acceptance."
     },
-    "mandatory_unit_suite": {
+    "unit_tests": {
       "required": true,
-      "executable": "VectorizeTests",
-      "all_tests": true,
-      "filter": "*"
+      "target": "VectorizeTests",
+      "require": "Complete unfiltered suite (106 tests in accepted heads)."
     },
-    "mandatory_execution": {
-      "required": true,
-      "harness_only": true,
-      "driver": "llvm/utils/check-reduction-fission.py",
-      "harness": "llvm/utils/reduction-fission-execution.c.in",
-      "complete_inherited_matrices": true,
-      "complete_new_matrices": true,
-      "fp_policies": [
-        "strict",
-        "reordered"
-      ],
-      "loop_vectorize_invocations": [
-        1,
-        2
-      ],
-      "vscales": [
-        1,
-        2,
-        4,
-        8,
-        32
-      ],
-      "comparison": "Fresh link and actual original/transformed/independent C comparisons with exact per-configuration counters. Preserve all inherited dispatch, integration, scalar/state/compact/acyclic, recurrence, exports, poison and adapter checks. Include the new fallback matrix, certificates, mutations and exact historical original functions. Verify instrumented scalable and fixed host modules before execution; generation is not execution. Freshly compile both exact original references and actual transformed modules for the repaired fixture; retain independent C oracle/exact counters across all48 new transformation/codegen configurations and every inherited configuration. Generation/certificates cannot substitute for host execution; no supplementary fast-math/errno assumptions. Rebuild exact original references and transformed collision fixtures after the source SSA edits. Require concrete nonzero vector execution whenever stage lanes fit capacity, including increment-name collisions, with unchanged 3264 comparisons per configuration, null-pointer zero-entry cases, exact/partial boundaries and empty compact chunks.",
-      "compact_tail_repair": "Fresh original/transformed/independent-oracle execution for every inherited/new configuration is mandatory after lit repairs; preserve per-row counts (3264 for noncanonical rows) and nonzero real vector and scalar-tail visits whenever capacity/lanes allow, initialized scratch, exact participation and retained/final state, aliases, input bytes and canaries. No parser fixture or codegen-only result substitutes for execution."
-    },
-    "rvv_machine_verification": {
-      "required": true,
-      "harness_only": true,
-      "target": "riscv64 +v",
-      "verify_machineinstrs": true,
-      "uninstrumented": true,
-      "include": [
-        "all inherited matrices",
-        "new scalar/tail/EVL matrices under both FP policies and LV1/LV2",
-        "full seven-function narrow-inclusive EVL RUN",
-        "index/index.next/current.iteration.next producer collisions; tail and EVL consumers under separate FP contracts",
-        "repaired compact scalar-tail and actual EVL outputs; keep unflagged/commuted add support and verify all inherited/new modules"
-      ],
-      "target_execution": false,
-      "performance_measurement": false
-    },
-    "primary_corpus": {
-      "required": true,
-      "harness_only": true,
-      "immutable_inputs": 117,
-      "policies": [
-        "strict",
-        "reordered"
-      ],
-      "compilations": 234,
-      "rewrite_inputs": false,
-      "supplementary_math_flags": [],
-      "exact_original_loop_attribution": true,
-      "compare_to_task": "t000073",
-      "compare_to_revision": "89ee078f645435f7b303667f81c4ff214614c92f",
-      "preserve_evidence": [
-        "original target source-located Selected/Rejected",
-        "independent producer and consumer VFs",
-        "scratch capacities/bytes/traffic/padding",
-        "guards/rereads/duplication",
-        "separate helper/nested other_records"
-      ],
-      "no_changed_primary_inputs_or_extra_math_assumptions": true,
-      "scope_evidence_to_exact_original_target": "Preserve source-location Selected/Rejected, stage VFs, scratch capacity/padding/traffic, guards/rereads/duplication; separate helper/nested activity. Compare all117 unchanged originals under both policies against accepted d1 head.",
-      "required_target_loop_comparison": "For all117 immutable originals under strict and reordered policies compare exact original target-loop source-location Selected/Rejected decisions, stage VFs and scratch/capacity/padding/traffic/guards/rereads/duplication against accepted d1 head 89ee078f645435f7b303667f81c4ff214614c92f; keep helper/nested-loop outcomes separate. Fresh full 234 compilation/verification/codegen runs are required even though this repair changes only validation."
-    },
-    "acceptance": "Fresh build, complete inherited and new mandatory lit tests, full VectorizeTests, fresh original/transformed/oracle executions and unchanged117-original two-policy evaluation must all pass. Compiler crashes, incorrect transformations and mandatory failures block acceptance. No target execution, speedup or maturity is inferred from code generation. Complete all mandatory stages after repair. Address subsequent failures without suppressing correctness checks or replacing failed execution with generation.",
     "repeated_lv_analysis_verification": {
       "required": true,
       "loop_vectorize_invocations": [
@@ -518,147 +280,709 @@
         "verify<loops>",
         "verify<scalar-evolution>"
       ],
-      "include": [
-        "all inherited matrices",
-        "scalar/tail/EVL original-control scheduler",
-        "omitted-alignment repeated-LV positives",
-        "repaired shared/stage-local VF and compact scalar-tail paths, LV1/LV2, both policies"
+      "require": "Use inherited matrices and subtraction_options/fneg_vector_options for every new composition. Verify complete modules before host adaptation and lowering."
+    },
+    "executable_comparisons": {
+      "required": true,
+      "driver": "llvm/utils/check-reduction-fission.py",
+      "harness": "llvm/utils/reduction-fission-execution.c.in",
+      "vscales": [
+        1,
+        2,
+        4,
+        8,
+        32
+      ],
+      "require": "Fresh complete inherited union plus new composition matrix; no skipped or normalized originals and no numerical-contract weakening. Preserve d1 affine/chunk/CFG/state/compact/export/integration matrices and d2 stores/subtraction/fneg/vector-negation/composition/bitwise/multiplication/analogous matrices, VPlan isolation/default dispatch and adapter cases. Keep multiplication wrapping/defined 88 configurations and analogous24 distinct (accepted plan3076864 comparisons), all initializer forms, defined flags, fixed/scalable metadata, actual entry versus emission, aliases/live-outs/canaries and exact original/C oracles. Reconcile complete observed keys/counts separately by policy, shape and vscale. New matrix must exhibit actual composed multiplication/bitwise chunk consumers, scalar tails, scalar defined/subtraction consumers, C1/empty/zero bypasses, exact/partial/multiple chunks and actual carried termination/IV/state.",
+      "argv": [
+        "python3",
+        "llvm/utils/check-reduction-fission.py",
+        "--build-dir",
+        "<fresh build>",
+        "--work-dir",
+        "<fresh immutable execution output>",
+        "--vscales",
+        "1",
+        "2",
+        "4",
+        "8",
+        "32"
       ]
+    },
+    "instrumented_ir_verification": {
+      "required": true,
+      "require": "Verify each exact original, uninstrumented transform, complete probe and renamed/specialized probe with opt before host adaptation/lowering. Keep failed stdin, input/probe/instrumented modules and full command/stdout/stderr."
+    },
+    "rvv_machine_verification": {
+      "required": true,
+      "require": "llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs on all inherited and new uninstrumented outputs, including all32 new composition modules and newly admitted native affine budget outputs. Inherited EVL/VP remains codegen/machine verification only; fixed-vscale host execution is not RVV execution."
+    },
+    "primary_evaluation": {
+      "required": true,
+      "benchmark_count": 117,
+      "compilation_count": 234,
+      "policies": [
+        "strict",
+        "reordered"
+      ],
+      "rewrite_inputs": false,
+      "extra_clang": [],
+      "extra_opt": [],
+      "compare_references": [
+        {
+          "revision": "ef2cbb48bbdddc96849a3a44d1d6abda93b17668",
+          "result": "evaluations/t000081/primary/result.json"
+        },
+        {
+          "revision": "ca6a7925a06c26ad9cb82e20887b7af95ceda629",
+          "result": "evaluations/t000083/primary/result.json"
+        }
+      ],
+      "require": "All unchanged original targets with harness-owned tests/try.sh and frozen target settings. Preserve hashes and compare exact original-target Selected/Rejected decisions, source coordinates, complete target records, producer/consumer VFs, capacity/alignment/padded scratch, traffic, guards, rereads and duplication against BOTH accepted heads. Separate helper/nested/other_records. Explain intentional new original-target outcomes from affine/store/operation composition; summary counts alone are insufficient. No extra math/errno assumptions in primary."
+    },
+    "artifact_preservation": {
+      "required": true,
+      "require": "Harness preserves immutable diffs/reports/results and all exact fresh input/output/probe/specialized modules, remarks, RVV outputs, commands/stdin/stdout/stderr, counts and complete execution results. Retain mismatch policy/LV/function/capacity/shape/vscale/N/start/trial/alias/seed context and partial counts on failure. Do not replace old evidence with a reused path. Only harness manages artifacts/binaries and refs."
+    },
+    "acceptance": "Fresh build, all120 mandatory lit files, unfiltered VectorizeTests, repeated-LV analysis verification, complete inherited/new executable matrices, RVV machine verification and all234 immutable primary compilations must pass independently. Crashes, miscompilations and mandatory failures block integration; no measured speedup requirement. Leave mature heads intact until acceptance."
+  },
+  "inherited_validation_contracts": {
+    "d1": {
+      "task_id": "t000081",
+      "worker_executed": false,
+      "fresh_build_required": true,
+      "build": {
+        "required": true,
+        "harness_only": true,
+        "fresh_LLVM_build_required": true,
+        "fresh_c_harness_compilation_and_link_required": true,
+        "preserve_accepted_heads_if_failed": true
+      },
+      "mandatory_lit": {
+        "required": true,
+        "explicit_paths": [
+          "llvm/test/Other/reduction-fission-acyclic-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
+          "llvm/test/Other/reduction-fission-compact-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-compact-recurrence-checker.test",
+          "llvm/test/Other/reduction-fission-compact-tail-checker.test",
+          "llvm/test/Other/reduction-fission-dispatch-checker.test",
+          "llvm/test/Other/reduction-fission-execution-checker.test",
+          "llvm/test/Other/reduction-fission-execution-symbols.test",
+          "llvm/test/Other/reduction-fission-export-checker.test",
+          "llvm/test/Other/reduction-fission-export-symbols.test",
+          "llvm/test/Other/reduction-fission-host-adapter.test",
+          "llvm/test/Other/reduction-fission-recurrence-checker.test",
+          "llvm/test/Other/reduction-fission-source-locations.test",
+          "llvm/test/Other/reduction-fission-state-cfg-checker.test",
+          "llvm/test/Other/reduction-fission-state-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-state-consumer-checker.test",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-trip-count.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-call-tail.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add-pressure.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combined.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-disabled.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-dispatch.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-duplication.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fabs.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-forced-pair.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering-isolation.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-general.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-independent-vfs.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-induction.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-duplication.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-plan.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-ordered.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-reread.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-invariant-frontier.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-legality.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-live-out.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-ordered.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-preview.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunk-cfg.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunk-state.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-chunks-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-chunks.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-controls.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-poison.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-exports.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-nested.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recipes.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder-nested.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-fma8.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-same-vf.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-select.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-short-producers.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-signed-zero.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-speculation.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stage-metadata.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll",
+          "llvm/test/Other/reduction-fission-affine-chunk-checker.test",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-chunks.ll"
+        ],
+        "preserve_all_inherited": true,
+        "all_inherited_run_lines": true,
+        "additional_runnable_files": [
+          "llvm/test/Other/reduction-fission-affine-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-state-consumer-checker.test",
+          "llvm/test/Other/reduction-fission-compact-chunk-checker.test",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-chunks.ll",
+          "llvm/test/Other/reduction-fission-execution-checker.test"
+        ],
+        "intentional_changed_expectations": "As documented above; retain all semantic negatives and update scratch-only expectations to positive actual-control checks.",
+        "alignment_repair_coverage": "Run every parse/print positive, omitted-input transformed certificate, final output/load mutation and retained semantic rejection. Complete the matrix beyond the first row.",
+        "consumer_identity_coverage": "Run all consistent local SSA-renaming positives (including increment-only), actual producer index/increment-name collision fixtures, LLVM verification of renamed and instrumented positives, and every nonidentical identity/PHI/stride/termination/scratch mutation. Cover affine C1/8/9/16 with strict/reordered scalar/tail/EVL, plus analogous retained-state/multiblock/compact paths. Preserve all inherited alignment/order/result/semantic mutations.",
+        "supporting_inputs": [
+          "llvm/test/Other/Inputs/reduction-fission-consumer-identity.py"
+        ],
+        "supporting_input_policy": "Import Python helpers through their owning .test RUN lines. Do not pass helper .py files to llvm-lit as standalone tests. No inherited RUN line/check is suppressed.",
+        "compact_tail_vf_repair_coverage": "Complete every inherited and new mandatory lit test, including all C1/8/9/16 scalar/tail/EVL rows under strict/reordered policies, SSA renames/name collisions, zero entry/full/partial/empty compact chunks, original zero-backedge and new full-tail traversal mutations, shared/stage-local widths, definition uniqueness/dominance/order, and integer flag/operand-order positives. LLVM-verify every positive actual transformed module yielded by the helper."
+      },
+      "mandatory_unit_suite": {
+        "required": true,
+        "executable": "VectorizeTests",
+        "all_tests": true,
+        "filter": "*"
+      },
+      "mandatory_execution": {
+        "required": true,
+        "harness_only": true,
+        "driver": "llvm/utils/check-reduction-fission.py",
+        "harness": "llvm/utils/reduction-fission-execution.c.in",
+        "complete_inherited_matrices": true,
+        "complete_new_matrices": true,
+        "fp_policies": [
+          "strict",
+          "reordered"
+        ],
+        "loop_vectorize_invocations": [
+          1,
+          2
+        ],
+        "vscales": [
+          1,
+          2,
+          4,
+          8,
+          32
+        ],
+        "comparison": "Fresh link and actual original/transformed/independent C comparisons with exact per-configuration counters. Preserve all inherited dispatch, integration, scalar/state/compact/acyclic, recurrence, exports, poison and adapter checks. Include the new fallback matrix, certificates, mutations and exact historical original functions. Verify instrumented scalable and fixed host modules before execution; generation is not execution. Freshly compile both exact original references and actual transformed modules for the repaired fixture; retain independent C oracle/exact counters across all48 new transformation/codegen configurations and every inherited configuration. Generation/certificates cannot substitute for host execution; no supplementary fast-math/errno assumptions. Rebuild exact original references and transformed collision fixtures after the source SSA edits. Require concrete nonzero vector execution whenever stage lanes fit capacity, including increment-name collisions, with unchanged 3264 comparisons per configuration, null-pointer zero-entry cases, exact/partial boundaries and empty compact chunks.",
+        "compact_tail_repair": "Fresh original/transformed/independent-oracle execution for every inherited/new configuration is mandatory after lit repairs; preserve per-row counts (3264 for noncanonical rows) and nonzero real vector and scalar-tail visits whenever capacity/lanes allow, initialized scratch, exact participation and retained/final state, aliases, input bytes and canaries. No parser fixture or codegen-only result substitutes for execution."
+      },
+      "rvv_machine_verification": {
+        "required": true,
+        "harness_only": true,
+        "target": "riscv64 +v",
+        "verify_machineinstrs": true,
+        "uninstrumented": true,
+        "include": [
+          "all inherited matrices",
+          "new scalar/tail/EVL matrices under both FP policies and LV1/LV2",
+          "full seven-function narrow-inclusive EVL RUN",
+          "index/index.next/current.iteration.next producer collisions; tail and EVL consumers under separate FP contracts",
+          "repaired compact scalar-tail and actual EVL outputs; keep unflagged/commuted add support and verify all inherited/new modules"
+        ],
+        "target_execution": false,
+        "performance_measurement": false
+      },
+      "primary_corpus": {
+        "required": true,
+        "harness_only": true,
+        "immutable_inputs": 117,
+        "policies": [
+          "strict",
+          "reordered"
+        ],
+        "compilations": 234,
+        "rewrite_inputs": false,
+        "supplementary_math_flags": [],
+        "exact_original_loop_attribution": true,
+        "compare_to_task": "t000073",
+        "compare_to_revision": "89ee078f645435f7b303667f81c4ff214614c92f",
+        "preserve_evidence": [
+          "original target source-located Selected/Rejected",
+          "independent producer and consumer VFs",
+          "scratch capacities/bytes/traffic/padding",
+          "guards/rereads/duplication",
+          "separate helper/nested other_records"
+        ],
+        "no_changed_primary_inputs_or_extra_math_assumptions": true,
+        "scope_evidence_to_exact_original_target": "Preserve source-location Selected/Rejected, stage VFs, scratch capacity/padding/traffic, guards/rereads/duplication; separate helper/nested activity. Compare all117 unchanged originals under both policies against accepted d1 head.",
+        "required_target_loop_comparison": "For all117 immutable originals under strict and reordered policies compare exact original target-loop source-location Selected/Rejected decisions, stage VFs and scratch/capacity/padding/traffic/guards/rereads/duplication against accepted d1 head 89ee078f645435f7b303667f81c4ff214614c92f; keep helper/nested-loop outcomes separate. Fresh full 234 compilation/verification/codegen runs are required even though this repair changes only validation."
+      },
+      "acceptance": "Fresh build, complete inherited and new mandatory lit tests, full VectorizeTests, fresh original/transformed/oracle executions and unchanged117-original two-policy evaluation must all pass. Compiler crashes, incorrect transformations and mandatory failures block acceptance. No target execution, speedup or maturity is inferred from code generation. Complete all mandatory stages after repair. Address subsequent failures without suppressing correctness checks or replacing failed execution with generation.",
+      "repeated_lv_analysis_verification": {
+        "required": true,
+        "loop_vectorize_invocations": [
+          1,
+          2
+        ],
+        "verifiers": [
+          "verify-each",
+          "verify<domtree>",
+          "verify<loops>",
+          "verify<scalar-evolution>"
+        ],
+        "include": [
+          "all inherited matrices",
+          "scalar/tail/EVL original-control scheduler",
+          "omitted-alignment repeated-LV positives",
+          "repaired shared/stage-local VF and compact scalar-tail paths, LV1/LV2, both policies"
+        ]
+      }
+    },
+    "d2": {
+      "task_id": "t000083",
+      "executor": "harness only",
+      "worker_executed": false,
+      "fresh_snapshot_required": true,
+      "compilation": {
+        "required": true,
+        "require": "Fresh assertion-enabled LLVM and C harness compilation/link for this completed snapshot, with host and RISCV backends. Preserve accepted639376b36344347776d6de5e38ec826873194920 on any mandatory failure. No unaccepted d1 integration."
+      },
+      "lit": {
+        "required": true,
+        "paths": [
+          "llvm/test/Other/reduction-fission-bitwise-checker.test",
+          "llvm/test/Other/reduction-fission-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
+          "llvm/test/Other/reduction-fission-compact-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-compact-recurrence-checker.test",
+          "llvm/test/Other/reduction-fission-compact-tail-checker.test",
+          "llvm/test/Other/reduction-fission-composition-checker.test",
+          "llvm/test/Other/reduction-fission-dispatch-checker.test",
+          "llvm/test/Other/reduction-fission-execution-accounting.test",
+          "llvm/test/Other/reduction-fission-execution-checker.test",
+          "llvm/test/Other/reduction-fission-execution-symbols.test",
+          "llvm/test/Other/reduction-fission-export-checker.test",
+          "llvm/test/Other/reduction-fission-export-symbols.test",
+          "llvm/test/Other/reduction-fission-fneg-checker.test",
+          "llvm/test/Other/reduction-fission-fneg-vector-checker.test",
+          "llvm/test/Other/reduction-fission-host-adapter.test",
+          "llvm/test/Other/reduction-fission-initializer-checker.test",
+          "llvm/test/Other/reduction-fission-multiply-checker.test",
+          "llvm/test/Other/reduction-fission-recurrence-checker.test",
+          "llvm/test/Other/reduction-fission-source-locations.test",
+          "llvm/test/Other/reduction-fission-state-cfg-checker.test",
+          "llvm/test/Other/reduction-fission-state-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-store-checker.test",
+          "llvm/test/Other/reduction-fission-subtraction-checker.test",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-trip-count.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-call-tail.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add-pressure.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combined.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-disabled.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-dispatch.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-duplication.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fabs.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-forced-pair.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering-isolation.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-general.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-independent-vfs.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-induction.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-duplication.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-plan.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-ordered.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-reread.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-invariant-frontier.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-legality.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-live-out.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-ordered.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-preview.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-bitwise-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-bitwise.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunk-state.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-chunks-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-chunks.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-composition-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-composition.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-controls.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-poison.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-exports.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg-patterns.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg-vector.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-nested.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-analogous.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-defined.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recipes.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder-nested.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-stores-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-stores.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-subtraction-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-subtraction.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-fma8.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-same-vf.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-select.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-short-producers.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-signed-zero.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-speculation.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stage-metadata.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
+        ],
+        "inherited_paths": [
+          "llvm/test/Other/reduction-fission-bitwise-checker.test",
+          "llvm/test/Other/reduction-fission-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
+          "llvm/test/Other/reduction-fission-compact-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-compact-recurrence-checker.test",
+          "llvm/test/Other/reduction-fission-compact-tail-checker.test",
+          "llvm/test/Other/reduction-fission-composition-checker.test",
+          "llvm/test/Other/reduction-fission-dispatch-checker.test",
+          "llvm/test/Other/reduction-fission-execution-accounting.test",
+          "llvm/test/Other/reduction-fission-execution-checker.test",
+          "llvm/test/Other/reduction-fission-execution-symbols.test",
+          "llvm/test/Other/reduction-fission-export-checker.test",
+          "llvm/test/Other/reduction-fission-export-symbols.test",
+          "llvm/test/Other/reduction-fission-fneg-checker.test",
+          "llvm/test/Other/reduction-fission-fneg-vector-checker.test",
+          "llvm/test/Other/reduction-fission-host-adapter.test",
+          "llvm/test/Other/reduction-fission-recurrence-checker.test",
+          "llvm/test/Other/reduction-fission-source-locations.test",
+          "llvm/test/Other/reduction-fission-state-cfg-checker.test",
+          "llvm/test/Other/reduction-fission-state-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-store-checker.test",
+          "llvm/test/Other/reduction-fission-subtraction-checker.test",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-trip-count.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-call-tail.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add-pressure.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combined.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-disabled.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-dispatch.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-duplication.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fabs.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-forced-pair.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering-isolation.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-general.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-independent-vfs.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-induction.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-duplication.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-plan.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-ordered.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-reread.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-invariant-frontier.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-legality.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-live-out.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-ordered.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-preview.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-bitwise-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-bitwise.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunk-state.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-bounds.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-chunks-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-chunks.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-composition-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-composition.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-controls.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-poison.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-exports.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg-patterns.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg-vector.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-fneg.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-nested.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recipes.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder-nested.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-stores-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-stores.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-subtraction-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-subtraction.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-fma8.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-same-vf.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-select.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-short-producers.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-signed-zero.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-speculation.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stage-metadata.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
+        ],
+        "new_paths": [
+          "llvm/test/Other/reduction-fission-initializer-checker.test",
+          "llvm/test/Other/reduction-fission-multiply-checker.test",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-analogous.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-defined.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply.ll"
+        ],
+        "changed_and_new_paths": [
+          "llvm/test/Other/reduction-fission-bitwise-checker.test",
+          "llvm/test/Other/reduction-fission-initializer-checker.test",
+          "llvm/test/Other/reduction-fission-multiply-checker.test",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-bitwise-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-analogous.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-defined.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply-reject.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-multiply.ll",
+          "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll"
+        ],
+        "planned_discovered": 113,
+        "observed_discovered": null,
+        "require": "Run every RUN line in all112 mandatory inherited/new paths plus the focused initializer test (113 total). Keep the48 complete multi-function multiplication modules/88 bodies, both FP policies, capacities1/8/9/65, scalar/vector requests and one/two LV invocations. Do not filter functions or bypass constant-list cases. Preserve bitwise1184 inherited IR rejections, six parser negatives and36 analogous positives plus238 shape and42 probe rejections. Preserve all existing multiplication carry/count/tail/participation/alias/live-out/scratch/probe certificates, six parser negatives and21 lane/accounting negatives. Record actual seed-form/type/op site counts and seed/neutral/placement rejection totals. The focused test plans84 positive synthetic cases/60 keys, with explicit typed-lane, carry, shape, neutral, placement and definition-ownership rejections. Archive both existing checker-counts.json files and initializer-counts.json. Partial multiplication counts must have complete=false; final complete=true requires every certificate/mutation/probe/parser check. Per-body observations must reconcile48 modules/88 bodies with actual shapes. Retain all failure commands/stdin/modules/stdout/stderr; no worker invocation or skipped checks.",
+        "inherited_and_previous_new_mandatory_files": 112,
+        "focused_additions": 1
+      },
+      "unit_tests": {
+        "required": true,
+        "target": "VectorizeTests",
+        "require": "Complete unfiltered inherited suite."
+      },
+      "executable_comparisons": {
+        "required": true,
+        "driver": "llvm/utils/check-reduction-fission.py",
+        "harness": "llvm/utils/reduction-fission-execution.c.in",
+        "vscales": [
+          1,
+          2,
+          4,
+          8,
+          32
+        ],
+        "require": "Complete every inherited matrix and the full multiplication wrapping/defined/analogous matrix, freshly linked. Expected112 multiplication configurations and3076864 original/transformed/unsigned-oracle comparisons, with policies separate (56 rows and1538432 comparisons each). Expect28 configurations with actual vector entry and84 with zero entry. The32 fixed vector bodies include4 C1 compact bodies with emitted code but zero entries;56 wrapping/defined bodies have no vector code;24 analogous rows remain scalar. Infer all shapes from actual modules, execute fixed/scalar code once, and retain every distinct policy/LV/capacity/function case. Inherited bitwise still exercises all scalable vscales1/2/4/8/32; no fixed row is scalable coverage. Reconcile lanes/scalable/vscale metadata, participants=vector_iterations*lanes+tail visits and chunks=vector-entered+scalar-only-nonempty+empty. All aliases, outputs, canaries, participation, initialized scratch/carries/reuse and exact oracles remain mandatory. Preserve/review any emission/count discrepancy. Reconcile observation scopes: multiply_coverage is wrapping/defined only (planned 88 rows, 3063808 comparisons, 28 actual-vector-entry and 60 zero-entry rows); multiply_analogous adds 24 rows, 13056 comparisons and 24 zero-entry rows. These sum to the planned combined 112/3076864/28/84, not an observed pass. Archive exact observations and explain any discrepancy. Report wrapping (72), defined (16) and analogous (24) configurations separately by policy, capacity, LV invocation, requested scalar/vector mode, actual fixed/scalable emission and observed entry. Reconcile the combined112 configurations/3076864 comparisons with exact observation keys; do not count the focused synthetic initializer cases as executable configurations or comparisons.",
+        "observation_keys": [
+          "observed_execution.multiply",
+          "observed_execution.multiply_analogous",
+          "observed_execution.multiply_coverage",
+          "observed_execution.bitwise_coverage"
+        ],
+        "missing_or_failed_rows": "mandatory failure; preserve complete command, module, policy/LV/capacity/vscale/N/mode/alias/trial/seed and diagnostic"
+      },
+      "instrumented_ir_verification": {
+        "required": true,
+        "require": "Verify every complete original, uninstrumented output, original-shape probe and renamed fixed-vscale probe module before host adaptation/lowering; retain exact .input.ll/.probe.ll/.instrumented.ll and failed command/stdin artifacts. Fixed probes report4 independently of vscale; scalable probes report4*vscale. Failures remain mandatory."
+      },
+      "rvv_machine_verification": {
+        "required": true,
+        "require": "llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs on every inherited and new uninstrumented output, including all100 new executable transformations and48 lit matrix outputs. Code generation only, not target execution."
+      },
+      "primary_evaluation": {
+        "required": true,
+        "benchmark_count": 117,
+        "compilation_count": 234,
+        "policies": [
+          "strict",
+          "reordered"
+        ],
+        "extra_clang": [],
+        "extra_opt": [],
+        "rewrite_inputs": false,
+        "reference": {
+          "revision": "639376b36344347776d6de5e38ec826873194920",
+          "result": "evaluations/t000075/primary/result.json"
+        },
+        "require": "Harness-only tests/try.sh on all unchanged immutable originals under both policies. Preserve hashes, exact original target source-location decisions and stage VF/scratch/guards/rereads/duplication evidence, with helper/nested other_records separate. No additional math/errno assumptions in primary policy."
+      },
+      "commands": [
+        {
+          "purpose": "all mandatory lit",
+          "argv": [
+            "<build_dir>/bin/llvm-lit",
+            "-v",
+            "<all paths in tests>"
+          ]
+        },
+        {
+          "purpose": "complete unit suite",
+          "argv": [
+            "<build_dir>/unittests/Transforms/Vectorize/VectorizeTests"
+          ]
+        },
+        {
+          "purpose": "all inherited and new original/transformed/oracle comparisons",
+          "argv": [
+            "python3",
+            "llvm/utils/check-reduction-fission.py",
+            "--build-dir",
+            "<build_dir>",
+            "--work-dir",
+            "<fresh immutable execution output>",
+            "--vscales",
+            "1",
+            "2",
+            "4",
+            "8",
+            "32"
+          ]
+        },
+        {
+          "purpose": "scalar and repeated-LV analysis verification",
+          "options_source": "subtraction_options(ceiling,reordered,repeated); all new matrices in check-reduction-fission.py"
+        },
+        {
+          "purpose": "actual ordinary multiplication consumers, shape certified from emitted loads",
+          "options_source": "fneg_vector_options(ceiling,reordered,repeated); requested VF4 IC1 scalar remainder, actual fixed/scalable shape certified without production changes"
+        },
+        {
+          "purpose": "new lit certificates and mutations",
+          "source": "RUN lines and embedded check.py in multiplication and initializer checker tests plus all four multiplication .ll files"
+        },
+        {
+          "purpose": "each complete actual module",
+          "argv": [
+            "<build_dir>/bin/opt",
+            "-passes=verify",
+            "-disable-output",
+            "<module>"
+          ]
+        },
+        {
+          "purpose": "each uninstrumented RVV module",
+          "argv": [
+            "<build_dir>/bin/llc",
+            "-mtriple=riscv64",
+            "-mattr=+v",
+            "-verify-machineinstrs",
+            "<module>",
+            "-o",
+            "<harness artifact.s>"
+          ]
+        },
+        {
+          "purpose": "234 immutable primary jobs",
+          "command_template": "tests/try.sh --function bench_kernel [--allow-fp-reordering for reordered policy] --output-dir <fresh artifact> <each immutable source> -- -DBENCH_NO_MAIN -ffp-contract=off",
+          "require": "Harness-owned frozen inputs, target settings and toolchain selection; no extra primary flags."
+        }
+      ],
+      "acceptance": "Fresh harness build, all113 lit files (112 inherited/new mandatory plus focused addition), unfiltered VectorizeTests, complete original/transformed/independent-oracle host execution of all inherited and multiplication matrices, probe verification, repeated-LV analysis verification, RVV machine verification and all234 original primary compilations must pass. Compare exact original-target Selected/Rejected locations, stage VFs and scratch evidence to accepted d2 639376b36344347776d6de5e38ec826873194920; keep nested/helper records separate. Correctness failures block acceptance. Planned counts or prior111 lit passes are not current observations. No maturity, target-execution or performance claim.",
+      "repeated_lv_analysis_verification": {
+        "required": true,
+        "loop_vectorize_invocations": [
+          1,
+          2
+        ],
+        "verifiers": [
+          "verify-each",
+          "verify<domtree>",
+          "verify<loops>",
+          "verify<scalar-evolution>"
+        ],
+        "options_source": "subtraction_options and fneg_vector_options; production/selection flags unchanged"
+      },
+      "artifact_preservation": {
+        "required": true,
+        "require": "Before common output reuse, preserve immutable t000077/t000080/t000082 logs/results/diffs and all surviving multiplication lit outputs, especially the failing C65 module SHA256 85ea4be71624c1c23e242a4b8227f22de4a9b8c955d95c0e4227cb896f1420bd, its .remarks/.s, all other C65 modules, the29 emitted modules/28 probes and commands.jsonl. Missing prior artifacts must be explicit; a reused path is not immutable historical evidence. Preserve/hash all fresh original, transformed, instrumented and specialized modules, RVV outputs, commands/stdin/stdout/stderr, both checker-counts.json files, initializer-counts.json, partial counts with complete=false and execution/results.json. Include every configuration/lane/path/comparison count and mismatch context. Worker did not move/delete/copy artifacts or binaries."
+      }
     }
   },
   "current_validation_status": {
     "worker_executed_compilation_or_tests": false,
-    "historical_result": "t000079 build succeeded but two mandatory lit tests failed (91/93 passed); no later execution/corpus evidence.",
-    "status": "Ready for harness snapshot and fresh complete mandatory validation; results pending.",
-    "static_review": "Python and embedded-Python AST parsing, JSON/lit-path inventory and git diff/whitespace review only. No test/helper module imported or executed."
+    "status": "Merged source and composition regressions ready for harness snapshot; all current outcomes pending.",
+    "observed_results": null
   },
+  "static_review": [
+    "Inspected immutable analysis/corpus metadata, both accepted task records/reviews, head source/reports and repair diffs. No corpus rewrite or benchmark-specific transformation.",
+    "Resolved production conflicts by retaining the d1 original-control/capacity scheduler and the d2 reduction/store/fneg/clone-location legality. Both complete utility/C definition inventories remain.",
+    "Preserved connected synthetic scalar/vector-tail load/index templates; removed merge-created duplicate SSA alternatives. Removed duplicated result dictionary fields and duplicate state-counter parsing from the textual merge.",
+    "Static Python/embedded-Python AST grammar parsing, C delimiter/duplicate-definition inventories, JSON/path inventory and read-only git diff/whitespace review only. No checker/test modules imported or executed."
+  ],
   "future_work": [
-    "Evaluate exact original-target selections and stage VF/scratch evidence only after immutable results return.",
-    "If downstream legal LV layouts differ, extend the explicit certificate vocabulary with proof and mutation checks; do not weaken count/state/result checks.",
-    "Do not combine d2 during this task. No RVV execution or speedup measurement has been performed."
-  ],
-  "new_rejection_obligations": {
-    "function_scoped_absence": "The new Other checker checks whole definitions of all genuine rejections in affine-reject, compact-chunks-reject and relational-reject under both FP policies, retaining the old global absence obligations even though the files now mix scratch-only admissions with semantic rejections.",
-    "retained": "Unavailable bounds, 256-iteration i8 count overflow, <one-slot padded storage, moved-state feedback, effects, strict/constrained FP, unsupported CFG and incompatible participation remain mandatory."
-  },
-  "accepted_comparison_revision": "89ee078f645435f7b303667f81c4ff214614c92f",
-  "alignment_repair": {
-    "request": "tasks/t000076.json review: revise; repair memory instruction mismatch and complete all mandatory validation",
-    "historical_failure": {
-      "revision": "6581f1c457ad38d69c6a512a88dff9fbcebfa487",
-      "compile_exit_code": 0,
-      "lit_passed": 92,
-      "lit_total": 93,
-      "eligible": false,
-      "failed_test": "llvm/test/Other/reduction-fission-affine-chunk-checker.test",
-      "source": "store i32 %out.r0, ptr %out",
-      "printed": "store i32 %out.r0, ptr %out, align 4",
-      "evidence": [
-        "builds/t000076/lit.log",
-        "jobs/t000076/000002-build/result.json",
-        "diffs/t000076.patch"
-      ]
-    },
-    "approach": "Preferred fixture-only ABI spelling repair, with two narrowly strengthened certificate obligations. require_chunk_instruction and chunk_instructions retain exact memory comparison behavior.",
-    "memory_audit": {
-      "scalar-affine-chunks": {
-        "input_loads": 14,
-        "final_stores": 70,
-        "omitted_alignment_after_repair": 0
-      },
-      "scalar-chunk-state": {
-        "memory_instructions": 52,
-        "omitted_alignment": 0
-      },
-      "scalar-chunk-cfg": {
-        "memory_instructions": 52,
-        "omitted_alignment": 0
-      },
-      "scalar-compact-chunks": {
-        "memory_instructions": 44,
-        "omitted_alignment": 0
-      }
-    },
-    "paths_reviewed": [
-      "check_original_chunk_control preserves exact original IV operation/comparison, branch polarity, actual continuation and all predecessor sets",
-      "check_noncanonical_chunk preserves original producer operations and now the complete final exit sequence; state-consumer scalar/tail/EVL certificates match full loads",
-      "narrow scalar consumer regex accepted an alignment-number prefix; complete require_chunk_instruction now follows load discovery",
-      "check_state_chunk/check_compact_chunk original producer/export comparisons already use explicit aligned fixtures; no changes needed",
-      "noncanonical execution rows read the repaired fixture for exact renamed originals and transformed modules; row generation and probes have no stale unaligned store literals",
-      "host_ir/compile_ir remove target configuration for host specialization and preserve memory alignments/operands; all original/transformed/oracle input/output/canary byte comparisons remain",
-      "opt SetDataLayout infers layout from -mtriple before parsing; LLParser supplies getABITypeAlign for omitted loads/stores. Positive parse/print calls explicitly set riscv64 instead of assuming empty-layout i64 ABI alignment"
-    ],
-    "regression_obligations": [
-      "all84 original memory instructions equal LLVM parse/print output for explicit and omitted ABI alignment",
-      "actual omitted-input repeated-LV transformations pass exact scalar certificates in strict and reordered rows, including i8 exports",
-      "each of ten final stores rejects changed value/destination/align1/align16",
-      "final store reordering is rejected even when all individual instructions remain",
-      "producer i32/double alignment changes are rejected",
-      "narrow i32/double consumer loads reject align4096/8192 prefix collisions and align1",
-      "retain every inherited control/count/participant/state/scratch/export/result certificate and mutation"
-    ]
-  },
-  "consumer_identity_repair": {
-    "request": "t000078 review: revise; discover actual consumer PHI/update identities and complete original-control bounded-scheduler validation",
-    "historical_failure": {
-      "revision": "8f4a1ab49e7a2763bffc48dbd8c9cafabec9cde3",
-      "compile_exit_code": 0,
-      "lit_passed": 92,
-      "lit_total": 93,
-      "eligible": false,
-      "failed_test": "llvm/test/Other/reduction-fission-affine-chunk-checker.test",
-      "failure": "expected consumer increment add index,VF while actual consumer uses a separate PHI; producer owns index",
-      "evidence": [
-        "tasks/t000078.json review",
-        "builds/t000078/lit.log",
-        "diffs/t000078.patch"
-      ]
-    },
-    "source_audit": [
-      "check_state_chunk_consumer: replace index/index.next/current.iteration.next spelling assumptions with PHI/update proof; use explicit count parameter",
-      "check_noncanonical_chunk: bind producer input ordinal independently; use consumer certificate identity for consume probe and scratch equality",
-      "check_compact_chunk: remove same index and increment-name assumptions",
-      "check_compact_count: bind identity to stage step, scratch GEPs and actual tail terminating operand; preserve AVL/empty/result checks",
-      "remaining dispatch/interleave checker paths already capture PHI and backedge operands; no literal index/index.next/current.iteration.next assumptions remain in shared Python checker",
-      "actual C probes compare original control/state/counts, initialized addresses/values, participant order and exact lane visits; no C oracle or result/canary/input comparison was removed"
-    ],
-    "not_changed": [
-      "production C++",
-      "117 immutable primary inputs",
-      "d2",
-      "strict/reordered numerical contracts",
-      "profitability prerequisites",
-      "scratch capacity/padding/traffic accounting"
-    ],
-    "pending": "Every requested harness build/lit/unit/execution/analysis/RVV/234-primary check",
-    "supporting_files": [
-      "llvm/test/Other/Inputs/reduction-fission-consumer-identity.py"
-    ]
-  },
-  "supporting_inputs": [
-    "llvm/test/Other/Inputs/reduction-fission-consumer-identity.py"
-  ],
-  "compact_tail_vf_repair": {
-    "task": "t000081",
-    "request": "t000079 revise request; repair complete compact tail recurrence and dominating VF lookup",
-    "files": [
-      "llvm/utils/check-reduction-fission.py",
-      "llvm/test/Other/Inputs/reduction-fission-consumer-identity.py",
-      "llvm/test/Other/reduction-fission-execution-checker.test",
-      "llvm/test/Other/reduction-fission-affine-chunk-checker.test",
-      "llvm/test/Other/reduction-fission-state-consumer-checker.test",
-      "llvm/test/Other/reduction-fission-compact-chunk-checker.test"
-    ],
-    "tail": "Exact entry/resume/self PHI multiplicity, actual unit update, actual-count termination and branch polarity; connected typed aligned scratch loads and reduction uses; preserve seeds and direct/typed LCSSA joins.",
-    "vf": "Unique requested definitions across function, exact predecessor multiplicity in fixed consumer stage, explicit instruction order. Entry/rounding/increment each prove vscale<<2. Equivalent local calls are equal by intrinsic contract.",
-    "fixture_audit": [
-      "Inherited tail snapshots compute entry width in consumer.ph and sometimes distinct width in vector.ph; both remain supported.",
-      "Inherited parser EVL uses add i64 step,vi without nuw; it remains unchanged and accepted, with exact length/zext definition order.",
-      "Synthetic compact_triangle had duplicate %vf definitions (i64 VF and float final output); only width and its three uses are renamed to %consumer.width.",
-      "Synthetic parser/probe fixtures used bare alloca pointers for scratch traversal, contradicting the inherited per-stream ordinal certificate. Add real producer-P/vector-IV/scalar-IV GEP connections; never use these fragments as executable equivalence evidence.",
-      "Actual original/transformed executable fixtures, FP contracts, C oracle/probes, 117 originals and d2 remain untouched."
-    ],
-    "pending": "All requested harness build/lit/VectorizeTests/execution/analysis/RVV/234-primary checks; subsequent failures block acceptance.",
-    "result_claims": "No checks beyond static inspection/syntax/path/whitespace review were run; no speedup, RVV execution or maturity claimed."
-  }
+    "Review independently accepted merged build/lit/unit/execution/primary evidence; repair concrete failures without dropping cases or relaxing contracts.",
+    "Reconcile actual mixed fixed/scalable emission and every runtime path/count against the planned configuration keys.",
+    "RVV target execution, spill/pressure/traffic and speed measurements remain future work; no merged maturity claim before independent acceptance."
+  ]
 }
