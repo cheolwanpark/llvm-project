@@ -25,9 +25,12 @@
 ; RUN: FileCheck %s --check-prefix=REMARK < %t.repeat.remarks
 ; RUN: FileCheck %s --check-prefix=SELECTED < %t.repeat.remarks
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.repeat -o /dev/null
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
+; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks-missed=vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
-; RUN:   -S %s 2>&1 | FileCheck %s --check-prefix=LIMIT
+; RUN:   -S %s -o %t.limit 2> %t.limit.remarks
+; RUN: FileCheck %s --check-prefix=LIMIT < %t.limit.remarks
+; RUN: FileCheck %s --check-prefix=LIMIT-IR < %t.limit
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.limit -o /dev/null
 ; RUN: opt -passes='loop-vectorize,verify<loops>' -verify-each -mtriple=riscv64 -mattr=+v \
 ; RUN:   -force-vector-width=4 -force-vector-interleave=1 -scalable-vectorization=always \
 ; RUN:   -hints-allow-reordering=false -S %s | FileCheck %s --check-prefix=ORIGINAL \
@@ -67,9 +70,14 @@ declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 ; SCALAR-REMARK: scalar-exports.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-exports.c:12:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-exports.c:12:3: scalar-IR fission consumer VF 1
-; The single-block export loop now chunks at the old limit. CFG/compact cases
-; still reject here until chunk compaction is independently supported.
+; Canonical single-block and compact export loops chunk at the old limit.
+; The unconditional multi-block producer retains its storage rejection.
 ; LIMIT: scalar-exports.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule
+; LIMIT-IR-LABEL: define void @export_unconditional(
+; LIMIT-IR: alloca [64 x i32]
+; LIMIT-IR: alloca [64 x double]
+; LIMIT-IR: alloca [64 x float]
+; LIMIT-IR: ret void
 ; SCALAR-LABEL: define void @export_unconditional(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -189,6 +197,9 @@ exit:
 ; SCALAR-REMARK: scalar-exports.c:22:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-exports.c:22:3: scalar-IR fission consumer VF 1
 ; LIMIT: scalar-exports.c:22:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; LIMIT-IR-LABEL: define void @export_diamond(
+; LIMIT-IR-NOT: scalar.fission
+; LIMIT-IR: ret void
 ; SCALAR-LABEL: define void @export_diamond(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -319,7 +330,30 @@ exit:
 ; SCALAR-REMARK: scalar-exports.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-exports.c:32:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-exports.c:32:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-exports.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; Compact export storage at ceiling 1043 now uses C=64/B=1024, preserving the
+; six final producer values even on empty chunks and a final inactive path.
+; LIMIT: scalar-exports.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule
+; LIMIT: scalar-exports.c:32:3: scalar-IR fission producer VF 1
+; LIMIT: scalar-exports.c:32:3: scalar-IR fission consumer VF vscale x 2
+; LIMIT-IR-LABEL: define void @export_compact(
+; LIMIT-IR: alloca [64 x i32]
+; LIMIT-IR: alloca [64 x double]
+; LIMIT-IR: alloca [64 x float]
+; LIMIT-IR: %fission.participating = phi i64 [ 0, %scalar.fission.producer.ph ], [ %fission.participating.merge, %latch ]
+; LIMIT-IR: scalar.fission.consumer.guard:
+; LIMIT-IR-DAG: %x.fission.export = phi i32 [ %x, %latch ]
+; LIMIT-IR-DAG: %c.fission.export = phi i32 [ %c, %latch ]
+; LIMIT-IR-DAG: %iv.fission.export = phi i64 [ %iv, %latch ]
+; LIMIT-IR-DAG: %next.fission.export = phi i64 [ %next, %latch ]
+; LIMIT-IR-DAG: %dc.fission.export = phi double [ %dc, %latch ]
+; LIMIT-IR-DAG: %fc.fission.export = phi float [ %fc, %latch ]
+; LIMIT-IR: %fission.empty = icmp eq i64 %fission.participating.count, 0
+; LIMIT-IR: scalar.fission.consumer.exit:
+; LIMIT-IR: %rd.result = phi double [ %rd.chunk.carry, %scalar.fission.consumer.guard ],
+; LIMIT-IR: producer.exit:
+; LIMIT-IR-DAG: %out.iv = phi i64 [ %iv.fission.export, %scalar.fission.chunk.latch ]
+; LIMIT-IR-DAG: %out.next = phi i64 [ %next.fission.export, %scalar.fission.chunk.latch ]
+; LIMIT-IR: ret void
 ; SCALAR-LABEL: define void @export_compact(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -454,7 +488,22 @@ exit:
 ; SCALAR-REMARK: scalar-exports.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-exports.c:42:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-exports.c:42:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-exports.c:42:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; The same canonical compact schedule is reused independently in every row.
+; LIMIT: scalar-exports.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule
+; LIMIT: scalar-exports.c:42:3: scalar-IR fission producer VF 1
+; LIMIT: scalar-exports.c:42:3: scalar-IR fission consumer VF vscale x 2
+; LIMIT-IR-LABEL: define void @export_nested(
+; LIMIT-IR: alloca [64 x i32]
+; LIMIT-IR: alloca [64 x double]
+; LIMIT-IR: alloca [64 x float]
+; LIMIT-IR: scalar.fission.consumer.guard:
+; LIMIT-IR: %fission.empty = icmp eq i64 %fission.participating.count, 0
+; LIMIT-IR: scalar.fission.consumer.exit:
+; LIMIT-IR: %rd.result = phi double [ %rd.chunk.carry, %scalar.fission.consumer.guard ],
+; LIMIT-IR: row.exit:
+; LIMIT-IR-DAG: %out.iv = phi i64 [ %iv.fission.export, %scalar.fission.chunk.latch ]
+; LIMIT-IR-DAG: %out.next = phi i64 [ %next.fission.export, %scalar.fission.chunk.latch ]
+; LIMIT-IR: ret void
 ; SCALAR-LABEL: define void @export_nested(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]

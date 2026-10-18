@@ -1,11 +1,11 @@
 {
-  "task_id": "t000061",
+  "task_id": "t000064",
   "direction_id": "d1",
-  "base_revision": "188df0ef280d315e55637938da03ade0c289ca55",
+  "base_revision": "bf214996ec8f51957c1642ab53346b7e509623ca",
   "merge_revision": null,
-  "hypothesis": "Already admitted acyclic compact producers with one common terminal participation block can use the existing bounded canonical chunk scheduler when full-trip storage exceeds the checked ceiling. Keeping completed iterations independent of participation permits empty chunks, sparse conditional loads and retained producer state without affine chunking, new operation admission, a profitability threshold or original-loop vectorizability. Full-trip splitting remains preferred when its storage fits.",
-  "semantics": "Chunk admission still requires zero-start/unit-step control whose next IV exits on equality, the existing finite representable count proof, and checked padded scratch and pointer-index sizing. The acyclic branch-only graph, single common terminal participation edge, exact use-edge closure of every moved accumulator, calls/effects, strictfp/constrained-FP and final-export restrictions are unchanged; all rejection checks precede mutation. For a chunk starting at base, K=min(N-base,C)>0. The original producer executes K original iterations and paths. A separate ordinal increments at each latch; its final completed count is exported through the compact guard and advances base. P starts at zero on each producer-preheader edge; only the original participation block stores at old P and increments it. Every bypass forwards P unchanged. Inductively 0<=P<=ordinal<K<=C before each producer iteration, every participating store index is <C, and on exit 0<=P<=completed=K<=C. The guard consumes exactly P initialized contributions in original participation order. P=0 executes no consumer load or accumulator update and forwards the incoming chunk accumulator, including signed zero, rather than the function-entry start. Nonempty and empty results merge before the chunk backedge. Existing retained-state snapshots forward simultaneous original backedges through the producer exit on every chunk, including empty chunks; current/next/final inactive exports remain separate. All producer blocks enter the new parent LoopInfo membership while remaining mapped to their inner loop. Dedicated exits, topmost SE invalidation, DT recomputation, stage metadata, source-located remarks and recursive LCSSA assertions are retained. Actual transformed scalar and vector/scalar-tail paths are registered against separately renamed exact original IR and an independent nonchunked C oracle, with per-chunk probes of completed/P/consumer conservation, original state/control, old-P stores, empty bypasses and current/next exports. Only the harness may execute this verification.",
-  "costs": "No new streams, retained-state arrays, participation masks, input rereads, producer duplication or contribution recomputation. Reuse the existing chunk min/remainder controller, producer ordinal, accumulator carries and retained-state backedge forwarding. Composition adds one completed-count forwarding PHI and retains the existing compact empty-stream guard, nonempty dedicated exit and result merge for each chunk. One runtime P==0 branch per chunk; no versioning/alias guards. LoopInfo insertion is O(producer blocks), with the existing linear acyclic/effect/use/export analyses and at-most-64-step monotone padded-capacity search; no new path enumeration, SSA reconstruction or profitability machinery. For the new shared i32+double fixtures, scratch per capacity C is alignTo(4*C,8)+8*C: C=1/8/9/16/65 reserves 16/96/112/192/784 bytes. At 15 bytes no slot fits; 111 bytes fits C=8, 112 fits C=9. Logical traffic is 12 bytes stored and 12 loaded per participating iteration, 24*sum(P_chunk) per row, zero for an empty stream; bytes are shared by both integer sums. Allocations are in function entry and reused across chunks/rows, independent of total runtime trips. Two retained integer carries and three reduction carries are exercised. The existing three-stream historical examples reserve C=64/B=1024 at ceiling 1043; single i32 streams reserve C=64/B=256 at ceiling 259. Validation-only probes reread inputs and compute independent expected results; that traffic is not generated compiler traffic. Physical stack use, spills, RVV traffic and speedup are not measured.",
+  "hypothesis": "Repair source attribution and validation expectations for the inherited bounded canonical compact schedule without changing its legality, producer operations, scheduler or consumer semantics. Already admitted acyclic compact producers still split at a checked padded capacity with independent ordinary-LV stage widths; full-trip splitting remains preferred when storage fits.",
+  "semantics": "Capture L.getStartLoc() before mutation. Set synthesized producer and consumer preheader branch locations to that exact original site, and retain that start as a standard DILocation operand on both stage loop IDs. Preserve it together with stage provenance when normal LV replaces IDs using explicit follow-up hints; stage remarks can continue using L->getStartLoc(), including on repeated LV. Rejections and Selected/ScalarFissionBound remarks use the captured site. No unknown-location checker fallback is admitted. Chunk admission still requires zero-start/unit-step control whose next IV exits on equality, the existing finite representable count proof, and checked padded scratch and pointer-index sizing. The acyclic branch-only graph, single common terminal participation edge, exact use-edge closure of every moved accumulator, calls/effects, strictfp/constrained-FP and final-export restrictions are unchanged; all rejection checks precede mutation. For a chunk starting at base, K=min(N-base,C)>0. The original producer executes K original iterations and paths. A separate ordinal increments at each latch; its final completed count is exported through the compact guard and advances base. P starts at zero on each producer-preheader edge; only the original participation block stores at old P and increments it. Every bypass forwards P unchanged. Inductively 0<=P<=ordinal<K<=C before each producer iteration, every participating store index is <C, and on exit 0<=P<=completed=K<=C. The guard consumes exactly P initialized contributions in original participation order. P=0 executes no consumer load or accumulator update and forwards the incoming chunk accumulator, including signed zero, rather than the function-entry start. Nonempty and empty results merge before the chunk backedge. Existing retained-state snapshots forward simultaneous original backedges through the producer exit on every chunk, including empty chunks; current/next/final inactive exports remain separate. All producer blocks enter the new parent LoopInfo membership while remaining mapped to their inner loop. Dedicated exits, topmost SE invalidation, DT recomputation, stage metadata, source-located remarks and recursive LCSSA assertions are retained. Actual transformed scalar and vector/scalar-tail paths are registered against separately renamed exact original IR and an independent nonchunked C oracle, with per-chunk probes of completed/P/consumer conservation, original state/control, old-P stores, empty bypasses and current/next exports. Only the harness may execute this verification.",
+  "costs": "No new streams, retained-state arrays, participation masks, input rereads, producer duplication or contribution recomputation. Reuse the existing chunk min/remainder controller, producer ordinal, accumulator carries and retained-state backedge forwarding. Composition adds one completed-count forwarding PHI and retains the existing compact empty-stream guard, nonempty dedicated exit and result merge for each chunk. One runtime P==0 branch per chunk; no versioning/alias guards. LoopInfo insertion is O(producer blocks), with the existing linear acyclic/effect/use/export analyses and at-most-64-step monotone padded-capacity search; no new path enumeration, SSA reconstruction or profitability machinery. For the new shared i32+double fixtures, scratch per capacity C is alignTo(4*C,8)+8*C: C=1/8/9/16/65 reserves 16/96/112/192/784 bytes. At 15 bytes no slot fits; 111 bytes fits C=8, 112 fits C=9. Logical traffic is 12 bytes stored and 12 loaded per participating iteration, 24*sum(P_chunk) per row, zero for an empty stream; bytes are shared by both integer sums. Allocations are in function entry and reused across chunks/rows, independent of total runtime trips. Two retained integer carries and three reduction carries are exercised. The existing three-stream historical examples reserve C=64/B=1024 at ceiling 1043; single i32 streams reserve C=64/B=256 at ceiling 259. Validation-only probes reread inputs and compute independent expected results; that traffic is not generated compiler traffic. Physical stack use, spills, RVV traffic and speedup are not measured. This repair adds no executable operations, allocations, scratch traffic, input rereads, duplication or guards. Source preservation scans the small stage loop-ID operand list, creates an ID only when the exact start is absent, and adds no general analysis machinery. The dispatch mixed-stream capacities use alignTo(4*C,8)+8*C: ceiling 520 selects C=43/B=520; ceiling 519 selects C=42/B=504; ceilings 259/260 select C=21/B=256. Traffic remains 12 stored plus 12 loaded bytes per participant. Canonical export_compact/export_nested at ceiling 1043 select C=64/B=1024 for i32/double/float streams (16 stored plus 16 loaded bytes per participant); full-trip C=65/B=1044 remains unchanged. Metadata changes are not a speedup measurement.",
   "tests": [
     "llvm/test/Other/reduction-fission-chunk-checker.test",
     "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
@@ -19,6 +19,7 @@
     "llvm/test/Other/reduction-fission-export-symbols.test",
     "llvm/test/Other/reduction-fission-host-adapter.test",
     "llvm/test/Other/reduction-fission-recurrence-checker.test",
+    "llvm/test/Other/reduction-fission-source-locations.test",
     "llvm/test/Other/reduction-fission-state-cfg-checker.test",
     "llvm/test/Other/reduction-fission-state-chunk-checker.test",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
@@ -95,7 +96,7 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stage-metadata.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
   ],
-  "limitations": "This worker has not built LLVM, invoked compilers, run lit/unit/executable tests, machine-verified modules or compiled the primary corpus. Only source/diff/immutable-result review, Python AST parsing and whitespace inspection are allowed here. Every new result remains pending independent harness validation. Chunking still excludes affine/relational/reversed-equality control, multiple participation sites, nonterminal updates and unsupported CFG/effects/accumulator feedback. Multi-block unconditional producers keep their existing no-chunk restriction; no d2 changes are imported. New numerical producer state uses i32 with finite FP inputs including signed zero; inherited exceptional-FP cases remain. Existing state/FP/export/poison tests remain mandatory. The new narrow i8 fixture executes scalar consumers under both policies and LV1/LV2; scalable vectorization may conservatively leave it scalar, and its separate vector-policy lit/codegen run does not assert a vector width. i64 fixtures require actually entered vector consumers when fixed-vscale lanes fit capacity. EVL remains uninstrumented RVV codegen/machine verification only; host execution covers scalar and vector/scalar-tail layouts at fixed vscale, never RVV execution. No fast-math/errno assumptions, target speedup or newly selected immutable original target is claimed.",
+  "limitations": "This worker has not built LLVM, invoked compilers, run lit/unit/executable tests, machine-verified modules or compiled the primary corpus. Only source/diff/immutable-result review, Python AST parsing and whitespace inspection are allowed here. Every new result remains pending independent harness validation. Chunking still excludes affine/relational/reversed-equality control, multiple participation sites, nonterminal updates and unsupported CFG/effects/accumulator feedback. Multi-block unconditional producers keep their existing no-chunk restriction; no d2 changes are imported. New numerical producer state uses i32 with finite FP inputs including signed zero; inherited exceptional-FP cases remain. Existing state/FP/export/poison tests remain mandatory. The new narrow i8 fixture executes scalar consumers under both policies and LV1/LV2; scalable vectorization may conservatively leave it scalar, and its separate vector-policy lit/codegen run does not assert a vector width. i64 fixtures require actually entered vector consumers when fixed-vscale lanes fit capacity. EVL remains uninstrumented RVV codegen/machine verification only; host execution covers scalar and vector/scalar-tail layouts at fixed vscale, never RVV execution. No fast-math/errno assumptions, target speedup or newly selected immutable original target is claimed. t000064 has performed no compilation or test execution. Exact legacy dispatch/export chunk ceilings now have source-located scratch/stage and IR/codegen checks; their unchanged full-trip executable certificates retain their capacity-65 assumptions. The inherited new compact-chunk execution matrix exercises the actual chunked transformation on analogous diamond, larger acyclic, narrow and enclosing-row programs; this repair does not claim separate numeric execution of the legacy 520/1043-ceiling variants. The 48 new attribution-only compiler configurations are lit obligations, not numerical comparisons.",
   "changed_expectations": [
     "scalar-compact.ll: compact_triangle at the 1043-byte run changes from scalar-scratch-limit to C=64/B=1024 selection. The original 1044-byte full-trip contract and all vector/ordered/empty-path checks remain. Selected remarks are enabled explicitly in this run.",
     "scalar-compact-cfg.ll: only canonical compact_cfg_serial at 1043 changes to C=64/B=1024; compact_cfg_nested, compact_cfg_affine and compact_cfg_enclosing have affine/relational control and still reject without mutation. Their exact 1044-byte full-trip checks and original fixtures remain.",
@@ -103,7 +104,14 @@
     "scalar-compact-bounds.ll: compact_over_limit now selects C=16384/B=65536 for 16385 original trips, using a partial second chunk. The exact i8 255-count admission and first unrepresentable 256-count rejection remain; no wrapping allocation is admitted.",
     "scalar-compact-recurrence-reject.ll: compact_recurrence_reject_over_capacity now selects C=5461/B=65536 for finite bound 5462, forwarding all four retained producer recurrences. The same canonical finite-count proof admits historical compact_recurrence_reject_unbounded, as it already did for unconditional recurrence_unbounded at t000059; this is IR/analysis-only huge-count coverage. All feedback/effect/strict-FP rejections remain.",
     "scalar-acyclic-reject.ll: reject_acyclic_conditional_serial and reject_acyclic_conditional_nested each change to C=64/B=256 selection at the 259-byte ceiling. Whole-file no-fission assertions are replaced with per-function rejections for every still-rejected original function; internal-cycle control/PHI checks remain. Unconditional multi-block liveout storage rejection at 259 is unchanged, as is its 260-byte full-trip positive.",
-    "New positive/boundary/rejection and mutation tests are added; no original LLVM fixture bodies or 117 benchmark sources are rewritten. The existing compact consumer certificate gains only explicit chunk producer-entry and enclosing-preheader parameters. Every inherited executable table, mutation and correctness check remains registered."
+    "New positive/boundary/rejection and mutation tests are added; no original LLVM fixture bodies or 117 benchmark sources are rewritten. The existing compact consumer certificate gains only explicit chunk producer-entry and enclosing-preheader parameters. Every inherited executable table, mutation and correctness check remains registered.",
+    "dispatch.ll compact_nested at ceiling 520 intentionally changes from no scratch to canonical compact C=43/B=520 (172 i32 bytes, 4 alignment bytes, 344 double bytes). Exact target dispatch.c:50:5, both stage remarks and compact guard are asserted. The scalar-disabled VPlan-only isolation still rejects this compact loop and keeps its no-scalar-scratch check.",
+    "dispatch.ll compact_nested at ceiling 519 intentionally changes from scalar-scratch-limit to C=42/B=504; C=43 needs 520. The 259-byte retained-state run also admits compact C=21/B=256, with explicit scratch/guard assertions. The ordered AoS C=64/B=512 and retained-XOR capacities remain unchanged. Scalar schedule checks preserve P reset, completed/P separation, empty incoming carries and completed-based progress.",
+    "scalar-exports.ll export_compact at ceiling 1043 intentionally changes from scalar-scratch-limit to C=64/B=1024, with all six producer export PHIs, participation reset, empty rd carry and distinct current/next final exports asserted. The original C=65/B=1044 scalar/vector/repeated-LV checks are retained.",
+    "scalar-exports.ll export_nested at ceiling 1043 intentionally changes to the same C=64/B=1024 compact schedule inside each row. Empty chunk carries and original row current/next exports remain asserted. Unconditional multi-block export_diamond retains scalar-scratch-limit and a per-function no-mutation check; unsupported affine compact/state siblings elsewhere remain rejected.",
+    "scalar-compact-chunks-reject.ll reversed equality now expects its earlier non-constant-trip-count rejection. The independent unsupported-control sibling retains scalar-unsupported-exit. All nine rejection fixtures now carry distinct exact original source sites, with precise REASON assertions and unchanged strict/reordered no-mutation checks.",
+    "Source attribution is strengthened, not relaxed: every later compact-chunk stage remark must use one of the fixture exact original locations. Mutations that replace a producer/consumer site with unknown, including appending a bad later-LV visit after a correct one, must reject. A separate 48-configuration lit test distinguishes preheader/header/loop-ID starts from different latch locations, including explicit follow-up IDs, full-trip/chunked storage, scalar/vector consumers, both FP policies and LV1/LV2.",
+    "Report accounting only: planned compact-chunk input cases are 4856832 at five vscales (208 non-enclosing configurations * 9792 + 96 enclosing * 29376), correcting the inherited doubled figure 9713664. All 304 configurations and every original/transformed/oracle check remain; the driver now requires the independent aggregate configuration and case totals in addition to existing per-function exact counters."
   ],
   "new_execution_obligations": {
     "regressions": [
@@ -176,7 +184,7 @@
     ],
     "narrow_consumers": "scalar execution; separate vector-policy lit and RVV machine verification",
     "planned_host_configurations_at_default_vscales": 304,
-    "planned_comparisons_at_default_vscales": 9713664,
+    "planned_comparisons_at_default_vscales": 4856832,
     "planned_uninstrumented_rvv_modules": 48,
     "planned_instrumented_scalable_module_verifications": 32,
     "completed_in_this_worker": 0,
@@ -1046,7 +1054,7 @@
     "coverage_inference": "Neither policy has exact original-target scalar-scratch-limit records at t000059. The two scratch byte limit exceeded records are VPlan reasons. This bounded compact composition therefore does not establish any new primary target selection; helper/nested activity and changed diagnostic reasons must be counted separately. Preserve every target record and source hash in the new harness comparison."
   },
   "validation_requested": {
-    "task_id": "t000061",
+    "task_id": "t000064",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
@@ -1058,7 +1066,7 @@
     },
     "mandatory_lit": {
       "required": true,
-      "expected_files": 87,
+      "expected_files": 88,
       "explicit_paths": [
         "llvm/test/Other/reduction-fission-chunk-checker.test",
         "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
@@ -1072,6 +1080,7 @@
         "llvm/test/Other/reduction-fission-export-symbols.test",
         "llvm/test/Other/reduction-fission-host-adapter.test",
         "llvm/test/Other/reduction-fission-recurrence-checker.test",
+        "llvm/test/Other/reduction-fission-source-locations.test",
         "llvm/test/Other/reduction-fission-state-cfg-checker.test",
         "llvm/test/Other/reduction-fission-state-chunk-checker.test",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
@@ -1156,8 +1165,10 @@
         "llvm/test/Other/Inputs/reduction-fission-compact-exits.ll",
         "llvm/test/Other/Inputs/reduction-fission-host-adapter.py"
       ],
-      "inherited_runnable_files": 82,
-      "additional_runnable_files": [],
+      "inherited_runnable_files": 87,
+      "additional_runnable_files": [
+        "llvm/test/Other/reduction-fission-source-locations.test"
+      ],
       "supporting_inputs": [
         {
           "path": "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
@@ -1184,7 +1195,7 @@
           "modified_by_this_revision": false
         }
       ],
-      "registration_audit": "report.tests equals mandatory_lit.explicit_paths: all 82 inherited runnable files, including the extended state-CFG oracle/accounting regression. No standalone Inputs files changed or registered. All RUN lines and inherited mutations remain mandatory."
+      "registration_audit": "88 runnable fission lit files: 87 inherited from the failed t000061 revision plus the new source-location test. All inherited RUN lines, numerical comparison matrices and checker mutations remain mandatory. Inputs remain separate non-runnable supporting files, with unchanged owners."
     },
     "mandatory_unit_suite": {
       "required": true,
@@ -1238,7 +1249,10 @@
         "literal state-CFG participation masks/final states and actual final participation arm, separately from inherited final-x==0 counters",
         "complete focused original/transformed/oracle state including reductions, final exports, indices, inputs, padding and canaries",
         "completed focused comparisons per exact emitted configuration in results.json, distinct from planned/generated cases",
-        "all new state-chunk exact original references, independent nonchunked formulas, simultaneous chunk carry/current/next exports, exact chunk/producer/consumer counts and completed stdout accounting"
+        "all new state-chunk exact original references, independent nonchunked formulas, simultaneous chunk carry/current/next exports, exact chunk/producer/consumer counts and completed stdout accounting",
+        "all inherited compact-chunk reset/count/empty-carry/state/export mutation checks",
+        "all 304 planned compact-chunk configurations and 4856832 planned exact original/transformed/oracle comparisons",
+        "reject every lost stage location, including a later bad visit after a correct first visit"
       ],
       "generation_is_not_execution": true,
       "new_dispatch_original_transformed_independent_formulas": true,
@@ -1525,7 +1539,7 @@
         ],
         "narrow_consumers": "scalar execution; separate vector-policy lit and RVV machine verification",
         "planned_host_configurations_at_default_vscales": 304,
-        "planned_comparisons_at_default_vscales": 9713664,
+        "planned_comparisons_at_default_vscales": 4856832,
         "planned_uninstrumented_rvv_modules": 48,
         "planned_instrumented_scalable_module_verifications": 32,
         "completed_in_this_worker": 0,
@@ -1546,9 +1560,44 @@
           "last participant export replacing final inactive merge",
           "any bypass incrementing P"
         ],
-        "verification": "verify instrumented modules before fixed-vscale adaptation; machine-verify uninstrumented RVV modules; completed stdout counters per exact transformed function; no worker execution"
+        "verification": "verify instrumented modules before fixed-vscale adaptation; machine-verify uninstrumented RVV modules; completed stdout counters per exact transformed function; no worker execution",
+        "case_accounting": {
+          "completed_case_unit": "one input configuration comparing exact original IR, actual transformed IR and independent C; multiple memcmp edges do not multiply the case count",
+          "non_enclosing_cases_per_configuration": 9792,
+          "enclosing_cases_per_configuration": 29376,
+          "scalar_configurations": 64,
+          "vector_tail_configurations_at_five_vscales": 240,
+          "planned_configurations_formula": "64 + 48 * len(vscales)",
+          "planned_cases_formula": "940032 + 783360 * len(vscales)",
+          "planned_cases_at_default_vscales": 4856832,
+          "prior_report_error": "t000061 doubled the planned count to 9713664; no cases or correctness comparisons are removed",
+          "assertions": "per-function domain counts plus independent aggregate configuration/case totals; stdout remains the completion evidence"
+        }
       },
-      "instrumented_module_verification": true
+      "instrumented_module_verification": true,
+      "source_attribution": {
+        "regression": "llvm/test/Other/reduction-fission-source-locations.test",
+        "configurations": 48,
+        "storage": [
+          "C=9/B=112 chunked",
+          "C=65/B=784 full-trip"
+        ],
+        "consumers": [
+          "scalar",
+          "actually vectorized"
+        ],
+        "lv_invocations": [
+          1,
+          2
+        ],
+        "policies": [
+          "strict",
+          "explicit fission FP reordering"
+        ],
+        "followup_ids": true,
+        "allow_unknown_location": false,
+        "stage_checker_mutations": "replace or append unknown producer/consumer stage locations; preserve every semantic certificate mutation"
+      }
     },
     "rvv_machine_verification": {
       "required": true,
@@ -1595,7 +1644,7 @@
       "compare_to_revision": "188df0ef280d315e55637938da03ade0c289ca55",
       "compare_to_result": "evaluations/t000059/primary/result.json"
     },
-    "acceptance": "Harness only: fresh LLVM compilation and fresh C harness compilation/link; all 87 runnable fission lit files, all VectorizeTests and complete inherited executable matrices plus the new compact-chunk matrix (304 default-vscale configurations, 9713664 planned original/transformed/oracle comparisons). Verify all instrumented scalable modules before host adaptation; machine-verify uninstrumented RVV modules, including scalar, EVL and vector/scalar-tail layouts under both policies/LV1/LV2. Run all 117 immutable original benchmarks under strict and explicitly reordered policies (234 compilations). Compare exact original target source locations, Selected/Rejected reasons, separate producer/consumer VFs, padded capacity/bytes and logical traffic/rereads/duplication/guards against immutable t000059. Report helper/nested activity separately. Crashes, incorrect transformations and mandatory failures block acceptance; keep the accepted head until independent validation. No d2 import, RVV execution or speedup claim."
+    "acceptance": "Harness only: fresh LLVM compilation and fresh C harness compilation/link; all 88 runnable fission lit files, all VectorizeTests and complete inherited executable matrices plus the new compact-chunk matrix (304 default-vscale configurations, 4856832 planned original/transformed/oracle comparisons). Verify all instrumented scalable modules before host adaptation; machine-verify uninstrumented RVV modules, including scalar, EVL and vector/scalar-tail layouts under both policies/LV1/LV2. Run all 117 immutable original benchmarks under strict and explicitly reordered policies (234 compilations). Compare exact original target source locations, Selected/Rejected reasons, separate producer/consumer VFs, padded capacity/bytes and logical traffic/rereads/duplication/guards against immutable t000059. Report helper/nested activity separately. Crashes, incorrect transformations and mandatory failures block acceptance; keep the accepted head until independent validation. No d2 import, RVV execution or speedup claim. Re-run all four formerly failing files past the original failing RUN, all remaining inherited RUN lines, the 48 exact-location configurations, and the complete numeric driver; no prior partial success substitutes for fresh completion."
   },
   "supporting_inputs": [
     {
@@ -1629,7 +1678,7 @@
     "Preserve both existing direction heads and record any new target diagnostic/stage changes separately from numerical and performance evidence."
   ],
   "current_validation_status": {
-    "task_id": "t000061",
+    "task_id": "t000064",
     "worker_executed_builds": 0,
     "worker_executed_tests": 0,
     "executed_numerical_comparisons": 0,
@@ -1639,11 +1688,88 @@
     "primary_corpus_compilations": 0,
     "rvv_machine_verification": "pending harness",
     "static_audits": [
-      "Read frozen benchmark analysis, immutable t000059 diffs/results/logs and current compact/chunk/state/export source.",
-      "Audited all Chunked/ParticipationArm combinations, all producer LoopInfo membership and dedicated exit/result/carry/LCSSA paths.",
-      "Parsed driver and new embedded Python as AST without executing checker code; reviewed generated LLVM/C fixtures and whitespace.",
-      "No compiler/build/test execution, benchmark edits, d2 imports, Git mutations or external messages."
+      "Read frozen benchmark analysis and immutable t000059/t000061 diffs, result records and mandatory-check logs.",
+      "Reviewed Loop::getLocRange lookup order, synthesized preheaders, stage loop IDs and VPlan follow-up provenance.",
+      "Reviewed all dispatch scratch modes, unsupported affine and multi-block restrictions, export guards/final values and unchanged scalar-disabled isolation.",
+      "Audited compact checker scalar/vector/EVL and narrow/full-trip paths, probe placement, completed/P/store-index conservation, simultaneous state forwarding, oracle ordering, alias/conditional-load domains and per-configuration accounting.",
+      "Python AST parsing only for driver and changed/new embedded checker programs; whitespace and path registration inspection. No checker/test code executed.",
+      "No compiler/build/test execution, benchmark edits, d2 imports, Git history/index/ref mutations, toolchain publication or external messages.",
+      "Manually reviewed existing post-failure scalar/tail/EVL modules read-only; no checker was invoked. Audited compact execution case arithmetic independently of observed stage probes, correcting the report count and adding aggregate completion assertions."
     ],
-    "status": "implementation ready for harness-only independent compilation, complete mandatory checks and exact-target evaluation"
+    "status": "repair ready for harness-only fresh compilation and complete mandatory validation; all new outcomes and exact-target comparisons pending"
+  },
+  "revision_repairs": {
+    "legality_expansion": false,
+    "imported_d2": false,
+    "scheduler_changes": false,
+    "preserved_contracts": [
+      "bounded canonical scheduling and finite representable counts",
+      "separate completed and participating counts; old-P stores; reset at every producer entry",
+      "incoming accumulator forwarding through empty middle/final chunks",
+      "simultaneous retained-state carries and distinct final current/next/inactive exports",
+      "all producer blocks in new chunk parent LoopInfo",
+      "strict FP separate from explicitly enabled fission reordering; no additional math assumptions",
+      "all inherited executable matrices, oracle comparisons and reset/count/empty-carry/state/export mutation checks"
+    ],
+    "attribution_regression": "llvm/test/Other/reduction-fission-source-locations.test",
+    "attribution_configurations": 48,
+    "original_location_sources": [
+      "preheader branch",
+      "header branch",
+      "loop-ID start, distinct from end"
+    ],
+    "known_failure_log": "builds/t000061/lit.log"
+  },
+  "prior_failure_evidence": {
+    "task": "t000061",
+    "revision": "bf214996ec8f51957c1642ab53346b7e509623ca",
+    "compile_exit_code": 0,
+    "lit_passed": 83,
+    "lit_total": 87,
+    "failed_tests": [
+      "llvm/test/Other/reduction-fission-compact-chunk-checker.test",
+      "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-dispatch.ll",
+      "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-chunks-reject.ll",
+      "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-exports.ll"
+    ],
+    "unit_execution_and_primary": "not reached in the recorded failed mandatory-check job",
+    "logs": [
+      "builds/t000061/progress.json",
+      "builds/t000061/lit.log",
+      "diffs/t000061.patch"
+    ],
+    "cause": "Missing producer preheader location exposed by the exact stage checker; stale compact storage rejections at dispatch/export limits; reversed-equality expectation did not reflect earlier count-proof rejection."
+  },
+  "comparison_status": {
+    "reference_task": "t000059",
+    "reference_revision": "188df0ef280d315e55637938da03ade0c289ca55",
+    "reference_result": "evaluations/t000059/primary/result.json",
+    "reference_compilations": 234,
+    "reference_selected_original_targets_per_policy": 3,
+    "candidate_results_available": false,
+    "candidate_vs_reference": "pending fresh harness results for all 234 immutable primary compilations",
+    "required_comparison_keys": [
+      "policy",
+      "source_sha256",
+      "exact original-target File/Line/Column",
+      "Selected and Rejected target_records",
+      "rejection reasons independent of selection",
+      "producer/consumer stage VFs",
+      "padded scratch capacity/bytes and logical traffic",
+      "helper/nested other_records kept separate"
+    ],
+    "inference": "The accepted reference has no exact-target scalar-scratch-limit rejection. Compact chunk support alone therefore promises no newly selected immutable original target; stage-attribution repair can change recorded source evidence without changing legality. No coverage or speedup increase is claimed."
+  },
+  "execution_accounting_audit": {
+    "completed_case_unit": "one input configuration comparing exact original IR, actual transformed IR and independent C; multiple memcmp edges do not multiply the case count",
+    "non_enclosing_cases_per_configuration": 9792,
+    "enclosing_cases_per_configuration": 29376,
+    "scalar_configurations": 64,
+    "vector_tail_configurations_at_five_vscales": 240,
+    "planned_configurations_formula": "64 + 48 * len(vscales)",
+    "planned_cases_formula": "940032 + 783360 * len(vscales)",
+    "planned_cases_at_default_vscales": 4856832,
+    "prior_report_error": "t000061 doubled the planned count to 9713664; no cases or correctness comparisons are removed",
+    "assertions": "per-function domain counts plus independent aggregate configuration/case totals; stdout remains the completion evidence"
   }
 }

@@ -241,8 +241,8 @@ bool isReductionFissionEnabled();
 /// explicit follow-up metadata re-enables vectorization on a later LV run.
 bool isReductionFissionStage(const Loop &L);
 
-/// Retain stage provenance when ordinary LV applies explicit follow-up hints.
-/// Those hints replace the loop ID and can otherwise drop the fission tags.
+/// Retain stage provenance and the original target location when ordinary LV
+/// applies explicit follow-up hints that replace the loop ID.
 void preserveReductionFissionStageMetadata(MDNode *OriginalID, Loop &L);
 
 /// Split a bounded scalar loop before querying whole-loop vectorizability.

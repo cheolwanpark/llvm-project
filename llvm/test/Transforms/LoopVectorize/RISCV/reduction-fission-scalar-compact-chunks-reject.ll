@@ -22,11 +22,11 @@ declare i32 @unsafe(i32) nounwind willreturn
 declare double @llvm.experimental.constrained.fsub.f64(double, double, metadata, metadata)
 
 
-; REASON: scalar-IR reduction fission rejected: scalar-scratch-limit
+; REASON: scalar-compact-chunks-reject.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 ; CHECK-LABEL: define void @compact_chunk_reject_affine(
 ; CHECK: ret void
 define void @compact_chunk_reject_affine(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
-                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
+                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !10 {
 entry:
   %valid = icmp ule i64 %n, 65
   %nonzero = icmp ne i64 %n, 0
@@ -34,7 +34,7 @@ entry:
   br i1 %inner.enter, label %preheader, label %bypass
 preheader:
   %limit = add nuw i64 %n, 7
-  br label %loop
+  br label %loop, !dbg !11
 loop:
   %iv = phi i64 [7, %preheader], [%next, %latch]
   %prev = phi i32 [23, %preheader], [%state.next, %latch]
@@ -106,18 +106,21 @@ bypass:
   ret void
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-unsupported-exit
+; The reversed exit has no admitted finite count; this proof fails before
+; chunk scheduling checks the exit polarity. Unsupported control below has
+; its own, independent scalar-unsupported-exit assertion.
+; REASON: scalar-compact-chunks-reject.c:22:3: scalar-IR reduction fission rejected: non-constant-trip-count
 ; CHECK-LABEL: define void @compact_chunk_reject_reverse_equality(
 ; CHECK: ret void
 define void @compact_chunk_reject_reverse_equality(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
-                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
+                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !12 {
 entry:
   %valid = icmp ule i64 %n, 65
   %nonzero = icmp ne i64 %n, 0
   %inner.enter = and i1 %valid, %nonzero
   br i1 %inner.enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !13
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %prev = phi i32 [23, %preheader], [%state.next, %latch]
@@ -189,18 +192,18 @@ bypass:
   ret void
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-unsupported-exit
+; REASON: scalar-compact-chunks-reject.c:32:3: scalar-IR reduction fission rejected: scalar-unsupported-exit
 ; CHECK-LABEL: define void @compact_chunk_reject_unsupported_control(
 ; CHECK: ret void
 define void @compact_chunk_reject_unsupported_control(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
-                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
+                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !14 {
 entry:
   %valid = icmp ule i64 %n, 65
   %nonzero = icmp ne i64 %n, 0
   %inner.enter = and i1 %valid, %nonzero
   br i1 %inner.enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !15
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %prev = phi i32 [23, %preheader], [%state.next, %latch]
@@ -273,18 +276,18 @@ bypass:
   ret void
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-unsafe-call
+; REASON: scalar-compact-chunks-reject.c:42:3: scalar-IR reduction fission rejected: scalar-unsafe-call
 ; CHECK-LABEL: define void @compact_chunk_reject_unsafe_call(
 ; CHECK: ret void
 define void @compact_chunk_reject_unsafe_call(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
-                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
+                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !16 {
 entry:
   %valid = icmp ule i64 %n, 65
   %nonzero = icmp ne i64 %n, 0
   %inner.enter = and i1 %valid, %nonzero
   br i1 %inner.enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !17
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %prev = phi i32 [23, %preheader], [%state.next, %latch]
@@ -356,18 +359,18 @@ bypass:
   ret void
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-non-simple-load
+; REASON: scalar-compact-chunks-reject.c:52:3: scalar-IR reduction fission rejected: scalar-non-simple-load
 ; CHECK-LABEL: define void @compact_chunk_reject_volatile(
 ; CHECK: ret void
 define void @compact_chunk_reject_volatile(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
-                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
+                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !18 {
 entry:
   %valid = icmp ule i64 %n, 65
   %nonzero = icmp ne i64 %n, 0
   %inner.enter = and i1 %valid, %nonzero
   br i1 %inner.enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !19
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %prev = phi i32 [23, %preheader], [%state.next, %latch]
@@ -439,18 +442,18 @@ bypass:
   ret void
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-unsupported-instruction
+; REASON: scalar-compact-chunks-reject.c:62:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
 ; CHECK-LABEL: define void @compact_chunk_reject_store(
 ; CHECK: ret void
 define void @compact_chunk_reject_store(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
-                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
+                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !20 {
 entry:
   %valid = icmp ule i64 %n, 65
   %nonzero = icmp ne i64 %n, 0
   %inner.enter = and i1 %valid, %nonzero
   br i1 %inner.enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !21
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %prev = phi i32 [23, %preheader], [%state.next, %latch]
@@ -523,18 +526,18 @@ bypass:
   ret void
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-strict-fp
+; REASON: scalar-compact-chunks-reject.c:72:3: scalar-IR reduction fission rejected: scalar-strict-fp
 ; CHECK-LABEL: define void @compact_chunk_reject_strictfp(
 ; CHECK: ret void
 define void @compact_chunk_reject_strictfp(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
-                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) strictfp {
+                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) strictfp !dbg !22 {
 entry:
   %valid = icmp ule i64 %n, 65
   %nonzero = icmp ne i64 %n, 0
   %inner.enter = and i1 %valid, %nonzero
   br i1 %inner.enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !23
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %prev = phi i32 [23, %preheader], [%state.next, %latch]
@@ -606,18 +609,18 @@ bypass:
   ret void
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-strict-fp
+; REASON: scalar-compact-chunks-reject.c:82:3: scalar-IR reduction fission rejected: scalar-strict-fp
 ; CHECK-LABEL: define void @compact_chunk_reject_constrained(
 ; CHECK: ret void
 define void @compact_chunk_reject_constrained(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
-                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
+                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !24 {
 entry:
   %valid = icmp ule i64 %n, 65
   %nonzero = icmp ne i64 %n, 0
   %inner.enter = and i1 %valid, %nonzero
   br i1 %inner.enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !25
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %prev = phi i32 [23, %preheader], [%state.next, %latch]
@@ -689,21 +692,21 @@ bypass:
   ret void
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
+; REASON: scalar-compact-chunks-reject.c:92:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
 ; CHECK-LABEL: define void @compact_chunk_reject_feedback(
 ; CHECK: %r0 = phi i32
 ; CHECK: %r1 = phi i32
 ; CHECK: %rd = phi double
 ; CHECK: ret void
 define void @compact_chunk_reject_feedback(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
-                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
+                      ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !26 {
 entry:
   %valid = icmp ule i64 %n, 65
   %nonzero = icmp ne i64 %n, 0
   %inner.enter = and i1 %valid, %nonzero
   br i1 %inner.enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !27
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %prev = phi i32 [23, %preheader], [%state.next, %latch]
@@ -777,3 +780,30 @@ producer.exit:
 bypass:
   ret void
 }
+
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2, !3}
+!0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !1, producer: "fission test", isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly)
+!1 = !DIFile(filename: "scalar-compact-chunks-reject.c", directory: "/")
+!2 = !{i32 2, !"Dwarf Version", i32 4}
+!3 = !{i32 2, !"Debug Info Version", i32 3}
+!5 = !DISubroutineType(types: !6)
+!6 = !{}
+!26 = distinct !DISubprogram(name: "compact_chunk_reject_feedback", scope: !1, file: !1, line: 90, type: !5, scopeLine: 90, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!27 = !DILocation(line: 92, column: 3, scope: !26)
+!24 = distinct !DISubprogram(name: "compact_chunk_reject_constrained", scope: !1, file: !1, line: 80, type: !5, scopeLine: 80, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!25 = !DILocation(line: 82, column: 3, scope: !24)
+!22 = distinct !DISubprogram(name: "compact_chunk_reject_strictfp", scope: !1, file: !1, line: 70, type: !5, scopeLine: 70, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!23 = !DILocation(line: 72, column: 3, scope: !22)
+!20 = distinct !DISubprogram(name: "compact_chunk_reject_store", scope: !1, file: !1, line: 60, type: !5, scopeLine: 60, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!21 = !DILocation(line: 62, column: 3, scope: !20)
+!18 = distinct !DISubprogram(name: "compact_chunk_reject_volatile", scope: !1, file: !1, line: 50, type: !5, scopeLine: 50, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!19 = !DILocation(line: 52, column: 3, scope: !18)
+!16 = distinct !DISubprogram(name: "compact_chunk_reject_unsafe_call", scope: !1, file: !1, line: 40, type: !5, scopeLine: 40, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!17 = !DILocation(line: 42, column: 3, scope: !16)
+!14 = distinct !DISubprogram(name: "compact_chunk_reject_unsupported_control", scope: !1, file: !1, line: 30, type: !5, scopeLine: 30, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!15 = !DILocation(line: 32, column: 3, scope: !14)
+!12 = distinct !DISubprogram(name: "compact_chunk_reject_reverse_equality", scope: !1, file: !1, line: 20, type: !5, scopeLine: 20, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!13 = !DILocation(line: 22, column: 3, scope: !12)
+!10 = distinct !DISubprogram(name: "compact_chunk_reject_affine", scope: !1, file: !1, line: 10, type: !5, scopeLine: 10, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!11 = !DILocation(line: 12, column: 3, scope: !10)

@@ -1,0 +1,74 @@
+# REQUIRES: riscv-registered-target
+# RUN: split-file %s %t
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-chunks.ll opt %t
+
+# Exercise each getStartLoc fallback with deliberately different locations on
+# the other branches. Explicit follow-up hints replace stage IDs after LV.
+# Full-trip/chunked, scalar/vector, both policies and repeated LV must retain
+# the precise original target location, including every later stage remark.
+
+#--- check.py
+import importlib.util
+from itertools import product
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = checker
+spec.loader.exec_module(checker)
+source = checker.keep_functions(Path(sys.argv[2]).read_text(), ['compact_chunk_diamond'])
+name = 'compact_chunk_diamond'
+original = checker.function_definition(source, name)
+
+for origin, capacity, scalar, repeated, reordered in product(
+        ('preheader', 'header', 'loop-id'), (9, 65), (True, False), (False, True), (False, True)):
+    body = original
+    preheader = ', !dbg !11' if origin == 'preheader' else (
+        ', !dbg !901' if origin == 'loop-id' else '')
+    header = '!11' if origin == 'header' else '!902'
+    body = body.replace('br label %loop, !dbg !11', 'br label %loop' + preheader)
+    body = body.replace('br i1 %choose, label %left, label %right',
+                        'br i1 %choose, label %left, label %right, !dbg ' + header)
+    body = body.replace('br i1 %done, label %producer.exit, label %loop, !dbg !11',
+                        'br i1 %done, label %producer.exit, label %loop, !dbg !903, !llvm.loop !900')
+    locations = '!11, !904, ' if origin == 'loop-id' else ''
+    fixture = source.replace(original, body) + (
+        f'\n!900 = distinct !{{!900, {locations}!905}}\n'
+        '!901 = !DILocation(line: 101, column: 1, scope: !10)\n'
+        '!902 = !DILocation(line: 102, column: 2, scope: !10)\n'
+        '!903 = !DILocation(line: 103, column: 3, scope: !10)\n'
+        '!904 = !DILocation(line: 104, column: 4, scope: !10)\n'
+        '!905 = !{!"llvm.loop.vectorize.followup_all", !906}\n'
+        '!906 = !{!"llvm.loop.vectorize.enable", i1 true}\n')
+    options = [sys.argv[3], '-passes=' + 'loop-vectorize,' * (2 if repeated else 1) +
+               'verify<domtree>,verify<loops>,verify<scalar-evolution>', '-verify-each',
+               '-mtriple=riscv64', '-mattr=+v', '-enable-vplan-reduction-fission',
+               '-pass-remarks=vplan-reduction-fission', '-hints-allow-reordering=false',
+               '-force-vector-width=' + ('1' if scalar else '4'),
+               '-force-vector-interleave=' + ('0' if scalar else '1'),
+               '-scalable-vectorization=' + ('off' if scalar else 'always'),
+               '-force-target-max-scalar-interleave=1', '-tail-folding-policy=dont-fold-tail',
+               '-enable-epilogue-vectorization=false',
+               f'-vplan-reduction-fission-max-scratch-bytes={112 if capacity == 9 else 784}',
+               '-S', '-o', '-']
+    if reordered:
+        options.append('-vplan-reduction-fission-allow-fp-reordering')
+    result = subprocess.run(options, input=fixture, text=True, capture_output=True, check=True)
+    tag = f'{origin}_c{capacity}_scalar{scalar}_lv{2 if repeated else 1}_reordered{reordered}'
+    (Path(sys.argv[4]) / (tag + '.ll')).write_text(result.stdout)
+    (Path(sys.argv[4]) / (tag + '.remarks')).write_text(result.stderr)
+    checker.check_compact_chunk_remarks(result.stderr, name, capacity,
+                                         112 if capacity == 9 else 784, not scalar)
+    assert result.stderr.count('split scalar-IR reduction loop;') == 1, result.stderr
+    stages = [line for line in result.stderr.splitlines() if 'scalar-IR fission ' in line]
+    assert stages and all(line.startswith('remark: scalar-compact-chunks.c:12:3: ')
+                          for line in stages), result.stderr
+    assert '<unknown>' not in result.stderr, result.stderr
+    assert bool(re.search(r'^vector\.body', result.stdout, re.M)) == (not scalar), tag
+
+print('PASS: exact original source attribution through scalar fission and repeated LV')

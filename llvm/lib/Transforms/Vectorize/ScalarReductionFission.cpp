@@ -23,6 +23,7 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -59,12 +60,46 @@ bool llvm::isReductionFissionStage(const Loop &L) {
          findOptionMDForLoop(&L, StageMD);
 }
 
+// getStartLoc() prefers loop metadata, then the preheader and header branches.
+// Stage preheaders and LV follow-up IDs can replace both original fallbacks.
+// Keep the original target's start in the standard loop location operand;
+// preserve an existing end location and all non-location attributes.
+static void setFissionStartLoc(Loop &L, DebugLoc Loc) {
+  if (!Loc)
+    return;
+  SmallVector<Metadata *, 8> MDs{nullptr, Loc.get()};
+  bool SawStart = false;
+  if (MDNode *ID = L.getLoopID())
+    for (const MDOperand &Op : llvm::drop_begin(ID->operands())) {
+      if (isa<DILocation>(Op) && !SawStart) {
+        if (Op.get() == Loc.get())
+          return;
+        SawStart = true;
+        continue;
+      }
+      MDs.push_back(Op.get());
+    }
+  MDNode *ID = MDNode::getDistinct(L.getHeader()->getContext(), MDs);
+  ID->replaceOperandWith(0, ID);
+  L.setLoopID(ID);
+}
+
 void llvm::preserveReductionFissionStageMetadata(MDNode *OriginalID, Loop &L) {
   if (!OriginalID)
     return;
+  bool IsStage = false;
   for (StringRef Name : {ProducerMD, ConsumerMD, StageMD})
-    if (findOptionMDForLoopID(OriginalID, Name) && !findOptionMDForLoop(&L, Name))
-      L.addStringLoopAttribute(Name);
+    if (findOptionMDForLoopID(OriginalID, Name)) {
+      IsStage = true;
+      if (!findOptionMDForLoop(&L, Name))
+        L.addStringLoopAttribute(Name);
+    }
+  if (IsStage)
+    for (const MDOperand &Op : llvm::drop_begin(OriginalID->operands()))
+      if (auto *Loc = dyn_cast<DILocation>(Op)) {
+        setFissionStartLoc(L, DebugLoc(Loc));
+        break;
+      }
 }
 
 // Preserve the existing unconditional header-update admission. Conditional
@@ -247,10 +282,11 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
 
   BasicBlock *Header = L.getHeader();
   Function *F = Header->getParent();
+  DebugLoc OriginalLoc = L.getStartLoc();
   auto Reject = [&](StringRef Reason) -> Loop * {
     ORE.emit([&]() {
       return OptimizationRemarkMissed("vplan-reduction-fission", "Rejected",
-                                      L.getStartLoc(), Header)
+                                      OriginalLoc, Header)
              << "scalar-IR reduction fission rejected: "
              << ore::NV("Reason", Reason);
     });
@@ -557,7 +593,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                               ? "admitted"
                               : "scalar-scratch-limit";
     return OptimizationRemarkAnalysis("vplan-reduction-fission",
-                                      "ScalarFissionBound", L.getStartLoc(),
+                                      "ScalarFissionBound", OriginalLoc,
                                       Header)
            << "scalar-IR admission passed; control "
            << ore::NV("Control", Print(SE.getSCEV(IV)))
@@ -642,7 +678,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
 
   ORE.emit([&]() {
     OptimizationRemark Remark("vplan-reduction-fission", "Selected",
-                              L.getStartLoc(), Header);
+                              OriginalLoc, Header);
     Remark << "split " << ore::NV("Path", "scalar-IR")
            << " reduction loop; stage VFs selected independently "
               "by normal vectorization; scratch capacity ";
@@ -730,7 +766,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     Value *Partial = CB.CreateICmpULT(Remaining, Limit, "fission.chunk.partial");
     ChunkCount = CB.CreateSelect(Partial, Remaining, Limit, "fission.chunk.count");
     CB.CreateBr(ProducerPH);
-    BranchInst::Create(Header, ProducerPH);
+    BranchInst::Create(Header, ProducerPH)->setDebugLoc(OriginalLoc);
     Preheader->getTerminator()->replaceSuccessorWith(Header, ChunkHeader);
     IV->replaceIncomingBlockWith(Preheader, ProducerPH);
     IV->setIncomingValueForBlock(ProducerPH, ChunkBase);
@@ -760,7 +796,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   // exit. Ordinary LV inserts its vector/middle blocks before the stage exit.
   if (Chunked)
     ChunkLatch->moveAfter(ParticipationArm ? ConsumerExit : ConsumerBody);
-  BranchInst::Create(ConsumerBody, ConsumerPH);
+  BranchInst::Create(ConsumerBody, ConsumerPH)->setDebugLoc(OriginalLoc);
   Loop *Consumer = LI.AllocateLoop();
   if (Loop *Parent = L.getParentLoop()) {
     Parent->addChildLoop(Consumer);
@@ -1039,6 +1075,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     Consumer->setLoopID(OriginalID);
   L.addStringLoopAttribute(ProducerMD);
   Consumer->addStringLoopAttribute(ConsumerMD);
+  setFissionStartLoc(L, OriginalLoc);
+  setFissionStartLoc(*Consumer, OriginalLoc);
   SE.forgetBlockAndLoopDispositions();
   DT.recalculate(*F);
   assert(L.isLCSSAForm(DT) && Consumer->isLCSSAForm(DT) &&

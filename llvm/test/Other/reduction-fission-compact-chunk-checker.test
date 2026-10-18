@@ -46,6 +46,21 @@ for ir, remarks, is_scalar, is_evl in [(scalar, sr, True, False),
         if name == 'compact_chunk_narrow' and not is_scalar:
             continue
         checker.check_compact_chunk_remarks(remarks, name, 9, 112, not is_scalar)
+        for role in ('producer', 'consumer'):
+            loc = 'scalar-compact-chunks.c:' + str(
+                12 + 10 * checker.COMPACT_CHUNK_FUNCTIONS.index(name)) + ':3:'
+            line = next(line for line in remarks.splitlines()
+                        if loc in line and 'scalar-IR fission ' + role + ' VF ' in line)
+            # Append a bad later visit too: presence of a correct first
+            # location cannot satisfy repeated-LV attribution on its own.
+            bad = line.replace(loc, '<unknown>:0:0:')
+            for candidate in (remarks.replace(line, bad), remarks + bad + '\n'):
+                try:
+                    checker.check_compact_chunk_remarks(candidate, name, 9, 112, not is_scalar)
+                except AssertionError:
+                    pass
+                else:
+                    raise AssertionError(name + ': accepted lost ' + role + ' location')
         body = checker.function_definition(ir, name)
         checked = checker.check_compact_chunk(ir, source, name, 9,
                                              scalar=is_scalar, evl=is_evl, probe=not is_evl)

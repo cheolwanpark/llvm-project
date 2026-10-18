@@ -3657,6 +3657,13 @@ def check_compact_chunk_remarks(remarks, name, capacity, size, vectorized):
     assert len(re.findall(expected, remarks)) == 1, (name, remarks)
     for role, vf in [('producer', '1'), ('consumer', 'vscale x 4' if vectorized else '1')]:
         assert f'{loc} scalar-IR fission {role} VF {vf}\n' in remarks, (name, remarks)
+    # A correct first visit must not hide a later lost location under repeated
+    # LV. Every stage in this fixture has one of the four exact target sites.
+    for line in remarks.splitlines():
+        if 'scalar-IR fission ' in line:
+            assert re.fullmatch(r'remark: scalar-compact-chunks.c:(12|22|32|42):3: '
+                                r'scalar-IR fission (producer|consumer) VF (1|vscale x 4)',
+                                line), (name, line)
 
 
 def check_compact_chunk(ir, original, name, capacity, scalar=False, evl=False, probe=False):
@@ -5761,6 +5768,15 @@ def check(args, work):
         result.stdout, state_chunk_host_configurations)
     compact_chunk_execution = compact_chunk_execution_counts(
         result.stdout, compact_chunk_host_configurations)
+    # Count completed input cases, each comparing all three implementations.
+    # Scalar: 16 configurations per function, with 3*9792 + 29376 cases.
+    # Per vector vscale: 16 configurations for each i64 function, with
+    # 2*9792 + 29376 cases. Narrow consumers remain scalar-only here.
+    compact_chunk_planned_configurations = 64 + 48 * len(args.vscales)
+    compact_chunk_planned_comparisons = 940032 + 783360 * len(args.vscales)
+    assert len(compact_chunk_execution) == compact_chunk_planned_configurations
+    assert sum(row['comparisons'] for row in compact_chunk_execution.values()) == (
+        compact_chunk_planned_comparisons)
     dispatch_execution = {}
     for match in re.finditer(r'^Dispatch (\S+): comparisons=(\d+) aliases=(\d+) bypasses=(\d+) '
                              r'producer-vector=(\d+) producer-tail=(\d+) '
@@ -5792,6 +5808,8 @@ def check(args, work):
         'compact_chunks': {
             'functions': COMPACT_CHUNK_FUNCTIONS, 'capacities': [1, 9, 16, 65],
             'scratch_bytes': [16, 112, 192, 784],
+            'planned_configurations': compact_chunk_planned_configurations,
+            'planned_comparisons': compact_chunk_planned_comparisons,
             'completed_configurations': len(compact_chunk_execution),
             'completed_comparisons': sum(c['comparisons'] for c in compact_chunk_execution.values()),
             'logical_store_bytes_per_participant': 12, 'logical_load_bytes_per_participant': 12,
