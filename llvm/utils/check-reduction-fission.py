@@ -1092,6 +1092,40 @@ def check_affine_function(ir, source, name, evl, probe=False):
     return body
 
 
+# Explicit reserved-byte expectations follow the fixture's stream order.
+# Integer-first i32[65], double[65] needs 260+4+520=784 bytes; reversed
+# accumulator PHIs in recurrence_runtime give double[65], i32[65], hence
+# 520+260=780. There is no padding after the last stream. Capacity and
+# traffic are separate: both orders store/load 12 bytes each per iteration.
+# Keep this table visible to the focused lit regression as well as execution.
+RECURRENCE_CASES = [
+    ('recurrence_first', 65, False, False, False, 12, 260 + 4 + 520),
+    ('recurrence_two', 65, True, False, False, 22, 260 + 4 + 520),
+    ('recurrence_affine', 65, True, False, False, 32, 260 + 4 + 520),
+    ('recurrence_runtime', 65, True, False, False, 42, 520 + 260),
+    ('recurrence_branch', 65, True, True, False, 52, 260 + 4 + 520),
+    ('recurrence_enclosing', 65, True, True, True, 62, 260 + 4 + 520),
+    ('recurrence_first_affine', 65, False, True, False, 102, 260 + 4 + 520),
+    ('recurrence_first_enclosing', 65, False, True, True, 112, 260 + 4 + 520),
+    ('recurrence_one', 1, True, False, False, 72, 4 + 4 + 8),
+    ('recurrence_255', 255, True, False, False, 82, 1020 + 4 + 2040),
+    ('recurrence_limit', 5461, True, False, False, 92, 21844 + 4 + 43688),
+]
+
+
+def check_recurrence_remarks(remarks, name, capacity, scratch_bytes, line,
+                             vectorized=True):
+    """Check exact fixture accounting and stage VFs at the original loop."""
+    location = re.escape(f'scalar-recurrence.c:{line}:3:')
+    selected = (location + r' split scalar-IR reduction loop;[^\n]*' +
+                f'scratch capacity {capacity}, scratch bytes {scratch_bytes}' + r'\b')
+    assert len(re.findall(selected, remarks)) == 1, f'@{name}: scratch remark\n{remarks}'
+    for stage, vf in [('producer', '1'), ('consumer', 'vscale x 4' if vectorized else '1')]:
+        pattern = location + re.escape(f' scalar-IR fission {stage} VF {vf}') + r'\b'
+        # Repeated LV may visit a stage again; it must not split it again.
+        assert re.search(pattern, remarks), f'@{name}: {stage} VF remark\n{remarks}'
+
+
 def check_recurrence_function(ir, source, name, evl, vectorized=True,
                               probe=False, capacity=65):
     """Small fixture certificate: retained state, full counts and scratch slots."""
@@ -1669,19 +1703,7 @@ def check(args, work):
     # Producer-local recurrences use one focused fixture matrix. Certificates
     # inspect actual opt output before adding any host-only probes.
     recurrence_rows = []
-    recurrence_cases = [
-        ('recurrence_first', 65, False, False, False, 12),
-        ('recurrence_two', 65, True, False, False, 22),
-        ('recurrence_affine', 65, True, False, False, 32),
-        ('recurrence_runtime', 65, True, False, False, 42),
-        ('recurrence_branch', 65, True, True, False, 52),
-        ('recurrence_enclosing', 65, True, True, True, 62),
-        ('recurrence_first_affine', 65, False, True, False, 102),
-        ('recurrence_first_enclosing', 65, False, True, True, 112),
-        ('recurrence_one', 1, True, False, False, 72),
-        ('recurrence_255', 255, True, False, False, 82),
-        ('recurrence_limit', 5461, True, False, False, 92),
-    ]
+    recurrence_cases = RECURRENCE_CASES
     recurrence_source = (tests / 'reduction-fission-scalar-recurrence.ll').read_text()
     reference, references = rename_execution_functions(
         recurrence_source, {name: f'ref_{name}' for name, *_ in recurrence_cases}, used_symbols)
@@ -1717,14 +1739,9 @@ def check(args, work):
                     (work / f'{tag}.rvv.ll').write_text(result.stdout)
                     assert result.stderr.count('split scalar-IR reduction loop;') == len(cases), result.stderr
                     instrumented = result.stdout
-                    for name, capacity, two, branch, nested, line in cases:
-                        size = 12 * capacity + (4 if capacity % 2 else 0)
-                        location = f'scalar-recurrence.c:{line}:3:'
-                        assert re.search(re.escape(location) + r' split scalar-IR reduction loop;[^\n]*' +
-                                         f'scratch capacity {capacity}, scratch bytes {size}' + r'\b',
-                                         result.stderr), result.stderr
-                        for stage, vf in [('producer', '1'), ('consumer', '1' if boundary else 'vscale x 4')]:
-                            assert f'{location} scalar-IR fission {stage} VF {vf}' in result.stderr, result.stderr
+                    for name, capacity, two, branch, nested, line, size in cases:
+                        check_recurrence_remarks(result.stderr, name, capacity, size,
+                                                 line, vectorized=not boundary)
                         checked = check_recurrence_function(
                             result.stdout, source, name, evl, vectorized=not boundary,
                             probe=not evl, capacity=capacity)
@@ -1743,7 +1760,7 @@ def check(args, work):
                             fixed, names = rename_execution_functions(
                                 specialize(instrumented, scale),
                                 {name: f'{name}_{tag}_s{scale}' for name, *_ in cases}, used_symbols)
-                            for name, capacity, two, branch, nested, line in cases:
+                            for name, capacity, two, branch, nested, line, size in cases:
                                 symbol = names[name]
                                 declarations.append(f'extern RecurrenceFn {symbol};')
                                 recurrence_rows.append(

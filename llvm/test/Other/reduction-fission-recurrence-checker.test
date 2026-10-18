@@ -3,16 +3,16 @@
 # RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 # RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
 # RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-# RUN:   -enable-vplan-reduction-fission -S \
-# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll -o %t/scalar.ll
+# RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission -S \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll -o %t/scalar.ll 2> %t/scalar.remarks
 # RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 # RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
 # RUN:   -hints-allow-reordering=false -scalable-vectorization=always \
 # RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
-# RUN:   -enable-vplan-reduction-fission -S \
-# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll -o %t/tail.ll
+# RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission -S \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll -o %t/tail.ll 2> %t/tail.remarks
 # RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py \
-# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll %t/scalar.ll %t/tail.ll
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll %t/scalar.ll %t/tail.ll %t/scalar.remarks %t/tail.remarks
 
 # Exercise the focused certificate using real output. Parser mutation coverage
 # supplements the complete original/transformed/independent execution matrix;
@@ -28,7 +28,63 @@ import sys
 spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
 checker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checker)
-source, scalar, tail = (Path(path).read_text() for path in sys.argv[2:])
+source, scalar, tail, scalar_remarks, tail_remarks = (
+    Path(path).read_text() for path in sys.argv[2:])
+
+# Exercise the execution matrix's exact remark assertion before compiling its
+# full executable matrix. The reversed PHIs in recurrence_runtime reserve
+# double[65] then i32[65]: 520+260=780 bytes. Integer-first siblings instead
+# need 260+4+520=784, with four bytes between streams and no final padding.
+# This corrects an expectation, not capacity or the 24 bytes/iteration traffic.
+layouts = [
+    ('recurrence_first', 65, 784, 12),
+    ('recurrence_two', 65, 784, 22),
+    ('recurrence_affine', 65, 784, 32),
+    ('recurrence_runtime', 65, 780, 42),
+    ('recurrence_branch', 65, 784, 52),
+    ('recurrence_enclosing', 65, 784, 62),
+    ('recurrence_first_affine', 65, 784, 102),
+    ('recurrence_first_enclosing', 65, 784, 112),
+    ('recurrence_one', 1, 16, 72),
+    ('recurrence_255', 255, 3064, 82),
+    ('recurrence_limit', 5461, 65536, 92),
+]
+assert [(name, capacity, size, line)
+        for name, capacity, two, branch, nested, line, size in checker.RECURRENCE_CASES] == layouts
+assert scalar_remarks.count('split scalar-IR reduction loop;') == len(layouts)
+assert tail_remarks.count('split scalar-IR reduction loop;') == len(layouts)
+for name, capacity, two, branch, nested, line, size in checker.RECURRENCE_CASES:
+    checker.check_recurrence_remarks(scalar_remarks, name, capacity, size, line,
+                                     vectorized=False)
+    if capacity == 65:
+        checker.check_recurrence_remarks(tail_remarks, name, capacity, size, line)
+
+# Both stream orders must reject the other's byte count. Also retain exact
+# capacity, source location and stage VFs (including the repeated-LV output).
+for name, line, size, wrong_size in [('recurrence_first', 12, 784, 780),
+                                    ('recurrence_runtime', 42, 780, 784)]:
+    location = f'scalar-recurrence.c:{line}:3:'
+    for remarks, vectorized in [(scalar_remarks, False), (tail_remarks, True)]:
+        local = '\n'.join(row for row in remarks.splitlines() if location in row)
+        consumer_vf = 'vscale x 4' if vectorized else '1'
+        for expected, wrong in [
+            (f'scratch bytes {size}', f'scratch bytes {wrong_size}'),
+            (f'scratch bytes {size}', f'scratch bytes {size}0'),
+            ('scratch capacity 65', 'scratch capacity 64'),
+            (location, f'scalar-recurrence.c:{line + 1}:3:'),
+            ('producer VF 1', 'producer VF 2'),
+            (f'consumer VF {consumer_vf}', 'consumer VF 8'),
+        ]:
+            assert expected in local, (name, expected, local)
+            mutated = local.replace(expected, wrong)
+            try:
+                checker.check_recurrence_remarks(mutated, name, 65, size, line,
+                                                 vectorized=vectorized)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError('accepted remark mutation: ' + wrong)
+
 core = ['recurrence_first', 'recurrence_two', 'recurrence_affine',
         'recurrence_runtime', 'recurrence_branch', 'recurrence_enclosing',
         'recurrence_first_affine', 'recurrence_first_enclosing']

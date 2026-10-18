@@ -25,6 +25,11 @@
 ; that PHI order. DAG checks allow either order while tying both typed loads
 ; to their scratch slots and the FP operand to its ordered reduction. Block
 ; labels bound consumer checks; producer state and FP operand order stay fixed.
+; Reserved bytes also follow stream order, without padding the final stream:
+; i32[65] then double[65] uses 260+4+520=784; recurrence_runtime reverses
+; the streams and uses 520+260=780. Both still have capacity 65 and exactly
+; 12 bytes stored plus 12 bytes loaded per completed iteration (24 total).
+; Integer-first capacity boundaries 1/255/5461 remain 16/3064/65536 bytes.
 ; The execution checker compares actual split code, original IR and C formulas
 ; with exact counts, ordered FP, tails and enclosing-row scratch reuse.
 ; Formerly all these loops failed scalar-unsupported-recurrence.
@@ -356,7 +361,7 @@ exit:
   ret void
 }
 
-; REMARK: scalar-recurrence.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
+; REMARK: scalar-recurrence.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 780
 ; SCALAR-LABEL: define void @recurrence_runtime(
 ; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
 ; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
