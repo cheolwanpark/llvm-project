@@ -852,6 +852,23 @@ COMPACT_CFG_FUNCTIONS = tuple(COMPACT_CFG_BASES)
 STATE_CFG_FUNCTIONS = ('state_cfg_serial', 'state_cfg_nested', 'state_cfg_affine')
 COMPACT_CFG_BASES.update(dict.fromkeys(STATE_CFG_FUNCTIONS, 'export_compact'))
 
+
+def state_cfg_execution_counts(stdout, expected_functions):
+    """Count completed focused comparisons, separately from the planned matrix."""
+    completed = {}
+    for match in re.finditer(r'^State CFG participation (\S+): comparisons=(\d+) '
+                             r'rows=(\d+) cases=(\d+)$', stdout, re.M):
+        name = match[1]
+        assert name not in completed, 'state CFG execution: duplicate ' + name
+        comparisons, rows, cases = map(int, match.groups()[1:])
+        assert (comparisons, rows, cases) == (28, 2, 7), (
+            'state CFG execution: incomplete focused cases', name, match[0])
+        completed[name] = comparisons
+    assert set(completed) == set(expected_functions), (
+        'state CFG execution: missing/unexpected configuration', completed, expected_functions)
+    return {'completed_comparisons': sum(completed.values()), 'configurations': completed}
+
+
 EXPORT_FAMILIES = (
     ('reduction-fission-scalar-exports.ll', EXPORT_FUNCTIONS, 0,
      'scalar-exports.c', 'exports'),
@@ -4417,6 +4434,7 @@ def check(args, work):
 
     # Final producer exports are an additional matrix. Keep all inherited
     # fixtures, reference origins, probes and adapter comparisons unchanged.
+    state_cfg_host_functions = set()
     for filename, functions, first_mode, location, fixture in EXPORT_FAMILIES:
         source = keep_functions((tests / filename).read_text(),
                                 functions)
@@ -4490,6 +4508,9 @@ def check(args, work):
                     references, used_symbols, first_mode, 0 if scalar else 4 * scale)
                 declarations.extend(variant_declarations)
                 export_rows.extend(rows)
+                if first_mode == 16:
+                    state_cfg_host_functions.update(f'{function}_{tag}_s{scale}'
+                                                    for function in functions)
                 compile_ir(f'{tag}_s{scale}', fixed)
                 records.append(dict(record, vscale=scale,
                                     execution='host fixed-vscale scalar remainder, not RVV',
@@ -5037,10 +5058,13 @@ def check(args, work):
                 dispatch_execution[name]['bypasses']) == (1484, 64, 120), dispatch_execution[name]
     assert set(dispatch_execution) == dispatch_host_functions, dispatch_execution
     assert len(dispatch_execution) == 8 * len(args.vscales), dispatch_execution
+    assert len(state_cfg_host_functions) == len(STATE_CFG_FUNCTIONS) * 4 * (len(args.vscales) + 1)
+    state_cfg_execution = state_cfg_execution_counts(result.stdout, state_cfg_host_functions)
     (work / 'results.json').write_text(json.dumps({
         'execution': 'host fixed-vscale specialization (not RVV execution)',
         'host_triple': triple, 'cases': records, 'result': result.stdout,
         'dispatch_execution': dispatch_execution,
+        'state_cfg_focused_execution': state_cfg_execution,
         'coverage_mapping': {
             'vplan_head': '5829f993afeabaabca2dd8e728c5cc637a56ea13',
             'scalar_head': '16d3d9df9d01e0a24000ccf672293ddff87d1fde',
@@ -5149,6 +5173,16 @@ def check(args, work):
                          'scalar consumers and vector/scalar tails at fixed host vscales 1/2/4/8/32; '
                          'uninstrumented EVL separately machine verified',
             'expected_additional_comparisons_at_default_vscales': 417312,
+            'focused_participation': {
+                'planned_comparisons_per_configuration': 28,
+                'planned_comparisons_at_default_vscales': 2016,
+                'N': 3, 'rows': [1, 2], 'starts': ['-0.0', '0.25'],
+                'checks': 'seven literal original-fixture participation masks and final states, '
+                          'including pattern=1 first/last-only and parity-disabled nonzero final input; '
+                          'original/transformed/oracle whole-state comparisons, canaries and exact '
+                          'N/P/vector/tail/empty/bypass/final-arm counters',
+                'completed': 'see state_cfg_focused_execution; never inferred from generated variants',
+            },
             'status': 'counts are planned until the generated C harness links and executes',
         },
         'retained_feedback_exports': {

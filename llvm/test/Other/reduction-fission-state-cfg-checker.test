@@ -27,6 +27,12 @@
 # result, export, chunk and host-adapter mutation fixtures remain mandatory.
 # The host comparison matrix separately executes actual original/transformed
 # IR and independent C under both policies and once/twice LV.
+# Its focused N=3 cases use literal participation masks/final states, including
+# pattern=1 with Rows=2. Affine must participate after right1 makes state even;
+# serial/nested must skip nonzero inputs when state is even. Whole-state
+# comparisons retain reductions, exports and canaries; a final-arm probe also
+# covers nonzero final inputs skipped by parity. The full inherited execution
+# matrix and its scalar/vector entry, alias and bypass assertions remain.
 
 #--- check.py
 import importlib.util
@@ -40,6 +46,52 @@ checker = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = checker
 spec.loader.exec_module(checker)
 source = Path(sys.argv[2]).read_text()
+
+# Pin the distinct ORIGINAL semantic contracts. Never change these fixtures to
+# match the former overbroad state-bit oracle. State contributes in all three,
+# but rows selects participation only in serial/nested, and affine updates on
+# right1 alone. The original retained state, not the last participant, exports.
+for name in checker.STATE_CFG_FUNCTIONS:
+    original = checker.function_definition(source, name)
+    blocks = checker.loop_blocks(original)
+    assert '%state.arg = xor i32 %arg, %state' in blocks['left']
+    assert '%out.c.copy = phi i32 [%state.merge, %latch]' in blocks['producer.exit']
+    update_edge = 'right1' if name == 'state_cfg_affine' else 'right'
+    assert '%state.next = add i32 %state, %state.delta' in blocks[update_edge]
+    assert original.count('%state.next = add i32') == 1
+    if name == 'state_cfg_affine':
+        assert '%choose = icmp eq i32 %x, 0' in blocks['loop']
+        assert 'br i1 %choose, label %inactive.dispatch, label %active.entry' in blocks['loop']
+        assert '%state.choose' not in original and '%state.mode' not in original
+        assert ('%state.merge = phi i32 [%state, %right2], [%state, %left], '
+                '[%state, %right], [%state.next, %right1]') in blocks['latch']
+    else:
+        assert '%state.mode = icmp eq i64 %rows, 2' in blocks['loop']
+        assert '%state.choose = and i1 %nonzero.x, %state.odd' in blocks['loop']
+        assert ('%choose = select i1 %state.mode, i1 %state.choose, '
+                'i1 %nonzero.x') in blocks['loop']
+        assert '%state.merge = phi i32 [%state, %left], [%state.next, %right]' in blocks['latch']
+
+
+# Completed focused comparisons are reported separately from generated/planned
+# cases. A missing variant, duplicate, wrong count or substituted name rejects.
+names = ['state_cfg_serial_once', 'state_cfg_affine_twice']
+stdout = ''.join(f'State CFG participation {name}: comparisons=28 rows=2 cases=7\n'
+                 for name in names)
+assert checker.state_cfg_execution_counts(stdout, names) == {
+    'completed_comparisons': 56, 'configurations': dict.fromkeys(names, 28),
+}
+for bad in (stdout.splitlines()[0] + '\n', stdout + stdout,
+            stdout.replace('comparisons=28', 'comparisons=27', 1),
+            stdout.replace('rows=2', 'rows=1', 1),
+            stdout.replace('cases=7', 'cases=6', 1),
+            stdout.replace(names[1], 'compact_cfg_affine_twice')):
+    try:
+        checker.state_cfg_execution_counts(bad, names)
+    except AssertionError as error:
+        assert 'state CFG execution:' in str(error), error
+    else:
+        raise AssertionError('accepted incomplete/substituted focused execution')
 
 
 def definition(text, value, old, new):

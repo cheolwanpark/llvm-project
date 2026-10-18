@@ -204,13 +204,20 @@ uint32_t scalar_helper(uint32_t X) {
 
 static unsigned ScalarVectorVisits, ScalarVectorRuns, ScalarTailVisits;
 static unsigned CompactIterations, CompactParticipants;
+static bool CompactLastParticipated;
 static unsigned ExportEmptyVisits, ExportBypassVisits, ExportInactiveFinalVisits;
 static unsigned CompactCFGBypasses[3];
 static unsigned AcyclicIterations, AcyclicLatches;
 void record_scalar_consumer_vector(void) { ++ScalarVectorVisits; }
 void record_scalar_consumer_tail(void) { ++ScalarTailVisits; }
-void record_compact_iteration(void) { ++CompactIterations; }
-void record_compact_participant(void) { ++CompactParticipants; }
+void record_compact_iteration(void) {
+  ++CompactIterations;
+  CompactLastParticipated = false;
+}
+void record_compact_participant(void) {
+  ++CompactParticipants;
+  CompactLastParticipated = true;
+}
 void record_export_guard(uint64_t P) { ExportEmptyVisits += P == 0; }
 void record_export_bypass(void) { ++ExportBypassVisits; }
 void record_export_final(uint32_t X) { ExportInactiveFinalVisits += X == 0; }
@@ -224,6 +231,7 @@ void record_acyclic_latch(void) { ++AcyclicLatches; }
 static void reset_compact_probes(void) {
   ScalarVectorVisits = ScalarTailVisits = 0;
   CompactIterations = CompactParticipants = 0;
+  CompactLastParticipated = false;
   ExportEmptyVisits = 0;
   ExportBypassVisits = ExportInactiveFinalVisits = 0;
   memset(CompactCFGBypasses, 0, sizeof(CompactCFGBypasses));
@@ -1163,7 +1171,10 @@ static void export_oracle(unsigned Mode, const uint32_t *A, const double *D,
       for (unsigned I = 0; I < N; ++I) {
         LastX = A[Base + I];
         bool Active = Mode == 0 || LastX != 0;
-        if (Stateful && Rows == 2) Active = Active && (State & 1);
+        // Only serial/nested use rows==2 to select a state-bit predicate.
+        // Affine participation is x!=0, even after right1 makes state even.
+        if ((Control == 16 || Control == 17) && Rows == 2)
+          Active = Active && (State & 1);
         if (Active) {
           uint32_t Arg = LastX;
           if (Mode != 0) {
@@ -1265,6 +1276,90 @@ static void export_pointers(ExportState *S, bool Nested, bool Alias,
   *DOut = Alias ? S->D + 1 + (Nested ? 65 : 0) : S->DOut + 1;
 }
 
+static void check_state_cfg_participation(unsigned C) {
+  // Literal masks/state exports from the three ORIGINAL fixtures, independent
+  // of export_oracle and the transformed probes. Bit I denotes iteration I.
+  // N=3, pattern=1 includes both first-only and last-only layouts; last-only
+  // makes affine's state even before a nonzero final input. Serial/nested
+  // also need cases where parity suppresses a nonzero input, recovers, or
+  // leaves P=0 with a nonzero final input. Rows=1 must ignore state parity.
+  static const struct {
+    uint32_t Input[3];
+    unsigned Mask[3][2]; // serial, nested, affine; Rows=1,2
+    uint32_t State[3][2];
+  } Cases[] = {
+      {{1, 0, 0}, {{1, 1}, {1, 1}, {1, 1}}, {{25, 25}, {25, 25}, {24, 24}}},
+      {{0, 0, 3}, {{4, 4}, {4, 4}, {4, 4}}, {{25, 25}, {25, 25}, {24, 24}}},
+      {{0, 2, 3}, {{6, 4}, {6, 4}, {6, 6}}, {{24, 27}, {24, 27}, {23, 23}}},
+      {{0, 1, 3}, {{6, 0}, {6, 0}, {6, 6}}, {{24, 30}, {24, 30}, {23, 23}}},
+      {{1, 0, 3}, {{5, 1}, {5, 1}, {5, 5}}, {{24, 28}, {24, 28}, {24, 24}}},
+      {{1, 2, 3}, {{7, 7}, {7, 7}, {7, 7}}, {{23, 23}, {23, 23}, {23, 23}}},
+      {{0, 0, 0}, {{0, 0}, {0, 0}, {0, 0}}, {{26, 26}, {26, 26}, {24, 24}}},
+  };
+  unsigned Control = Exports[C].Mode, Lanes = Exports[C].VectorLanes, Runs = 0;
+  if (Control < 16 || Control > 18) abort();
+  for (unsigned K = 0; K < sizeof(Cases) / sizeof(*Cases); ++K)
+    for (unsigned R = 0; R < 2; ++R)
+      for (unsigned Trial = 0; Trial < 2; ++Trial) {
+        unsigned Mask = Cases[K].Mask[Control - 16][R], P = 0, Edges[3] = {0};
+        for (unsigned I = 0; I < 3; ++I) {
+          P += (Mask >> I) & 1;
+          if (!(Mask & (1u << I))) ++Edges[Control == 18 ? I % 3 : 0];
+        }
+        double Start = Trial ? 0.25 : -0.0;
+        ExportState Actual, Original, Independent;
+        init_export_state(&Actual, 3, 0, 0, 0);
+        memcpy(Actual.A + 1, Cases[K].Input, sizeof(Cases[K].Input));
+        Actual.D[1] = 1.0;
+        Actual.D[2] = -0.5;
+        Actual.D[3] = 0.25;
+        memcpy(&Original, &Actual, sizeof(Original));
+        memcpy(&Independent, &Actual, sizeof(Independent));
+        ExportCounts Expected = {0};
+        export_oracle(Control, Independent.A + 1, Independent.D + 1,
+                      Independent.Out + 1, Independent.Indices + 1,
+                      Independent.DOut + 1, Independent.FOut + 1,
+                      R + 1, 3, Start, Lanes, &Expected);
+        // Reintroducing the overbroad Stateful && Rows==2 predicate fails
+        // here for the affine last-only case, before any transformed call.
+        if (Expected.Iterations != 3 || Expected.Participants != P ||
+            Expected.Vectors != (Lanes ? P / Lanes : 0) ||
+            Expected.Tails != (Lanes ? P % Lanes : P) ||
+            Expected.Empty != (P == 0) || Expected.Bypasses ||
+            Expected.InactiveFinal != (Cases[K].Input[2] == 0) ||
+            memcmp(Expected.CFGBypasses, Edges, sizeof(Edges)) ||
+            Independent.Out[3] != Cases[K].Input[2] ||
+            (!(Mask & 4) && Independent.Out[4] != (Cases[K].Input[2] ^ 7)) ||
+            Independent.Indices[1] != (Control == 16 ? 2u : 11u) ||
+            Independent.Indices[2] != (Control == 16 ? 3u : 13u) ||
+            Independent.Out[5] != Cases[K].State[Control - 16][R])
+          fail(Exports[C].Name, 3, K, "state CFG literal participation/state oracle");
+        Exports[C].Reference(Original.A + 1, Original.D + 1, Original.Out + 1,
+                             Original.Indices + 1, Original.DOut + 1,
+                             Original.FOut + 1, R + 1, 3, Start);
+        if (memcmp(&Original, &Independent, sizeof(Original)))
+          fail(Exports[C].Name, 3, K, "state CFG original / oracle exports/reductions/canaries");
+        reset_compact_probes();
+        Exports[C].Fn(Actual.A + 1, Actual.D + 1, Actual.Out + 1,
+                      Actual.Indices + 1, Actual.DOut + 1, Actual.FOut + 1,
+                      R + 1, 3, Start);
+        check_compact_probes(Exports[C].Name, 3, K, 3, P,
+                             Lanes ? P / Lanes : 0, Lanes ? P % Lanes : P);
+        // Keep the inherited x==0 final-input probe. Separately check the
+        // actual final participation arm, which can skip a nonzero x.
+        if (ExportEmptyVisits != (P == 0) || ExportBypassVisits ||
+            ExportInactiveFinalVisits != (Cases[K].Input[2] == 0) ||
+            CompactLastParticipated != ((Mask & 4) != 0) ||
+            memcmp(CompactCFGBypasses, Edges, sizeof(Edges)) ||
+            memcmp(&Actual, &Original, sizeof(Actual)) ||
+            memcmp(&Actual, &Independent, sizeof(Actual)))
+          fail(Exports[C].Name, 3, K, "state CFG transformed participation/exports/reductions/canaries");
+        ++Runs;
+      }
+  printf("State CFG participation %s: comparisons=%u rows=2 cases=7\n",
+         Exports[C].Name, Runs);
+}
+
 static void check_exports(void) {
   static const uint64_t Ns[] = {0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17,
                                  31, 32, 33, 63, 64, 65, 66, UINT64_MAX};
@@ -1273,6 +1368,7 @@ static void check_exports(void) {
   for (unsigned C = 0; C < sizeof(Exports) / sizeof(*Exports); ++C) {
     unsigned Mode = Exports[C].Mode, Lanes = Exports[C].VectorLanes;
     bool Stateful = Mode >= 16;
+    if (Stateful) check_state_cfg_participation(C);
     bool Nested = Mode == 3 || Mode == 11 || Mode == 15;
     bool Compact = Mode == 2 || Mode == 3 || Mode == 8 || Mode == 11 || Mode >= 12;
     bool Unconditional = Mode == 0 || Mode == 4 || Mode == 7;
