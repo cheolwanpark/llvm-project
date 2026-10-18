@@ -15,6 +15,8 @@
 ; and vector-tail paths with independent C oracles, state/scratch/edge probes.
 ; C=1/8/9/16, zero entry, exact capacity, partial and empty compact chunks.
 ; EVL is separately machine verified, never labeled target execution.
+; Keep ABI alignment explicit on every load/store: source-versus-printed
+; certificates compare whole memory instructions, including final exports.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 ; CHECK-LABEL: define void @nc_offset(
@@ -84,19 +86,19 @@ producer.exit:
   %o2 = getelementptr i32, ptr %out, i64 2
   %o3 = getelementptr i32, ptr %out, i64 3
   %o4 = getelementptr i32, ptr %out, i64 4
-  store i32 %out.r0, ptr %out
-  store i32 %out.r1, ptr %o1
-  store i32 %out.prev, ptr %o2
-  store i32 %out.older, ptr %o3
-  store i32 %out.next, ptr %o4
+  store i32 %out.r0, ptr %out, align 4
+  store i32 %out.r1, ptr %o1, align 4
+  store i32 %out.prev, ptr %o2, align 4
+  store i32 %out.older, ptr %o3, align 4
+  store i32 %out.next, ptr %o4, align 4
   %i1 = getelementptr i64, ptr %indices, i64 1
-  store i64 %out.iv, ptr %indices
-  store i64 %out.ivnext, ptr %i1
+  store i64 %out.iv, ptr %indices, align 8
+  store i64 %out.ivnext, ptr %i1, align 8
   %d1 = getelementptr double, ptr %dout, i64 1
   %d2 = getelementptr double, ptr %dout, i64 2
-  store double %out.rd, ptr %dout
-  store double %out.dstate, ptr %d1
-  store double %out.dnext, ptr %d2
+  store double %out.rd, ptr %dout, align 8
+  store double %out.dstate, ptr %d1, align 8
+  store double %out.dnext, ptr %d2, align 8
   ret void
 bypass:
   ret void
@@ -170,19 +172,19 @@ producer.exit:
   %o2 = getelementptr i32, ptr %out, i64 2
   %o3 = getelementptr i32, ptr %out, i64 3
   %o4 = getelementptr i32, ptr %out, i64 4
-  store i32 %out.r0, ptr %out
-  store i32 %out.r1, ptr %o1
-  store i32 %out.prev, ptr %o2
-  store i32 %out.older, ptr %o3
-  store i32 %out.next, ptr %o4
+  store i32 %out.r0, ptr %out, align 4
+  store i32 %out.r1, ptr %o1, align 4
+  store i32 %out.prev, ptr %o2, align 4
+  store i32 %out.older, ptr %o3, align 4
+  store i32 %out.next, ptr %o4, align 4
   %i1 = getelementptr i64, ptr %indices, i64 1
-  store i64 %out.iv, ptr %indices
-  store i64 %out.ivnext, ptr %i1
+  store i64 %out.iv, ptr %indices, align 8
+  store i64 %out.ivnext, ptr %i1, align 8
   %d1 = getelementptr double, ptr %dout, i64 1
   %d2 = getelementptr double, ptr %dout, i64 2
-  store double %out.rd, ptr %dout
-  store double %out.dstate, ptr %d1
-  store double %out.dnext, ptr %d2
+  store double %out.rd, ptr %dout, align 8
+  store double %out.dstate, ptr %d1, align 8
+  store double %out.dnext, ptr %d2, align 8
   ret void
 bypass:
   ret void
@@ -256,19 +258,19 @@ producer.exit:
   %o2 = getelementptr i32, ptr %out, i64 2
   %o3 = getelementptr i32, ptr %out, i64 3
   %o4 = getelementptr i32, ptr %out, i64 4
-  store i32 %out.r0, ptr %out
-  store i32 %out.r1, ptr %o1
-  store i32 %out.prev, ptr %o2
-  store i32 %out.older, ptr %o3
-  store i32 %out.next, ptr %o4
+  store i32 %out.r0, ptr %out, align 4
+  store i32 %out.r1, ptr %o1, align 4
+  store i32 %out.prev, ptr %o2, align 4
+  store i32 %out.older, ptr %o3, align 4
+  store i32 %out.next, ptr %o4, align 4
   %i1 = getelementptr i64, ptr %indices, i64 1
-  store i64 %out.iv, ptr %indices
-  store i64 %out.ivnext, ptr %i1
+  store i64 %out.iv, ptr %indices, align 8
+  store i64 %out.ivnext, ptr %i1, align 8
   %d1 = getelementptr double, ptr %dout, i64 1
   %d2 = getelementptr double, ptr %dout, i64 2
-  store double %out.rd, ptr %dout
-  store double %out.dstate, ptr %d1
-  store double %out.dnext, ptr %d2
+  store double %out.rd, ptr %dout, align 8
+  store double %out.dstate, ptr %d1, align 8
+  store double %out.dnext, ptr %d2, align 8
   ret void
 bypass:
   ret void
@@ -342,19 +344,19 @@ producer.exit:
   %o2 = getelementptr i32, ptr %out, i64 2
   %o3 = getelementptr i32, ptr %out, i64 3
   %o4 = getelementptr i32, ptr %out, i64 4
-  store i32 %out.r0, ptr %out
-  store i32 %out.r1, ptr %o1
-  store i32 %out.prev, ptr %o2
-  store i32 %out.older, ptr %o3
-  store i32 %out.next, ptr %o4
+  store i32 %out.r0, ptr %out, align 4
+  store i32 %out.r1, ptr %o1, align 4
+  store i32 %out.prev, ptr %o2, align 4
+  store i32 %out.older, ptr %o3, align 4
+  store i32 %out.next, ptr %o4, align 4
   %i1 = getelementptr i64, ptr %indices, i64 1
-  store i64 %out.iv, ptr %indices
-  store i64 %out.ivnext, ptr %i1
+  store i64 %out.iv, ptr %indices, align 8
+  store i64 %out.ivnext, ptr %i1, align 8
   %d1 = getelementptr double, ptr %dout, i64 1
   %d2 = getelementptr double, ptr %dout, i64 2
-  store double %out.rd, ptr %dout
-  store double %out.dstate, ptr %d1
-  store double %out.dnext, ptr %d2
+  store double %out.rd, ptr %dout, align 8
+  store double %out.dstate, ptr %d1, align 8
+  store double %out.dnext, ptr %d2, align 8
   ret void
 bypass:
   ret void
@@ -426,19 +428,19 @@ producer.exit:
   %o2 = getelementptr i32, ptr %out, i64 2
   %o3 = getelementptr i32, ptr %out, i64 3
   %o4 = getelementptr i32, ptr %out, i64 4
-  store i32 %out.r0, ptr %out
-  store i32 %out.r1, ptr %o1
-  store i32 %out.prev, ptr %o2
-  store i32 %out.older, ptr %o3
-  store i32 %out.next, ptr %o4
+  store i32 %out.r0, ptr %out, align 4
+  store i32 %out.r1, ptr %o1, align 4
+  store i32 %out.prev, ptr %o2, align 4
+  store i32 %out.older, ptr %o3, align 4
+  store i32 %out.next, ptr %o4, align 4
   %i1 = getelementptr i64, ptr %indices, i64 1
-  store i64 %out.iv, ptr %indices
-  store i64 %out.ivnext, ptr %i1
+  store i64 %out.iv, ptr %indices, align 8
+  store i64 %out.ivnext, ptr %i1, align 8
   %d1 = getelementptr double, ptr %dout, i64 1
   %d2 = getelementptr double, ptr %dout, i64 2
-  store double %out.rd, ptr %dout
-  store double %out.dstate, ptr %d1
-  store double %out.dnext, ptr %d2
+  store double %out.rd, ptr %dout, align 8
+  store double %out.dstate, ptr %d1, align 8
+  store double %out.dnext, ptr %d2, align 8
   ret void
 bypass:
   ret void
@@ -518,19 +520,19 @@ producer.exit:
   %o2 = getelementptr i32, ptr %out, i64 2
   %o3 = getelementptr i32, ptr %out, i64 3
   %o4 = getelementptr i32, ptr %out, i64 4
-  store i32 %out.r0, ptr %out
-  store i32 %out.r1, ptr %o1
-  store i32 %out.prev, ptr %o2
-  store i32 %out.older, ptr %o3
-  store i32 %out.next, ptr %o4
+  store i32 %out.r0, ptr %out, align 4
+  store i32 %out.r1, ptr %o1, align 4
+  store i32 %out.prev, ptr %o2, align 4
+  store i32 %out.older, ptr %o3, align 4
+  store i32 %out.next, ptr %o4, align 4
   %i1 = getelementptr i64, ptr %indices, i64 1
-  store i64 %out.iv, ptr %indices
-  store i64 %out.ivnext, ptr %i1
+  store i64 %out.iv, ptr %indices, align 8
+  store i64 %out.ivnext, ptr %i1, align 8
   %d1 = getelementptr double, ptr %dout, i64 1
   %d2 = getelementptr double, ptr %dout, i64 2
-  store double %out.rd, ptr %dout
-  store double %out.dstate, ptr %d1
-  store double %out.dnext, ptr %d2
+  store double %out.rd, ptr %dout, align 8
+  store double %out.dstate, ptr %d1, align 8
+  store double %out.dnext, ptr %d2, align 8
   ret void
 bypass:
   ret void
@@ -609,19 +611,19 @@ producer.exit:
   %o2 = getelementptr i32, ptr %out, i64 2
   %o3 = getelementptr i32, ptr %out, i64 3
   %o4 = getelementptr i32, ptr %out, i64 4
-  store i32 %out.r0, ptr %out
-  store i32 %out.r1, ptr %o1
-  store i32 %out.prev, ptr %o2
-  store i32 %out.older, ptr %o3
-  store i32 %out.next, ptr %o4
+  store i32 %out.r0, ptr %out, align 4
+  store i32 %out.r1, ptr %o1, align 4
+  store i32 %out.prev, ptr %o2, align 4
+  store i32 %out.older, ptr %o3, align 4
+  store i32 %out.next, ptr %o4, align 4
   %i1 = getelementptr i64, ptr %indices, i64 1
-  store i64 %wide.iv, ptr %indices
-  store i64 %wide.next, ptr %i1
+  store i64 %wide.iv, ptr %indices, align 8
+  store i64 %wide.next, ptr %i1, align 8
   %d1 = getelementptr double, ptr %dout, i64 1
   %d2 = getelementptr double, ptr %dout, i64 2
-  store double %out.rd, ptr %dout
-  store double %out.dstate, ptr %d1
-  store double %out.dnext, ptr %d2
+  store double %out.rd, ptr %dout, align 8
+  store double %out.dstate, ptr %d1, align 8
+  store double %out.dnext, ptr %d2, align 8
   ret void
 bypass:
   ret void

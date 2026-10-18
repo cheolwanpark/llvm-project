@@ -33,6 +33,34 @@ declarations = ('\ndeclare void @record_nc_begin(i64, i32, i32, double)\n'
                 'declare void @record_nc_consume(i64, i64, ptr, ptr, i32)\n'
                 'declare void @record_nc_end(i64, i32, i64)\n')
 
+# The fixture spells out ABI alignment so whole-instruction certificates can
+# use its source directly. Audit every memory instruction, not just the first
+# failing output. LLVM itself supplies omitted alignment in this positive case;
+# the checker never removes or guesses memory attributes.
+def memory_instructions(ir, name):
+    return [line for code in checker.loop_blocks(checker.function_definition(ir, name)).values()
+            for line in checker.chunk_instructions(code)
+            if line.startswith('store ') or re.match(r'%[-\w.$]+ = load ', line)]
+
+def omit_abi_alignment(match):
+    ty = match[2] or match[3]
+    assert int(match[4]) == {'i32': 4, 'i64': 8, 'double': 8}[ty], match[0]
+    return match[1]
+
+omitted, omissions = re.subn(
+    r'(?m)^(  (?:%[-\w.$]+ = load (i32|double), ptr %[-\w.$]+|'
+    r'store (i32|i64|double) %[-\w.$]+, ptr %[-\w.$]+)), align (4|8)$',
+    omit_abi_alignment, source)
+assert omissions == 84 and omitted != source  # 14 input loads, 70 final stores.
+for spelling in (source, omitted):
+    printed = checker.run([opt, '-mtriple=riscv64', '-mattr=+v',
+                           '-passes=verify', '-verify-each', '-S'], input=spelling).stdout
+    for name in checker.NC_CHUNK_FUNCTIONS:
+        expected = memory_instructions(source, name)
+        assert len(expected) == 12
+        assert sum(line.startswith('store ') for line in expected) == 10
+        assert memory_instructions(printed, name) == expected, (name, printed)
+
 def reject(ir, name, old, new, capacity, evl=False):
     body = checker.function_definition(ir, name)
     assert old != new and body.count(old) == 1, (name, old, body)
@@ -67,12 +95,54 @@ for capacity, ceiling in ((1, 16), (9, 112)):
             tag = f'c{capacity}_{relaxed}_{kind}'
             (work / (tag + '.ll')).write_text(ir)
             (work / (tag + '.remarks')).write_text(result.stderr)
+            if capacity == 9 and scalar:
+                # Both FP contracts transform the omitted spelling as well.
+                # Check it against the explicit fixture, including i8 exports.
+                omitted_result = checker.run([opt, *flags], input=omitted)
+                (work / (tag + '.omitted.ll')).write_text(omitted_result.stdout)
+                (work / (tag + '.omitted.remarks')).write_text(omitted_result.stderr)
+                for name in names:
+                    checker.check_noncanonical_chunk(omitted_result.stdout, source, name, capacity)
             for name in names:
                 body = checker.function_definition(ir, name)
                 checked = checker.check_noncanonical_chunk(ir, source, name, capacity, evl, probe=not evl)
                 if not evl:
                     instrumented = instrumented.replace(body, checked, 1)
                 ty = 'i8' if name == 'nc_narrow' else 'i64'
+                outputs = [line for line in checker.chunk_instructions(checker.loop_blocks(body)['producer.exit'])
+                           if line.startswith('store ')]
+                assert len(outputs) == 10
+                for line in outputs:
+                    m = re.fullmatch(r'store (i32|i64|double) (%[-\w.$]+), ptr (%[-\w.$]+), align (4|8)', line)
+                    assert m, line
+                    t, value, destination, alignment = m.groups()
+                    alternatives = {'i32': ('%out.r0', '%out.r1'),
+                                    'i64': ('%wide.iv', '%wide.next') if name == 'nc_narrow'
+                                           else ('%out.iv', '%out.ivnext'),
+                                    'double': ('%out.rd', '%out.dnext')}
+                    pointers = {'i32': ('%out', '%o1'), 'i64': ('%indices', '%i1'),
+                                'double': ('%dout', '%d1')}
+                    other_value = next(v for v in alternatives[t] if v != value)
+                    other_destination = next(p for p in pointers[t] if p != destination)
+                    reject(ir, name, line, f'store {t} {other_value}, ptr {destination}, align {alignment}', capacity, evl)
+                    reject(ir, name, line, f'store {t} {value}, ptr {other_destination}, align {alignment}', capacity, evl)
+                    for changed_alignment in (1, 16):
+                        reject(ir, name, line, f'store {t} {value}, ptr {destination}, align {changed_alignment}', capacity, evl)
+                # Membership alone cannot certify the final observable order.
+                first = '  store i32 %out.r0, ptr %out, align 4\n  store i32 %out.r1, ptr %o1, align 4'
+                swapped = '  store i32 %out.r1, ptr %o1, align 4\n  store i32 %out.r0, ptr %out, align 4'
+                reject(ir, name, first, swapped, capacity, evl)
+                for t, alignment in (('i32', 4), ('double', 8)):
+                    line = next(line for line in checker.chunk_instructions(checker.loop_blocks(body)['loop'])
+                                if f' = load {t}, ' in line)
+                    reject(ir, name, line, line.replace(f', align {alignment}', ', align 16'), capacity, evl)
+                if name == 'nc_narrow':
+                    # A prefix match for align 4 must not also accept align 4X.
+                    for t, alignment in (('i32', 4), ('double', 8)):
+                        line = next(line for line in checker.chunk_instructions(
+                            checker.loop_blocks(body)['scalar.fission.consumer.body']) if f' = load {t}, ' in line)
+                        reject(ir, name, line, line.replace(f', align {alignment}', f', align {alignment * 1024}'), capacity, evl)
+                        reject(ir, name, line, line.replace(f', align {alignment}', ', align 1'), capacity, evl)
                 for old, new in [
                     (f'%fission.producer.more = icmp ne {ty} %fission.producer.next, {capacity}',
                      f'%fission.producer.more = icmp ne {ty} %fission.producer.next, {capacity+1}'),

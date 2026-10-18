@@ -4313,14 +4313,21 @@ def check_noncanonical_chunk(ir, original, name, capacity, evl=False, probe=Fals
             assert offset == index, (name, offset, index)
         require(store_block, f'store {t} %{value}, ptr {address}, align ' + ('4' if t == 'i32' else '8'))
         addresses[t] = address
+    exit_instructions = []
     for line in chunk_instructions(source['producer.exit']):
         m = re.fullmatch(r'(%out\.[-\w.$]+) = phi (i8|i32|i64|double) \[\s*(%[-\w.$]+), %latch\s*\]', line)
         if not m:
             require('producer.exit', line)
+            exit_instructions.append(line)
         elif m[1] not in ('%out.r0', '%out.r1', '%out.rd'):
             out, t, value = m.groups()
             require(ph, f'{value}.fission.export = phi {t} [ {value}, %latch ]')
             require('producer.exit', f'{out} = phi {t} [ {value}.fission.export, %scalar.fission.chunk.latch ]')
+    # Only the PHIs change at this exit. Preserve the whole final sequence,
+    # including narrow-IV extensions, GEPs, store order and explicit alignment.
+    # Do not discard memory attributes to reconcile source and printed IR.
+    assert [line for line in chunk_instructions(blocks['producer.exit'])
+            if ' = phi ' not in line] == exit_instructions, (name, blocks['producer.exit'])
     vectors = [label for label in blocks if label.startswith('vector.body')]
     assert len(vectors) <= 1 and not (narrow and vectors), body
     if compact:
@@ -4359,6 +4366,8 @@ def check_noncanonical_chunk(ir, original, name, capacity, evl=False, probe=Fals
             loads = re.findall(rf'(%[-\w.$]+) = load {t}, ptr {re.escape(address)}, align {alignment}',
                                blocks['scalar.fission.consumer.body'])
             assert len(loads) == 1, body
+            require('scalar.fission.consumer.body',
+                    f'{loads[0]} = load {t}, ptr {address}, align {alignment}')
             loaded[t] = loads[0]
         for r, u, t, seed, operation in [('r0', 'u0', 'i32', '17', f'add i32 %r0.consume, {loaded["i32"]}'),
                                         ('r1', 'u1', 'i32', '-7', f'add i32 {loaded["i32"]}, %r1.consume'),
