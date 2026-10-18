@@ -79,6 +79,55 @@ def keep_functions(ir, names):
         lambda m: m[0] if m['name'] in names else '', ir)
 
 
+def execution_symbol(label):
+    """Keep artifact labels separate from portable C/IR external symbols."""
+    # Only hyphens are normalized. Reject other punctuation rather than
+    # silently merging more labels. Avoid reserved leading underscores and
+    # C11 keywords as these symbols also appear in the C execution harness.
+    symbol = label.replace('-', '_')
+    keywords = set(('auto break case char const continue default do double else '
+                    'enum extern float for goto if inline int long register restrict '
+                    'return short signed sizeof static struct switch typedef union '
+                    'unsigned void volatile while').split())
+    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', symbol) or symbol in keywords:
+        raise ValueError(f'invalid execution symbol label: {label!r}')
+    return symbol
+
+
+def rename_execution_functions(ir, labels, used_symbols):
+    """Rename fixture definitions and all unquoted references in one step.
+
+    used_symbols spans every object linked into the execution harness. Reject
+    duplicate normalized names, including repeated requests, before changing
+    it. This is fixture naming, not a general LLVM IR parser.
+    """
+    names = {}
+    occupied = set(re.findall(r'@([-\w.$]+)', ir)) - labels.keys()
+    for function, label in labels.items():
+        function_definition(ir, function)
+        name = execution_symbol(label)
+        if name in used_symbols or name in occupied or name in names.values():
+            raise ValueError(f'colliding execution symbol: {name!r} (label {label!r})')
+        names[function] = name
+    ir = re.sub(r'@([-\w.$]+)', lambda m: '@' + names.get(m[1], m[1]), ir)
+    used_symbols.update(names.values())
+    return ir, names
+
+
+def boundary_variant(ir, bounds, tag, references, used_symbols):
+    """Use the same symbols in boundary IR, C declarations and dispatch rows."""
+    labels = {function: f'{function}_{tag}' for function, _ in bounds}
+    if len(labels) != len(bounds):
+        raise ValueError('duplicate boundary function')
+    ir, names = rename_execution_functions(ir, labels, used_symbols)
+    declarations, rows = [], []
+    for function, count in bounds:
+        name, reference = names[function], references[function]
+        declarations.append(f'extern ScalarConstantFn {name}, {reference};')
+        rows.append(f'{{"{name}", {name}, {reference}, {count}}}')
+    return ir, declarations, rows
+
+
 def scalar_consumer(body, name):
     parts = re.split(r'^scalar\.fission\.consumer\.ph:[^\n]*\n', body, flags=re.M)
     if len(parts) != 2:
@@ -1061,6 +1110,7 @@ def check(args, work):
     opt, llc = (args.build_dir / 'bin' / name for name in ('opt', 'llc'))
     triple = run([args.cc, '-dumpmachine']).stdout.strip()
     objects, records = [], []
+    used_symbols = set()
     declarations, combined_rows, induction_rows, fp_rows = [], [], [], []
     scalar_rows, mixed_rows, constant_rows, nested_rows, diamond_rows = [], [], [], [], []
     compact_rows, compact_integer_rows, compact_nested_rows = [], [], []
@@ -1094,9 +1144,8 @@ def check(args, work):
         # These fixtures also contain rejection cases, which must not be
         # included repeatedly under their original names in the host objects.
         source = keep_functions(source, functions)
-        reference = source
-        for function in functions:
-            reference = reference.replace(f'@{function}(', f'@ref_{function}(')
+        reference, references = rename_execution_functions(
+            source, {function: f'ref_{function}' for function in functions}, used_symbols)
         compile_ir(f'reference_{fixture}', reference)
         for relaxed in ([False, True] if fixture == 'combined' else
                         [fixture == 'fp-reordering']):
@@ -1119,16 +1168,18 @@ def check(args, work):
             run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
                  '-o', str(work / f'{tag}.s')], input=result.stdout)
             for scale in args.vscales:
-                fixed = specialize(result.stdout, scale)
+                fixed, names = rename_execution_functions(
+                    specialize(result.stdout, scale),
+                    {function: f'{function}_{"r" if relaxed else "o"}_s{scale}'
+                     for function in functions}, used_symbols)
                 for function in functions:
-                    name = f'{function}_{"r" if relaxed else "o"}_s{scale}'
-                    fixed = fixed.replace(f'@{function}(', f'@{name}(')
+                    name = names[function]
                     if fixture == 'combined':
                         declarations.append(f'extern CombinedFn {name};')
                         combined_rows.append(f'{{"{name}", {str(relaxed).lower()}, {name}}}')
                     elif fixture == 'induction':
                         declarations.append(f'extern InductionFn {name};')
-                        induction_rows.append(f'{{"{name}", {name}, ref_{function}}}')
+                        induction_rows.append(f'{{"{name}", {name}, {references[function]}}}')
                     else:
                         declarations.append(f'extern FPFn {name};')
                         fp_rows.append(f'{{"{name}", {name}}}')
@@ -1162,14 +1213,13 @@ def check(args, work):
     ]:
         source = keep_functions((tests / f'reduction-fission-{fixture}.ll').read_text(),
                                 functions)
-        reference = source
-        for function in functions:
-            reference = reference.replace(f'@{function}(', f'@ref_{function}(')
+        reference, references = rename_execution_functions(
+            source, {function: f'ref_{function}' for function in functions}, used_symbols)
         compile_ir(f'reference_{fixture}', reference)
         if fixture == 'scalar-affine':
             for function in functions:
                 ty = 'ScalarNestedFn' if function == 'affine_enclosing' else 'AffineFn'
-                declarations.append(f'extern {ty} ref_{function};')
+                declarations.append(f'extern {ty} {references[function]};')
         # The early path retains ordered FP independently of the separate
         # VPlan reassociation option. Exercise both option settings and keep
         # the default EVL artifact distinct from scalar-tail host execution.
@@ -1268,32 +1318,34 @@ def check(args, work):
                 if fixture == 'scalar-affine':
                     instrumented += '\ndeclare void @record_compact_participant()\n'
                 for scale in args.vscales:
-                    fixed = specialize(instrumented, scale)
+                    suffix = f'{"option_on" if relaxed else "o"}_s{scale}'
+                    if fixture in ('scalar-acyclic', 'scalar-affine'):
+                        suffix += f'_lv{repeats}'
+                    fixed, names = rename_execution_functions(
+                        specialize(instrumented, scale),
+                        {function: f'{function}_{suffix}' for function in functions}, used_symbols)
                     for function in functions:
-                        name = f'{function}_{"option_on" if relaxed else "o"}_s{scale}'
-                        if fixture in ('scalar-acyclic', 'scalar-affine'):
-                            name += f'_lv{repeats}'
-                        fixed = fixed.replace(f'@{function}(', f'@{name}(')
+                        name, reference = names[function], references[function]
                         if function.startswith('affine_') and function != 'affine_enclosing':
                             declarations.append(f'extern AffineFn {name};')
                             control = {'affine_unsigned_early': 1, 'affine_signed_early': 2,
                                        'affine_down_early': 3, 'affine_signed_down_early': 4}.get(function, 0)
-                            affine_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}, '
+                            affine_rows.append(f'{{"{name}", {name}, {reference}, {4 * scale}, '
                                                f'{str(function == "affine_signed_down").lower()}, '
                                                f'{str(function == "affine_compact").lower()}, {control}}}')
                         elif function in ('compact_triangle', 'compact_diamond'):
                             declarations.append(f'extern ScalarMixedFn {name};')
-                            compact_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}}}')
+                            compact_rows.append(f'{{"{name}", {name}, {reference}, {4 * scale}}}')
                         elif function == 'compact_integer':
                             declarations.append(f'extern ScalarSumFn {name};')
-                            compact_integer_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}}}')
+                            compact_integer_rows.append(f'{{"{name}", {name}, {reference}, {4 * scale}}}')
                         elif function == 'compact_nested':
                             declarations.append(f'extern ScalarNestedFn {name};')
-                            compact_nested_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}}}')
+                            compact_nested_rows.append(f'{{"{name}", {name}, {reference}, {4 * scale}}}')
                         elif function in ('scalar_helper_sum', 'arithmetic_sum',
                                         'diamond_arithmetic'):
                             declarations.append(f'extern ScalarSumFn {name};')
-                            scalar_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}}}')
+                            scalar_rows.append(f'{{"{name}", {name}, {reference}, {4 * scale}}}')
                         elif function == 'scalar_mixed':
                             declarations.append(f'extern ScalarMixedFn {name};')
                             mixed_rows.append(f'{{"{name}", {name}, {4 * scale}}}')
@@ -1302,16 +1354,16 @@ def check(args, work):
                             diamond_rows.append(f'{{"{name}", {name}, {4 * scale}}}')
                         elif function in ('acyclic_serial', 'acyclic_nested', 'acyclic_three_way'):
                             declarations.append(f'extern ScalarMixedFn {name};')
-                            acyclic_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}, '
+                            acyclic_rows.append(f'{{"{name}", {name}, {reference}, {4 * scale}, '
                                                 f'{str(function != "acyclic_serial").lower()}}}')
                         elif function in ('scalar_nested', 'scalar_diamond_nested', 'acyclic_enclosing', 'affine_enclosing'):
                             declarations.append(f'extern ScalarNestedFn {name};')
-                            nested_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}, '
+                            nested_rows.append(f'{{"{name}", {name}, {reference}, {4 * scale}, '
                                                f'{str(function != "scalar_nested").lower()}, '
                                                f'{str(function in ("acyclic_enclosing", "affine_enclosing")).lower()}}}')
                         else:
                             declarations.append(f'extern ScalarConstantFn {name};')
-                            constant_rows.append(f'{{"{name}", {name}, ref_{function}, false}}')
+                            constant_rows.append(f'{{"{name}", {name}, {reference}, false}}')
                     compile_ir(f'{tag}_s{scale}', fixed)
                     records.append({'fixture': fixture, 'fp_reordering_option': relaxed,
                                     'loop_vectorize_invocations': repeats,
@@ -1341,9 +1393,8 @@ def check(args, work):
     ]:
         source = keep_functions((tests / f'reduction-fission-{fixture}-bounds.ll').read_text(),
                                 [name for name, _ in bounds])
-        reference = source
-        for function, _ in bounds:
-            reference = reference.replace(f'@{function}(', f'@ref_{function}(')
+        reference, references = rename_execution_functions(
+            source, {function: f'ref_{function}' for function, _ in bounds}, used_symbols)
         compile_ir(f'reference_{fixture}_bounds', reference)
         for relaxed, repeats in [(r, n) for r in (False, True)
                                  for n in ((1, 2) if fixture == 'scalar-affine' else (1,))]:
@@ -1389,10 +1440,10 @@ def check(args, work):
                 assert visits == 1, body
                 instrumented = instrumented.replace(
                     body, producer + 'scalar.fission.consumer.ph:\n' + consumer, 1)
-                name = f'{function}_{tag}'
-                instrumented = instrumented.replace(f'@{function}(', f'@{name}(')
-                declarations.append(f'extern ScalarConstantFn {name}, ref_{function};')
-                acyclic_bound_rows.append(f'{{"{name}", {name}, ref_{function}, {count}}}')
+            instrumented, variant_declarations, variant_rows = boundary_variant(
+                instrumented, bounds, tag, references, used_symbols)
+            declarations.extend(variant_declarations)
+            acyclic_bound_rows.extend(variant_rows)
             instrumented += ('\ndeclare void @record_acyclic_iteration()\n'
                              'declare void @record_acyclic_latch()\n'
                              'declare void @record_scalar_consumer_tail()\n')
@@ -1426,8 +1477,10 @@ def check(args, work):
         run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
              '-o', str(work / f'{tag}.s')], input=result.stdout)
         instrumented += '\ndeclare void @record_scalar_consumer_vector()\n'
-        name = f'narrow_constant_{tag}'
-        compile_ir(tag, specialize(instrumented, 1).replace('@narrow_constant(', f'@{name}('))
+        fixed, names = rename_execution_functions(
+            specialize(instrumented, 1), {'narrow_constant': f'narrow_constant_{tag}'}, used_symbols)
+        name = names['narrow_constant']
+        compile_ir(tag, fixed)
         declarations.append(f'extern ScalarConstantFn {name};')
         constant_rows.append(f'{{"{name}", {name}, ref_narrow_constant, true}}')
         records.append({'fixture': 'scalar-ir-narrow-fixed',

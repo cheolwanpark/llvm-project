@@ -1,0 +1,210 @@
+# REQUIRES: riscv-registered-target
+# RUN: split-file %s %t
+# RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+# RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
+# RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
+# RUN:   -enable-vplan-reduction-fission -S \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-bounds.ll -o %t/acyclic.ll
+# RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+# RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
+# RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
+# RUN:   -enable-vplan-reduction-fission -S \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll -o %t/affine.ll
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py %t \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV
+# RUN: opt -passes=verify -disable-output %t/acyclic-renamed.ll
+# RUN: opt -passes=verify -disable-output %t/affine-renamed.ll
+# RUN: opt -passes=verify -disable-output %t/acyclic-reference.ll
+# RUN: opt -passes=verify -disable-output %t/affine-reference.ll
+# RUN: opt -passes=verify -disable-output %t/references-renamed.ll
+
+# Check the production boundary emitter on actual split IR, including the
+# repeated-LV affine shape. Policy/LV labels below test naming and dispatch
+# identity only; both policies and actual LV1/LV2 execution comparisons remain
+# the responsibility of check-reduction-fission.py and its full C harness.
+
+#--- check.py
+import importlib.util
+from pathlib import Path
+import re
+import sys
+
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(checker)
+work, fixtures = map(Path, sys.argv[2:])
+
+
+def rejected(action, diagnostic):
+    try:
+        action()
+    except ValueError as error:
+        assert diagnostic in str(error), (diagnostic, error)
+    else:
+        raise AssertionError('accepted ' + diagnostic)
+
+
+# Existing portable symbols are stable, including short names, case, digits
+# and trailing/interior underscores. Only the artifact hyphen is normalized.
+for label in ('a', 'Z9_', 'name__v1', 'a0_9', 'combined_o_s1',
+              'combined_r_s32', 'scalar_helper_sum_option_on_s4',
+              'acyclic_serial_o_s8_lv2', 'affine_compact_option_on_s32_lv2',
+              'narrow_constant_narrow_fixed_ordered'):
+    assert checker.execution_symbol(label) == label
+assert checker.execution_symbol('a-b-9') == 'a_b_9'
+for label in ('', '_reserved', '9first', 'a.b', 'a$b', 'a b', 'a/b',
+              'a\\b', 'a\nb', 'a"b', 'nonascii_\u00e9', 'for'):
+    rejected(lambda: checker.execution_symbol(label), 'invalid execution symbol label:')
+
+
+# One registry spans all objects as in the full execution checker. A source
+# function and its exact reference must stay distinct across functions,
+# policies and repeated-LV invocations. Keep every capacity/count case.
+used, transformed_symbols, reference_symbols = set(), set(), set()
+for fixture, stem, bounds, repeats in [
+    ('scalar-acyclic', 'acyclic', [('acyclic_one', 1), ('acyclic_i8_max', 255),
+                                 ('acyclic_default_limit', 16384)], (1,)),
+    ('scalar-affine', 'affine', [('affine_one', 1), ('affine_i8_max', 255),
+                               ('affine_default_limit', 16384),
+                               ('affine_relational_limit', 16384),
+                               ('affine_relational_i8_max', 255)], (1, 2)),
+]:
+    functions = [function for function, _ in bounds]
+    source = checker.keep_functions(
+        (fixtures / f'reduction-fission-{fixture}-bounds.ll').read_text(), functions)
+    split = checker.keep_functions((work / f'{stem}.ll').read_text(), functions)
+    reference, references = checker.rename_execution_functions(
+        source, {function: f'ref_{function}' for function in functions}, used)
+    (work / f'{stem}-reference.ll').write_text(reference)
+    for function in functions:
+        expected = 'ref_' + function
+        assert references[function] == expected
+        reference_symbols.add(expected)
+        assert checker.function_definition(reference, expected) == (
+            checker.function_definition(source, function).replace('@' + function + '(',
+                                                                 '@' + expected + '('))
+
+    for policy in ('ordered', 'option_on'):
+        for repeat in repeats:
+            tag = f'{fixture}_bounds_{policy}_lv{repeat}'
+            # The tag remains a useful hyphenated artifact label.
+            assert '-' in tag
+            renamed, declarations, rows = checker.boundary_variant(
+                split, bounds, tag, references, used)
+            assert len(declarations) == len(rows) == len(bounds)
+            assert len(list(checker.FUNCTION_DEFINITION.finditer(renamed))) == len(bounds)
+            for (function, count), declaration, row in zip(bounds, declarations, rows):
+                expected = f'{function}_{fixture.replace("-", "_")}_bounds_{policy}_lv{repeat}'
+                original_body = checker.function_definition(split, function)
+                body = checker.function_definition(renamed, expected)
+                # These are actual split producers/consumers, not renamed
+                # original loops that could accidentally satisfy dispatch.
+                producer, consumer = checker.scalar_consumer(body, expected)
+                assert f'alloca [{count} x i32]' in producer
+                assert 'scalar.fission.consumer.body:' in consumer
+                assert body == original_body.replace('@' + function + '(', '@' + expected + '(')
+                assert expected not in transformed_symbols
+                transformed_symbols.add(expected)
+                assert declaration == f'extern ScalarConstantFn {expected}, ref_{function};'
+                match = re.fullmatch(r'\{"([A-Za-z][A-Za-z0-9_]*)", '
+                                     r'([A-Za-z][A-Za-z0-9_]*), '
+                                     r'([A-Za-z][A-Za-z0-9_]*), ([0-9]+)\}', row)
+                assert match and match.groups() == (expected, expected, references[function], str(count))
+                # Both actual dispatch operands resolve to the intended body.
+                assert checker.function_definition(renamed, match[2]) == body
+                assert checker.function_definition(reference, match[3]) == (
+                    checker.function_definition(source, function).replace('@' + function + '(',
+                                                                         '@' + match[3] + '('))
+            (work / f'{stem}-renamed.ll').write_text(renamed)
+    snapshot = used.copy()
+    for repeated_tag in (tag, tag.replace('-', '_')):
+        rejected(lambda: checker.boundary_variant(split, bounds, repeated_tag, references, used),
+                 'colliding execution symbol:')
+        assert used == snapshot
+    for invalid_tag in ('bad.tag', 'bad/tag', 'bad tag', 'bad"tag'):
+        rejected(lambda: checker.boundary_variant(split, bounds, invalid_tag, references, used),
+                 'invalid execution symbol label:')
+        assert used == snapshot
+    rejected(lambda: checker.boundary_variant(split, bounds + [bounds[0]],
+                                              'new_variant', references, used),
+             'duplicate boundary function')
+    assert used == snapshot
+
+assert len(transformed_symbols) == 26 and len(reference_symbols) == 8
+assert transformed_symbols.isdisjoint(reference_symbols)
+assert used == transformed_symbols | reference_symbols
+
+
+# Renaming must cover function-pointer operands and exact call tokens as well
+# as definitions. A same-prefix function and an external declaration remain
+# distinct. Simultaneous renaming also avoids rewriting a newly minted name.
+source = (work / 'references.ll').read_text()
+renamed, names = checker.rename_execution_functions(
+    source, {'f': 'function-one', 'f_more': 'function_two'}, set())
+assert names == {'f': 'function_one', 'f_more': 'function_two'}
+assert '@f' not in re.findall(r'@[-\w.$]+', renamed)
+assert '@f_more' not in re.findall(r'@[-\w.$]+', renamed)
+assert '@pointer = global ptr @function_one' in renamed
+assert '@pointer_more = global ptr @function_two' in renamed
+assert 'call i32 @function_one(i32 %x)' in renamed
+assert 'call i32 @function_two(i32 %x)' in renamed
+assert 'declare i32 @external(i32)' in renamed
+assert 'call i32 @external(i32 %b)' in renamed
+(work / 'references-renamed.ll').write_text(renamed)
+partial, _ = checker.rename_execution_functions(source, {'f': 'new_f'}, set())
+assert checker.function_definition(partial, 'f_more') == checker.function_definition(source, 'f_more')
+assert '@pointer_more = global ptr @f_more' in partial
+assert 'call i32 @new_f(i32 %x)' in partial
+assert 'call i32 @f_more(i32 %x)' in partial
+swapped, _ = checker.rename_execution_functions(source, {'f': 'f_more', 'f_more': 'f'}, set())
+assert '@pointer = global ptr @f_more' in swapped
+assert '@pointer_more = global ptr @f' in swapped
+
+# Reject ambiguous normalization within a module or across linked objects,
+# repeated variants and collisions with retained definitions/declarations or
+# globals. A failed request must leave the shared registry unchanged, even
+# when an earlier mapping in that request was valid.
+for labels, initial, diagnostic in [
+    ({'f': 'same-tag', 'f_more': 'same_tag'}, set(), 'colliding execution symbol:'),
+    ({'f': 'valid_name', 'f_more': 'prior-tag'}, {'prior_tag'}, 'colliding execution symbol:'),
+    ({'f': 'valid_name', 'f_more': 'bad.name'}, set(), 'invalid execution symbol label:'),
+    ({'f': 'f_more'}, set(), 'colliding execution symbol:'),
+    ({'f': 'external'}, set(), 'colliding execution symbol:'),
+    ({'f': 'pointer'}, set(), 'colliding execution symbol:'),
+    ({'missing': 'valid_name'}, set(), 'expected one definition for @missing, found 0'),
+]:
+    registry = initial.copy()
+    rejected(lambda: checker.rename_execution_functions(source, labels, registry), diagnostic)
+    assert registry == initial
+registry = set()
+checker.rename_execution_functions(source, {'f': 'new-tag'}, registry)
+for label in ('new-tag', 'new_tag'):
+    rejected(lambda: checker.rename_execution_functions(source, {'f': label}, registry),
+             'colliding execution symbol:')
+assert registry == {'new_tag'}
+
+#--- references.ll
+@pointer = global ptr @f
+@pointer_more = global ptr @f_more
+declare i32 @external(i32)
+
+define i32 @f(i32 %x) {
+entry:
+  %double = mul i32 %x, 2
+  ret i32 %double
+}
+
+define i32 @f_more(i32 %x) {
+entry:
+  %next = add i32 %x, 1
+  ret i32 %next
+}
+
+define i32 @caller(i32 %x) {
+entry:
+  %a = call i32 @f(i32 %x)
+  %b = call i32 @f_more(i32 %x)
+  %c = call i32 @external(i32 %b)
+  %result = add i32 %a, %c
+  ret i32 %result
+}
