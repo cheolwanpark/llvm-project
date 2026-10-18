@@ -1,0 +1,81 @@
+# RUN: split-file %s %t
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py %t/functions.ll
+
+# Parsing and checker boundaries only; transformed execution is exercised by
+# check-reduction-fission.py with the real opt/llc and the C harness.
+
+#--- check.py
+import importlib.util
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location('fission_checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(checker)
+source = Path(sys.argv[2]).read_text()
+
+# Keep the multiline definition whole and drop the following definition.
+body = checker.function_definition(source, 'multiline')
+assert 'i64 %n)' in body and 'ret i64 %n' in body
+kept = checker.keep_functions(source, ['multiline'])
+assert kept.count('define ') == 1
+assert checker.function_definition(kept, 'multiline') == body
+
+try:
+    checker.function_definition(source, 'missing')
+except ValueError as error:
+    assert 'expected one definition for @missing, found 0' in str(error)
+    assert 'multiline' in str(error)
+else:
+    raise AssertionError('missing function did not fail')
+
+try:
+    checker.function_definition(source + body + '\n', 'multiline')
+except ValueError as error:
+    assert 'found 2' in str(error)
+else:
+    raise AssertionError('duplicate function did not fail')
+
+# A reduction in the producer or another function cannot satisfy the exact
+# consumer's check. This used to be possible with module-wide substring tests.
+try:
+    checker.check_scalar_function(source, 'arithmetic_sum', evl=False)
+except AssertionError as error:
+    assert '@arithmetic_sum: missing integer consumer reduction' in str(error)
+else:
+    raise AssertionError('producer reduction accepted as consumer evidence')
+
+# Fixed-vscale specialization must fail before handing unsupported EVL/VP
+# operations to a host backend. Renaming scalable types alone is not sound.
+for intrinsic in ('llvm.experimental.get.vector.length.i64',
+                  'llvm.vp.load.nxv4i32.p0', 'llvm.vp.merge.nxv4i32',
+                  'llvm.vp.reduce.fadd.nxv4f64'):
+    try:
+        checker.specialize('@' + intrinsic + '()', 2)
+    except ValueError as error:
+        assert intrinsic in str(error) and 'scalar-remainder' in str(error)
+    else:
+        raise AssertionError('unsupported intrinsic silently specialized')
+
+#--- functions.ll
+define i64 @multiline(ptr %a,
+                      i64 %n) {
+entry:
+  ret i64 %n
+}
+
+define i64 @arithmetic_sum(ptr %a) {
+entry:
+  %producer.load = load <vscale x 4 x i64>, ptr %a
+  %producer.reduction = call i64 @llvm.vector.reduce.add.nxv4i64(<vscale x 4 x i64> %producer.load)
+  br label %scalar.fission.consumer.ph
+scalar.fission.consumer.ph:
+  br label %vector.body
+vector.body:
+  %consumer.load = load <vscale x 4 x i64>, ptr %a
+  br label %scalar.fission.consumer.body
+scalar.fission.consumer.body:
+  ret i64 %producer.reduction
+}
+
+declare i64 @llvm.vector.reduce.add.nxv4i64(<vscale x 4 x i64>)

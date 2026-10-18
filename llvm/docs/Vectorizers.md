@@ -235,12 +235,19 @@ original scalar IR, and checks reassociated FP using classification, signed zero
 and magnitude-based absolute error bounds. Early scalar cases additionally cover
 unknown pure helpers, arithmetic producers, mixed float/double/integer sums,
 input/output aliasing, zero/one/odd/maximum counts, invalid guarded counts and
-narrow indices. They assert the generated scalar producer/vector consumer path,
+narrow indices, plus repeated inner stages with scratch reuse, outer carried
+results and stores aliasing a later row's inputs. They assert the generated
+scalar producer/vector consumer path,
 then use host-only vector-consumer entry probes to verify execution, with exact
 ordered comparisons under both settings of the separate FP-reordering option.
-Separate RVV machine verification
-and generated assembly complement the host checks. The output directory retains
-IR, assembly, selection remarks and a JSON result for reproducibility.
+For early scalar fixtures, the default EVL/VP IR has separate regression checks
+and RVV machine verification. Host comparisons use an explicitly labeled
+`-tail-folding-policy=dont-fold-tail` variant with scalar remainders and epilogue
+vectorization disabled. The specializer rejects EVL/VP operations rather than
+approximating their vector-length, mask or inactive-lane semantics. A fixed-VF
+variant also requires execution of the narrow-IV vector consumer. These checks
+provide neither RVV target execution nor speedup measurements. The output
+directory retains IR, assembly, selection remarks and a JSON result.
 
 ### Diagnostics
 

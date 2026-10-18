@@ -12,7 +12,15 @@
 ; RUN:   -enable-vplan-reduction-fission -S %s | FileCheck %s
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
 ; RUN:   -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
+; RUN:   -force-vector-width=4 -scalable-vectorization=always -hints-allow-reordering=false \
+; RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
+; RUN:   -enable-vplan-reduction-fission -S %s -o %t.tail
+; RUN: FileCheck %s --check-prefix=TAIL --implicit-check-not=llvm.vp. --implicit-check-not=llvm.experimental.get.vector.length < %t.tail
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.tail -o /dev/null
+; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
+; RUN:   -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
 ; RUN:   -force-vector-width=4 -scalable-vectorization=off -hints-allow-reordering=false \
+; RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
 ; RUN:   -enable-vplan-reduction-fission -S %s | FileCheck %s --check-prefix=FIXED
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
 ; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 \
@@ -27,7 +35,11 @@
 ; opt. Its explicit contract, not its name, permits fission. No chain-depth,
 ; pressure, minimum-reduction-count or whole-loop vectorizability gate applies.
 ; The forced normal LV width makes the consumer assertion deterministic; the
-; producer remains scalar. The executable checker compares these exact paths.
+; producer remains scalar. Default RVV LV folds the tail using EVL/VP, so its
+; active count, masked loads, inactive-lane preservation and ordered FP are
+; checked explicitly. Scalar-remainder checks live in the separate supported
+; dont-fold-tail variant, which the fixed-vscale host checker executes. Both
+; variants retain RVV machine verification; host execution is not RVV execution.
 ;
 ; REMARK: scalar-ir.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260
 ; REMARK: scalar-ir.c:12:3: scalar-IR fission producer VF 1
@@ -49,11 +61,35 @@
 ; CHECK: store i32
 ; CHECK: scalar.fission.consumer.ph:
 ; CHECK: vector.body:
-; CHECK: load <vscale x 4 x i32>
+; CHECK: [[INDEX:%.*]] = phi i64 [ 0, %vector.ph ], [ [[INDEX_NEXT:%.*]], %vector.body ]
+; CHECK: [[ACC:%.*]] = phi <vscale x 4 x i32>
+; CHECK: [[AVL:%.*]] = phi i64 [ %n, %vector.ph ], [ [[AVL_NEXT:%.*]], %vector.body ]
+; CHECK: [[EVL:%.*]] = call i32 @llvm.experimental.get.vector.length.i64(i64 [[AVL]], i32 4, i1 true)
+; CHECK: [[LOAD:%.*]] = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 {{%.*}}, <vscale x 4 x i1> splat (i1 true), i32 [[EVL]])
+; CHECK: [[ADD:%.*]] = add <vscale x 4 x i32> [[ACC]], [[LOAD]]
+; CHECK: call <vscale x 4 x i32> @llvm.vp.merge.nxv4i32(<vscale x 4 x i1> splat (i1 true), <vscale x 4 x i32> [[ADD]], <vscale x 4 x i32> [[ACC]], i32 [[EVL]])
+; CHECK: [[STEP:%.*]] = zext i32 [[EVL]] to i64
+; CHECK: [[INDEX_NEXT]] = add nuw i64 [[STEP]], [[INDEX]]
+; CHECK: [[AVL_NEXT]] = sub nuw i64 [[AVL]], [[STEP]]
+; CHECK: [[DONE:%.*]] = icmp eq i64 [[AVL_NEXT]], 0
+; CHECK: br i1 [[DONE]], label %middle.block, label %vector.body
 ; CHECK: call i32 @llvm.vector.reduce.add.nxv4i32
-; CHECK: scalar.fission.consumer.body:
-; CHECK: add i32
+; CHECK-NOT: scalar.fission.consumer.body:
+; CHECK: store i32 %result, ptr %out
 ; CHECK: ret void
+;
+; TAIL-LABEL: define void @scalar_helper_sum(
+; TAIL: alloca [65 x i32]
+; TAIL: br i1 %enter, label %preheader, label %exit
+; TAIL: call i32 @scalar_helper
+; TAIL: scalar.fission.consumer.ph:
+; TAIL: vector.body:
+; TAIL: load <vscale x 4 x i32>
+; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
+; TAIL: scalar.fission.consumer.body:
+; TAIL: add i32
+; TAIL: store i32 %result, ptr %out
+; TAIL: ret void
 
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
@@ -82,13 +118,21 @@ exit:
 }
 
 ; Same shape with an arithmetic producer and a different integer width. The
-; two stages may both vectorize, with independently selected scalar remainders.
+; two stages may both vectorize, with independently selected tail handling.
 ; CHECK-LABEL: define void @arithmetic_sum(
 ; CHECK: alloca [65 x i64]
 ; CHECK: mul <vscale x 4 x i64>
 ; CHECK: scalar.fission.consumer.ph:
 ; CHECK: call i64 @llvm.vector.reduce.add.nxv4i64
 ; CHECK: ret void
+; TAIL-LABEL: define void @arithmetic_sum(
+; TAIL: alloca [65 x i64]
+; TAIL: mul <vscale x 4 x i64>
+; TAIL: scalar.fission.consumer.ph:
+; TAIL: call i64 @llvm.vector.reduce.add.nxv4i64
+; TAIL: scalar.fission.consumer.body:
+; TAIL: add i64
+; TAIL: ret void
 define void @arithmetic_sum(ptr readonly %a, ptr %out, i64 %n, i32 %start) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -123,14 +167,49 @@ exit:
 ; CHECK-COUNT-1: alloca [65 x i32]
 ; CHECK: alloca [65 x double]
 ; CHECK: alloca [65 x float]
+; CHECK-NOT: alloca
+; CHECK: br i1 %enter, label %preheader, label %exit
 ; CHECK: call i32 @scalar_helper
 ; CHECK: scalar.fission.consumer.ph:
-; CHECK: call double @llvm.vector.reduce.fadd.nxv4f64
-; CHECK: call float @llvm.vector.reduce.fadd.nxv4f32
-; CHECK: scalar.fission.consumer.body:
-; CHECK: fadd double
-; CHECK: fadd float
+; CHECK: vector.body:
+; CHECK: [[DACC:%.*]] = phi double [ %start, %vector.ph ], [ [[DADD:%.*]], %vector.body ]
+; CHECK: [[FACC:%.*]] = phi float [ %fstart, %vector.ph ], [ [[FADD:%.*]], %vector.body ]
+; CHECK: [[MAVL:%.*]] = phi i64 [ %n, %vector.ph ], [ [[MAVL_NEXT:%.*]], %vector.body ]
+; CHECK: [[MEVL:%.*]] = call i32 @llvm.experimental.get.vector.length.i64(i64 [[MAVL]], i32 4, i1 true)
+; CHECK: [[SHARED:%.*]] = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 {{%.*}}, <vscale x 4 x i1> splat (i1 true), i32 [[MEVL]])
+; CHECK: [[DLOAD:%.*]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr align 8 {{%.*}}, <vscale x 4 x i1> splat (i1 true), i32 [[MEVL]])
+; CHECK: [[FLOAD:%.*]] = call <vscale x 4 x float> @llvm.vp.load.nxv4f32.p0(ptr align 4 {{%.*}}, <vscale x 4 x i1> splat (i1 true), i32 [[MEVL]])
+; CHECK-NOT: @llvm.vp.load
+; CHECK: add <vscale x 4 x i32> {{%.*}}, [[SHARED]]
+; CHECK: add <vscale x 4 x i32> [[SHARED]], {{%.*}}
+; No fast-math flags: the scalar accumulator is the first operand each time.
+; CHECK: [[DADD]] = call double @llvm.vp.reduce.fadd.nxv4f64(double [[DACC]], <vscale x 4 x double> [[DLOAD]], <vscale x 4 x i1> splat (i1 true), i32 [[MEVL]])
+; CHECK: [[FADD]] = call float @llvm.vp.reduce.fadd.nxv4f32(float [[FACC]], <vscale x 4 x float> [[FLOAD]], <vscale x 4 x i1> splat (i1 true), i32 [[MEVL]])
+; CHECK: [[MSTEP:%.*]] = zext i32 [[MEVL]] to i64
+; CHECK: %current.iteration.next = add nuw i64 [[MSTEP]], %index
+; CHECK: [[MAVL_NEXT]] = sub nuw i64 [[MAVL]], [[MSTEP]]
+; CHECK: icmp eq i64 [[MAVL_NEXT]], 0
+; CHECK: store i32 %v0, ptr %out
+; CHECK: store i32 %v1, ptr %o1
+; CHECK: store double %vd, ptr %dout
+; CHECK: store float %vf, ptr %fout
 ; CHECK: ret void
+;
+; TAIL-LABEL: define void @scalar_mixed(
+; TAIL: alloca [65 x i32]
+; TAIL: alloca [65 x double]
+; TAIL: alloca [65 x float]
+; TAIL-NOT: alloca
+; TAIL: call i32 @scalar_helper
+; TAIL: scalar.fission.consumer.ph:
+; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
+; TAIL: call float @llvm.vector.reduce.fadd.nxv4f32
+; TAIL: scalar.fission.consumer.body:
+; TAIL: fadd double
+; TAIL: fadd float
+; TAIL: store double %vd, ptr %dout
+; TAIL: store float %vf, ptr %fout
+; TAIL: ret void
 define void @scalar_mixed(ptr readonly %a, ptr readonly %fp, ptr %out,
                           ptr %dout, ptr %fout, i64 %n, double %start) {
 entry:

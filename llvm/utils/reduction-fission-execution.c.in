@@ -23,12 +23,15 @@ typedef void ScalarSumFn(const uint32_t *, void *, uint64_t, uint32_t);
 typedef void ScalarMixedFn(const uint32_t *, const double *, uint32_t *,
                            double *, float *, uint64_t, double);
 typedef uint32_t ScalarConstantFn(uint32_t);
+typedef void ScalarNestedFn(const uint32_t *, const double *, uint32_t *,
+                            double *, uint64_t, uint64_t, double);
 extern CombinedFn ref_combined;
 extern InductionFn ref_induction, ref_negative_step, ref_truncated;
 extern FPFn ref_fp_reordering;
 extern ScalarSumFn ref_scalar_helper_sum, ref_arithmetic_sum;
 extern ScalarMixedFn ref_scalar_mixed;
 extern ScalarConstantFn ref_narrow_constant, ref_one_iteration;
+extern ScalarNestedFn ref_scalar_nested;
 @DECLARATIONS@
 
 static const struct {
@@ -57,7 +60,13 @@ static const struct {
 static const struct {
   const char *Name;
   ScalarConstantFn *Fn, *Reference;
+  bool RequireVector;
 } ScalarConstants[] = {@SCALAR_CONSTANTS@};
+static const struct {
+  const char *Name;
+  ScalarNestedFn *Fn;
+  unsigned VectorLanes;
+} ScalarNested[] = {@SCALAR_NESTED@};
 
 // No memory access, exceptions, convergence, or FP-environment effects. opt
 // only sees the explicitly attributed declaration, with no vector mapping.
@@ -186,6 +195,8 @@ int main(void) {
         Scalars[C].Reference(A, Expected + 1, N, Start);
         ScalarVectorVisits = 0;
         Scalars[C].Fn(A, Actual + 1, N, Start);
+        if ((!N || N > 65) && ScalarVectorVisits)
+          fail(Scalars[C].Name, (unsigned)N, Trial, "entry guard entered vector consumer");
         if (N == 65 && Scalars[C].VectorLanes <= 65 && !ScalarVectorVisits)
           fail(Scalars[C].Name, (unsigned)N, Trial, "vector consumer did not execute");
         ScalarVectorRuns += ScalarVectorVisits != 0;
@@ -218,6 +229,8 @@ int main(void) {
         ref_scalar_mixed(A, D, RefOut + 1, ExpectedD + 1, ExpectedF + 1, N, Start);
         ScalarVectorVisits = 0;
         ScalarMixed[C].Fn(A, D, Out + 1, ActualD + 1, ActualF + 1, N, Start);
+        if ((!N || N > 65) && ScalarVectorVisits)
+          fail(ScalarMixed[C].Name, (unsigned)N, Trial, "entry guard entered FP consumer");
         if (N == 65 && ScalarMixed[C].VectorLanes <= 65 && !ScalarVectorVisits)
           fail(ScalarMixed[C].Name, (unsigned)N, Trial, "vector FP consumer did not execute");
         ScalarVectorRuns += ScalarVectorVisits != 0;
@@ -231,10 +244,68 @@ int main(void) {
   for (unsigned C = 0; C < sizeof(ScalarConstants) / sizeof(*ScalarConstants); ++C)
     for (unsigned Trial = 0; Trial < 200; ++Trial) {
       uint32_t X = random_value();
+      ScalarVectorVisits = 0;
       if (ScalarConstants[C].Fn(X) != ScalarConstants[C].Reference(X))
         fail(ScalarConstants[C].Name, 200, Trial, "constant/narrow trip mismatch");
+      if (ScalarConstants[C].RequireVector && !ScalarVectorVisits)
+        fail(ScalarConstants[C].Name, 200, Trial, "narrow IV vector consumer did not execute");
+      ScalarVectorRuns += ScalarVectorVisits != 0;
       ++Runs;
     }
+  static const uint64_t RowCounts[] = {0, 1, 2, 4, 5, UINT64_MAX};
+  for (unsigned C = 0; C < sizeof(ScalarNested) / sizeof(*ScalarNested); ++C)
+    for (unsigned R = 0; R < sizeof(RowCounts) / sizeof(*RowCounts); ++R)
+      for (unsigned K = 0; K < sizeof(ScalarCounts) / sizeof(*ScalarCounts); ++K)
+        for (unsigned Trial = 0; Trial < 20; ++Trial) {
+          uint64_t Rows = RowCounts[R], N = ScalarCounts[K];
+          bool Enter = Rows && Rows <= 4 && N && N <= 65;
+          double Start = Trial % 8 == 2 ? -0.0 : Trial % 8 == 3 ? 1.0 : 3.5;
+          for (unsigned I = 0; I < 1026; ++I) Input[I] = random_value();
+          fill_fp(FPInput, 1026, Trial);
+          for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+          for (unsigned I = 0; I < 7; ++I) Result[I] = RefResult[I] = I + 0.25;
+          // With rejected row/inner guards even the output pointers may be
+          // null: no row, producer or consumer may execute.
+          ref_scalar_nested(Enter ? Input : NULL, Enter ? FPInput : NULL,
+                            Enter ? RefOut + 1 : NULL,
+                            Enter ? RefResult + 1 : NULL, Rows, N, Start);
+          ScalarVectorVisits = 0;
+          ScalarNested[C].Fn(Enter ? Input : NULL, Enter ? FPInput : NULL,
+                             Enter ? Out + 1 : NULL, Enter ? Result + 1 : NULL,
+                             Rows, N, Start);
+          if (!Enter && ScalarVectorVisits)
+            fail(ScalarNested[C].Name, (unsigned)N, Trial,
+                 "nested entry guard entered consumer");
+          if (Enter && N == 65 && ScalarNested[C].VectorLanes <= N) {
+            // There must be at least one vector-header visit per row, not
+            // merely a single entry somewhere in the enclosing function.
+            unsigned PerRow = (unsigned)N / ScalarNested[C].VectorLanes;
+            if (ScalarVectorVisits != Rows * PerRow)
+              fail(ScalarNested[C].Name, (unsigned)N, Trial,
+                   "repeated inner vector consumer did not execute for every row");
+          }
+          ScalarVectorRuns += ScalarVectorVisits != 0;
+          if (memcmp(Out, RefOut, sizeof(Out)) ||
+              memcmp(Result, RefResult, sizeof(Result)))
+            fail(ScalarNested[C].Name, (unsigned)N, Trial,
+                 "nested integer, ordered FP, exported result or canary mismatch");
+          // Store row outputs into a future row's inputs. This preserves the
+          // real outer dependence: the next producer must see those stores.
+          uint32_t Alias[262], RefAlias[262];
+          double DAlias[262], RefDAlias[262];
+          memcpy(Alias, Input, sizeof(Alias));
+          memcpy(RefAlias, Input, sizeof(RefAlias));
+          memcpy(DAlias, FPInput, sizeof(DAlias));
+          memcpy(RefDAlias, FPInput, sizeof(RefDAlias));
+          ref_scalar_nested(RefAlias, RefDAlias, RefAlias + 65, RefDAlias + 65,
+                            Rows, N, Start);
+          ScalarNested[C].Fn(Alias, DAlias, Alias + 65, DAlias + 65, Rows, N, Start);
+          if (memcmp(Alias, RefAlias, sizeof(Alias)) ||
+              memcmp(DAlias, RefDAlias, sizeof(DAlias)))
+            fail(ScalarNested[C].Name, (unsigned)N, Trial,
+                 "nested future-input alias or scratch reuse mismatch");
+          Runs += 2;
+        }
   printf("PASS: %u executions; integer and ordered FP exact; relaxed FP "
          "classification/signed-zero/error bounds; max absolute FP difference %.17g\n",
          Runs, MaxError);
