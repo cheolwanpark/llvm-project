@@ -9,13 +9,13 @@
 ; Bounds concern full original trips, even if the predicate admits no updates.
 ; A count of 255 fits i8; 256 original trips with an i8 IV do not fit the
 ; compact counter and must reject before mutation. No wrapping allocation.
-; The default 65536-byte ceiling admits exactly 16384 i32 slots and rejects
-; one additional slot. No profitability thresholds or runtime assumptions.
+; The default 65536-byte ceiling admits exactly 16384 i32 slots. One additional trip
+; uses a partial second chunk with the same bounded storage. No profitability thresholds or runtime assumptions.
 ;
 ; REMARK: scratch capacity 255, scratch bytes 1020
 ; REMARK: scalar-IR reduction fission rejected: trip-count-overflow
 ; REMARK: scratch capacity 16384, scratch bytes 65536
-; REMARK: scalar-IR reduction fission rejected: scalar-scratch-limit
+; REMARK: scratch capacity 16384, scratch bytes 65536, producer live-outs 0, chunked schedule, trip bound 16385
 
 ; CHECK-LABEL: define i32 @compact_i8_max(
 ; CHECK: alloca [255 x i32]
@@ -105,7 +105,9 @@ exit:
 }
 
 ; CHECK-LABEL: define i32 @compact_over_limit(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [16384 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: scalar.fission.consumer.guard:
 ; CHECK: ret i32
 define i32 @compact_over_limit(i32 %cutoff) {
 entry:

@@ -31,7 +31,7 @@
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=1044 -pass-remarks=vplan-reduction-fission \
 ; RUN:   -disable-output %s 2>&1 | FileCheck %s --check-prefix=LIMIT
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks-missed=vplan-reduction-fission \
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission \
 ; RUN:   -S %s 2>&1 | FileCheck %s --check-prefix=SMALL
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -S %s | FileCheck %s --check-prefix=DISABLED --implicit-check-not=scalar.fission
@@ -64,7 +64,7 @@
 ; REMARK: scalar-compact.c:42:9: scalar-IR fission producer VF 1
 ; REMARK: scalar-compact.c:42:9: scalar-IR fission consumer VF vscale x 4
 ; LIMIT: scalar-compact.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; SMALL: scalar-compact.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; SMALL: scalar-compact.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
 ; DISABLED-LABEL: define void @compact_triangle(
 ; DISABLED: sdiv i32 840, %x
 ; DISABLED: ret void

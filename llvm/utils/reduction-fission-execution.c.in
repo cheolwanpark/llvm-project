@@ -190,6 +190,11 @@ static const struct {
 } StateChunks[] = {@STATE_CHUNKS@};
 static const struct {
   const char *Name;
+  ExportFn *Fn, *Reference;
+  unsigned Mode, Capacity, VectorLanes;
+} CompactChunks[] = {@COMPACT_CHUNKS@};
+static const struct {
+  const char *Name;
   ShortFPFn *Fn;
   unsigned ProducerLanes, ConsumerLanes;
 } AosChunks[] = {@AOS_CHUNKS@};
@@ -1877,6 +1882,276 @@ static void check_state_chunks(void) {
 }
 
 
+// Compact chunk probes count the actual producer, participation and consumer
+// paths separately. Expected state and sums advance in original iteration
+// order; only active iterations read D. No neutral FP add is used for bypasses.
+static const uint32_t *CCA;
+static const double *CCD;
+static unsigned CCMode, CCN, CCRows, CCCapacity, CCLanes, CCRowsArg;
+static unsigned CCBase, CCCount, CCProduced, CCExpectedP, CCStoredP, CCConsumed;
+static unsigned CCProgress, CCRow, CCBegins, CCEnds, CCEmpty, CCVector, CCTail;
+static unsigned CCVisits, CCParticipants, CCPartial, CCFull, CCFinalInactive;
+static unsigned CCEmptyThenActive, CCChunkVector, CCChunkTail;
+static bool CCActive, CCGuarded, CCExpectedActive, CCSeen, CCWasEmpty;
+static uint32_t CCPrev, CCOlder, CCCurrent, CCOld, CCNext, CCR0, CCR1;
+static double CCRD, CCStart, CCLastDC;
+
+static bool cc_participates(unsigned Mode, uint64_t Rows, uint32_t X, uint32_t Prev) {
+  return X != 0 && (Rows != 2 || (Prev & 1)) &&
+         ((Mode != 1 && Mode != 3) || X != 2);
+}
+
+static void cc_equal(double Actual, double Expected, const char *Reason) {
+  if (memcmp(&Actual, &Expected, sizeof(double)))
+    fail(ChunkName, CCN, CCBegins, Reason);
+}
+
+void record_cc_begin(uint64_t Base, uint64_t Count, uint32_t Prev,
+                     uint32_t Older, uint32_t R0, uint32_t R1, double RD) {
+  unsigned Remaining = CCN - CCProgress;
+  unsigned Expected = Remaining < CCCapacity ? Remaining : CCCapacity;
+  if (CCActive || CCRow >= CCRows || !Remaining || Base != CCProgress ||
+      !Count || Count != Expected || Prev != CCPrev || Older != CCOlder ||
+      R0 != CCR0 || R1 != CCR1)
+    fail(ChunkName, CCN, CCBegins, "compact chunk base/count/incoming state or accumulator");
+  cc_equal(RD, CCRD, "compact chunk incoming ordered carry");
+  CCActive = true;
+  CCGuarded = CCExpectedActive = CCSeen = false;
+  CCBase = Base;
+  CCCount = Count;
+  CCProduced = CCExpectedP = CCStoredP = CCConsumed = 0;
+  CCChunkVector = CCChunkTail = 0;
+  CCPartial += Count < CCCapacity;
+  CCFull += Count == CCCapacity;
+  ++CCBegins;
+}
+
+void record_cc_producer(uint64_t Global, uint64_t Local) {
+  if (!CCActive || CCGuarded || CCConsumed || Local != CCProduced ||
+      CCProduced >= CCCount || Global != CCBase + Local ||
+      (CCProduced && CCExpectedActive != CCSeen))
+    fail(ChunkName, CCN, CCBegins, "compact producer ordinal/order or participation edge");
+  unsigned I = (CCMode == 3 ? 65 * CCRow : 0) + Global;
+  uint32_t X = CCA[I];
+  CCCurrent = CCPrev;
+  CCOld = CCOlder;
+  CCNext = X + CCOlder;
+  CCExpectedActive = cc_participates(CCMode, CCRowsArg, X, CCPrev);
+  CCSeen = false;
+  CCLastDC = CCStart;
+  if (CCExpectedActive) {
+    uint32_t C = scalar_helper(CCPrev ^ CCNext);
+    CCLastDC = CCD[I] - (double)CCPrev;
+    CCR0 += C;
+    CCR1 = C + CCR1;
+    CCRD = CCRD + CCLastDC;
+    ++CCExpectedP;
+    ++CCParticipants;
+  }
+  CCOlder = CCPrev;
+  CCPrev = CCNext;
+  ++CCProduced;
+  ++CCVisits;
+}
+
+void record_cc_participant(uint64_t P) {
+  if (!CCActive || CCGuarded || !CCProduced || !CCExpectedActive || CCSeen ||
+      P != CCStoredP || P >= CCProduced || P >= CCCapacity)
+    fail(ChunkName, CCN, CCBegins, "compact old P/store index/reset/participation");
+  ++CCStoredP;
+  CCSeen = true;
+}
+
+void record_cc_guard(uint64_t Completed, uint64_t P, uint32_t Prev,
+                     uint32_t Older, uint32_t Next, double LastDC) {
+  if (!CCActive || CCGuarded || CCProduced != CCCount || Completed != CCProduced ||
+      CCExpectedActive != CCSeen || P != CCExpectedP || P != CCStoredP ||
+      P > Completed || Completed > CCCapacity || Prev != CCCurrent ||
+      Older != CCOld || Next != CCNext)
+    fail(ChunkName, CCN, CCBegins, "compact completed/P/state/current-next export");
+  cc_equal(LastDC, CCLastDC, "compact final conditional producer export");
+  CCGuarded = true;
+  CCEmpty += P == 0;
+  CCEmptyThenActive += P != 0 && CCWasEmpty;
+  CCWasEmpty = P == 0;
+  CCFinalInactive += CCBase + CCCount == CCN && !CCExpectedActive;
+}
+
+static void record_cc_lanes(unsigned Lanes) {
+  if (!CCActive || !CCGuarded || !Lanes || CCConsumed > CCStoredP ||
+      Lanes > CCStoredP - CCConsumed)
+    fail(ChunkName, CCN, CCBegins, "compact consumer before guard/empty or exceeds P");
+  CCConsumed += Lanes;
+}
+void record_cc_vector(void) {
+  record_cc_lanes(CCLanes); ++CCVector; ++CCChunkVector;
+}
+void record_cc_tail(void) {
+  record_cc_lanes(1); ++CCTail; ++CCChunkTail;
+}
+
+void record_cc_end(uint32_t R0, uint32_t R1, double RD) {
+  unsigned Vectors = CCLanes ? CCStoredP / CCLanes : 0;
+  if (CCChunkVector != Vectors || CCChunkTail != CCStoredP - Vectors * CCLanes)
+    fail(ChunkName, CCN, CCBegins, "compact exact per-chunk vector/tail iterations");
+  if (!CCActive || !CCGuarded || CCConsumed != CCStoredP || R0 != CCR0 || R1 != CCR1)
+    fail(ChunkName, CCN, CCBegins, "compact consumer count or chunk accumulator forwarding");
+  cc_equal(RD, CCRD, "compact empty bypass/nonempty ordered result");
+  CCActive = false;
+  CCProgress += CCCount;
+  if (CCProgress == CCN) {
+    CCProgress = 0;
+    CCWasEmpty = false;
+    ++CCRow;
+  }
+  ++CCEnds;
+}
+
+// Independent full traversal without chunks, instrumentation state or scratch.
+// Row stores precede the next row's loads, including permitted output aliases.
+static void compact_chunk_oracle(unsigned Mode, const uint32_t *A, const double *D,
+                                  uint32_t *Out, uint64_t *Indices, double *DOut,
+                                  uint64_t Rows, uint64_t N, double Start) {
+  bool Nested = Mode == 3;
+  if (!N || N > 65 || (Nested && (!Rows || Rows > 4))) return;
+  uint32_t R0 = 17, R1 = (uint32_t)-7, Prev = 23, Older = (uint32_t)-11;
+  double RD = Start;
+  for (unsigned Row = 0; Row < (Nested ? Rows : 1); ++Row) {
+    uint32_t Current = Prev, Old = Older, Next = Prev;
+    double Last = Start;
+    for (unsigned I = 0; I < N; ++I) {
+      unsigned J = (Nested ? 65 * Row : 0) + I;
+      Current = Prev;
+      Old = Older;
+      Next = A[J] + Old;
+      Last = Start;
+      bool Active = A[J] != 0;
+      if (Rows == 2) Active = Active && (Prev & 1);
+      if (Mode == 1 || Nested) Active = Active && A[J] != 2;
+      if (Active) {
+        uint32_t C = scalar_helper(Current ^ Next);
+        double DC = D[J] - (double)Current;
+        R0 = R0 + C;
+        R1 = C + R1;
+        RD = RD + DC;
+        Last = DC;
+      }
+      Older = Current;
+      Prev = Next;
+    }
+    unsigned O = Nested ? 5 * Row : 0, J = Nested ? 2 * Row : 0;
+    Out[O] = R0; Out[O + 1] = R1; Out[O + 2] = Current;
+    Out[O + 3] = Old; Out[O + 4] = Next;
+    DOut[J] = RD; DOut[J + 1] = Last;
+    Indices[J] = N - 1; Indices[J + 1] = N;
+  }
+}
+
+static unsigned cc_input(unsigned Pattern, unsigned I, unsigned N, unsigned Capacity) {
+  switch (Pattern) {
+  case 0: return 0;                         // all empty (D may be null)
+  case 1: return 1;                         // all active in input mode
+  case 2: return I % 2 == 0;                // alternating
+  case 3: return I == 0;                    // first only
+  case 4: return I + 1 == N;                // last only
+  case 5: return I < Capacity || I + 1 == N; // empty middle, active later
+  case 6: return I < N / 2;                 // empty final chunks
+  case 7: return I % 3 == 0 ? 2 : 0;        // distinct CFG bypasses
+  default: return (I * 17 + 5) % 7 < 3;      // irregular tail participation
+  }
+}
+
+static void check_compact_chunks(void) {
+  static const uint64_t RowCounts[] = {0, 1, 2, 4, 5, UINT64_MAX};
+  static const double Starts[] = {-0.0, 0.0, 0.25, -8.25};
+  unsigned Total = 0;
+  for (unsigned C = 0; C < sizeof(CompactChunks) / sizeof(*CompactChunks); ++C) {
+    unsigned Mode = CompactChunks[C].Mode, Capacity = CompactChunks[C].Capacity;
+    unsigned Lanes = CompactChunks[C].VectorLanes;
+    bool Nested = Mode == 3;
+    unsigned Runs = 0, Produced = 0, Consumed = 0, Begins = 0, Empty = 0;
+    unsigned Vector = 0, Tail = 0, Zero = 0, Multi = 0, Partial = 0, Full = 0;
+    unsigned State = 0, Inactive = 0, EmptyThenActive = 0;
+    for (unsigned K = 0; K < 68; ++K)
+      for (unsigned R = 0; R < (Nested ? 6u : 2u); ++R)
+        for (unsigned Pattern = 0; Pattern < 9; ++Pattern)
+          for (unsigned Trial = 0; Trial < 4; ++Trial)
+            for (unsigned Alias = 0; Alias < 2; ++Alias) {
+              uint64_t N = K == 67 ? UINT64_MAX : K;
+              uint64_t Rows = Nested ? RowCounts[R] : R + 1;
+              bool Enter = N && N <= 65 && (!Nested || (Rows && Rows <= 4));
+              double Start = Starts[Trial];
+              StateChunkState Actual, Original, Independent;
+              memset(&Actual, 0x5a, sizeof(Actual));
+              for (unsigned I = 0; I < 260; ++I) {
+                Actual.A[1 + I] = cc_input(Pattern, I % 65, Enter ? N : 0, Capacity);
+                Actual.D[1 + I] = Trial == 0 ? -0.0 :
+                                  Trial == 1 ? 0.0 : (double)(int)(I % 17) - 8.25;
+              }
+              memcpy(&Original, &Actual, sizeof(Actual));
+              memcpy(&Independent, &Actual, sizeof(Actual));
+              const uint32_t *A;
+              const double *D;
+              uint32_t *Out;
+              double *DOut;
+              // Null inactive FP inputs make speculation observable. Alias D
+              // outputs may still write the backing array; they never read D.
+              state_chunk_pointers(&Independent, Alias, Enter, &A, &D, &Out, &DOut);
+              if (Pattern == 0 && (!Nested || !Alias || Rows <= 1)) D = NULL;
+              compact_chunk_oracle(Mode, A, D, Out, Independent.Indices + 1, DOut, Rows, N, Start);
+              state_chunk_pointers(&Original, Alias, Enter, &A, &D, &Out, &DOut);
+              if (Pattern == 0 && (!Nested || !Alias || Rows <= 1)) D = NULL;
+              CompactChunks[C].Reference(A, D, Out, Original.Indices + 1, DOut,
+                                         Original.FOut + 1, Rows, N, Start);
+              if (memcmp(&Original, &Independent, sizeof(Original)))
+                fail(CompactChunks[C].Name, N, Pattern, "original compact chunks versus oracle");
+              state_chunk_pointers(&Actual, Alias, Enter, &A, &D, &Out, &DOut);
+              if (Pattern == 0 && (!Nested || !Alias || Rows <= 1)) D = NULL;
+              ChunkName = CompactChunks[C].Name;
+              CCA = A; CCD = D; CCMode = Mode; CCN = Enter ? N : 0;
+              CCRows = Enter ? (Nested ? Rows : 1) : 0; CCRowsArg = Rows;
+              CCCapacity = Capacity; CCLanes = Lanes;
+              CCPrev = 23; CCOlder = (uint32_t)-11; CCR0 = 17; CCR1 = (uint32_t)-7;
+              CCRD = CCStart = Start;
+              CCActive = CCWasEmpty = false;
+              CCProgress = CCRow = CCBegins = CCEnds = CCEmpty = CCVector = CCTail = 0;
+              CCVisits = CCParticipants = CCPartial = CCFull = CCFinalInactive = 0;
+              CCEmptyThenActive = 0;
+              CompactChunks[C].Fn(A, D, Out, Actual.Indices + 1, DOut,
+                                  Actual.FOut + 1, Rows, N, Start);
+              unsigned ExpectedChunks = CCRows * (CCN / Capacity + (CCN % Capacity != 0));
+              if (CCActive || CCProgress || CCRow != CCRows || CCBegins != ExpectedChunks ||
+                  CCEnds != ExpectedChunks || CCVisits != CCN * CCRows ||
+                  CCParticipants != CCVector * Lanes + CCTail ||
+                  CCPartial != CCRows * (CCN % Capacity != 0) ||
+                  CCFull != CCRows * (CCN / Capacity))
+                fail(ChunkName, N, Pattern, "compact exact counts/empty path/chunk/row conservation");
+              if (memcmp(&Actual, &Original, sizeof(Actual)) ||
+                  memcmp(&Actual, &Independent, sizeof(Actual)))
+                fail(ChunkName, N, Pattern, "compact accumulator/state/export/alias/input/canary");
+              Produced += CCVisits; Consumed += CCParticipants; Begins += CCBegins;
+              Empty += CCEmpty; Vector += CCVector; Tail += CCTail;
+              Partial += CCPartial; Full += CCFull; Inactive += CCFinalInactive;
+              EmptyThenActive += CCEmptyThenActive;
+              Zero += !Enter; Multi += Enter && N > Capacity; State += Enter && Rows == 2;
+              ++Runs;
+            }
+    if (!Produced || Produced < Consumed || !Consumed || !Empty || !Begins ||
+        !Zero || !State || !Inactive || !Full || (!Lanes && Vector) ||
+        (Capacity < 65 && (!Multi || !EmptyThenActive)) ||
+        (Capacity > 1 && Capacity < 65 && !Partial) ||
+        (Lanes && Lanes <= Capacity && !Vector))
+      fail(CompactChunks[C].Name, 65, 0, "missing compact chunk transformed path evidence");
+    printf("Compact chunks %s: comparisons=%u producer=%u consumer=%u chunks=%u "
+           "empty=%u vector=%u tail=%u zero=%u multi=%u partial=%u full=%u state=%u "
+           "final-inactive=%u empty-then-active=%u\n", CompactChunks[C].Name,
+           Runs, Produced, Consumed, Begins, Empty, Vector, Tail, Zero, Multi,
+           Partial, Full, State, Inactive, EmptyThenActive);
+    Total += Runs;
+  }
+  printf("Compact chunks: %u original/transformed/oracle host comparisons (not RVV)\n", Total);
+}
+
 // AoS probes use the actual load/store addresses from each emitted stage.
 // In particular a global producer IV must never index the reused scratch.
 static const double *AosInput;
@@ -3042,6 +3317,7 @@ int main(void) {
   check_exports();
   check_chunks();
   check_state_chunks();
+  check_compact_chunks();
   check_aos_chunks();
   check_integration();
   printf("PASS: %u executions; interleave stages/tails counted with guarded "

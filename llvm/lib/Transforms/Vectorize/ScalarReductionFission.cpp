@@ -606,12 +606,13 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   auto ScratchBytes = ScratchSize(Capacity);
   bool Chunked = !ScratchBytes;
   if (Chunked) {
-    // Only a single-block unconditional zero-start/unit-step loop whose next
-    // IV exits on equality may use the invariant operand as the actual N.
+    // Only a zero-start/unit-step loop whose next IV exits on equality may
+    // use the invariant operand as the actual N. Multi-block producers have
+    // already passed the acyclic/common terminal participation edge proof.
     // An affine endpoint or relational termination witness only bounds storage:
     // it must never reach the N-base arithmetic or replace original control.
-    if (L.getNumBlocks() != 1 || ParticipationArm ||
-        !CanonicalCount || !ScratchSize(1))
+    if ((L.getNumBlocks() != 1 && !ParticipationArm) || !CanonicalCount ||
+        !ScratchSize(1))
       return Reject("scalar-scratch-limit");
     if ((Compare->getPredicate() == ICmpInst::ICMP_EQ) !=
         (Branch->getSuccessor(0) == Exit))
@@ -674,8 +675,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
 
   // All rejection points precede mutation. Retain the original entry guard.
   // Chunked producers keep global IVs/operations and use a local chunk latch
-  // test. A compact full-trip stream may be empty even when its producer runs:
-  // its guard exports the original starts without an add.
+  // test. A compact stream may be empty even when its producer runs: its guard
+  // forwards the incoming accumulator (the chunk carry when chunked).
   SE.forgetTopmostLoop(&L);
   MDNode *OriginalID = L.getLoopID();
   LLVMContext &Ctx = F->getContext();
@@ -700,8 +701,10 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     Chunk->addBasicBlockToLoop(ChunkHeader, LI);
     Chunk->addBasicBlockToLoop(ProducerPH, LI);
     Chunk->addBasicBlockToLoop(ChunkLatch, LI);
-    // Header is already in every old ancestor and stays mapped to L.
-    Chunk->addBlockEntry(Header);
+    // All producer blocks are already in every old ancestor and stay mapped
+    // to L. The new intermediate parent must contain every one of them too.
+    for (BasicBlock *BB : L.blocks())
+      Chunk->addBlockEntry(BB);
 
     IRBuilder<> CB(ChunkHeader);
     CB.SetCurrentDebugLocation(Branch->getDebugLoc());
@@ -744,10 +747,6 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       BasicBlock::Create(Ctx, "scalar.fission.consumer.ph", F, Exit);
   BasicBlock *ConsumerBody =
       BasicBlock::Create(Ctx, "scalar.fission.consumer.body", F, Exit);
-  // Keep the inner stages before their shared chunk exit. Ordinary LV inserts
-  // its vector/middle blocks before that exit as well.
-  if (Chunked)
-    ChunkLatch->moveAfter(ConsumerBody);
   // Keep the consumer's exit dedicated, before joining the zero-count bypass.
   BasicBlock *ConsumerLoopExit =
       ParticipationArm
@@ -757,6 +756,10 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       ParticipationArm
           ? BasicBlock::Create(Ctx, "scalar.fission.consumer.exit", F, Exit)
           : (Chunked ? ChunkLatch : Exit);
+  // Keep the inner stages and compact result merge before their shared chunk
+  // exit. Ordinary LV inserts its vector/middle blocks before the stage exit.
+  if (Chunked)
+    ChunkLatch->moveAfter(ParticipationArm ? ConsumerExit : ConsumerBody);
   BranchInst::Create(ConsumerBody, ConsumerPH);
   Loop *Consumer = LI.AllocateLoop();
   if (Loop *Parent = L.getParentLoop()) {
@@ -808,6 +811,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   Value *ProducerIndex = IV;
   Value *ConsumerCount = Chunked ? ChunkCount : Compare->getOperand(1);
   Value *ProducerNext = nullptr;
+  Value *CompletedCount = nullptr;
   if (Chunked) {
     auto *Ordinal = PHINode::Create(IV->getType(), 2, "fission.producer.ordinal",
                                    &*Header->begin());
@@ -817,19 +821,29 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                "fission.producer.next", /*HasNUW=*/true);
     Ordinal->addIncoming(ProducerNext, Latch);
     ProducerIndex = Ordinal;
+    CompletedCount = ChunkCount;
+    if (ParticipationArm) {
+      auto *Completed = PHINode::Create(
+          IV->getType(), 1, "fission.producer.completed",
+          ProducerExit->getFirstNonPHIIt());
+      Completed->addIncoming(ProducerNext, Latch);
+      CompletedCount = Completed;
+    }
   }
   if (ParticipationArm) {
-    // Before original iteration i, 0 <= count <= i. An update stores at count
-    // then increments once; a bypass retains count. The acyclic producer visits
+    // Before local iteration i, 0 <= P <= i < the chunk limit <= capacity
+    // (or the full-trip bound). Reset P at each producer entry. A participant
+    // stores at the old P, independently of the completed-iteration ordinal,
+    // then increments once; a bypass retains P. The acyclic producer visits
     // the terminal participation block at most once, and its unconditional
     // branch reaches the latch directly. Only that one edge carries CountNext;
-    // all other latch edges carry Count. Thus every store index is
-    // < N <= MaxTripCount and the final count P <= N fits the original IV type
+    // all other latch edges carry Count. Thus every store index is < capacity,
+    // and final 0 <= P <= completed <= capacity fits the original IV type
     // (getScalarFissionMaxTripCount checks representability). Full-trip
-    // allocation and the checked byte/index ceiling bound every compact GEP.
+    // allocation or checked padded chunk allocation bounds every compact GEP.
     auto *Count = PHINode::Create(IV->getType(), 2, "fission.participating",
                                  &*Header->begin());
-    Count->addIncoming(ConstantInt::get(IV->getType(), 0), Preheader);
+    Count->addIncoming(ConstantInt::get(IV->getType(), 0), ProducerPH);
     IRBuilder<> ArmBuilder(ParticipationArm->getTerminator());
     Value *CountNext = ArmBuilder.CreateAdd(
         Count, ConstantInt::get(IV->getType(), 1), "fission.participating.next",
@@ -923,9 +937,12 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       LoopResult->addIncoming(Update, ConsumerBody);
       auto *Result = PHINode::Create(R.Phi->getType(), 2,
                                     R.Phi->getName() + ".result", ConsumerExit);
-      Result->addIncoming(R.Phi->getIncomingValueForBlock(Preheader),
+      Result->addIncoming(Chunked ? ChunkCarries.lookup(R.Phi)
+                                 : R.Phi->getIncomingValueForBlock(Preheader),
                           ConsumerGuard);
       Result->addIncoming(LoopResult, ConsumerLoopExit);
+      if (Chunked)
+        ChunkCarries.lookup(R.Phi)->addIncoming(Result, ChunkLatch);
       ConsumerUpdates[R.Merge] = Result;
     } else if (Chunked) {
       auto *Result = PHINode::Create(
@@ -960,10 +977,11 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   if (Chunked || ParticipationArm) {
     Value *More = B.CreateICmpNE(ConsumerNext, ConsumerCount,
                                "fission.consumer.more");
-    B.CreateCondBr(More, ConsumerBody, Chunked ? ChunkLatch : ConsumerLoopExit);
-    if (!Chunked) {
+    B.CreateCondBr(More, ConsumerBody,
+                   ParticipationArm ? ConsumerLoopExit : ChunkLatch);
+    if (ParticipationArm) {
       BranchInst::Create(ConsumerExit, ConsumerLoopExit);
-      BranchInst::Create(Exit, ConsumerExit);
+      BranchInst::Create(Chunked ? ChunkLatch : Exit, ConsumerExit);
     }
   } else if (!CanonicalCount) {
     Value *More = B.CreateICmpNE(ConsumerNext, ConsumerCount,
@@ -983,12 +1001,12 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                  "fission.producer.more");
     Branch->setCondition(More);
     Branch->setSuccessor(0, Header);
-    Branch->setSuccessor(1, ConsumerPH);
+    Branch->setSuccessor(1, ProducerExit);
     // Original exit weights describe N iterations, not a C-iteration chunk.
     Branch->setMetadata(LLVMContext::MD_prof, nullptr);
     IRBuilder<> CB(ChunkLatch);
     CB.SetCurrentDebugLocation(Branch->getDebugLoc());
-    Value *BaseNext = CB.CreateAdd(ChunkBase, ChunkCount, "fission.chunk.next",
+    Value *BaseNext = CB.CreateAdd(ChunkBase, CompletedCount, "fission.chunk.next",
                                   /*HasNUW=*/true);
     ChunkBase->addIncoming(BaseNext, ChunkLatch);
     Value *MoreChunks = CB.CreateICmpNE(BaseNext, Compare->getOperand(1),

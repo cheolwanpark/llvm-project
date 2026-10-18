@@ -29,10 +29,10 @@
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
 ; RUN:   -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 \
 ; RUN:   -scalable-vectorization=off -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks-missed=vplan-reduction-fission \
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission \
 ; RUN:   -S %s -o %t.limit 2> %t.limit.remarks
 ; RUN: FileCheck %s --check-prefix=LIMIT < %t.limit.remarks
-; RUN: FileCheck %s --check-prefix=UNCHANGED --implicit-check-not=scalar.fission < %t.limit
+; RUN: FileCheck %s --check-prefix=UNCHANGED < %t.limit
 ;
 ; SELECTED-COUNT-4: : split scalar-IR reduction loop;
 ; SELECTED-NOT: : split
@@ -44,7 +44,8 @@
 ; the last iteration even when it does not participate. No skipped FP add is
 ; replaced by adding zero. The execution checker compares actual original IR,
 ; transformed vector/tail paths and independent C under both fission policies.
-; Full capacity 65 needs 1044 padded bytes; 1043 must reject without chunking.
+; Full capacity 65 needs 1044 padded bytes. At 1043 the canonical serial
+; case chunks at C=64/B=1024; all affine controls still reject.
 ;
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
@@ -54,8 +55,11 @@ declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 ; SCALAR-REMARK: scalar-compact-cfg.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-compact-cfg.c:12:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-compact-cfg.c:12:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-compact-cfg.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; LIMIT: scalar-compact-cfg.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
 ; UNCHANGED-LABEL: define void @compact_cfg_serial(
+; UNCHANGED: alloca [64 x i32]
+; UNCHANGED: scalar.fission.chunk:
+; UNCHANGED: scalar.fission.consumer.guard:
 ; UNCHANGED: ret void
 ; SCALAR-LABEL: define void @compact_cfg_serial(
 ; SCALAR: alloca [65 x i32]
@@ -215,7 +219,10 @@ exit:
 ; SCALAR-REMARK: scalar-compact-cfg.c:22:3: scalar-IR fission consumer VF 1
 ; LIMIT: scalar-compact-cfg.c:22:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 ; UNCHANGED-LABEL: define void @compact_cfg_nested(
+; UNCHANGED-NOT: scalar.fission
 ; UNCHANGED: ret void
+; UNCHANGED-NOT: scalar.fission
+; UNCHANGED: }
 ; SCALAR-LABEL: define void @compact_cfg_nested(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -375,7 +382,10 @@ exit:
 ; SCALAR-REMARK: scalar-compact-cfg.c:32:3: scalar-IR fission consumer VF 1
 ; LIMIT: scalar-compact-cfg.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 ; UNCHANGED-LABEL: define void @compact_cfg_affine(
+; UNCHANGED-NOT: scalar.fission
 ; UNCHANGED: ret void
+; UNCHANGED-NOT: scalar.fission
+; UNCHANGED: }
 ; SCALAR-LABEL: define void @compact_cfg_affine(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -546,7 +556,10 @@ exit:
 ; SCALAR-REMARK: scalar-compact-cfg.c:42:3: scalar-IR fission consumer VF 1
 ; LIMIT: scalar-compact-cfg.c:42:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 ; UNCHANGED-LABEL: define void @compact_cfg_enclosing(
+; UNCHANGED-NOT: scalar.fission
 ; UNCHANGED: ret void
+; UNCHANGED-NOT: scalar.fission
+; UNCHANGED: }
 ; SCALAR-LABEL: define void @compact_cfg_enclosing(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]

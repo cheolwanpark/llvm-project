@@ -688,9 +688,17 @@ exit:
   ret void
 }
 
-; REASON: scalar-compact-recurrence.c:92:3: scalar-IR reduction fission rejected: {{non-constant-trip-count|scalar-scratch-limit}}
+; Canonical finite count; compact chunks now retain all four producer carries.
+; REASON: scalar-compact-recurrence.c:92:3: split scalar-IR reduction loop; {{.*}}scratch capacity 5461, scratch bytes 65536
 ; CHECK-LABEL: define void @compact_recurrence_reject_unbounded(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [5461 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: %prev.chunk.carry = phi i32
+; CHECK: %older.chunk.carry = phi i32
+; CHECK: %dprev.chunk.carry = phi double
+; CHECK: %dolder.chunk.carry = phi double
+; CHECK: scalar.fission.consumer.guard:
+; CHECK: %rd.result = phi double [ %rd.chunk.carry, %scalar.fission.consumer.guard ],
 ; CHECK: ret void
 define void @compact_recurrence_reject_unbounded(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !28 {
@@ -769,9 +777,17 @@ exit:
   ret void
 }
 
-; REASON: scalar-compact-recurrence.c:102:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; Canonical finite count; compact chunks now retain all four producer carries.
+; REASON: scalar-compact-recurrence.c:102:3: split scalar-IR reduction loop; {{.*}}scratch capacity 5461, scratch bytes 65536
 ; CHECK-LABEL: define void @compact_recurrence_reject_over_capacity(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [5461 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: %prev.chunk.carry = phi i32
+; CHECK: %older.chunk.carry = phi i32
+; CHECK: %dprev.chunk.carry = phi double
+; CHECK: %dolder.chunk.carry = phi double
+; CHECK: scalar.fission.consumer.guard:
+; CHECK: %rd.result = phi double [ %rd.chunk.carry, %scalar.fission.consumer.guard ],
 ; CHECK: ret void
 define void @compact_recurrence_reject_over_capacity(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !30 {
