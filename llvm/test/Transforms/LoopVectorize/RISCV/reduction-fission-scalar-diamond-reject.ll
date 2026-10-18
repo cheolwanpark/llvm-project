@@ -11,14 +11,15 @@
 ; REASON: scalar-diamond-reject.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
 ;
 ; These are independent semantic/CFG rejections, not profitability decisions.
-; General conditional participation, early exits, cycles and other live-outs
-; remain outside the small producer-diamond contract.
+; Incompatible participation, early exits, cycles and partial-state live-outs
+; remain outside the small producer triangle/diamond contract.
 
 declare i32 @readonly_call(i32) memory(read) nounwind willreturn speculatable
 declare i32 @effect_call(i32) nounwind willreturn
 declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
 
-; Skipping a reduction on one arm is not a diamond producer.
+; Conditional updates are now covered by scalar-compact.ll. Exporting the
+; old accumulator as well as the final value remains unsupported.
 ; CHECK-LABEL: define i32 @reject_conditional_update(
 ; CHECK: ret i32
 define i32 @reject_conditional_update(ptr %a, i64 %n) !dbg !4 {
@@ -48,7 +49,8 @@ latch:
   %done = icmp eq i64 %next, %n
   br i1 %done, label %exit, label %loop, !dbg !7
 exit:
-  ret i32 %merged
+  %partial = add i32 %sum, %merged
+  ret i32 %partial
 bypass:
   ret i32 19
 }

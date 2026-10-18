@@ -35,6 +35,9 @@ extern ScalarNestedFn ref_scalar_nested;
 extern ScalarMixedFn ref_scalar_diamond;
 extern ScalarSumFn ref_diamond_arithmetic;
 extern ScalarNestedFn ref_scalar_diamond_nested;
+extern ScalarMixedFn ref_compact_triangle, ref_compact_diamond;
+extern ScalarSumFn ref_compact_integer;
+extern ScalarNestedFn ref_compact_nested;
 @DECLARATIONS@
 
 static const struct {
@@ -76,6 +79,21 @@ static const struct {
   unsigned VectorLanes;
   bool ProbeTail;
 } ScalarNested[] = {@SCALAR_NESTED@};
+static const struct {
+  const char *Name;
+  ScalarMixedFn *Fn, *Reference;
+  unsigned VectorLanes;
+} Compact[] = {@COMPACT@};
+static const struct {
+  const char *Name;
+  ScalarSumFn *Fn, *Reference;
+  unsigned VectorLanes;
+} CompactInteger[] = {@COMPACT_INTEGER@};
+static const struct {
+  const char *Name;
+  ScalarNestedFn *Fn, *Reference;
+  unsigned VectorLanes;
+} CompactNested[] = {@COMPACT_NESTED@};
 
 // No memory access, exceptions, convergence, or FP-environment effects. opt
 // only sees the explicitly attributed declaration, with no vector mapping.
@@ -86,8 +104,16 @@ uint32_t scalar_helper(uint32_t X) {
 }
 
 static unsigned ScalarVectorVisits, ScalarVectorRuns, ScalarTailVisits;
+static unsigned CompactIterations, CompactParticipants;
 void record_scalar_consumer_vector(void) { ++ScalarVectorVisits; }
 void record_scalar_consumer_tail(void) { ++ScalarTailVisits; }
+void record_compact_iteration(void) { ++CompactIterations; }
+void record_compact_participant(void) { ++CompactParticipants; }
+
+static void reset_compact_probes(void) {
+  ScalarVectorVisits = ScalarTailVisits = 0;
+  CompactIterations = CompactParticipants = 0;
+}
 
 static uint32_t Seed = 314159265;
 static double MaxError;
@@ -99,6 +125,55 @@ static uint32_t random_value(void) {
 static void fail(const char *Name, unsigned N, unsigned Trial, const char *What) {
   fprintf(stderr, "%s: N=%u trial=%u: %s\n", Name, N, Trial, What);
   exit(1);
+}
+
+static void check_compact_probes(const char *Name, unsigned N, unsigned Trial,
+                                 unsigned Iterations, unsigned Participants,
+                                 unsigned VectorVisits, unsigned TailVisits) {
+  if (CompactIterations != Iterations || CompactParticipants != Participants ||
+      ScalarVectorVisits != VectorVisits || ScalarTailVisits != TailVisits)
+    fail(Name, N, Trial, "compact producer/participant/vector/tail visit mismatch");
+  ScalarVectorRuns += ScalarVectorVisits != 0;
+}
+
+// Count using the actual participation predicates. Simulate only integer row
+// feedback for the alias case; output row r overwrites input row 1, element r.
+// This determines later row participation without using transformed counters.
+static void compact_nested_counts(uint32_t *A, unsigned Rows, unsigned N,
+                                   unsigned Lanes, bool Alias,
+                                   unsigned *Participants, unsigned *Vectors,
+                                   unsigned *Tails) {
+  uint32_t Carry = 19;
+  *Participants = *Vectors = *Tails = 0;
+  for (unsigned R = 0; R < Rows; ++R) {
+    unsigned P = 0;
+    for (unsigned I = 0; I < N; ++I) {
+      uint32_t X = A[R * 65 + I];
+      if (X & 1) {
+        ++P;
+        Carry += scalar_helper(X ^ R);
+      }
+    }
+    *Participants += P;
+    *Vectors += P / Lanes;
+    *Tails += P % Lanes;
+    if (Alias) A[65 + R] = Carry;
+  }
+}
+
+// Ordinary LLVM FP does not promise a NaN payload. All other bit patterns,
+// including the sign of an unchanged zero initial value, must match exactly.
+static bool compact_doubles_equal(const double *A, const double *B, unsigned N) {
+  for (unsigned I = 0; I < N; ++I)
+    if (!(isnan(A[I]) && isnan(B[I])) && memcmp(A + I, B + I, sizeof(*A)))
+      return false;
+  return true;
+}
+static bool compact_floats_equal(const float *A, const float *B, unsigned N) {
+  for (unsigned I = 0; I < N; ++I)
+    if (!(isnan(A[I]) && isnan(B[I])) && memcmp(A + I, B + I, sizeof(*A)))
+      return false;
+  return true;
 }
 static void fill_fp(double *A, unsigned Count, unsigned Trial) {
   for (unsigned I = 0; I < Count; ++I) {
@@ -373,10 +448,150 @@ int main(void) {
                  "nested future-input alias or scratch reuse mismatch");
           Runs += 2;
         }
+  // Independent N and P sweeps: in addition to guarded original counts, hold
+  // N=65 and exercise EVERY compact count P=0..65 in permuted iteration order.
+  // This reaches vector boundaries and tails based on P rather than N.
+  unsigned CountCases = sizeof(ScalarCounts) / sizeof(*ScalarCounts);
+  for (unsigned C = 0; C < sizeof(Compact) / sizeof(*Compact); ++C)
+    for (unsigned K = 0; K < CountCases + 66; ++K)
+      for (unsigned Trial = 0; Trial < 16; ++Trial) {
+        uint64_t N = K < CountCases ? ScalarCounts[K] : 65;
+        bool Enter = N && N <= 65;
+        unsigned P = 0, Lanes = Compact[C].VectorLanes;
+        double Start = Trial % 2 ? 3.5 : -0.0;
+        for (unsigned I = 0; I < 66; ++I) {
+          unsigned Pattern = Trial % 8;
+          bool Active = K >= CountCases ? (I * 7 + Trial) % 65 < K - CountCases :
+                        Pattern == 0 ? false : Pattern == 1 ? true :
+                        Pattern == 2 ? I == N / 2 : Pattern == 3 ? I + 1 == N :
+                        Pattern == 4 ? I % 2 : Pattern == 5 ? (I / 7) % 2 :
+                        Pattern == 6 ? I % 13 == 0 : random_value() % 2;
+          Input[I] = Active ? I % 31 + 1 : 0;
+          if (Enter && I < N && Active) ++P;
+          switch (Trial / 2) {
+          case 0: FPInput[I] = -0.0; break;
+          case 1: FPInput[I] = (double[]){1e16, 1.0, -1e16, 0.0}[I % 4]; break;
+          case 2: FPInput[I] = INFINITY; break;
+          case 3: FPInput[I] = -INFINITY; break;
+          case 4: FPInput[I] = NAN; break;
+          case 5: FPInput[I] = 0x1p-1074; break;
+          case 6: FPInput[I] = 0x1p-149; break;
+          default: FPInput[I] = (double)(int32_t)random_value() / 1024.0; break;
+          }
+        }
+        // P=0: every divisor is zero and every conditional FP pointer is null.
+        const uint32_t *A = Enter ? Input : NULL;
+        const double *D = P ? FPInput : NULL;
+        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        double ActualD[3] = {19.5, 7.0, 3.25}, ExpectedD[3] = {19.5, 7.0, 3.25};
+        float ActualF[3] = {19.5f, 7.0f, 3.25f}, ExpectedF[3] = {19.5f, 7.0f, 3.25f};
+        Compact[C].Reference(A, D, RefOut + 1, ExpectedD + 1, ExpectedF + 1, N, Start);
+        reset_compact_probes();
+        Compact[C].Fn(A, D, Out + 1, ActualD + 1, ActualF + 1, N, Start);
+        check_compact_probes(Compact[C].Name, (unsigned)N, Trial, Enter ? N : 0,
+                              P, P / Lanes, P % Lanes);
+        if (memcmp(Out, RefOut, sizeof(Out)) ||
+            !compact_doubles_equal(ActualD, ExpectedD, 3) ||
+            !compact_floats_equal(ActualF, ExpectedF, 3))
+          fail(Compact[C].Name, (unsigned)N, Trial, "compact ordered result/canary mismatch");
+        // Repeated invocation overwrites the same scratch, with final outputs
+        // aliasing both integer predicates and floating contributions.
+        uint32_t Alias[66], RefAlias[66];
+        double DAlias[66], RefDAlias[66];
+        memcpy(Alias, Input, sizeof(Alias));
+        memcpy(RefAlias, Input, sizeof(RefAlias));
+        memcpy(DAlias, FPInput, sizeof(DAlias));
+        memcpy(RefDAlias, FPInput, sizeof(RefDAlias));
+        Compact[C].Reference(RefAlias, P ? RefDAlias : NULL, RefAlias, RefDAlias,
+                              ExpectedF + 1, N, Start);
+        reset_compact_probes();
+        Compact[C].Fn(Alias, P ? DAlias : NULL, Alias, DAlias, ActualF + 1, N, Start);
+        check_compact_probes(Compact[C].Name, (unsigned)N, Trial, Enter ? N : 0,
+                              P, P / Lanes, P % Lanes);
+        if (memcmp(Alias, RefAlias, sizeof(Alias)) ||
+            !compact_doubles_equal(DAlias, RefDAlias, 66) ||
+            !compact_floats_equal(ActualF, ExpectedF, 3))
+          fail(Compact[C].Name, (unsigned)N, Trial, "compact input/output alias mismatch");
+        Runs += 2;
+      }
+  for (unsigned C = 0; C < sizeof(CompactInteger) / sizeof(*CompactInteger); ++C)
+    for (unsigned K = 0; K < CountCases + 66; ++K) {
+      uint64_t N = K < CountCases ? ScalarCounts[K] : 65;
+      bool Enter = N && N <= 65;
+      unsigned P = 0, Lanes = CompactInteger[C].VectorLanes;
+      for (unsigned I = 0; I < 66; ++I) {
+        Input[I] = (I * 7 + 3) % 65 < (K < CountCases ? 33 : K - CountCases)
+                     ? random_value() : 0;
+        if (Enter && I < N && Input[I]) ++P;
+      }
+      uint64_t Actual[3] = {19, 7, 23}, Expected[3] = {19, 7, 23};
+      uint32_t Start = random_value();
+      CompactInteger[C].Reference(Enter ? Input : NULL, Expected + 1, N, Start);
+      reset_compact_probes();
+      CompactInteger[C].Fn(Enter ? Input : NULL, Actual + 1, N, Start);
+      check_compact_probes(CompactInteger[C].Name, (unsigned)N, K, Enter ? N : 0,
+                            P, P / Lanes, P % Lanes);
+      if (memcmp(Actual, Expected, sizeof(Actual)))
+        fail(CompactInteger[C].Name, (unsigned)N, K, "compact i64 result/flags mismatch");
+      ++Runs;
+    }
+  for (unsigned C = 0; C < sizeof(CompactNested) / sizeof(*CompactNested); ++C)
+    for (unsigned R = 0; R < sizeof(RowCounts) / sizeof(*RowCounts); ++R)
+      for (unsigned K = 0; K < CountCases; ++K)
+        for (unsigned Trial = 0; Trial < 8; ++Trial) {
+          uint64_t Rows = RowCounts[R], N = ScalarCounts[K];
+          bool Enter = Rows && Rows <= 4 && N && N <= 65;
+          unsigned P = 0, V = 0, T = 0, Lanes = CompactNested[C].VectorLanes;
+          for (unsigned I = 0; I < 262; ++I) {
+            // Alternate empty/full rows, plus one, sparse and random rows.
+            bool Active = Trial == 0 ? false : Trial == 1 ? true :
+                          Trial == 2 ? I % 65 == 64 : Trial == 3 ? (I / 65) % 2 :
+                          Trial == 4 ? I % 17 == 0 : random_value() % 2;
+            Input[I] = (random_value() & ~1u) | Active;
+          }
+          fill_fp(FPInput, 262, Trial);
+          if (Enter)
+            compact_nested_counts(Input, Rows, N, Lanes, false, &P, &V, &T);
+          double Start = Trial % 2 ? 3.5 : -0.0;
+          for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+          for (unsigned I = 0; I < 7; ++I) Result[I] = RefResult[I] = I + 0.25;
+          CompactNested[C].Reference(Enter ? Input : NULL, P ? FPInput : NULL,
+                                      Enter ? RefOut + 1 : NULL, Enter ? RefResult + 1 : NULL,
+                                      Rows, N, Start);
+          reset_compact_probes();
+          CompactNested[C].Fn(Enter ? Input : NULL, P ? FPInput : NULL,
+                               Enter ? Out + 1 : NULL, Enter ? Result + 1 : NULL,
+                               Rows, N, Start);
+          check_compact_probes(CompactNested[C].Name, (unsigned)N, Trial,
+                                Enter ? Rows * N : 0, P, V, T);
+          if (memcmp(Out, RefOut, sizeof(Out)) || memcmp(Result, RefResult, sizeof(Result)))
+            fail(CompactNested[C].Name, (unsigned)N, Trial, "compact nested carry/reuse mismatch");
+          uint32_t Alias[262], RefAlias[262], CountAlias[262];
+          double DAlias[262], RefDAlias[262];
+          memcpy(Alias, Input, sizeof(Alias));
+          memcpy(RefAlias, Input, sizeof(RefAlias));
+          memcpy(CountAlias, Input, sizeof(CountAlias));
+          memcpy(DAlias, FPInput, sizeof(DAlias));
+          memcpy(RefDAlias, FPInput, sizeof(RefDAlias));
+          if (Enter)
+            compact_nested_counts(CountAlias, Rows, N, Lanes, true, &P, &V, &T);
+          CompactNested[C].Reference(RefAlias, RefDAlias, RefAlias + 65, RefDAlias + 65,
+                                      Rows, N, Start);
+          reset_compact_probes();
+          CompactNested[C].Fn(Alias, DAlias, Alias + 65, DAlias + 65, Rows, N, Start);
+          check_compact_probes(CompactNested[C].Name, (unsigned)N, Trial,
+                                Enter ? Rows * N : 0, P, V, T);
+          if (memcmp(Alias, RefAlias, sizeof(Alias)) ||
+              memcmp(DAlias, RefDAlias, sizeof(DAlias)))
+            fail(CompactNested[C].Name, (unsigned)N, Trial, "compact nested future-row alias mismatch");
+          Runs += 2;
+        }
   printf("PASS: %u executions; integer and ordered FP exact; relaxed FP "
          "classification/signed-zero/error bounds; max absolute FP difference %.17g\n",
          Runs, MaxError);
   printf("Early scalar fission: %u host comparisons entered a vector consumer\n",
          ScalarVectorRuns);
+  printf("Compact streams: exact integer/non-NaN FP bits; NaNs by classification; "
+         "exact producer/participant/vector/tail counts\n");
   return 0;
 }

@@ -63,6 +63,24 @@ except AssertionError:
 else:
     raise AssertionError('speculated diamond division accepted as producer evidence')
 
+# Compact instrumentation must retain the whole function and insert the
+# producer probes after PHIs as well as the two exact consumer probes.
+compact = checker.check_scalar_function(source, 'compact_triangle', evl=False, probe=True)
+for probe in ('compact_iteration', 'compact_participant',
+              'scalar_consumer_vector', 'scalar_consumer_tail'):
+    assert compact.count('call void @record_' + probe + '()') == 1
+assert compact.startswith('define void @compact_triangle(') and compact.endswith('}')
+assert ('%pi = phi i64 [ 0, %entry ]\n'
+        '  call void @record_compact_iteration()') in compact
+unguarded = source.replace('%fission.empty = icmp eq i64 %fission.participating.count, 0',
+                           '%fission.empty = icmp eq i64 %fission.participating.count, 1')
+try:
+    checker.check_scalar_function(unguarded, 'compact_triangle', evl=False)
+except AssertionError:
+    pass
+else:
+    raise AssertionError('missing compact empty-stream guard accepted')
+
 # Fixed-vscale specialization must fail before handing unsupported EVL/VP
 # operations to a host backend. Renaming scalable types alone is not sound.
 for intrinsic in ('llvm.experimental.get.vector.length.i64',
@@ -133,5 +151,53 @@ vector.body:
   br label %scalar.fission.consumer.body
 scalar.fission.consumer.body:
   %ti = phi i64 [ 0, %vector.body ]
+  ret void
+}
+
+; Parser/probe fixture only; actual transformed execution uses scalar-compact.ll.
+define void @compact_triangle(ptr %a, ptr %fp) {
+entry:
+  %s = alloca [65 x i32]
+  %d = alloca [65 x double]
+  %f = alloca [65 x float]
+  br label %loop
+loop:
+  %pi = phi i64 [ 0, %entry ]
+  %x = load i32, ptr %a
+  %choose = icmp ne i32 %x, 0
+  br i1 %choose, label %left, label %latch
+left:
+  %q = sdiv i32 840, %x
+  %lc = call i32 @scalar_helper(i32 %q)
+  %dp = getelementptr double, ptr %fp, i64 0
+  %dc = load double, ptr %dp
+  %fc = fptrunc double %dc to float
+  %fission.participating.next = add nuw i64 %pi, 1
+  store i32 %lc, ptr %s
+  store double %dc, ptr %d
+  store float %fc, ptr %f
+  br label %latch
+latch:
+  br label %scalar.fission.consumer.guard
+scalar.fission.consumer.guard:
+  %fission.participating.count = phi i64 [ %fission.participating.next, %latch ]
+  %fission.empty = icmp eq i64 %fission.participating.count, 0
+  br i1 %fission.empty, label %scalar.fission.consumer.exit, label %scalar.fission.consumer.ph
+scalar.fission.consumer.ph:
+  %bound = add i64 0, %fission.participating.count
+  br label %vector.body
+vector.body:
+  %vi = phi i64 [ 0, %scalar.fission.consumer.ph ]
+  %il = load <vscale x 4 x i32>, ptr %s
+  %dl = load <vscale x 4 x double>, ptr %d
+  %fl = load <vscale x 4 x float>, ptr %f
+  %dr = call double @llvm.vector.reduce.fadd.nxv4f64(double 0.0, <vscale x 4 x double> %dl)
+  %fr = call float @llvm.vector.reduce.fadd.nxv4f32(float 0.0, <vscale x 4 x float> %fl)
+  %ir = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %il)
+  br label %scalar.fission.consumer.body
+scalar.fission.consumer.body:
+  %ti = phi i64 [ 0, %vector.body ]
+  br label %scalar.fission.consumer.exit
+scalar.fission.consumer.exit:
   ret void
 }

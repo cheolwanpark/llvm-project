@@ -94,7 +94,7 @@ llc output.ll -mtriple=riscv64 -mattr=+v,+zvl128b -verify-machineinstrs
 Clang accepts the same option through `-mllvm -enable-vplan-reduction-fission`.
 The transform is disabled by default. Before whole-loop vectorization legality
 or VPlan construction, a small scalar-IR path handles canonical, read-only
-loops with unconditional integer-add or ordinary float/double-add
+loops with integer-add or ordinary float/double-add
 reductions. It requires an exact constant count or a proven constant maximum
 runtime count, and keeps the entry guard and exact participating iterations.
 Only final reduction updates may escape. Each distinct original contribution
@@ -103,14 +103,20 @@ under the existing scratch ceiling. Narrow iteration indices are zero-extended
 for scratch addressing. Reductions retain operand order, grouping, initial values
 and flags; this path does not add FP reassociation permissions.
 
-The producer may be a single block or one four-block diamond: the header
-branches to two distinct straight-line arm blocks, both branch to the common
-latch, and only the latch may exit or return to the header. Reduction updates
-must be in the header or latch and execute once on every iteration. Original
-predicates, arm operations and merge PHIs remain in place; contributions are
-stored at the latch. Loads or division in an arm are not speculated onto the other arm. The
-accumulators cannot feed predicates, merge PHIs or other producer operations.
-Conditional updates, early exits, internal cycles and larger CFGs are rejected.
+The producer may be a single block, a triangle, or one diamond: the header
+branches through at most one straight-line block on each arm to the common
+latch, and only the latch may exit or return to the header. Unconditional
+reduction updates in the header or latch store their contributions at the latch.
+Alternatively, all reductions may update on the same arm, with each bypass
+retaining its previous accumulator. A shared bounded index compacts distinct
+contributions in participation order, storing only on that arm. The ordered
+consumer executes exactly the resulting count; an empty stream exports the
+original initial values without arithmetic or scratch reads. Capacity still
+uses the checked full original trip bound. Original predicates and producer
+operations remain in place, including loads or divisions unsafe on the bypass.
+Accumulator state may feed only its own update/bypass recurrence and final
+exports. Feedback, incompatible participation, partial-state exports, early
+exits, internal cycles and larger CFGs are rejected.
 The same transformation can split an inner loop while retaining its enclosing
 loop's carried state and observable stores between successive producers.
 
@@ -247,12 +253,17 @@ and magnitude-based absolute error bounds. Early scalar cases additionally cover
 unknown pure helpers, arithmetic producers, mixed float/double/integer sums,
 input/output aliasing, zero/one/odd/maximum counts, invalid guarded counts and
 narrow indices, producer diamonds with untaken null loads or zero divisors,
+compact contribution streams with independently varied original and participant
+counts, empty streams preserving signed-zero starts, exceptional FP inputs,
 plus repeated inner stages with scratch reuse, outer carried
 results and stores aliasing a later row's inputs. They assert the generated
 scalar producer/vector consumer path,
 then use host-only vector-consumer entry probes (and scalar-tail probes for
-diamonds) to verify execution, with exact
+diamonds and compact streams) to verify execution. Compact cases also probe
+original producer iterations and participating arms, requiring exact visit
+counts at vector boundaries and tails. They retain exact
 ordered comparisons under both settings of the separate FP-reordering option.
+Ordinary FP NaNs are compared by classification, without assuming a payload.
 For early scalar fixtures, the default EVL/VP IR has separate regression checks
 and RVV machine verification. Host comparisons use an explicitly labeled
 `-tail-folding-policy=dont-fold-tail` variant with scalar remainders and epilogue

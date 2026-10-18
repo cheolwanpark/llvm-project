@@ -48,25 +48,30 @@ StringRef llvm::getScalarReductionFissionStage(const Loop &L) {
   return {};
 }
 
-// Accept just one diamond, not general if-conversion. Every path visits the
-// latch exactly once per iteration. Keeping these blocks in place preserves
+// Accept one triangle/diamond, not general if-conversion. Every path visits
+// the latch exactly once per iteration. Keeping these blocks in place preserves
 // arm-local loads/arithmetic, including operations unsafe on the other arm.
 static bool hasSupportedProducerCFG(const Loop &L, BasicBlock *Latch) {
   BasicBlock *Header = L.getHeader();
   if (L.getNumBlocks() == 1)
     return Latch == Header;
-  if (L.getNumBlocks() != 4 || !Latch || Latch == Header)
+  if ((L.getNumBlocks() != 3 && L.getNumBlocks() != 4) || !Latch ||
+      Latch == Header)
     return false;
   auto *Branch = dyn_cast<BranchInst>(Header->getTerminator());
   if (!Branch || !Branch->isConditional())
     return false;
   BasicBlock *Left = Branch->getSuccessor(0);
   BasicBlock *Right = Branch->getSuccessor(1);
-  if (Left == Right || Left == Header || Right == Header || Left == Latch ||
-      Right == Latch || !L.contains(Left) || !L.contains(Right) ||
+  if (L.getNumBlocks() != ((Left == Latch || Right == Latch) ? 3u : 4u))
+    return false;
+  if (Left == Right || Left == Header || Right == Header ||
+      !L.contains(Left) || !L.contains(Right) ||
       pred_size(Latch) != 2)
     return false;
   for (BasicBlock *Arm : {Left, Right}) {
+    if (Arm == Latch)
+      continue;
     auto *ArmBranch = dyn_cast<BranchInst>(Arm->getTerminator());
     if (Arm->getSinglePredecessor() != Header || !ArmBranch ||
         !ArmBranch->isUnconditional() || ArmBranch->getSuccessor(0) != Latch)
@@ -121,44 +126,74 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   struct Reduction {
     PHINode *Phi;
     BinaryOperator *Update;
+    // Conditional recurrences merge an arm-local update with the unchanged
+    // header accumulator. This merge, rather than Update, is their live-out.
+    PHINode *Merge;
     Value *Contribution;
     unsigned ContributionOperand;
     PHINode *ConsumerPhi = nullptr;
   };
   SmallVector<Reduction, 4> Reductions;
   SmallPtrSet<Instruction *, 8> ReductionInsts;
+  BasicBlock *ParticipationArm = nullptr;
   for (PHINode &Phi : Header->phis()) {
     if (&Phi == IV)
       continue;
-    auto *Update =
-        dyn_cast<BinaryOperator>(Phi.getIncomingValueForBlock(Latch));
+    Value *Backedge = Phi.getIncomingValueForBlock(Latch);
+    auto *Merge = dyn_cast<PHINode>(Backedge);
+    BinaryOperator *Update = nullptr;
+    if (Merge) {
+      if (Merge->getParent() != Latch || Merge->getNumIncomingValues() != 2)
+        return Reject("scalar-unsupported-recurrence");
+      int Bypass = Merge->getIncomingValue(0) == &Phi ? 0 : 1;
+      BasicBlock *Arm = Merge->getIncomingBlock(1 - Bypass);
+      Update = dyn_cast<BinaryOperator>(Merge->getIncomingValue(1 - Bypass));
+      if (Merge->getIncomingValue(Bypass) != &Phi || !Update ||
+          Update->getParent() != Arm || Arm == Header || Arm == Latch ||
+          !L.contains(Arm) || !Update->hasOneUse() ||
+          *Update->user_begin() != Merge || Phi.getNumUses() != 2)
+        return Reject("scalar-unsupported-recurrence");
+      for (User *U : Phi.users())
+        if (U != Update && U != Merge)
+          return Reject("scalar-reduction-feedback");
+      if (ParticipationArm && ParticipationArm != Arm)
+        return Reject("scalar-incompatible-participation");
+      ParticipationArm = Arm;
+    } else {
+      Update = dyn_cast<BinaryOperator>(Backedge);
+      if (!Update ||
+          (Update->getParent() != Header && Update->getParent() != Latch) ||
+          !Phi.hasOneUse() || *Phi.user_begin() != Update)
+        return Reject("scalar-unsupported-recurrence");
+    }
     Type *Ty = Phi.getType();
-    // Header and latch updates execute once on every iteration. An arm-local
-    // update or a PHI of updated/unchanged accumulators is not unconditional.
-    if (!Update ||
-        (Update->getParent() != Header && Update->getParent() != Latch) ||
-        !Phi.hasOneUse() || *Phi.user_begin() != Update ||
-        !((Ty->isIntegerTy() && Update->getOpcode() == Instruction::Add) ||
+    if (!((Ty->isIntegerTy() && Update->getOpcode() == Instruction::Add) ||
           ((Ty->isFloatTy() || Ty->isDoubleTy()) &&
-           Update->getOpcode() == Instruction::FAdd)))
+           Update->getOpcode() == Instruction::FAdd)) ||
+        (Update->getOperand(0) != &Phi && Update->getOperand(1) != &Phi))
       return Reject("scalar-unsupported-recurrence");
     unsigned ContributionOperand = Update->getOperand(0) == &Phi ? 1 : 0;
     Value *Contribution = Update->getOperand(ContributionOperand);
-    Reductions.push_back({&Phi, Update, Contribution, ContributionOperand});
+    Reductions.push_back({&Phi, Update, Merge, Contribution, ContributionOperand});
     ReductionInsts.insert(&Phi);
     ReductionInsts.insert(Update);
+    if (Merge)
+      ReductionInsts.insert(Merge);
   }
   if (Reductions.empty())
     return Reject("scalar-no-reduction");
 
-  // Phi has exactly its update as a user. An update may only feed its own Phi
-  // and LCSSA exports. Consequently neither a producer nor another reduction
-  // can depend on accumulator state. This linear use check needs no DAG walk.
+  // State can only flow around its own update/bypass recurrence and into final
+  // LCSSA exports. In particular no predicate, contribution, other reduction or
+  // partial-state export can observe it. This needs no recursive DAG walk.
   for (const Reduction &R : Reductions) {
+    if (bool(R.Merge) != bool(ParticipationArm))
+      return Reject("scalar-incompatible-participation");
     if (auto *I = dyn_cast<Instruction>(R.Contribution);
         I && ReductionInsts.contains(I))
       return Reject("scalar-reduction-feedback");
-    for (User *U : R.Update->users()) {
+    Instruction *Result = R.Merge ? cast<Instruction>(R.Merge) : R.Update;
+    for (User *U : Result->users()) {
       if (U == R.Phi)
         continue;
       auto *Phi = dyn_cast<PHINode>(U);
@@ -246,35 +281,85 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   });
 
   // All rejection points precede mutation. The original guarded preheader and
-  // producer control remain intact. The consumer is entered once the producer
-  // finishes, so it also executes at least once, including the N=1 case.
+  // producer control remain intact. A compact stream can be empty even when
+  // the producer runs: its guard exports the original starts without an add.
   SE.forgetTopmostLoop(&L);
   MDNode *OriginalID = L.getLoopID();
   LLVMContext &Ctx = F->getContext();
+  BasicBlock *ConsumerGuard =
+      ParticipationArm
+          ? BasicBlock::Create(Ctx, "scalar.fission.consumer.guard", F, Exit)
+          : nullptr;
   BasicBlock *ConsumerPH =
       BasicBlock::Create(Ctx, "scalar.fission.consumer.ph", F, Exit);
   BasicBlock *ConsumerBody =
       BasicBlock::Create(Ctx, "scalar.fission.consumer.body", F, Exit);
+  // Keep the consumer's exit dedicated, before joining the zero-count bypass.
+  BasicBlock *ConsumerLoopExit =
+      ParticipationArm
+          ? BasicBlock::Create(Ctx, "scalar.fission.consumer.loopexit", F, Exit)
+          : nullptr;
+  BasicBlock *ConsumerExit =
+      ParticipationArm
+          ? BasicBlock::Create(Ctx, "scalar.fission.consumer.exit", F, Exit)
+          : Exit;
   BranchInst::Create(ConsumerBody, ConsumerPH);
   Loop *Consumer = LI.AllocateLoop();
   if (Loop *Parent = L.getParentLoop()) {
     Parent->addChildLoop(Consumer);
     Parent->addBasicBlockToLoop(ConsumerPH, LI);
+    if (ConsumerGuard) {
+      Parent->addBasicBlockToLoop(ConsumerGuard, LI);
+      Parent->addBasicBlockToLoop(ConsumerLoopExit, LI);
+      Parent->addBasicBlockToLoop(ConsumerExit, LI);
+    }
   } else {
     LI.addTopLevelLoop(Consumer);
   }
   Consumer->addBasicBlockToLoop(ConsumerBody, LI);
 
   IRBuilder<> EntryBuilder(&*F->getEntryBlock().getFirstInsertionPt());
-  // Header values and latch PHIs are available here without moving any
-  // arm-local computation or changing which arm participates.
-  IRBuilder<> ProducerBuilder(Branch);
+  Value *ProducerIndex = IV;
+  Value *ConsumerCount = Compare->getOperand(1);
+  if (ParticipationArm) {
+    // Before original iteration i, 0 <= count <= i. An update stores at count
+    // then increments once; a bypass retains count. Thus every store index is
+    // < N <= MaxTripCount and the final count P <= N fits the original IV type
+    // (analyzeFissionTripCount checks representability). Full-trip allocation
+    // and the checked byte/index ceiling above also bound every compact GEP.
+    auto *Count = PHINode::Create(IV->getType(), 2, "fission.participating",
+                                 &*Header->begin());
+    Count->addIncoming(ConstantInt::get(IV->getType(), 0), Preheader);
+    IRBuilder<> ArmBuilder(ParticipationArm->getTerminator());
+    Value *CountNext = ArmBuilder.CreateAdd(
+        Count, ConstantInt::get(IV->getType(), 1), "fission.participating.next",
+        /*HasNUW=*/true);
+    auto *CountMerge = PHINode::Create(
+        IV->getType(), 2, "fission.participating.merge", &*Latch->begin());
+    for (BasicBlock *Pred : predecessors(Latch))
+      CountMerge->addIncoming(Pred == ParticipationArm ? CountNext : Count, Pred);
+    Count->addIncoming(CountMerge, Latch);
+    ProducerIndex = Count;
+    IRBuilder<> GuardBuilder(ConsumerGuard);
+    auto *CountExport = GuardBuilder.CreatePHI(IV->getType(), 1,
+                                              "fission.participating.count");
+    CountExport->addIncoming(CountMerge, Latch);
+    ConsumerCount = CountExport;
+    Value *Empty = GuardBuilder.CreateICmpEQ(
+        CountExport, ConstantInt::get(IV->getType(), 0), "fission.empty");
+    GuardBuilder.CreateCondBr(Empty, ConsumerExit, ConsumerPH);
+  }
+  // Unconditional merged contributions are available at the latch. Compact
+  // contributions stay in their original arm; no inactive operation is moved.
+  IRBuilder<> ProducerBuilder(ParticipationArm
+                                  ? ParticipationArm->getTerminator()
+                                  : Branch);
   for (auto &[Contribution, Slot] : Scratch) {
     auto *Array = ArrayType::get(Contribution->getType(), Trip->MaxTripCount);
     Slot = EntryBuilder.CreateAlloca(Array, DL.getAllocaAddrSpace(), nullptr,
                                     "scalar.fission.scratch");
     Value *Index = ProducerBuilder.CreateZExtOrTrunc(
-        IV, DL.getIndexType(Slot->getType()), "fission.producer.index");
+        ProducerIndex, DL.getIndexType(Slot->getType()), "fission.producer.index");
     Value *Address = ProducerBuilder.CreateInBoundsGEP(
         Array, Slot, {ProducerBuilder.getInt32(0), Index});
     ProducerBuilder.CreateStore(Contribution, Address);
@@ -306,7 +391,20 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     Update->setOperand(1 - R.ContributionOperand, R.ConsumerPhi);
     B.Insert(Update, R.Update->getName() + ".consume");
     R.ConsumerPhi->addIncoming(Update, ConsumerBody);
-    ConsumerUpdates[R.Update] = Update;
+    if (ParticipationArm) {
+      auto *LoopResult = PHINode::Create(R.Phi->getType(), 1,
+                                         R.Phi->getName() + ".lcssa",
+                                         ConsumerLoopExit);
+      LoopResult->addIncoming(Update, ConsumerBody);
+      auto *Result = PHINode::Create(R.Phi->getType(), 2,
+                                    R.Phi->getName() + ".result", ConsumerExit);
+      Result->addIncoming(R.Phi->getIncomingValueForBlock(Preheader),
+                          ConsumerGuard);
+      Result->addIncoming(LoopResult, ConsumerLoopExit);
+      ConsumerUpdates[R.Merge] = Result;
+    } else {
+      ConsumerUpdates[R.Update] = Update;
+    }
   }
   for (PHINode &Export : Exit->phis()) {
     int Index = Export.getBasicBlockIndex(Latch);
@@ -314,27 +412,42 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       if (Value *Update = ConsumerUpdates.lookup(Export.getIncomingValue(Index)))
         Export.setIncomingValue(Index, Update);
   }
-  // Clone the original induction increment too, including its wrap flags.
+  // The compact consumer iterates exactly P times in original participation
+  // order. Otherwise clone the original induction/control, including flags.
   Instruction *ConsumerNext = Next->clone();
   ConsumerNext->replaceUsesOfWith(IV, ConsumerIV);
   B.Insert(ConsumerNext, "fission.consumer.next");
   ConsumerIV->addIncoming(ConsumerNext, ConsumerBody);
-  Instruction *Done = Compare->clone();
-  Done->setOperand(0, ConsumerNext);
-  B.Insert(Done, "fission.consumer.done");
-  B.CreateCondBr(Done,
-                 Branch->getSuccessor(0) == Header ? ConsumerBody : Exit,
-                 Branch->getSuccessor(1) == Header ? ConsumerBody : Exit);
-  Branch->setSuccessor(Branch->getSuccessor(0) == Exit ? 0 : 1, ConsumerPH);
+  if (ParticipationArm) {
+    Value *More = B.CreateICmpNE(ConsumerNext, ConsumerCount,
+                               "fission.consumer.more");
+    B.CreateCondBr(More, ConsumerBody, ConsumerLoopExit);
+    BranchInst::Create(ConsumerExit, ConsumerLoopExit);
+    BranchInst::Create(Exit, ConsumerExit);
+  } else {
+    Instruction *Done = Compare->clone();
+    Done->setOperand(0, ConsumerNext);
+    B.Insert(Done, "fission.consumer.done");
+    B.CreateCondBr(Done,
+                   Branch->getSuccessor(0) == Header ? ConsumerBody : Exit,
+                   Branch->getSuccessor(1) == Header ? ConsumerBody : Exit);
+  }
+  Branch->setSuccessor(Branch->getSuccessor(0) == Exit ? 0 : 1,
+                       ConsumerGuard ? ConsumerGuard : ConsumerPH);
   for (PHINode &Export : Exit->phis())
-    Export.replaceIncomingBlockWith(Latch, ConsumerBody);
+    Export.replaceIncomingBlockWith(
+        Latch, ParticipationArm ? ConsumerExit : ConsumerBody);
   for (Reduction &R : Reductions) {
     R.Update->dropAllReferences();
     R.Phi->dropAllReferences();
+    if (R.Merge)
+      R.Merge->dropAllReferences();
   }
   for (Reduction &R : Reductions) {
     R.Update->eraseFromParent();
     R.Phi->eraseFromParent();
+    if (R.Merge)
+      R.Merge->eraseFromParent();
   }
   if (OriginalID)
     Consumer->setLoopID(OriginalID);
