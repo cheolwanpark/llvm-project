@@ -411,6 +411,38 @@ def check_scalar_function(ir, name, evl, probe=False, fixed_narrow=False):
     return body
 
 
+def affine_instruction_refines(original, candidate, normalize):
+    if normalize(original) == normalize(candidate):
+        return True
+    # Dropping nuw/nsw refines poison to the integer operation's wrapping
+    # result. On every originally defined execution the result is unchanged.
+    # This is deliberately one-way, scalar-integer-only, and cannot change an
+    # opcode, type, operand, other flag, or placement. In particular it does not
+    # admit added flags, exact/disjoint changes, FP flags, or reassociation.
+    integer = re.compile(r'\s*(%[-\w.$]+) = (add|sub|mul|shl)'
+                         r'((?: (?:nuw|nsw))*) (i[1-9]\d*) '
+                         r'(%[-\w.$]+|-?\d+), (%[-\w.$]+|-?\d+)\s*')
+    old, new = (integer.fullmatch(line.split(', !', 1)[0])
+                for line in (original, candidate))
+    if not old or not new:
+        return False
+    for instruction in (old, new):
+        flags = instruction[3].split()
+        if len(flags) != len(set(flags)):
+            return False
+        width = int(instruction[4][1:])
+        for operand in (instruction[5], instruction[6]):
+            if not operand.startswith('%') and not -(1 << (width - 1)) <= int(operand) < (1 << width):
+                return False
+        if instruction[2] == 'shl':
+            # Only the demonstrated constant, in-range shift form is checked.
+            if instruction[6].startswith('%') or not 0 <= int(instruction[6]) < width:
+                return False
+    return (tuple(old[i] for i in (1, 2, 4, 5, 6)) ==
+            tuple(new[i] for i in (1, 2, 4, 5, 6)) and
+            set(new[3].split()) <= set(old[3].split()))
+
+
 def check_affine_function(ir, source, name, evl, probe=False):
     """Check the exact retained control and the separate consumer of a fixture."""
     body = function_definition(ir, name)
@@ -437,15 +469,209 @@ def check_affine_function(ir, source, name, evl, probe=False):
         return re.sub(r'\s+', '', line)
 
     before, after = blocks(original), blocks(body)
+
+    def definitions(text):
+        result = {}
+        for label, block in blocks(text).items():
+            for position, line in enumerate(block.splitlines()):
+                definition = re.fullmatch(r'  (%[-\w.$]+) = (.+)', line.split(', !', 1)[0])
+                if definition:
+                    value, expression = definition.groups()
+                    assert value not in result, (name, 'duplicate SSA definition', value)
+                    result[value] = (label, position, expression)
+        arguments = set(re.findall(r'%[-\w.$]+', text.split('{', 1)[0]))
+        assert not arguments.intersection(result), (name, 'redefined argument')
+        return result
+
+    definitions(original)
+    defined = definitions(body)
     after_instructions = {
         label: {normalize(line) for line in block.splitlines() if line.strip()}
         for label, block in after.items()
     }
     labels = list(before)
     labels = labels[labels.index(header):labels.index('latch') + 1]
+
+    def full_count_kind():
+        # Small certificates for these fixtures, independent of function names.
+        # Matching an SSA name alone proves nothing: check its defining i64
+        # arithmetic, guard dominance, all producer edges and the actual exit.
+        # No relational modular early-exit sibling has one of these controls.
+        def has(block, *instructions):
+            return all(any(affine_instruction_refines('  ' + instruction, line, normalize)
+                           for line in block.splitlines()) for instruction in instructions)
+
+        def edges(block):
+            lines = [line.split(', !', 1)[0].strip() for line in block.splitlines()
+                     if line.strip() and not line.lstrip().startswith(';')]
+            branches = [line for line in lines if line.startswith('br ')]
+            if len(branches) != 1 or branches[0] != lines[-1]:
+                return None
+            return re.findall(r'label %([-\w.$]+)', branches[0])
+
+        def incoming(table, destination):
+            return sorted(label for label, block in table.items()
+                          for target in (edges(block) or []) if target == destination)
+
+        if not has(before['entry'], '%valid = icmp ule i64 %n, 65',
+                   '%nonzero = icmp ne i64 %n, 0'):
+            return None
+        if not all(re.search(r'(?:\(|,)\s*i64 %n(?=[,)])', text.split('{', 1)[0])
+                   for text in (original, body)):
+            return None
+        # Verify the finite, forward producer DAG. Every entered iteration
+        # reaches the latch exactly once; its branch is the only loop exit.
+        region = [ph] + labels
+        exit_label = 'row.exit' if enclosing else 'exit'
+        for i, label in enumerate(region):
+            successors = edges(before[label])
+            if not successors or (label != 'latch' and any(
+                    target not in region[i + 1:] for target in successors)):
+                return None
+            if label == 'latch' and sorted(successors) != sorted([header, exit_label]):
+                return None
+            replacement = ['scalar.fission.consumer.ph' if t == exit_label else t
+                           for t in successors]
+            if edges(after[label]) != replacement:
+                return None
+        for table in (before, after):
+            if incoming(table, header) != sorted([ph, 'latch']):
+                return None
+            if incoming(table, ph) != (['outer'] if enclosing else ['entry']):
+                return None
+        if incoming(after, 'scalar.fission.consumer.ph') != ['latch']:
+            return None
+        consumer_edges = ['vector.ph'] if evl else ['scalar.ph', 'vector.ph']
+        if (edges(after['scalar.fission.consumer.ph']) != consumer_edges or
+                incoming(after, 'vector.ph') != ['scalar.fission.consumer.ph'] or
+                edges(after['vector.ph']) != ['vector.body']):
+            return None
+        if enclosing:
+            for table in (before, after):
+                if not (has(table['entry'], '%rows.valid = icmp ule i64 %rows, 4',
+                            '%rows.nonzero = icmp ne i64 %rows, 0',
+                            '%rows.enter = and i1 %rows.valid, %rows.nonzero',
+                            '%inner.enter = and i1 %valid, %nonzero',
+                            '%enter = and i1 %rows.enter, %inner.enter',
+                            'br i1 %enter, label %outer.ph, label %exit') and
+                        has(table['outer.ph'], 'br label %outer') and
+                        has(table['outer'], '%row = phi i64 [ 0, %outer.ph ], [ %row.next, %row.exit ]',
+                            'br label %inner.ph') and
+                        has(table['row.exit'], '%row.next = add nuw i64 %row, 1',
+                            '%rows.done = icmp eq i64 %row.next, %rows',
+                            'br i1 %rows.done, label %exit, label %outer') and
+                        incoming(table, 'outer.ph') == ['entry'] and
+                        incoming(table, 'outer') == ['outer.ph', 'row.exit']):
+                    return None
+        elif not has(before['entry'], '%enter = and i1 %valid, %nonzero',
+                     'br i1 %enter, label %preheader, label %exit'):
+            return None
+
+        # 1<=n<=65. Each tuple describes the *completed* count, not a storage
+        # bound. Relational forms have bounded origins and cannot wrap. For the
+        # equality wrap form, +2 first reaches begin+2*n at n (<2^63) steps.
+        controls = [
+            ('unit', '7', ['%limit = add nuw nsw i64 %n, 7'],
+             '%next = add nuw nsw i64 %iv, 1', '%done = icmp eq i64 %limit, %next', False),
+            ('twice', '%origin', ['%bits = and i64 %begin, 31',
+             '%origin = add nuw nsw i64 %bits, 1', '%span = shl nuw nsw i64 %n, 1',
+             '%limit = add nuw nsw i64 %origin, %span'],
+             '%next = add nuw nsw i64 %iv, 2', '%done = icmp ne i64 %next, %limit', True),
+            ('thirds', '9', ['%span = mul nuw nsw i64 %n, 3',
+             '%limit = add nuw nsw i64 %span, 9'],
+             '%next = add nuw nsw i64 %iv, 3', '%done = icmp ult i64 %next, %limit', True),
+            ('signed', '%origin', ['%origin = or i64 %begin, -32',
+             '%span = shl nuw nsw i64 %n, 1', '%limit = add nsw i64 %origin, %span'],
+             '%next = add nsw i64 %iv, 2', '%done = icmp sgt i64 %limit, %next', True),
+            ('down', '201', ['%span = mul nuw nsw i64 %n, 3',
+             '%limit = sub nuw nsw i64 201, %span'],
+             '%next = sub nuw nsw i64 %iv, 3', '%done = icmp ugt i64 %next, %limit', True),
+            ('signed.down', '%origin', ['%bits = and i64 %begin, 31',
+             '%origin = sub nsw i64 %bits, 17', '%span = shl nuw nsw i64 %n, 1',
+             '%limit = sub nsw i64 %origin, %span'],
+             '%next = add nsw i64 %iv, -2', '%done = icmp sge i64 %limit, %next', False),
+            ('twice', '%begin', ['%span = shl nuw nsw i64 %n, 1',
+             '%limit = add i64 %begin, %span'],
+             '%next = add i64 %iv, 2', '%done = icmp eq i64 %limit, %next', False),
+            ('current', '7', ['%last = sub nuw nsw i64 %n, 1',
+             '%span = shl nuw nsw i64 %last, 1', '%limit = add nuw nsw i64 %span, 7'],
+             '%next = add nuw nsw i64 %iv, 2', '%done = icmp uge i64 %iv, %limit', False),
+        ]
+        if enclosing:
+            # 0<=row<rows<=4, origin=row+5, last next=origin+2*n<=138.
+            controls = [('enclosing', '%origin', ['%origin = add nuw nsw i64 %row, 5',
+                         '%span = shl nuw nsw i64 %n, 1',
+                         '%limit = add nuw nsw i64 %origin, %span'],
+                         '%next = add nuw nsw i64 %iv, 2',
+                         '%done = icmp slt i64 %next, %limit', True)]
+        for kind, origin, setup, step, comparison, continue_true in controls:
+            true, false = (header, exit_label) if continue_true else (exit_label, header)
+            if (has(before[ph], *setup) and
+                    has(before[header], f'%iv = phi i64 [ {origin}, %{ph} ], [ %next, %latch ]') and
+                    has(before['latch'], step, comparison,
+                        f'br i1 %done, label %{true}, label %{false}')):
+                return kind
+        return None
+
+    def count_expressions(kind):
+        # Recognize only retained straight-line expansion chains. Each operand
+        # is the preceding checked SSA definition; every operation is i64 and
+        # stays in this block, in this order. No arbitrary live-in, cast, PHI,
+        # or same-valued/dead instruction can establish count provenance.
+        patterns = {
+            # span=2*n in [2,130]: ((span-2)>>1)+1=n, including n=1.
+            'twice': [('add i64 %span, -2', 'lshr i64 {0}, 1', 'add nuw i64 {1}, 1'),
+                      ('sub i64 %span, 2', 'lshr i64 {0}, 1', 'add nuw i64 {1}, 1')],
+            # n=1: umin(3*n-3,1)=0. n>=2: it is 1, and
+            # floor((3*n-4)/3)=n-2. Both paths therefore yield n.
+            'thirds': [('add i64 %span, -3', 'call i64 @llvm.umin.i64(i64 {0}, i64 1)',
+                        'sub i64 %span, {1}', 'add i64 {2}, -3', 'udiv i64 {3}, 3',
+                        'add i64 {1}, {4}', 'add i64 {5}, 1')],
+            # origin in [-32,-1], limit=origin+2*n >= origin+2.
+            'signed': [('add nsw i64 %origin, 2',
+                        'call i64 @llvm.smax.i64(i64 %limit, i64 {0})',
+                        'sub i64 {1}, %origin', 'add i64 {2}, -1',
+                        'lshr i64 {3}, 1', 'add nuw i64 {4}, 1')],
+            # bits in [0,31], origin=bits-17, limit=origin-2*n <= bits-19.
+            'signed.down': [('add nsw i64 %bits, -19',
+                             'call i64 @llvm.smin.i64(i64 %limit, i64 {0})',
+                             'sub i64 %bits, {1}', 'add i64 {2}, -18',
+                             'lshr i64 {3}, 1', 'add nuw i64 {4}, 1')],
+            # Current-IV test performs the last contribution before exiting.
+            'current': [('shl i64 %n, 1', 'add i64 {0}, -1',
+                         'lshr i64 {1}, 1', 'add nuw i64 {2}, 1')],
+            # smax(row+5+2*n,row+7)=row+5+2*n; subtract row+6.
+            # Checked outer guard and recurrence above establish 0<=row<=3.
+            'enclosing': [('shl i64 %n, 1', 'add i64 {0}, 5', 'add i64 {1}, %row',
+                           'add i64 %row, 7', 'call i64 @llvm.smax.i64(i64 {2}, i64 {3})',
+                           'mul nsw i64 %row, -1', 'add i64 {5}, -6',
+                           'add i64 {4}, {6}', 'lshr i64 {7}, 1', 'add nuw i64 {8}, 1')],
+        }
+        # The enclosing chain spans two checked dominating blocks. All other
+        # observed chains are wholly in the single-entry consumer preheader.
+        locations = (['outer.ph', 'outer'] if kind == 'enclosing'
+                     else ['scalar.fission.consumer.ph'])
+        instructions = [(value, label, expression) for value, (label, _, expression) in defined.items()
+                        if label in locations and not (kind == 'enclosing' and expression.startswith('phi '))]
+        aliases = []
+        for pattern in patterns.get(kind, []):
+            for start in range(len(instructions) - len(pattern) + 1):
+                values = []
+                for (value, label, expression), expected in zip(instructions[start:], pattern):
+                    expected_block = ('outer.ph' if len(values) < 2 else 'outer') if kind == 'enclosing' else locations[0]
+                    if label != expected_block or not affine_instruction_refines(
+                            '  ' + value + ' = ' + expected.format(*values),
+                            '  ' + value + ' = ' + expression, normalize):
+                        break
+                    values.append(value)
+                else:
+                    aliases.append(values[-1])
+        return aliases
+
     # The fixtures deliberately use the IV in addressing and internal control.
     # Require every retained instruction/edge in its original block, including
-    # flags and operand order. Only reduction state and the exit edge change.
+    # operand order. Integer nowrap flags may only be removed by the refinement
+    # above. Only reduction state and the exit edge otherwise change.
     header_reduction = r'%(?:r0|r1|rd|rf|sum|dsum) = phi '
     update = r'%(?:u0|u1|ud|uf|update|dupdate) = '
     merge = r'%(?:m0|m1|md|mf) = phi '
@@ -460,7 +686,11 @@ def check_affine_function(ir, source, name, evl, probe=False):
                 new_exit = ('scalar.fission.consumer.guard' if compact
                             else 'scalar.fission.consumer.ph')
                 line = line.replace('label %' + old_exit, 'label %' + new_exit)
-            assert normalize(line) in after_instructions[label], (name, label, line, body)
+            value = re.match(r'  (%[-\w.$]+) = ', line)
+            candidate = defined.get(value[1]) if value else None
+            assert (normalize(line) in after_instructions[label] or
+                    (candidate and candidate[0] == label and affine_instruction_refines(
+                        line, '  ' + value[1] + ' = ' + candidate[2], normalize))), (name, label, line, body)
     assert '<vscale x' not in producer and 'fadd ' not in producer, producer
     assert producer.count('call i32 @scalar_helper(') == 1, producer
     for ty in ['i32', 'double'] + ([] if enclosing else ['float']):
@@ -488,32 +718,40 @@ def check_affine_function(ir, source, name, evl, probe=False):
         # the accepted compact fixture. Its original induction is now strided.
         check_compact_count(producer, consumer, 'compact_triangle', evl)
     else:
-        assert (f'%fission.ordinal = phi i64 [ 0, %{ph} ], '
-                '[ %fission.completed, %latch ]') in producer, body
-        assert '%fission.completed = add nuw i64 %fission.ordinal, 1' in producer, body
-        assert re.search(r'^  %fission.completed.count = phi i64 '
-                         r'\[ %fission.completed, %latch \]', consumer, re.M), body
-        # For the original fixtures, the preserved arithmetic proves N=n and
-        # SE may use n as the exit value of the ordinal. The modular relational
-        # siblings may exit earlier and must use the actual completed count.
-        # Other accepted aliases must be single-input exports on the latch edge.
+        for value, label, expression in [
+            ('%fission.ordinal', header,
+             f'phi i64 [ 0, %{ph} ], [ %fission.completed, %latch ]'),
+            ('%fission.completed', 'latch', 'add nuw i64 %fission.ordinal, 1'),
+            ('%fission.completed.count', 'scalar.fission.consumer.ph',
+             'phi i64 [ %fission.completed, %latch ]'),
+        ]:
+            assert value in defined and defined[value][0] == label, (name, value, body)
+            assert normalize(defined[value][2]) == normalize(expression), (name, value, body)
+        # Permit n and observed expanded expressions only after a certificate
+        # for the original control proves N=n. An equality witness bounding
+        # storage is insufficient, particularly for modular relational exits.
+        # Function names are never count certificates.
         counts = ['%fission.completed', '%fission.completed.count']
-        if not name.endswith('_early'):
+        kind = full_count_kind()
+        if kind:
             counts.append('%n')
+            counts.extend(count_expressions(kind))
         for value, incoming in re.findall(
                 r'^  (%[-\w.$]+) = phi i64 \[ (%[-\w.$]+), %latch \](?:, ![^\n]*)?$',
                 consumer, re.M):
-            if incoming == '%fission.completed':
+            if incoming == '%fission.completed' and defined[value][0] == 'scalar.fission.consumer.ph':
                 counts.append(value)
         count = '(?:' + '|'.join(map(re.escape, counts)) + ')'
         if evl:
-            assert re.search(rf'%avl = phi i64 \[ {count}, %vector\.ph \]', consumer), body
+            assert re.search(rf'^  %avl = phi i64 \[ {count}, %vector\.ph \], '
+                             r'\[ %avl\.next, %vector\.body \](?:, ![^\n]*)?$', consumer, re.M), body
         else:
-            for instruction in [rf'%min.iters.check = icmp ult i64 {count},',
-                                rf'%n.mod.vf = urem i64 {count},',
-                                rf'%fission.consumer.more = icmp ne i64 '
-                                rf'%fission.consumer.next, {count}']:
-                assert re.search(instruction, consumer), (name, instruction, body)
+            for instruction in [rf'%min\.iters\.check = icmp ult i64 {count}, %[-\w.$]+',
+                                rf'%n\.mod\.vf = urem i64 {count}, %[-\w.$]+',
+                                rf'%n\.vec = sub i64 {count}, %n\.mod\.vf',
+                                rf'%fission\.consumer\.more = icmp ne i64 '
+                                rf'%fission\.consumer\.next, {count}']:
+                assert re.search(rf'^  {instruction}(?:, ![^\n]*)?$', consumer, re.M), (name, instruction, body)
     vector = re.search(r'^vector\.body[^:]*:[^\n]*\n(.*?)(?=^[\w.$-]+:|^})',
                        consumer, re.M | re.S)
     assert vector, f'@{name}: missing vector consumer\n{body}'
@@ -523,7 +761,8 @@ def check_affine_function(ir, source, name, evl, probe=False):
     assert '@llvm.vector.reduce.add.nxv4i32' in consumer, body
     load = r'call <vscale x 4 x i32> @llvm\.vp\.load\.' if evl else r'load <vscale x 4 x i32>'
     assert len(re.findall(load, vector[0])) == 1, body
-    assert not re.search(r'\b(?:fadd|call)\s+[^\n]*\breassoc\b', body), body
+    assert not re.search(r'\b(?:fadd|fsub|fmul|fdiv|frem|fcmp|call)\s+'
+                         r'(?:fast|reassoc|nnan|ninf|nsz|arcp|contract|afn)\b', body), body
     if probe:
         for label, recorder in [(header, 'acyclic_iteration'), ('latch', 'acyclic_latch'),
                                 ('vector.body', 'scalar_consumer_vector'),

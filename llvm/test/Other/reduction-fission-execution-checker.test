@@ -1,6 +1,7 @@
 # RUN: split-file %s %t
 # RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py %t/functions.ll %t/compact-evl.ll \
-# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll %t/affine-evl.ll
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll %t/affine-evl.ll \
+# RUN:   %S/Inputs/reduction-fission-affine-counts.ll
 
 # Parsing and checker boundaries only; transformed execution is exercised by
 # check-reduction-fission.py with the real opt/llc and the C harness.
@@ -8,6 +9,7 @@
 #--- check.py
 import importlib.util
 from pathlib import Path
+import re
 import sys
 
 spec = importlib.util.spec_from_file_location('fission_checker', sys.argv[1])
@@ -356,10 +358,18 @@ decimal = affine.replace('3.000000e+00', '3.0').replace('5.000000e-01', '0.5').r
 assert checker.check_affine_function(decimal, affine_source, affine_name, evl=True) == decimal
 
 for candidate in (affine, many_metadata):
+    # Removing integer nuw/nsw is a one-way poison refinement. These two
+    # former negative cases now intentionally succeed; so does removing both.
+    # The opcode, scalar integer type, ordered operands and block still match.
+    for value, flags in (('%next', 'nuw nsw'), ('%index', 'nuw nsw'),
+                         ('%limit', 'nuw nsw')):
+        for remaining in ('nuw', 'nsw', ''):
+            dropped = change_line(candidate, value, flags + ' ', remaining + ' ' if remaining else '')
+            assert checker.check_affine_function(dropped, affine_source, affine_name, evl=True) == dropped
     for value, old, new, label, instruction in [
         ('%next', 'add nuw nsw', 'sub nuw nsw', 'latch', '%next = add nuw nsw i64 %iv, 1'),
-        ('%next', 'nuw nsw', 'nsw', 'latch', '%next = add nuw nsw i64 %iv, 1'),
-        ('%next', 'nuw nsw', 'nuw', 'latch', '%next = add nuw nsw i64 %iv, 1'),
+        ('%next', 'i64', 'i32', 'latch', '%next = add nuw nsw i64 %iv, 1'),
+        ('%next', 'nuw nsw', 'nuw nsw exact', 'latch', '%next = add nuw nsw i64 %iv, 1'),
         # 1 is a prefix of 10: substring membership incorrectly accepts this.
         ('%next', ', 1', ', 10', 'latch', '%next = add nuw nsw i64 %iv, 1'),
         ('%next', '%iv, 1', '1, %iv', 'latch', '%next = add nuw nsw i64 %iv, 1'),
@@ -419,6 +429,185 @@ for candidate in (affine, many_metadata):
     reject_affine(replace_once(candidate, '  %pc = add i32 %first.c, 23',
                               '  ; %pc = add i32 %first.c, 23'),
                   'positive', '%pc = add i32 %first.c, 23')
+
+# All fourteen real retained outputs, including affine_runtime's unflagged
+# span and expanded count, analogous relational min/max forms, current-IV
+# termination, modular wrap, enclosing reuse, and the four early-exit siblings.
+# These are checker fixtures; real opt transformations are still mandatory in
+# the executable comparisons, at every N=0..66 and UINT64_MAX, and P=0..65.
+affine_originals = Path(sys.argv[4]).read_text()
+affine_outputs = Path(sys.argv[6]).read_text()
+for match in checker.FUNCTION_DEFINITION.finditer(affine_outputs):
+    function = match['name']
+    assert checker.check_affine_function(affine_outputs, affine_originals, function, evl=True) == match[0]
+
+runtime_name = 'affine_runtime'
+runtime_source = checker.function_definition(affine_originals, runtime_name)
+runtime = checker.function_definition(affine_outputs, runtime_name)
+
+
+def reject_count(candidate, original=runtime_source, function=runtime_name, reason=''):
+    try:
+        checker.check_affine_function(candidate, original, function, evl=True)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('accepted affine count mutation: ' + reason)
+
+
+# Function and temporary SSA names are not evidence. The arithmetic/guard/CFG
+# certificate must work under renaming, including for the wrap analogue.
+for function in ('affine_runtime', 'affine_wrap'):
+    original = checker.function_definition(affine_originals, function)
+    candidate = checker.function_definition(affine_outputs, function)
+    for old, new in ((function, 'unrelated_name'), ('%3', '%minus.two'),
+                     ('%4', '%half'), ('%5', '%count')):
+        original, candidate = original.replace(old, new), candidate.replace(old, new)
+    assert checker.check_affine_function(candidate, original, 'unrelated_name', evl=True) == candidate
+
+# The exactly checked subtraction spelling is analogous to the printed add -2.
+subtraction = change_line(runtime, '%3', 'add i64 %span, -2', 'sub i64 %span, 2')
+assert checker.check_affine_function(subtraction, runtime_source, runtime_name, evl=True) == subtraction
+
+# Integer flag removal is one-way. Test shl and mul as well as the add/sub
+# placements above, including removal of each flag separately and both.
+for function, value, operation in (('affine_runtime', '%span', 'shl'),
+                                    ('affine_unsigned', '%span', 'mul')):
+    original = checker.function_definition(affine_originals, function)
+    candidate = checker.function_definition(affine_outputs, function)
+    for flags in ('nuw ', 'nsw ', ''):
+        dropped = change_line(candidate, value, operation + ' i64', operation + ' ' + flags + 'i64')
+        assert checker.check_affine_function(dropped, original, function, evl=True) == dropped
+    unflagged_source = change_line(original, value, 'nuw nsw ', '')
+    for flags in ('nuw ', 'nsw ', 'nuw nsw '):
+        added = change_line(candidate, value, operation + ' i64', operation + ' ' + flags + 'i64')
+        reject_count(added, unflagged_source, function, 'added ' + flags)
+
+# Mutation on only the output must fail preservation. Make the SAME change
+# on both sides too: preservation alone is not a proof of N=n. Entry counts
+# 0, 66, signed/unsigned extremes must never enter under the certified guard.
+for value, old, replacements in [
+    ('%valid', 'icmp ule i64 %n, 65', ('icmp ule i64 %n, 66', 'icmp ule i64 %n, 64',
+                                    'icmp ule i64 %n, 0', 'icmp ule i64 %n, 1',
+                                    'icmp sle i64 %n, 65', 'icmp uge i64 %n, 65',
+                                    'icmp ule i32 %n, 65', 'icmp ule i64 %begin, 65')),
+    ('%nonzero', 'icmp ne i64 %n, 0', ('icmp eq i64 %n, 0', 'icmp ne i64 %n, 1')),
+    ('%enter', 'and i1', ('or i1',)),
+    ('%span', 'shl i64 %n, 1', ('shl i64 %n, 0', 'shl i64 %n, 2',
+                              'shl i64 %n, 64', 'shl i64 %begin, 1', 'shl i32 %n, 1')),
+    ('%origin', 'add nuw nsw i64 %bits, 1', ('add nuw nsw i64 %bits, 2',)),
+    ('%next', 'add nuw nsw i64 %iv, 2', ('add nuw nsw i64 %iv, 1',)),
+    ('%done', 'icmp ne i64 %next, %limit', ('icmp ult i64 %next, %limit',)),
+]:
+    for replacement in replacements:
+        mutated = change_line(runtime, value, old, replacement)
+        reject_count(mutated, reason=replacement)
+        # The source span still has both flags; mirror the transformed
+        # expression's flags only for this deliberate dual-side mutation.
+        old_source = old.replace('shl i64', 'shl nuw nsw i64') if value == '%span' else old
+        source_replacement = replacement.replace('shl i', 'shl nuw nsw i') if value == '%span' else replacement
+        original = change_line(runtime_source, value, old_source, source_replacement)
+        reject_count(mutated, original, reason='matching source: ' + replacement)
+
+for value, old, replacements in [
+    ('%3', 'add i64 %span, -2', ('add i64 %span, -1', 'add i64 %span, -4',
+                               'sub i64 %span, 1', 'add i64 %n, -2',
+                               'add i32 %span, -2', 'add nuw i64 %span, -2')),
+    ('%4', 'lshr i64 %3, 1', ('lshr i64 %3, 0', 'lshr i64 %3, 2',
+                             'ashr i64 %3, 1', 'lshr exact i64 %3, 1',
+                             'lshr i64 %span, 1', 'lshr i32 %3, 1')),
+    ('%5', 'add nuw i64 %4, 1', ('add nuw i64 %4, 0', 'add nuw i64 %4, 2',
+                                'add nuw i64 %3, 1', 'add nuw nsw i64 %4, 1')),
+    ('%avl', '[ %5, %vector.ph ]', ('[ %span, %vector.ph ]', '[ %begin, %vector.ph ]',
+                                   '[ %5.other, %vector.ph ]', '[ %arbitrary, %vector.ph ]',
+                                   '[ %5, %latch ]')),
+    ('%fission.completed.count', '[ %fission.completed, %latch ]',
+     ('[ %n, %latch ]', '[ %fission.completed, %left ]',
+      '[ %fission.completed, %latch ], [ %n, %preheader ]')),
+]:
+    for replacement in replacements:
+        reject_count(change_line(runtime, value, old, replacement), reason=replacement)
+
+# Dropped flags on new integer count operations have the same refinement
+# contract; added flags do not. Each intermediate must be a unique definition
+# in the observed dominating block, never a comment or a coincidental alias.
+plain_final = change_line(runtime, '%5', 'add nuw i64', 'add i64')
+assert checker.check_affine_function(plain_final, runtime_source, runtime_name, evl=True) == plain_final
+for flag in ('fast', 'reassoc', 'nnan', 'ninf', 'nsz', 'arcp', 'contract', 'afn'):
+    reject_count(change_line(runtime, '%pd', 'fmul double', 'fmul ' + flag + ' double'),
+                 reason='FP relaxation: ' + flag)
+chain = '  %3 = add i64 %span, -2\n  %4 = lshr i64 %3, 1\n  %5 = add nuw i64 %4, 1\n'
+for altered in (runtime.replace(chain, ''.join('  ; ' + line.strip() + '\n' for line in chain.splitlines())),
+                runtime.replace(chain, chain.replace('%4 = lshr i64', '%4 = lshr\n  i64')),
+                runtime.replace(chain, chain + '  %5 = add nuw i64 %4, 1\n'),
+                runtime.replace(chain, '').replace('  %q = ', chain + '  %q = ', 1),
+                runtime.replace(chain, '').replace('vector.ph:', 'vector.ph:\n' + chain, 1)):
+    reject_count(altered, reason='count definition/placement')
+reject_count(runtime.replace('i64 %n, double', 'i32 %n, double'), reason='argument width')
+reject_count(runtime[:-1] + 'extra:\n  br label %preheader\n}', reason='guard dominance')
+reject_count(runtime[:-1] + 'extra:\n  br label %loop\n}', reason='producer entry')
+reject_count(runtime[:-1] + 'extra:\n  br label %vector.ph\n}', reason='consumer entry')
+forwarded = runtime.replace('  br label %vector.body\n',
+                            '  %arbitrary = phi i64 [ %fission.completed, %scalar.fission.consumer.ph ]\n'
+                            '  br label %vector.body\n')
+reject_count(change_line(forwarded, '%avl', '[ %5, %vector.ph ]',
+                         '[ %arbitrary, %vector.ph ]'), reason='wrong export block')
+
+# Every arithmetic edge/width/constant in the other observed chains is
+# checked too. The enclosing chain is hoisted into two dominating blocks;
+# its outer guard/row recurrence is part of its completed-count certificate.
+for function in ('affine_unsigned', 'affine_signed', 'affine_signed_down',
+                 'affine_current', 'affine_enclosing'):
+    original = checker.function_definition(affine_originals, function)
+    candidate = checker.function_definition(affine_outputs, function)
+    if function == 'affine_enclosing':
+        region = candidate.split('outer.ph:', 1)[1].split('inner.ph:', 1)[0]
+    else:
+        region = checker.scalar_consumer(candidate, function)[1].split('vector.ph:', 1)[0]
+    originals = set(re.findall(r'^  (%[-\w.$]+) = ', original, re.M))
+    for value, expression in re.findall(r'^  (%[-\w.$]+) = (.+)', region, re.M):
+        if value in originals or expression.startswith('phi '):
+            continue
+        for old, new in [('i64', 'i32')]:
+            reject_count(change_line(candidate, value, old, new), original, function, 'chain width')
+        operands = re.findall(r'%[-\w.$]+', expression)
+        if operands:
+            reject_count(change_line(candidate, value, operands[0], '%unrelated'),
+                         original, function, 'chain operand')
+        constants = list(re.finditer(r'(?<=[, ])-?\d+(?=[,) ]|$)', expression))
+        if constants:
+            constant = constants[-1]
+            mutated = expression[:constant.start()] + str(int(constant[0]) + 1) + expression[constant.end():]
+            reject_count(change_line(candidate, value, expression, mutated),
+                         original, function, 'chain constant')
+    if function == 'affine_enclosing':
+        for value, old, new in (('%rows.valid', ', 4', ', 5'),
+                                ('%row.next', ', 1', ', 2'),
+                                ('%row', '[ 0, %outer.ph ]', '[ 1, %outer.ph ]')):
+            reject_count(change_line(candidate, value, old, new), original, function, 'enclosing control')
+
+# A storage-bound witness does not count completed iterations. All modular
+# relational siblings may stop before n. Rename them to remove even the
+# apparent function-name hint; n and every fake arithmetic alias must fail.
+for function in ('affine_unsigned_early', 'affine_signed_early',
+                 'affine_down_early', 'affine_signed_down_early'):
+    original = checker.function_definition(affine_originals, function).replace(function, 'ordinary_name')
+    candidate = checker.function_definition(affine_outputs, function).replace(function, 'ordinary_name')
+    assert checker.check_affine_function(candidate, original, 'ordinary_name', evl=True) == candidate
+    for value in ('%n', '%span', '%limit', '%arbitrary', '%fission.completed.other'):
+        reject_count(change_line(candidate, '%avl', '[ %fission.completed, %vector.ph ]',
+                                 '[ ' + value + ', %vector.ph ]'), original, 'ordinary_name', 'early witness')
+
+# Affine compaction must consume actual P, retain P=0 bypass and starts. The
+# existing compact fixtures above still exercise both tail policies and LV2
+# forwarding; these mutations call the affine production entry point as well.
+compact_affine = checker.function_definition(affine_outputs, 'affine_compact')
+compact_original = checker.function_definition(affine_originals, 'affine_compact')
+for value in ('%n', '%span', '%limit', '%arbitrary'):
+    reject_count(change_line(compact_affine, '%avl', '[ %fission.participating.merge, %vector.ph ]',
+                             '[ ' + value + ', %vector.ph ]'), compact_original, 'affine_compact', 'compact witness')
+reject_count(change_line(compact_affine, '%fission.empty', 'icmp eq', 'icmp ne'),
+             compact_original, 'affine_compact', 'empty bypass')
 
 # Fixed-vscale specialization must fail before handing unsupported EVL/VP
 # operations to a host backend. Renaming scalable types alone is not sound.

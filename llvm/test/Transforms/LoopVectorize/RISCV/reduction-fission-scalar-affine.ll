@@ -32,8 +32,9 @@
 ; RUN:   -vplan-reduction-fission-min-pressure-percent=1000000 \
 ; RUN:   -S %s | FileCheck %s --check-prefix=SCALAR
 ;
-; Nonzero and strided integer controls. Retain the original producer's flags,
-; predicate, operand order, branch polarity and entry guard. Scratch uses a
+; Nonzero and strided integer controls. Retain the original producer's integer
+; operations (allowing removal of poison-generating nowrap flags), predicate,
+; operand order, branch polarity and entry guard. Scratch uses a
 ; private ordinal; the consumer counts completed contributions. Runtime starts
 ; are independent of n and bounded by visible IR, never fixture knowledge.
 ; The compact triangle retains its separate participation proof and P=0 bypass.
@@ -164,10 +165,15 @@ exit:
 ; SCALAR: %fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.
 ; SCALAR: ret void
 ; EVL-LABEL: define void @affine_runtime(
+; EVL: %span = shl i64 %n, 1
 ; EVL: %next = add nuw nsw i64 %iv, 2
 ; EVL: %done = icmp ne i64 %next, %limit
 ; EVL: scalar.fission.consumer.ph:
+; EVL: [[SPAN_MINUS_TWO:%.*]] = add i64 %span, -2
+; EVL-NEXT: [[HALF:%.*]] = lshr i64 [[SPAN_MINUS_TWO]], 1
+; EVL-NEXT: [[COUNT:%.*]] = add nuw i64 [[HALF]], 1
 ; EVL: vector.body:
+; EVL: %avl = phi i64 [ [[COUNT]], %vector.ph ]
 ; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
 ; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
 ; EVL: ret void
