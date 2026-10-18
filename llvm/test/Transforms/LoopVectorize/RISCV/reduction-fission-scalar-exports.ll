@@ -70,8 +70,8 @@ declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 ; SCALAR-REMARK: scalar-exports.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-exports.c:12:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-exports.c:12:3: scalar-IR fission consumer VF 1
-; Canonical single-block and compact export loops chunk at the old limit.
-; The unconditional multi-block producer retains its storage rejection.
+; Canonical single-block, compact and unconditional multiblock export loops
+; chunk at the old full-trip limit, retaining their original final exports.
 ; LIMIT: scalar-exports.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule
 ; LIMIT-IR-LABEL: define void @export_unconditional(
 ; LIMIT-IR: alloca [64 x i32]
@@ -196,9 +196,13 @@ exit:
 ; SCALAR-REMARK: scalar-exports.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-exports.c:22:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-exports.c:22:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-exports.c:22:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; LIMIT: scalar-exports.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule
 ; LIMIT-IR-LABEL: define void @export_diamond(
-; LIMIT-IR-NOT: scalar.fission
+; LIMIT-IR: alloca [64 x i32]
+; LIMIT-IR: alloca [64 x double]
+; LIMIT-IR: alloca [64 x float]
+; LIMIT-IR: scalar.fission.chunk:
+; LIMIT-IR: %iv.fission.export = phi i64 [ %iv, %latch ]
 ; LIMIT-IR: ret void
 ; SCALAR-LABEL: define void @export_diamond(
 ; SCALAR: alloca [65 x i32]

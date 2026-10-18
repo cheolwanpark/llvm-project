@@ -643,12 +643,12 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   bool Chunked = !ScratchBytes;
   if (Chunked) {
     // Only a zero-start/unit-step loop whose next IV exits on equality may
-    // use the invariant operand as the actual N. Multi-block producers have
-    // already passed the acyclic/common terminal participation edge proof.
+    // use the invariant operand as the actual N. The acyclic CFG proof gives
+    // exactly one latch visit per entered iteration, regardless of whether
+    // reductions are unconditional or use a terminal participation edge.
     // An affine endpoint or relational termination witness only bounds storage:
     // it must never reach the N-base arithmetic or replace original control.
-    if ((L.getNumBlocks() != 1 && !ParticipationArm) || !CanonicalCount ||
-        !ScratchSize(1))
+    if (!CanonicalCount || !ScratchSize(1))
       return Reject("scalar-scratch-limit");
     if ((Compare->getPredicate() == ICmpInst::ICMP_EQ) !=
         (Branch->getSuccessor(0) == Exit))
@@ -849,6 +849,12 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   Value *ProducerNext = nullptr;
   Value *CompletedCount = nullptr;
   if (Chunked) {
+    // For an unconditional producer, the DAG reaches the latch once and each
+    // contribution dominates its original update (in the latch, or in a
+    // supported header). It therefore dominates the latch stores below. For
+    // local ordinal i, 0 <= i < K=min(N-base,C); the one latch increment exits
+    // at exactly K. The consumer visits initialized slots [0,K) in order before
+    // base advances by K. Original branches and arm-local operations stay put.
     auto *Ordinal = PHINode::Create(IV->getType(), 2, "fission.producer.ordinal",
                                    &*Header->begin());
     Ordinal->addIncoming(ConstantInt::get(IV->getType(), 0), ProducerPH);

@@ -26,7 +26,7 @@
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=1044 -pass-remarks=vplan-reduction-fission \
 ; RUN:   -disable-output %s 2>&1 | FileCheck %s --check-prefix=LIMIT
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks-missed=vplan-reduction-fission \
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks-missed=vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
 ; RUN:   -S %s 2>&1 | FileCheck %s --check-prefix=SMALL
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
 ; RUN:   -S %s | FileCheck %s --check-prefix=DISABLED --implicit-check-not=scalar.fission
@@ -55,9 +55,13 @@
 ; REMARK: scalar-diamond.c:62:5: scalar-IR fission producer VF 1
 ; REMARK: scalar-diamond.c:62:5: scalar-IR fission consumer VF vscale x 4
 ; LIMIT: scalar-diamond.c:32:7: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; SMALL: scalar-diamond.c:32:7: scalar-IR reduction fission rejected: scalar-scratch-limit
+; At the old full-trip ceiling, the same diamond now uses bounded chunks.
+; SMALL: scalar-diamond.c:32:7: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
 ; SMALL-LABEL: define void @scalar_diamond(
-; SMALL-NOT: scalar.fission
+; SMALL: alloca [64 x i32]
+; SMALL: alloca [64 x double]
+; SMALL: alloca [64 x float]
+; SMALL: scalar.fission.chunk:
 ; SMALL: ret void
 ; DISABLED-LABEL: define void @scalar_diamond(
 ; DISABLED: sdiv i32 840, %x

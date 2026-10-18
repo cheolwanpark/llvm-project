@@ -1689,12 +1689,44 @@ static const double *StateChunkD;
 static unsigned StateChunkMode, StateProducerVisits;
 static uint32_t StatePrev, StateOlder;
 static double StateD;
+static unsigned StateCFGStores, StateCFGLeft, StateCFGRight, StateCFGEdges;
+static const uint32_t *StateCFGIntBase;
+static const double *StateCFGDoubleBase;
+static uint32_t StateCFGPrev, StateCFGOlder;
+static double StateCFGD;
+
+// A literal original-iteration reference, independent of transformed SSA and
+// chunk control. Mode 4/5/6: one/serial/nested diamonds; 7: header updates.
+static void state_cfg_step(unsigned Mode, uint32_t X, const double *D,
+                           uint32_t Prev, uint32_t Older, double DS,
+                           uint32_t *C, double *DC, double *NextD) {
+  bool Left = X != 0 && (Prev & 1);
+  uint32_t B = Left ? (uint32_t)(840 / (int32_t)X) : X;
+  double Delta = Left ? (double)(int32_t)B : *D;
+  if (Mode == 5 || (Mode == 6 && Left)) {
+    if (Older & 1) {
+      B += 23;
+      Delta *= 0.5;
+    } else {
+      B -= 9;
+      Delta *= -1.0;
+    }
+  }
+  *NextD = DS + Delta;
+  *C = scalar_helper(Prev ^ (X + Older) ^ (Mode == 7 ? 0 : B));
+  *DC = Mode == 7 ? DS - (double)(int32_t)X : *NextD - DS;
+}
 
 void record_state_chunk_begin(uint64_t Base, uint64_t Count, uint32_t Prev,
                               uint32_t Older, double D) {
   record_chunk_begin(Base, Count);
   if (Prev != StatePrev || Older != StateOlder || memcmp(&D, &StateD, sizeof(D)))
     fail(ChunkName, ChunkN, ChunkBegins, "producer state initial/carry mismatch");
+  StateCFGStores = 0;
+  StateCFGEdges = 0;
+  StateCFGPrev = Prev;
+  StateCFGOlder = Older;
+  StateCFGD = D;
 }
 
 void record_state_chunk_producer(uint64_t Global, uint64_t Local) {
@@ -1702,18 +1734,70 @@ void record_state_chunk_producer(uint64_t Global, uint64_t Local) {
   ++StateProducerVisits;
 }
 
+void record_state_chunk_cfg_branch(unsigned Edge) {
+  if (!ChunkActive || Edge > 3 || (StateCFGEdges & (1u << Edge)))
+    fail(ChunkName, ChunkN, Edge, "acyclic original branch visited twice");
+  StateCFGEdges |= 1u << Edge;
+  StateCFGLeft += Edge == 0;
+  StateCFGRight += Edge == 1;
+}
+
+// Probe AFTER the actual latch stores. Establish/reset bases from slot zero
+// in each chunk and check both mixed-size streams at every local ordinal.
+void record_state_chunk_cfg_store(uint64_t Global, uint64_t Local, uint32_t C,
+                                  double DC, const uint32_t *IP, const double *DP) {
+  if (!ChunkActive || Global != ChunkBase + Local || Local != StateCFGStores ||
+      Local >= ChunkCount || Local >= ChunkCapacity)
+    fail(ChunkName, ChunkN, Local, "acyclic chunk scratch ordinal/count");
+  if (!Local) {
+    StateCFGIntBase = IP;
+    StateCFGDoubleBase = DP;
+  }
+  if (IP != StateCFGIntBase + Local || DP != StateCFGDoubleBase + Local ||
+      *IP != C || memcmp(DP, &DC, sizeof(DC)))
+    fail(ChunkName, ChunkN, Local, "acyclic chunk actual scratch address/value");
+  uint32_t X = StateChunkA[Global], ExpectedC;
+  double ExpectedDC, NextD;
+  bool Left = X != 0 && (StateCFGPrev & 1);
+  unsigned ExpectedEdges = Left ? 1u : 2u;
+  if (StateChunkMode == 5 || (StateChunkMode == 6 && Left))
+    ExpectedEdges |= StateCFGOlder & 1 ? 4u : 8u;
+  if (StateCFGEdges != ExpectedEdges)
+    fail(ChunkName, ChunkN, Local, "acyclic actual producer branch sequence");
+  StateCFGEdges = 0;
+  state_cfg_step(StateChunkMode, X, StateChunkD ? StateChunkD + Global : NULL,
+                 StateCFGPrev, StateCFGOlder, StateCFGD,
+                 &ExpectedC, &ExpectedDC, &NextD);
+  if (C != ExpectedC || memcmp(&DC, &ExpectedDC, sizeof(DC)))
+    fail(ChunkName, ChunkN, Local, "acyclic branch-sensitive scratch contribution");
+  uint32_t Next = X + StateCFGOlder;
+  StateCFGOlder = StateCFGPrev;
+  StateCFGPrev = Next;
+  StateCFGD = NextD;
+  ++StateCFGStores;
+}
+
 void record_state_chunk_end(uint32_t Prev, uint32_t Older, uint32_t Next,
                             double D, double DNext) {
   uint32_t Current = StatePrev, Old = StateOlder, Updated = StatePrev;
   double CurrentD = StateD, UpdatedD = StateD;
-  bool Pair = StateChunkMode == 1 || StateChunkMode == 3;
+  bool Pair = StateChunkMode == 1 || StateChunkMode == 3 || StateChunkMode >= 4;
+  if (StateChunkMode >= 4 && (StateCFGStores != ChunkCount || StateCFGEdges))
+    fail(ChunkName, ChunkN, ChunkBegins, "acyclic chunk exactly one store pair per iteration");
   for (unsigned I = 0; I < ChunkCount; ++I) {
     unsigned Offset = (StateChunkMode == 3 ? 65 * ChunkCompletedRows : 0) + ChunkBase + I;
     Current = StatePrev;
     Old = StateOlder;
     CurrentD = StateD;
     Updated = Pair ? StateChunkA[Offset] + Old : StateChunkA[Offset];
-    UpdatedD = CurrentD + StateChunkD[Offset];
+    if (StateChunkMode >= 4) {
+      uint32_t IgnoredC;
+      double IgnoredDC;
+      state_cfg_step(StateChunkMode, StateChunkA[Offset],
+                     StateChunkD ? StateChunkD + Offset : NULL,
+                     Current, Old, CurrentD, &IgnoredC, &IgnoredDC, &UpdatedD);
+    } else
+      UpdatedD = CurrentD + StateChunkD[Offset];
     StatePrev = Updated;
     if (Pair) StateOlder = Current;
     StateD = UpdatedD;
@@ -1736,7 +1820,7 @@ typedef struct {
 static void state_chunk_oracle(unsigned Mode, const uint32_t *A, const double *D,
                                 uint32_t *Out, uint64_t *Indices, double *DOut,
                                 uint64_t Rows, uint64_t N, double Start) {
-  bool Nested = Mode == 3, Pair = Mode == 1 || Nested;
+  bool Nested = Mode == 3, Pair = Mode == 1 || Nested || Mode >= 4;
   if (!N || N > 65 || (Nested && (!Rows || Rows > 4))) return;
   uint32_t R0 = 17, R1 = (uint32_t)-7, Prev = 23, Older = (uint32_t)-11;
   double RD = Start, DS = Start;
@@ -1749,9 +1833,15 @@ static void state_chunk_oracle(unsigned Mode, const uint32_t *A, const double *D
       Old = Older;
       CurrentD = DS;
       Updated = Pair ? A[Offset] + Old : A[Offset];
-      uint32_t C = scalar_helper(Current ^ Updated);
-      NextD = CurrentD + D[Offset];
-      DC = Mode == 2 ? CurrentD - D[Offset] : NextD - CurrentD;
+      uint32_t C;
+      if (Mode >= 4)
+        state_cfg_step(Mode, A[Offset], (D ? D + Offset : NULL), Current, Old, CurrentD,
+                       &C, &DC, &NextD);
+      else {
+        C = scalar_helper(Current ^ Updated);
+        NextD = CurrentD + D[Offset];
+        DC = Mode == 2 ? CurrentD - D[Offset] : NextD - CurrentD;
+      }
       R0 += C;
       R1 = C + R1;
       RD = RD + DC;
@@ -1794,6 +1884,7 @@ static void check_state_chunks(void) {
     bool Nested = Mode == 3;
     unsigned Runs = 0, Produced = 0, Consumed = 0, Begins = 0;
     unsigned Vectors = 0, Tails = 0, Zero = 0, Multi = 0, Partial = 0, Full = 0;
+    StateCFGLeft = StateCFGRight = 0;
     for (unsigned K = 0; K < 68; ++K)
       for (unsigned R = 0; R < (Nested ? 6u : 1u); ++R)
         for (unsigned Trial = 0; Trial < 8; ++Trial)
@@ -1806,7 +1897,8 @@ static void check_state_chunks(void) {
             StateChunkState Actual, Original, Independent;
             memset(&Actual, 0x5a, sizeof(Actual));
             for (unsigned I = 0; I < 260; ++I) {
-              Actual.A[1 + I] = Trial == 0 ? 0 : Trial == 1 ? I + 1 : random_value();
+              Actual.A[1 + I] = Mode >= 4 && Trial == 2 ? 2 * I + 2 :
+                                  Trial == 0 ? 0 : Trial == 1 ? I + 1 : random_value();
               Actual.D[1 + I] = Values[(I + Trial) % 8];
             }
             memcpy(&Original, &Actual, sizeof(Actual));
@@ -1816,14 +1908,17 @@ static void check_state_chunks(void) {
             uint32_t *Out;
             double *DOut;
             state_chunk_pointers(&Independent, Alias, Enter, &A, &D, &Out, &DOut);
+            if (Mode >= 4 && Trial == 2) D = NULL;
             state_chunk_oracle(Mode, A, D, Out, Independent.Indices + 1, DOut, Rows, N, Start);
             state_chunk_pointers(&Original, Alias, Enter, &A, &D, &Out, &DOut);
+            if (Mode >= 4 && Trial == 2) D = NULL;
             StateChunks[C].Reference(A, D, Out, Original.Indices + 1, DOut,
                                      Original.FOut + 1, Rows, N, Start);
             if (memcmp(&Original, &Independent, sizeof(Original)))
               fail(StateChunks[C].Name, N, Trial, "original state IR versus independent oracle");
 
             state_chunk_pointers(&Actual, Alias, Enter, &A, &D, &Out, &DOut);
+            if (Mode >= 4 && Trial == 2) D = NULL;
             ChunkName = StateChunks[C].Name;
             ChunkN = Enter ? N : 0;
             ChunkRows = Enter ? Rows : 0;
@@ -1872,6 +1967,8 @@ static void check_state_chunks(void) {
         !Multi || (Capacity > 1 && !Partial) ||
         (Lanes && Lanes <= Capacity && !Vectors) || ((!Lanes || Lanes > Capacity) && Vectors))
       fail(StateChunks[C].Name, 65, 0, "missing retained-state transformed-path evidence");
+    if (Mode >= 4 && (!StateCFGLeft || !StateCFGRight))
+      fail(StateChunks[C].Name, 65, 0, "missing branch-sensitive producer execution");
     printf("State chunks %s: comparisons=%u producer=%u consumer=%u chunks=%u "
            "vector=%u tail=%u complete=%u partial=%u zero=%u multi=%u\n",
            StateChunks[C].Name, Runs, Produced, Consumed, Begins, Vectors, Tails,

@@ -23,9 +23,9 @@
 ; RUN:   -S %s | FileCheck %s --check-prefix=EXPORT
 ;
 ; Generalized admission must not admit effects, feedback, partial-state exports,
-; cycles or early exits. The two former larger-CFG compact rejections below now
-; have one terminal update edge and accumulator-preserving bypasses. At 259
-; bytes they reject for scratch; the 260-byte run requires their exact split.
+; cycles or early exits. The former larger-CFG compact cases and unconditional
+; final merged exports now chunk at C=64/B=256 under the 259-byte ceiling;
+; the 260-byte run still requires their exact full-trip split.
 ; Loop::getStartLoc uses loop metadata or the preheader/header terminator,
 ; not the latch's debug location. Supply the original loop start at each
 ; preheader so every rejection retains its exact source location.
@@ -319,14 +319,16 @@ bypass:
   ret i32 19
 }
 
-; Final latch-merged values are now legal exports. Keep this exact source
-; function as a scratch rejection at 259 and a positive case at 260 bytes.
+; Final latch-merged exports now also support canonical bounded chunks.
+; Keep the exact original source: C=64 at 259 bytes, full-trip C=65 at 260.
 ; Serial/nested mixed exports are executed by scalar-export-controls.ll.
-; REASON: scalar-acyclic-reject.c:62:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; REASON: scalar-acyclic-reject.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256, producer live-outs 1, chunked schedule
 ; CHECK-LABEL: define i32 @reject_acyclic_liveout(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [64 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: %c.fission.export = phi i32 [ %c, %latch ]
+; CHECK: %[[CHUNK_FINAL:.*]] = phi i32 [ %c.fission.export, %scalar.fission.chunk.latch ]
+; CHECK: ret i32 %[[CHUNK_FINAL]]
 ; CHECK: }
 ; EXPORT-LABEL: define i32 @reject_acyclic_liveout(
 ; EXPORT: alloca [65 x i32]
