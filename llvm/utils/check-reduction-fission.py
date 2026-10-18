@@ -425,14 +425,22 @@ def check_affine_function(ir, source, name, evl, probe=False):
                                r'(?=^[-\w.$]+:|^}|\Z)', text, re.M | re.S))
 
     def normalize(line):
+        # Normalize one complete instruction at a time. An attachment on an
+        # earlier instruction must not hide the rest of its block, and a
+        # retained instruction must not match a prefix or span two lines.
+        line = line.split(', !', 1)[0]
         # The fixture's exact dyadic FP literals (3.0, 0.5, -1.0) print in
         # scientific notation after opt. Compare values as well as retaining
         # every opcode, operand order and flag, without relying on spelling.
         line = re.sub(r'(?<![\w.])(-?\d+\.\d+(?:[eE][+-]?\d+)?)(?![\w.])',
-                      lambda m: float(m[0]).hex(), line.split(', !')[0])
+                      lambda m: float(m[0]).hex(), line)
         return re.sub(r'\s+', '', line)
 
     before, after = blocks(original), blocks(body)
+    after_instructions = {
+        label: {normalize(line) for line in block.splitlines() if line.strip()}
+        for label, block in after.items()
+    }
     labels = list(before)
     labels = labels[labels.index(header):labels.index('latch') + 1]
     # The fixtures deliberately use the IV in addressing and internal control.
@@ -452,7 +460,7 @@ def check_affine_function(ir, source, name, evl, probe=False):
                 new_exit = ('scalar.fission.consumer.guard' if compact
                             else 'scalar.fission.consumer.ph')
                 line = line.replace('label %' + old_exit, 'label %' + new_exit)
-            assert normalize(line) in normalize(after[label]), (name, label, line, body)
+            assert normalize(line) in after_instructions[label], (name, label, line, body)
     assert '<vscale x' not in producer and 'fadd ' not in producer, producer
     assert producer.count('call i32 @scalar_helper(') == 1, producer
     for ty in ['i32', 'double'] + ([] if enclosing else ['float']):

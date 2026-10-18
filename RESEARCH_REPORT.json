@@ -1,137 +1,146 @@
 {
-  "task_id": "t000022",
-  "base_revision": "5008d91e458e775ebee3688aec06a78e4ae4a643",
-  "hypothesis": "Strict signed/unsigned relational scalar reductions with an affine control and an invariant endpoint start+step*span can be split when ordinary relational SCEV trip formulas are unavailable or too conservative. A small equality-witness proof preserves start/end correlation and works for ascending, descending and wrapping controls, including enclosing-loop reuse. This is a legality/storage proof extension before ordinary LV, with independently selected stage VFs and no profitability, pressure, depth, reduction-count or original-vectorizability requirement.",
-  "semantics": "The existing induction recognition, unique exiting latch, acyclic branch CFG, simplify-form, dedicated exits, LCSSA, reduction-use/feedback, participation, live-out, call/effect, alias and strict/constrained-FP checks remain. Normalize only the analysis predicate for branch polarity; require its continuation predicate to be strict SLT/SGT/ULT/UGT, so equality exits irrespective of operand order. For the admitted integer affine IV {S,+,K}, subtract S from the invariant comparison operand. Recover span only from the identical constant SCEV factor K (or the unit-stride identity); there is no integer division, modular solver, search or inferred nowrap requirement. If the latch compares the backedge value, witness=span-1; if it compares the current IV, witness=span. Evaluate the actual compared addrec at this witness and require its modular difference from the original endpoint to fold to zero. Thus, on every defined execution that reaches that ordinal, the actual original branch exits there. Earlier exits, including those caused by signed/unsigned wrapping order, are allowed: N<=witness+1, never N=witness+1 by assumption. Apply only LLVM existing loop-entry guards to the witness, range-bound it, widen before adding one, and require the completed count to fit uint64 and the original IV type. Take the smaller of this unconditional bound and the existing ordinary count proof. The unchanged checked byte/alignment multiplication and signed alloca-pointer-index ceiling prove every scratch access and counter cast. A private ordinal stores at 0<=i<N<=M and its nuw increment exports actual N through LCSSA. The unchanged consumer performs exactly N ordered updates. Compact participation retains its separate counter, original participation paths/order, P<=N bound and P=0 guard; no fabricated zero contribution is added. All producer arithmetic, flags, comparison operands, branch polarity, guards and operations remain in their original blocks; only the exiting edge is redirected as before. Contributions are computed once without rereads or speculation. Ordered FP updates are cloned with original flags/operand order; the explicit fission FP-reordering option adds no relaxation on this scalar path. Enclosing rows retain their real carries, final stores and future-input aliases, reusing entry-allocated scratch after each consumer. Executable validation is requested against untouched original IR and independent C formulas after one and two ordinary LV invocations. Four new modular relational functions use independent unsigned-C control counting (signed order via sign-bit xor) and require earlier-than-witness exits, full-capacity executions, exact producer/header/latch/consumer counts and nonzero vector/tail visits for every comparison class. Their checker cannot substitute n for the completed count. All original affine, compact, acyclic, canonical and VPlan execution assertions are retained.",
-  "costs": "No new runtime instructions relative to t000019: the change only proves finite storage bounds; existing private ordinal/completed and compact counters and consumer remain unchanged. Relative to canonical pre-affine splitting, a noncanonical producer has one ordinal PHI, one nuw add per original iteration and one completed-count export; the consumer has a zero-based PHI/add/equality branch. Compaction has one increment per participant, latch merges/count export and the existing empty guard, without a second full-trip ordinal. For maximum M, actual N and compact P, scratch is M times the sum of unique contribution allocation sizes plus ABI padding, statically allocated in function entry even on a bypass, capped at the unchanged default 65536 bytes per candidate and signed pointer-index ceiling. Each mixed affine fixture shares three arrays across four reductions: 65*i32 + 65*double + 65*float = 1044 accounted bytes including 4 padding bytes; logical stores and loads are each 16*N bytes, or 16*P for compaction. The enclosing loop reuses 784 accounted bytes (65*i32 + 65*double plus padding), with 12*N stores and 12*N loads per row, without multiplying capacity by rows. Scalar boundary executions reserve 4/1020/65536 bytes for 1/255/16384 i32 contributions and transfer 8*N logical bytes total (131072 at full capacity); new relational analogues execute capacities 255 and 16384 too. There are no original-input rereads, duplicated producer operations, contribution recomputation, mask arrays, new guards, alias/SCEV versioning, dynamic allocation or unbounded storage. Compile-time additions are a direct predicate/factor scan, a few standard SCEV algebra queries, one affine evaluateAtIteration equality check and the existing bounded guard-rewrite/range machinery. Scratch planning arithmetic was extracted verbatim into one shared helper to diagnose the original scratch rejection without a second implementation. Analysis remarks record the ordinary count/admission outcome separately from the new witness; when remarks are enabled this also computes the old scratch plan for diagnostic purposes. Existing O(B+E) CFG admission and scans/DT recalculation remain. No general proof engine or profitability model was introduced. Test additions and retained failure stdin/commands affect validation only. Physical traffic, stack layout, register pressure, RVV execution and performance are unmeasured.",
+  "task_id": "t000025",
+  "base_revision": "459f488011e28910bf74a43bbdb0640d0326eb24",
+  "hypothesis": "A validation-only repair lets the production execution checker inspect all retained instructions of affine scalar-fission producers even when an earlier instruction carries metadata. Complete normalized instruction membership in the original block also rejects operand/successor prefixes and text spanning lines. This unblocks independent validation of the existing bounded signed/unsigned, ascending/descending, modular relational and enclosing-loop transformations; this task adds no compiler admission rule or profitability model and claims no newly validated program coverage.",
+  "semantics": "check_affine_function now splits each transformed block into individual printed instructions, removes only that instruction's metadata suffix, normalizes the existing fixture FP decimal/exponent spellings and whitespace, and stores complete normalized strings in a set for that block. Each retained original instruction must equal an element of its original block's set. No whole-block metadata truncation or substring membership remains in the affine preservation check. Opcodes, arithmetic flags, operand order/values, comparisons, branch conditions/polarity and successors are compared. Existing exemptions remain limited to relocated reduction PHIs/updates, compact reduction merge PHIs and redirection of the original latch exit to the consumer preheader/empty guard. The production scratch, load/store, helper-call, unsafe-operation placement, ordered-FP, instrumentation and completed/participating-count assertions are retained verbatim. The equality witness continues to bound storage only: early-exit siblings must consume their actual exported completed count, never n or the equality witness; compaction consumes exactly its proven participation count, including the P=0 bypass. No LLVM C++ or original semantic fixture changes are made in this task. The inherited legality proof still bounds ordinals and scratch by unconditional IR/SE facts, preserves original guards/control and participant order, excludes reduction feedback/unsupported live-outs/effects and clones ordered updates without added FP relaxation. Enclosing rows preserve carries, stores and future-row aliases while reusing entry-allocated scratch. New lit cases call the production check_affine_function against the real affine_const source and retained t000022 transformed output. Metadata on 13 earlier arithmetic/PHI/load/call sites, on either or both sides, must retain later arithmetic and branches. Negative arithmetic, flags, operands, predicates, successors, block moves, split-line and comment mutations must fail at the specific original-block preservation assertion. Executable verification remains requested through the harness: real opt output after one and two ordinary LV invocations, actual producer/latch/participant/vector/tail probes, original IR and independent C references, all existing aliases/canaries/inactive invalid operands/ordered FP/zero entry/empty participation/enclosing reuse and capacity boundaries.",
+  "costs": "This task changes validation only: no target instructions, allocations, traffic, recomputation, rereads, duplication, guards or compiler analyses are added. The checker builds one normalized-instruction set per block in expected linear time/space in printed instruction text, then performs exact membership queries; it uses no IR equivalence solver. The test adds a retained function and bounded positive/mutation cases. The underlying affine transformation costs remain those of t000022: No new runtime instructions relative to t000019: the change only proves finite storage bounds; existing private ordinal/completed and compact counters and consumer remain unchanged. Relative to canonical pre-affine splitting, a noncanonical producer has one ordinal PHI, one nuw add per original iteration and one completed-count export; the consumer has a zero-based PHI/add/equality branch. Compaction has one increment per participant, latch merges/count export and the existing empty guard, without a second full-trip ordinal. For maximum M, actual N and compact P, scratch is M times the sum of unique contribution allocation sizes plus ABI padding, statically allocated in function entry even on a bypass, capped at the unchanged default 65536 bytes per candidate and signed pointer-index ceiling. Each mixed affine fixture shares three arrays across four reductions: 65*i32 + 65*double + 65*float = 1044 accounted bytes including 4 padding bytes; logical stores and loads are each 16*N bytes, or 16*P for compaction. The enclosing loop reuses 784 accounted bytes (65*i32 + 65*double plus padding), with 12*N stores and 12*N loads per row, without multiplying capacity by rows. Scalar boundary executions reserve 4/1020/65536 bytes for 1/255/16384 i32 contributions and transfer 8*N logical bytes total (131072 at full capacity); new relational analogues execute capacities 255 and 16384 too. There are no original-input rereads, duplicated producer operations, contribution recomputation, mask arrays, new guards, alias/SCEV versioning, dynamic allocation or unbounded storage. Compile-time additions are a direct predicate/factor scan, a few standard SCEV algebra queries, one affine evaluateAtIteration equality check and the existing bounded guard-rewrite/range machinery. Scratch planning arithmetic was extracted verbatim into one shared helper to diagnose the original scratch rejection without a second implementation. Analysis remarks record the ordinary count/admission outcome separately from the new witness; when remarks are enabled this also computes the old scratch plan for diagnostic purposes. Existing O(B+E) CFG admission and scans/DT recalculation remain. No general proof engine or profitability model was introduced. Test additions and retained failure stdin/commands affect validation only. Physical traffic, stack layout, register pressure, RVV execution and performance are unmeasured.",
   "tests": [
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
+    "llvm/test/Other/reduction-fission-execution-checker.test",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-trip-count.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-call-tail.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add-pressure.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combined.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-disabled.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-duplication.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fabs.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-forced-pair.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering-isolation.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-general.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-induction.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-invariant-frontier.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-legality.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-live-out.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-ordered.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-preview.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-bounds.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-reject.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-bounds.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-nested.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-reject.ll",
-    "llvm/test/Other/reduction-fission-execution-checker.test"
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recipes.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder-nested.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-fma8.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-same-vf.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-select.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-signed-zero.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-speculation.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
   ],
-  "limitations": "The worker did not build LLVM, run any compiler (including a host compiler), execute lit, VectorizeTests, the execution checker, try.sh or target code. Read-only source/diff/log inspection, fixture generation and whitespace review are not fresh validation. The frozen t000019 failure log contains neither missed remarks nor printed SCEVs, so its exact per-function bound/scratch rejection is not claimed observed: the new mandatory diagnostic RUN and ScalarFissionBound remarks are requested to determine and retain it. No callable live harness diagnostic interface was available to the worker; compiler diagnostics are requested only through this report and lit RUNs. The new proof intentionally covers a syntactically recoverable constant SCEV factor and strict continuation comparisons that exit on equality; non-strict continuation, an unreachable equality lattice, a missing unconditional span bound, count overflow or scratch overflow gets no exemption. The ordinary proof remains available for other already-supported shapes. A different but equivalent factorization may remain unproved. This does not broaden arbitrary/pointer/FP inductions, extra recurrences, early exits, internal cycles, unsupported live-outs, independent participation streams, side effects, unsafe calls or strictfp/constrained FP. Scratch remains untiled, full-trip and capped per loop rather than per function. Host fixed-vscale scalar-remainder execution and RVV machine-verified EVL/code generation are separate evidence; neither is RVV target execution or measured speedup. No new corpus selection, direction maturity or speedup is claimed. Benchmarks, harness, other/common worktrees, binaries and Git index/history/refs were not modified; unfinished d2 work was not integrated.",
-  "test_expectations": "All ten original affine positive definitions and their EVL/repeated-LV/tail/scalar/remarks assertions are retained, especially unsigned/signed ascending, unsigned/signed descending and enclosing reuse. No relational loop was rewritten to equality or given fixture-only assumptions. Four additional modular relational definitions at scalar-affine.c:112/122/132/142:3 have no nowrap flags and may exit earlier than n. Original fixtures keep every prior trial/start combination; only these new variants use the expanded boundary starts. Independent C formulas use the separately counted actual iterations. Per-control assertions require both early and full-capacity execution plus actual vector/tail visits. New relational boundary positives/rejections coexist with every original equality/narrow/capacity fixture. New unsafe siblings reject equality-continuation nontermination, an unreachable strict-comparison equality and an unbounded witness. Analysis BOUND checks for the five previously failing original locations require earlier legality admission to pass, the ordinary proof to reject (count availability/representability or scratch), and the new witness backedge bound to be 64. These are new diagnostic assertions, not a relaxation of existing correctness checks. All existing FP/compact alias/canary/source-location/stage VF/scratch assertions remain. Failure commands, captured stderr/stdout and supplied compiler stdin are retained by the execution checker when the harness supplies its persistent work directory.",
+  "limitations": "The worker ran no compilers (including host compilation), builds, lit, VectorizeTests, test runners, execution checker or try.sh. The new regression code has not been executed by the worker. Read-only immutable artifact/source/diff inspection and report editing do not establish fresh validation. The t000022 harness passed 44 lit files and 99 VectorizeTests cases but stopped on the first affine preservation assertion before RVV verification of that affine output, completion of the host executable or any primary corpus evaluation. Later artifacts/results for this revision do not yet exist. The focused retained EVL fixture is checker input, not an executable replacement for original-vs-transformed comparisons. The existing actual-count checks are unchanged, not generalized to arbitrary equivalent SSA expressions. The underlying compiler still does not support arbitrary/non-affine/pointer/FP controls, non-strict or unreachable-lattice equality certificates, unbounded or unrepresentable counts, oversized scratch, extra producer recurrences, cycles, unsupported live-outs/effects/calls, multiple independent participation streams or strictfp/constrained FP. Scratch is untiled and capped per candidate, not per function. Strict and explicitly enabled fission FP reordering remain separate contracts without extra fast-math or errno assumptions. Fixed-vscale host execution and RVV machine verification are neither RVV target execution nor measured speedup. No direction maturity, corpus improvement or performance is claimed. No benchmarks, harness, other worktrees, binaries, Git index/history/refs or unfinished d2 work were modified.",
+  "test_expectations": "Only the checker expectation for correctly retained instructions after earlier metadata changes: it should now succeed. Complete instructions with modified opcode/flags/operands/branch predicates or successors, same-prefix trailing operands/labels, instructions moved to another block, text split across printed lines or present only in a comment must fail at the exact preservation assertion. Equivalent spelling of 3.0/0.5/-1.0 is still allowed. No original LLVM IR, Selected/Rejected remark, stage VF, scratch, semantic result, count or correctness expectation was relaxed or removed. Every original affine positive, four modular early-exit siblings, narrow/count/scratch boundary, relational rejection and all canonical/diamond/compact/acyclic/VPlan cases remain. Negative unit mutations are parser/checker inputs only; the executable matrix still obtains transformed code from real opt.",
   "evidence_read": [
-    "Task t000022 and tasks/t000019.json including its revise review, immutable diffs/t000019.patch, inherited report and corresponding current compiler/fixture/checker/C-harness source.",
-    "builds/t000019/lit.log and task build result: compilation succeeded, 42/43 lit files passed, affine positive file failed at its first EVL FileCheck. affine_unsigned, affine_signed, affine_down and affine_signed_down lacked consumer stages; affine_enclosing lacked scratch allocation. Later positive RUNs, unit tests, executable comparisons and primary evaluation were not reached. This does not validate the semantic extension.",
-    "Read-only inspection of the remaining common-build t000019 positive output and success-only remarks found selections only at 12/22/72/92/102:3, consistent with the frozen log; those non-frozen residual files are corroboration only, not acceptance evidence. The old command did not enable missed/analysis remarks, so no precise rejection/SCEV observation is fabricated.",
-    "ScalarReductionFission.cpp admission order; InductionDescriptor::isInductionPHI and ScalarEvolution createSimpleAffineAddRec/createAddRecFromPHI, isAddRecNeverPoison, howManyLessThans/howManyGreaterThans, constant-max and guard rewriter implementations. Standard SCEV may discard subtraction nowrap information and lose relational start/end correlation. This motivated an equality identity rather than another relational/no-overflow solver.",
-    "Frozen harness/BENCHMARKS_ANALYSIS.md: immutable 117 inputs, exact-target source attribution, strict versus explicitly reordered policies, scalar pre-legality hypotheses, no errno/extra-zero or numerical-contract shortcuts, and code generation versus execution/performance distinctions.",
-    "Re-read all 234 individual frozen evaluations/t000017/primary result JSONs and the summary: exit codes all zero, original-target selections zero, per policy 91 rejected/26 no_decision. Exact-target scalar reasons per policy include 28 unsupported-exit, 31 unsupported-cfg, 12 unsupported-recurrence and 10 unsafe-call. These independent barriers do not establish new coverage for this patch."
+    "tasks/t000022.json, its revise review and immutable diffs/t000022.patch; current ScalarReductionFission.cpp equality-witness/storage proof, affine original/boundary/rejection fixtures, production Python checker and C harness.",
+    "builds/t000022/lit.log: all 44 mandatory lit files passed; unit.log: all 99 VectorizeTests cases passed. execution.log: first affine_const latch preservation assertion failed although the branch is present. No successful complete executable comparison or primary evaluation for t000022 is inferred from earlier object compilation progress.",
+    "Retained builds/t000022/execution/scalar-affine_ordered_default-evl_lv1.rvv.ll, reference_scalar-affine.ll and scalar-affine_ordered_default-evl_lv1.remarks: the first latch metadata is on fission.completed before scratch GEPs/stores and the retained branch. All 14 exact original affine source locations have Selected plus producer VF 1 and consumer VF vscale x 4; scratch capacity 65 and bytes 1044, or 784 at enclosing location 82:3. These are generated IR/remark observations, not affine target or host execution.",
+    "Frozen harness/BENCHMARKS_ANALYSIS.md and all 234 evaluations/t000017/primary/*/{strict,reordered}/result.json: each policy has 117 successful compilations, zero selected originals, 91 rejected and 26 no_decision. Exact-target scalar rejections include 28 unsupported-exit, 31 unsupported-cfg, 12 unsupported-recurrence and 10 unsafe-call per policy. Other helper/inner activity cannot establish original-loop selection. Historical evidence does not validate this revision."
   ],
   "prior_validation": {
-    "task_id": "t000019",
-    "revision": "5008d91e458e775ebee3688aec06a78e4ae4a643",
+    "task_id": "t000022",
+    "revision": "459f488011e28910bf74a43bbdb0640d0326eb24",
     "compilation_exit_code": 0,
-    "lit_exit_code": 1,
-    "lit_passed_files": 42,
-    "lit_total_files": 43,
-    "failed_files": [
-      "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll"
-    ],
-    "later_checks_reached": false,
+    "lit_exit_code": 0,
+    "lit_passed_files": 44,
+    "lit_total_files": 44,
+    "unit_exit_code": 0,
+    "unit_tests": "99 VectorizeTests cases passed",
+    "execution_exit_code": 1,
+    "execution_failure": "affine_const latch instruction preservation assertion",
+    "complete_executable_comparisons_reached": false,
+    "primary_corpus_reached": false,
     "this_revision_validated": false,
     "accepted_ancestor": "e3a9dc640ed17640d7d1de4dd0f82adb05a9baf4"
   },
   "diagnosis": {
-    "status": "source diagnosis with compiler confirmation requested, not worker-observed compiler diagnostics",
-    "observed_failure": "Missing scalar fission stages at five original locations in the first EVL output; the failed command enabled only success remarks.",
-    "admission_audit": "All five have a directly compared integer affine induction, one exiting latch, the accepted branch-only acyclic CFG, no extra control live-out, admitted reduction recurrence uses and safe retained producer operations. Their original exit phi exports are reductions only. No admission check is changed. New BOUND remarks run only after these checks, so a failure earlier in the path remains a distinct exact-location Rejected result.",
-    "bound_audit": "Ordinary getBackedgeTakenCount/constant maximum/guarded exact range and scratch checking are replayed separately by ScalarFissionBound before refining the bound. OrdinaryAdmission prints the exact earlier outcome, including scalar-scratch-limit when a finite ordinary bound exceeds capacity. This avoids assuming getScalarFissionMaxTripCount itself is the rejecting return. The five source-derived expressions below are mathematical SCEV normal forms, not claims about previously printed SCEV syntax/flags.",
-    "functions": [
-      {
-        "name": "affine_unsigned",
-        "location": "scalar-affine.c:32:3",
-        "iv": "{9,+,3}",
-        "tested": "{12,+,3}",
-        "endpoint": "9+3*n",
-        "guards": "1<=u n<=65; branch conjunction in entry",
-        "witness": "n-1",
-        "requested_max_backedges": 64,
-        "requested_scratch_bytes": 1044
-      },
-      {
-        "name": "affine_signed",
-        "location": "scalar-affine.c:42:3",
-        "iv": "{O,+,2}, O=(begin or -32)",
-        "tested": "{O+2,+,2}",
-        "endpoint": "O+2*n",
-        "guards": "1<=u n<=65; O in [-32,-1] from IR",
-        "witness": "n-1",
-        "requested_max_backedges": 64,
-        "requested_scratch_bytes": 1044
-      },
-      {
-        "name": "affine_down",
-        "location": "scalar-affine.c:52:3",
-        "iv": "{201,+,-3}",
-        "tested": "{198,+,-3}",
-        "endpoint": "201-3*n",
-        "guards": "1<=u n<=65; original sub nuw nsw retained",
-        "witness": "n-1",
-        "requested_max_backedges": 64,
-        "requested_scratch_bytes": 1044
-      },
-      {
-        "name": "affine_signed_down",
-        "location": "scalar-affine.c:62:3",
-        "iv": "{O,+,-2}, O=(begin and 31)-17",
-        "tested": "{O-2,+,-2}",
-        "endpoint": "O-2*n",
-        "guards": "1<=u n<=65; O in [-17,14]; original inverse branch/swapped compare retained",
-        "witness": "n-1",
-        "requested_max_backedges": 64,
-        "requested_scratch_bytes": 1044
-      },
-      {
-        "name": "affine_enclosing",
-        "location": "scalar-affine.c:82:3",
-        "iv": "{O,+,2}, O=row+5 for enclosing row",
-        "tested": "{O+2,+,2}",
-        "endpoint": "O+2*n",
-        "guards": "entry conjunction dominates inner loop: 1<=u n<=65, 1<=u rows<=4; outer carries/stores remain",
-        "witness": "n-1 after cancellation of the shared outer recurrence",
-        "requested_max_backedges": 64,
-        "requested_scratch_bytes": 784
-      }
-    ],
-    "required_confirmation": "Retain %t.scev, full %t and %t.remarks from the positive test before FileCheck. For each of the five, record raw control/exact/constant-max/guarded-exact/range expressions, OrdinaryCount, OrdinaryAdmission, guarded witness, final Selected and both stage VFs. If admission or witness folding differs, treat the mandatory failure as a blocker and retain all artifacts; do not relax a positive or correctness assertion."
+    "status": "confirmed from immutable failure log, retained IR and checker source; no worker execution",
+    "observed_failure": "affine_const latch branch is present, with original condition/polarity and redirected exit.",
+    "cause": "normalize(after[label]) applied split(\", !\")[0] to the entire latch block, dropping every instruction after metadata on fission.completed. The later retained branch could never match. Whole-block substring membership also admitted prefix and cross-line counterfeits.",
+    "repair": "Normalize each printed instruction separately and require complete normalized-string membership in the same original block. Keep all previous preservation exemptions and semantic assertions.",
+    "expected_outcome": "The first affine_const metadata failure should be removed; all later semantic checks remain mandatory and may reveal separate failures. No unobserved later failure is preemptively repaired.",
+    "compiler_changes_in_this_task": false,
+    "changed_original_test_expectations": false
   },
   "validation_requested": {
-    "task_id": "t000022",
+    "task_id": "t000025",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
       "required": true,
       "snapshot": "this worktree after harness freeze",
       "agent_compilation": false,
-      "base_revision": "5008d91e458e775ebee3688aec06a78e4ae4a643",
+      "base_revision": "459f488011e28910bf74a43bbdb0640d0326eb24",
       "prior_build_is_not_acceptance": true
     },
     "lit": {
       "mandatory_fission_suite": true,
       "changed_and_explicit_paths": [
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
+        "llvm/test/Other/reduction-fission-execution-checker.test",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-trip-count.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-call-tail.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add-pressure.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combined.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-disabled.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-duplication.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fabs.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-forced-pair.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering-isolation.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-general.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-induction.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-invariant-frontier.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-legality.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-live-out.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-ordered.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-preview.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-bounds.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-bounds.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-nested.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-reject.ll",
-        "llvm/test/Other/reduction-fission-execution-checker.test"
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recipes.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder-nested.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-fma8.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-same-vf.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-select.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-signed-zero.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-speculation.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
       ],
       "verify_each": true,
       "analyses": [
@@ -150,7 +159,8 @@
         "full admission/count/scratch/witness analysis remarks before FileCheck",
         "all original and new modular relational/control and capacity outputs"
       ],
-      "retain_unchanged_native_cycle_rejection": true
+      "retain_unchanged_native_cycle_rejection": true,
+      "checker_positive_and_negative_RUN_required": true
     },
     "unit_tests": {
       "required": [
@@ -213,9 +223,12 @@
         "Retain every existing case/trial and correctness assertion; original affine begins remain Trial%7",
         "Four modular relational controls must demonstrate earlier-than-witness exits and full 65-trip execution, exact actual N rather than span, and nonzero vector and tail visits per class",
         "New relational scalar boundary execution: full 255 and 16384 trips; retain current-IV i8 256-trip rejection and 16385-slot scratch rejection",
-        "Retain commands.jsonl, failed-command.json, failed-command.stdin and the complete persistent work directory on failure"
+        "Retain commands.jsonl, failed-command.json, failed-command.stdin and the complete persistent work directory on failure",
+        "Run the expanded production-checker metadata/preservation mutation lit RUN, with the unchanged real affine source fixture.",
+        "No acceptance from copied checker fixture or previous build progress: complete the linked executable and all original/transformed/independent comparisons.",
+        "If a later mandatory assertion fails, retain the exact function, original/transformed/probe/fixed-vscale IR and visit/result diagnostics; do not remove preservation or actual-count assertions."
       ],
-      "comparison_status": "pending independent harness",
+      "comparison_status": "pending fresh independent harness; no worker execution",
       "persistent_work_dir_required": true
     },
     "rvv_machine_verification": {
@@ -302,14 +315,24 @@
           "ScalarFissionBound all fields at each original location",
           "every later scalar/repeat/tail RUN and machine-verifier artifact"
         ]
+      },
+      {
+        "kind": "affine_metadata_checker_regressions",
+        "required": true,
+        "retain": [
+          "every split-file/check.py RUN command and result",
+          "baseline retained EVL fixture and original production affine source",
+          "exact failed preservation instruction/block for any mutation failure",
+          "full later actual transformed affine IR/probes/remarks on failure"
+        ]
       }
     ],
-    "acceptance": "Pending a fresh harness build, exact five-loop diagnostic confirmation, every mandatory lit file and RUN line, VectorizeTests, all existing/new original-IR and independent-reference comparisons after one/two LV invocations, RVV machine verification and all 234 immutable primary corpus compilations. No acceptance from old build success. Mandatory failures, compiler crashes or wrong results block acceptance; no measured speedup is not a veto.",
+    "acceptance": "Pending fresh compilation of the frozen t000025 worktree, all 44 mandatory fission/checker lit files and every RUN line, VectorizeTests, the complete existing and new host fixed-vscale executable comparisons after one and two ordinary LV invocations, uninstrumented RVV machine verification and all 234 immutable primary corpus compilations under strict and explicitly reordered policies. Preserve exact original-loop source attribution, Selected/Rejected reasons, stage VFs and scratch evidence. Prior successful static tests do not replace these checks. Crashes, incorrect transformations and failing mandatory checks block acceptance; a lack of measured speedup is not a veto.",
     "diagnostics": {
       "required": true,
       "worker_executed": false,
-      "base_revision": "5008d91e458e775ebee3688aec06a78e4ae4a643",
-      "contract": "Mandatory RUNs in scalar-affine.ll request opt diagnostics through the harness; no worker compiler invocation.",
+      "base_revision": "459f488011e28910bf74a43bbdb0640d0326eb24",
+      "contract": "Retain all existing scalar-affine.ll SCEV/analysis/Selected/Rejected/stage RUNs through the harness, together with complete execution checker artifacts; the worker invokes no compiler or test.",
       "commands": [
         {
           "tool": "opt",
@@ -362,5 +385,5 @@
       ]
     }
   },
-  "future_work": "Review fresh frozen diagnostics and every mandatory outcome before accepting or claiming completion of the affine direction. If SCEV identity normalization differs, retain the exact actual expressions and repair the narrow proof rather than changing original positive controls or semantic assertions. Broader non-strict/non-lattice relational bounds, correlated controls without a direct constant factor, bounded producer cycles, additional participation streams, whole-function scratch limits/tiling and real RVV execution/performance remain separate tasks. Combine mature heads only after independent acceptance; this task does not integrate d2."
+  "future_work": "Inspect the fresh immutable harness outcomes before accepting the affine direction. Any later failure needs its retained concrete artifact and a narrow repair; do not substitute equality witnesses for completed counts or relax original controls, participation, FP or exact-stage assertions. Broader non-strict/non-lattice proofs, controls without a direct constant factor, producer cycles, independent participation streams, whole-function scratch limits/tiling and real RVV execution/performance remain separate future work. This task does not dispatch further work or integrate d2."
 }

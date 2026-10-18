@@ -1,5 +1,6 @@
 # RUN: split-file %s %t
-# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py %t/functions.ll %t/compact-evl.ll
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py %t/functions.ll %t/compact-evl.ll \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll %t/affine-evl.ll
 
 # Parsing and checker boundaries only; transformed execution is exercised by
 # check-reduction-fission.py with the real opt/llc and the C harness.
@@ -298,6 +299,127 @@ for evl, original in ((False, compact_tail), (True, compact_evl)):
                                              '  br label %middle.block\nvector.ph:'),
                            True, 'extra vector exit predecessor')
 
+# Retained output from the affine execution fixture that exposed whole-block
+# metadata truncation. Use the real original and production checker, including
+# every control, scratch and actual-count assertion, rather than a normalization
+# helper or an independent approximation of the preservation check.
+affine_name = 'affine_const'
+affine_source = checker.function_definition(Path(sys.argv[4]).read_text(), affine_name)
+affine = checker.function_definition(Path(sys.argv[5]).read_text(), affine_name)
+assert checker.check_affine_function(affine, affine_source, affine_name, evl=True) == affine
+
+
+def replace_once(body, old, new):
+    assert body.count(old) == 1, (old, body)
+    return body.replace(old, new, 1)
+
+
+def attach_metadata(body, value, attachments):
+    lines = [line for line in body.splitlines() if line.startswith('  ' + value + ' = ')]
+    assert len(lines) == 1, (value, body)
+    return replace_once(body, lines[0], lines[0].split(', !', 1)[0] + attachments)
+
+
+def reject_affine(body, label, instruction):
+    try:
+        checker.check_affine_function(body, affine_source, affine_name, evl=True)
+    except AssertionError as error:
+        # Require the exact preservation assertion. A later scratch, count or
+        # reduction assertion must not disguise missing mutation coverage.
+        failure = error.args[0]
+        assert isinstance(failure, tuple) and failure[:2] == (affine_name, label), failure
+        assert failure[2].split(', !', 1)[0].strip() == instruction, failure
+    else:
+        raise AssertionError('accepted affine mutation: ' + instruction)
+
+
+# An early attachment in the latch is followed by retained arithmetic, compare
+# and branch. Analogous placements cover entry/preheader, header PHIs, loads,
+# calls and merge/arm instructions. Metadata IDs/order may differ on each side;
+# neither side's first attachment may truncate later instructions in the block.
+placements = ('%valid', '%limit', '%iv', '%index', '%x', '%lc', '%first.c',
+              '%pc', '%pd', '%c', '%fc', '%next', '%done')
+many_metadata = affine
+for value in placements:
+    marked = attach_metadata(affine, value, ', !dbg !71, !annotation !72')
+    marked_source = attach_metadata(affine_source, value, ', !annotation !82, !dbg !81')
+    for candidate, original in ((marked, affine_source), (affine, marked_source),
+                                (marked, marked_source)):
+        assert checker.check_affine_function(candidate, original, affine_name, evl=True) == candidate
+    many_metadata = attach_metadata(many_metadata, value, ', !dbg !71, !annotation !72')
+assert checker.check_affine_function(many_metadata, affine_source, affine_name, evl=True) == many_metadata
+
+# The three exact dyadic values may retain decimal spelling or print with an
+# exponent. This allowance cannot hide a changed value or added FP flags.
+decimal = affine.replace('3.000000e+00', '3.0').replace('5.000000e-01', '0.5').replace(
+    '-1.000000e+00', '-1.0')
+assert checker.check_affine_function(decimal, affine_source, affine_name, evl=True) == decimal
+
+for candidate in (affine, many_metadata):
+    for value, old, new, label, instruction in [
+        ('%next', 'add nuw nsw', 'sub nuw nsw', 'latch', '%next = add nuw nsw i64 %iv, 1'),
+        ('%next', 'nuw nsw', 'nsw', 'latch', '%next = add nuw nsw i64 %iv, 1'),
+        ('%next', 'nuw nsw', 'nuw', 'latch', '%next = add nuw nsw i64 %iv, 1'),
+        # 1 is a prefix of 10: substring membership incorrectly accepts this.
+        ('%next', ', 1', ', 10', 'latch', '%next = add nuw nsw i64 %iv, 1'),
+        ('%next', '%iv, 1', '1, %iv', 'latch', '%next = add nuw nsw i64 %iv, 1'),
+        ('%index', ', 7', ', 70', 'loop', '%index = sub nuw nsw i64 %iv, 7'),
+        ('%pc', 'add i32', 'add nsw i32', 'positive', '%pc = add i32 %first.c, 23'),
+        ('%pc', '%first.c, 23', '%first.different, 23', 'positive', '%pc = add i32 %first.c, 23'),
+        ('%q', '840', '420', 'left', '%q = sdiv i32 840, %x'),
+        ('%lc', '%q)', '%x)', 'left', '%lc = call i32 @scalar_helper(i32 %q)'),
+        ('%p', '%index', '%index.other', 'loop', '%p = getelementptr i32, ptr %a, i64 %index'),
+        ('%pd', 'fmul double', 'fmul fast double', 'positive', '%pd = fmul double %first.d, 0.5'),
+        ('%pd', '5.000000e-01', '5.000000e+00', 'positive', '%pd = fmul double %first.d, 0.5'),
+        ('%rc', '3.000000e+00', '3.000000e+01', 'right', '%rc = fmul double %dx, 3.0'),
+        ('%done', 'icmp eq', 'icmp ne', 'latch', '%done = icmp eq i64 %limit, %next'),
+        ('%done', 'icmp eq', 'icmp ult', 'latch', '%done = icmp eq i64 %limit, %next'),
+        ('%done', '%limit, %next', '%next, %limit', 'latch', '%done = icmp eq i64 %limit, %next'),
+        ('%choose', 'icmp ne', 'icmp eq', 'loop', '%choose = icmp ne i32 %x, 0'),
+    ]:
+        reject_affine(change_line(candidate, value, old, new), label, instruction)
+
+    for branch, replacements, label in [
+        ('br i1 %enter, label %preheader, label %exit', (
+            'br i1 %nonzero, label %preheader, label %exit',
+            'br i1 %enter, label %exit, label %preheader',
+            'br i1 %enter, label %preheader, label %exit.other'), 'entry'),
+        ('br label %loop', ('br label %loop.other',), 'preheader'),
+        ('br i1 %choose, label %left, label %right', (
+            'br i1 %done, label %left, label %right',
+            'br i1 %choose, label %right, label %left',
+            'br i1 %choose, label %left, label %right.other'), 'loop'),
+        ('br i1 %done, label %scalar.fission.consumer.ph, label %loop', (
+            'br i1 %choose, label %scalar.fission.consumer.ph, label %loop',
+            'br i1 %done, label %loop, label %scalar.fission.consumer.ph',
+            'br i1 %done, label %scalar.fission.consumer.ph.other, label %loop',
+            'br i1 %done, label %scalar.fission.consumer.ph, label %loop.other'), 'latch'),
+    ]:
+        for replacement in replacements:
+            reject_affine(replace_once(candidate, '  ' + branch, '  ' + replacement),
+                          label, branch)
+
+    # Full instruction text elsewhere in the same function cannot establish
+    # preservation in its original block, even for an otherwise safe move.
+    for value, source_label, destination, instruction in [
+        ('%q', 'left', '  %choose = ', '%q = sdiv i32 840, %x'),
+        ('%pc', 'positive', '  %parity = ', '%pc = add i32 %first.c, 23'),
+        ('%done', 'latch', '  %nc = ', '%done = icmp eq i64 %limit, %next'),
+    ]:
+        line = next(line for line in candidate.splitlines() if line.startswith('  ' + value + ' = '))
+        moved = replace_once(candidate, line + '\n', '')
+        moved = replace_once(moved, destination, line + '\n' + destination)
+        reject_affine(moved, source_label, instruction)
+
+    # Concatenating whitespace across physical instructions, or finding the
+    # instruction only in a comment, cannot supply a complete printed line.
+    reject_affine(replace_once(candidate, '  %next = add nuw nsw i64 %iv, 1',
+                              '  %next = add nuw nsw\n  i64 %iv, 1'),
+                  'latch', '%next = add nuw nsw i64 %iv, 1')
+    reject_affine(replace_once(candidate, '  %pc = add i32 %first.c, 23',
+                              '  ; %pc = add i32 %first.c, 23'),
+                  'positive', '%pc = add i32 %first.c, 23')
+
 # Fixed-vscale specialization must fail before handing unsupported EVL/VP
 # operations to a host backend. Renaming scalable types alone is not sound.
 for intrinsic in ('llvm.experimental.get.vector.length.i64',
@@ -484,5 +606,130 @@ scalar.fission.consumer.exit:
   %r1.result = phi i32 [ -7, %scalar.fission.consumer.guard ], [ %ir2, %scalar.fission.consumer.loopexit ]
   %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ %dr, %scalar.fission.consumer.loopexit ]
   %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ %fr, %scalar.fission.consumer.loopexit ]
+  ret void
+}
+
+#--- affine-evl.ll
+; Retained affine_const EVL output. Checker/probe fixture only; executable
+; comparisons continue to compile the original affine fixture with real opt.
+define void @affine_const(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) #1 !dbg !4 {
+entry:
+  %scalar.fission.scratch = alloca [65 x i32], align 4
+  %scalar.fission.scratch1 = alloca [65 x double], align 8
+  %scalar.fission.scratch2 = alloca [65 x float], align 4
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %enter = and i1 %valid, %nonzero
+  %fstart = fptrunc double %start to float
+  br i1 %enter, label %preheader, label %exit
+
+preheader:                                        ; preds = %entry
+  %limit = add nuw nsw i64 %n, 7
+  br label %loop, !dbg !7
+
+loop:                                             ; preds = %latch, %preheader
+  %fission.ordinal = phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]
+  %iv = phi i64 [ 7, %preheader ], [ %next, %latch ]
+  %index = sub nuw nsw i64 %iv, 7
+  %p = getelementptr i32, ptr %a, i64 %index
+  %x = load i32, ptr %p, align 4
+  %choose = icmp ne i32 %x, 0
+  br i1 %choose, label %left, label %right, !dbg !7
+
+left:                                             ; preds = %loop
+  %q = sdiv i32 840, %x
+  %lc = call i32 @scalar_helper(i32 %q)
+  %ld = sitofp i32 %q to double
+  br label %first.merge
+
+right:                                            ; preds = %loop
+  %dp = getelementptr double, ptr %fp, i64 %index
+  %dx = load double, ptr %dp, align 8
+  %rc = fmul double %dx, 3.000000e+00
+  br label %first.merge
+
+first.merge:                                      ; preds = %right, %left
+  %first.c = phi i32 [ %lc, %left ], [ 17, %right ]
+  %first.d = phi double [ %ld, %left ], [ %rc, %right ]
+  %parity = and i64 %index, 1
+  %second = icmp ne i64 %parity, 0
+  br i1 %second, label %positive, label %negative
+
+positive:                                         ; preds = %first.merge
+  %pc = add i32 %first.c, 23
+  %pd = fmul double %first.d, 5.000000e-01
+  br label %latch
+
+negative:                                         ; preds = %first.merge
+  %nc = sub i32 %first.c, 9
+  %nd = fmul double %first.d, -1.000000e+00
+  br label %latch
+
+latch:                                            ; preds = %negative, %positive
+  %c = phi i32 [ %pc, %positive ], [ %nc, %negative ]
+  %dc = phi double [ %pd, %positive ], [ %nd, %negative ]
+  %fc = fptrunc double %dc to float
+  %next = add nuw nsw i64 %iv, 1
+  %done = icmp eq i64 %limit, %next
+  %fission.completed = add nuw i64 %fission.ordinal, 1, !dbg !7
+  %0 = getelementptr inbounds [65 x i32], ptr %scalar.fission.scratch, i32 0, i64 %fission.ordinal, !dbg !7
+  store i32 %c, ptr %0, align 4, !dbg !7
+  %1 = getelementptr inbounds [65 x double], ptr %scalar.fission.scratch1, i32 0, i64 %fission.ordinal, !dbg !7
+  store double %dc, ptr %1, align 8, !dbg !7
+  %2 = getelementptr inbounds [65 x float], ptr %scalar.fission.scratch2, i32 0, i64 %fission.ordinal, !dbg !7
+  store float %fc, ptr %2, align 4, !dbg !7
+  br i1 %done, label %scalar.fission.consumer.ph, label %loop, !dbg !7, !llvm.loop !8
+
+scalar.fission.consumer.ph:                       ; preds = %latch
+  %fission.completed.count = phi i64 [ %fission.completed, %latch ]
+  br label %vector.ph
+
+vector.ph:                                        ; preds = %scalar.fission.consumer.ph
+  br label %vector.body
+
+vector.body:                                      ; preds = %vector.body, %vector.ph
+  %index5 = phi i64 [ 0, %vector.ph ], [ %current.iteration.next, %vector.body ], !dbg !7
+  %vec.phi = phi <vscale x 4 x i32> [ insertelement (<vscale x 4 x i32> zeroinitializer, i32 17, i32 0), %vector.ph ], [ %11, %vector.body ]
+  %vec.phi6 = phi <vscale x 4 x i32> [ insertelement (<vscale x 4 x i32> zeroinitializer, i32 -7, i32 0), %vector.ph ], [ %12, %vector.body ]
+  %vec.phi7 = phi double [ %start, %vector.ph ], [ %9, %vector.body ]
+  %vec.phi8 = phi float [ %fstart, %vector.ph ], [ %10, %vector.body ]
+  %avl = phi i64 [ %n, %vector.ph ], [ %avl.next, %vector.body ]
+  %3 = call i32 @llvm.experimental.get.vector.length.i64(i64 %avl, i32 4, i1 true)
+  %4 = getelementptr inbounds [65 x i32], ptr %scalar.fission.scratch, i32 0, i64 %index5, !dbg !7
+  %vp.op.load = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 %4, <vscale x 4 x i1> splat (i1 true), i32 %3), !dbg !7
+  %5 = getelementptr inbounds [65 x double], ptr %scalar.fission.scratch1, i32 0, i64 %index5, !dbg !7
+  %vp.op.load9 = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr align 8 %5, <vscale x 4 x i1> splat (i1 true), i32 %3), !dbg !7
+  %6 = getelementptr inbounds [65 x float], ptr %scalar.fission.scratch2, i32 0, i64 %index5, !dbg !7
+  %vp.op.load10 = call <vscale x 4 x float> @llvm.vp.load.nxv4f32.p0(ptr align 4 %6, <vscale x 4 x i1> splat (i1 true), i32 %3), !dbg !7
+  %7 = add <vscale x 4 x i32> %vec.phi, %vp.op.load, !dbg !7
+  %8 = add <vscale x 4 x i32> %vp.op.load, %vec.phi6, !dbg !7
+  %9 = call double @llvm.vp.reduce.fadd.nxv4f64(double %vec.phi7, <vscale x 4 x double> %vp.op.load9, <vscale x 4 x i1> splat (i1 true), i32 %3)
+  %10 = call float @llvm.vp.reduce.fadd.nxv4f32(float %vec.phi8, <vscale x 4 x float> %vp.op.load10, <vscale x 4 x i1> splat (i1 true), i32 %3)
+  %11 = call <vscale x 4 x i32> @llvm.vp.merge.nxv4i32(<vscale x 4 x i1> splat (i1 true), <vscale x 4 x i32> %7, <vscale x 4 x i32> %vec.phi, i32 %3)
+  %12 = call <vscale x 4 x i32> @llvm.vp.merge.nxv4i32(<vscale x 4 x i1> splat (i1 true), <vscale x 4 x i32> %8, <vscale x 4 x i32> %vec.phi6, i32 %3)
+  %13 = zext i32 %3 to i64, !dbg !7
+  %current.iteration.next = add nuw i64 %13, %index5, !dbg !7
+  %avl.next = sub nuw i64 %avl, %13
+  %14 = icmp eq i64 %avl.next, 0
+  br i1 %14, label %middle.block, label %vector.body, !dbg !7, !llvm.loop !10
+
+middle.block:                                     ; preds = %vector.body
+  %15 = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %11), !dbg !7
+  %16 = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %12), !dbg !7
+  br label %exit.loopexit, !dbg !7
+
+exit.loopexit:                                    ; preds = %middle.block
+  br label %exit
+
+exit:                                             ; preds = %exit.loopexit, %entry
+  %v0 = phi i32 [ 17, %entry ], [ %15, %exit.loopexit ]
+  %v1 = phi i32 [ -7, %entry ], [ %16, %exit.loopexit ]
+  %vd = phi double [ %start, %entry ], [ %9, %exit.loopexit ]
+  %vf = phi float [ %fstart, %entry ], [ %10, %exit.loopexit ]
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %v0, ptr %out, align 4
+  store i32 %v1, ptr %o1, align 4
+  store double %vd, ptr %dout, align 8
+  store float %vf, ptr %fout, align 4
   ret void
 }
