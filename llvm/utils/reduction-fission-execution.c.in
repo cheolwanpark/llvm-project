@@ -605,7 +605,8 @@ int main(void) {
   unsigned AffineVectorRuns = 0, AffineTailRuns = 0;
   unsigned AffineEarlyRuns[5] = {0}, AffineFullRuns[5] = {0};
   unsigned AffineControlVectors[5] = {0}, AffineControlTails[5] = {0};
-  for (unsigned C = 0; C < sizeof(Affine) / sizeof(*Affine); ++C)
+  for (unsigned C = 0; C < sizeof(Affine) / sizeof(*Affine); ++C) {
+    unsigned CompactPaths = 0;
     for (unsigned K = 0; K < (Affine[C].Compact ? 134u : 68u); ++K)
       for (unsigned Trial = 0; Trial < 16; ++Trial) {
         uint64_t N = K >= 68 ? 65 : K == 67 ? UINT64_MAX : K;
@@ -677,6 +678,19 @@ int main(void) {
             (Affine[C].Compact && CompactParticipants != P) ||
             ScalarVectorVisits != P / Lanes || ScalarTailVisits != P % Lanes)
           fail(Affine[C].Name, (unsigned)N, Trial, "affine exact producer/control/participant/vector/tail counts");
+        // Require these paths separately for every compact LV1/LV2, FP
+        // option and fixed-vscale variant, not just somewhere in the matrix.
+        // P=0 here must follow an entered producer with no participants.
+        if (Affine[C].Compact && Enter) {
+          CompactPaths |= !P ? 1u : !ScalarVectorVisits ? 2u :
+                          !ScalarTailVisits ? 4u : 8u;
+          if (P + 1 == Lanes)
+            CompactPaths |= 16u;
+          if (P == Lanes)
+            CompactPaths |= 32u;
+          if (P == Lanes + 1)
+            CompactPaths |= 64u;
+        }
         AffineVectorRuns += ScalarVectorVisits != 0;
         AffineTailRuns += ScalarTailVisits != 0;
         AffineControlVectors[Affine[C].Control] += ScalarVectorVisits != 0;
@@ -721,6 +735,18 @@ int main(void) {
           fail(Affine[C].Name, (unsigned)N, Trial, "affine alias/reuse result or exact stage counts");
         Runs += 2;
       }
+    if (Affine[C].Compact) {
+      unsigned Lanes = Affine[C].VectorLanes;
+      unsigned Required = 3u | (Lanes <= 65 ? 4u : 0u) |
+                          (Lanes < 65 ? 8u : 0u) |
+                          (Lanes <= 66 ? 16u : 0u) |
+                          (Lanes <= 65 ? 32u : 0u) |
+                          (Lanes < 65 ? 64u : 0u);
+      if ((CompactPaths & Required) != Required)
+        fail(Affine[C].Name, 65, CompactPaths,
+             "compact P=0, scalar-only, vector-exact and vector/tail boundary paths");
+    }
+  }
   if (!AffineVectorRuns || !AffineTailRuns)
     fail("affine matrix", 65, 0, "actual vector and remainder paths both required");
   for (unsigned Control = 1; Control <= 4; ++Control)

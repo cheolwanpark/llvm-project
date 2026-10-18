@@ -1150,13 +1150,14 @@ scalar.fission.consumer.body:
 }
 
 ; Parser/probe fixture only; actual transformed execution uses scalar-compact.ll.
-define void @compact_triangle(ptr %a, ptr %fp, i64 %n, i64 %unrelated, double %start) {
+define void @compact_triangle(ptr %a, ptr %fp, ptr %out, ptr %dout, ptr %fout, i64 %n, i64 %unrelated, double %start) {
 entry:
   %s = alloca [65 x i32]
   %d = alloca [65 x double]
   %f = alloca [65 x float]
   %fstart = fptrunc double %start to float
-  br label %preheader
+  %nonzero = icmp ne i64 %n, 0
+  br i1 %nonzero, label %preheader, label %exit
 preheader:
   br label %loop
 loop:
@@ -1197,37 +1198,76 @@ vector.ph:
   br label %vector.body
 vector.body:
   %vi = phi i64 [ 0, %vector.ph ], [ %vector.next, %vector.body ]
+  %v0.acc = phi <vscale x 4 x i32> [ insertelement (<vscale x 4 x i32> zeroinitializer, i32 17, i32 0), %vector.ph ], [ %v0.update, %vector.body ]
+  %v1.acc = phi <vscale x 4 x i32> [ insertelement (<vscale x 4 x i32> zeroinitializer, i32 -7, i32 0), %vector.ph ], [ %v1.update, %vector.body ]
+  %vd.acc = phi double [ %start, %vector.ph ], [ %dr, %vector.body ]
+  %vf.acc = phi float [ %fstart, %vector.ph ], [ %fr, %vector.body ]
   %il = load <vscale x 4 x i32>, ptr %s
   %dl = load <vscale x 4 x double>, ptr %d
   %fl = load <vscale x 4 x float>, ptr %f
-  %dr = call double @llvm.vector.reduce.fadd.nxv4f64(double 0.0, <vscale x 4 x double> %dl)
-  %fr = call float @llvm.vector.reduce.fadd.nxv4f32(float 0.0, <vscale x 4 x float> %fl)
-  %ir = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %il)
+  %v0.update = add <vscale x 4 x i32> %v0.acc, %il
+  %v1.update = add <vscale x 4 x i32> %il, %v1.acc
+  %dr = call double @llvm.vector.reduce.fadd.nxv4f64(double %vd.acc, <vscale x 4 x double> %dl)
+  %fr = call float @llvm.vector.reduce.fadd.nxv4f32(float %vf.acc, <vscale x 4 x float> %fl)
   %vector.next = add nuw i64 %vi, %vf
   %vector.done = icmp eq i64 %vector.next, %n.vec
   br i1 %vector.done, label %middle.block, label %vector.body
 middle.block:
+  %ir = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %v0.update)
+  %ir2 = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %v1.update)
   %cmp.n = icmp eq i64 %fission.participating.count, %n.vec
   br i1 %cmp.n, label %scalar.fission.consumer.loopexit, label %scalar.ph
 scalar.ph:
   %resume = phi i64 [ 0, %scalar.fission.consumer.ph ], [ %n.vec, %middle.block ]
+  %r0.resume = phi i32 [ 17, %scalar.fission.consumer.ph ], [ %ir, %middle.block ]
+  %r1.resume = phi i32 [ -7, %scalar.fission.consumer.ph ], [ %ir2, %middle.block ]
+  %rd.resume = phi double [ %start, %scalar.fission.consumer.ph ], [ %dr, %middle.block ]
+  %rf.resume = phi float [ %fstart, %scalar.fission.consumer.ph ], [ %fr, %middle.block ]
   br label %scalar.fission.consumer.body
 scalar.fission.consumer.body:
   %ti = phi i64 [ %resume, %scalar.ph ], [ %fission.consumer.next, %scalar.fission.consumer.body ]
+  %r0.consume = phi i32 [ %r0.resume, %scalar.ph ], [ %u0.consume, %scalar.fission.consumer.body ]
+  %r1.consume = phi i32 [ %r1.resume, %scalar.ph ], [ %u1.consume, %scalar.fission.consumer.body ]
+  %rd.consume = phi double [ %rd.resume, %scalar.ph ], [ %ud.consume, %scalar.fission.consumer.body ]
+  %rf.consume = phi float [ %rf.resume, %scalar.ph ], [ %uf.consume, %scalar.fission.consumer.body ]
+  %ci = load i32, ptr %s
+  %cd = load double, ptr %d
+  %cf = load float, ptr %f
+  %u0.consume = add i32 %r0.consume, %ci
+  %u1.consume = add i32 %ci, %r1.consume
+  %ud.consume = fadd double %rd.consume, %cd
+  %uf.consume = fadd float %rf.consume, %cf
   %fission.consumer.next = add nuw i64 %ti, 1
   %fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.participating.count
   br i1 %fission.consumer.more, label %scalar.fission.consumer.body, label %scalar.fission.consumer.loopexit
 scalar.fission.consumer.loopexit:
-  %r0.lcssa = phi i32 [ %ir, %middle.block ], [ 23, %scalar.fission.consumer.body ]
-  %r1.lcssa = phi i32 [ %ir, %middle.block ], [ 29, %scalar.fission.consumer.body ]
-  %rd.lcssa = phi double [ %dr, %middle.block ], [ 1.000000e+00, %scalar.fission.consumer.body ]
-  %rf.lcssa = phi float [ %fr, %middle.block ], [ 2.000000e+00, %scalar.fission.consumer.body ]
+  %r0.lcssa = phi i32 [ %ir, %middle.block ], [ %u0.consume, %scalar.fission.consumer.body ]
+  %r1.lcssa = phi i32 [ %ir2, %middle.block ], [ %u1.consume, %scalar.fission.consumer.body ]
+  %rd.lcssa = phi double [ %dr, %middle.block ], [ %ud.consume, %scalar.fission.consumer.body ]
+  %rf.lcssa = phi float [ %fr, %middle.block ], [ %uf.consume, %scalar.fission.consumer.body ]
   br label %scalar.fission.consumer.exit
 scalar.fission.consumer.exit:
   %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ], [ %r0.lcssa, %scalar.fission.consumer.loopexit ]
   %r1.result = phi i32 [ -7, %scalar.fission.consumer.guard ], [ %r1.lcssa, %scalar.fission.consumer.loopexit ]
   %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ %rd.lcssa, %scalar.fission.consumer.loopexit ]
   %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ %rf.lcssa, %scalar.fission.consumer.loopexit ]
+  br label %output.bridge
+output.bridge:
+  %m0 = phi i32 [ %r0.result, %scalar.fission.consumer.exit ]
+  %m1 = phi i32 [ %r1.result, %scalar.fission.consumer.exit ]
+  %md = phi double [ %rd.result, %scalar.fission.consumer.exit ]
+  %mf = phi float [ %rf.result, %scalar.fission.consumer.exit ]
+  br label %exit
+exit:
+  %v0 = phi i32 [ 17, %entry ], [ %m0, %output.bridge ]
+  %v1 = phi i32 [ -7, %entry ], [ %m1, %output.bridge ]
+  %vd = phi double [ %start, %entry ], [ %md, %output.bridge ]
+  %vf = phi float [ %fstart, %entry ], [ %mf, %output.bridge ]
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %v0, ptr %out
+  store i32 %v1, ptr %o1
+  store double %vd, ptr %dout
+  store float %vf, ptr %fout
   ret void
 }
 

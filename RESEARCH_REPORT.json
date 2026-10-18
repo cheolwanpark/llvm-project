@@ -1,11 +1,12 @@
 {
-  "task_id": "t000032",
-  "base_revision": "209fdd0c9df5c66586a9d69f635e080777a7066f",
-  "hypothesis": "Affine checker boundary fixtures must specialize an argument without confusing a formal parameter with identically typed instruction operands. A fixture-specific signature/parameter-span helper admits the existing %n and %rows boundary constructions, including multiline signatures, while retaining every guard and substituting only exact argument uses in the selected definition. This repairs validation construction only; no LLVM transformation, program legality, profitability model or immutable benchmark changes.",
-  "semantics": "specialize_i64_argument first requires exactly one definition with the requested exact function name, then one supported void-function signature and exactly one selected i64 formal in its flat parameter span. It removes that parameter and one adjacent separator by offsets within the signature, never by module-wide deletion of a typed operand. It substitutes exact SSA tokens only after that signature in the selected body, preserving instructions, branches, guards, metadata, comments, similar identifiers, unrelated parameters and adjacent definitions. Supported syntax is deliberately limited to unquoted void functions with named ptr (optionally readonly), i64, double and float formals, including multiline lists; quoted body tokens, argument redefinitions and unsupported formal syntax fail explicitly. Focused construction cases compare the whole expected module for both arguments, every parameter position and all retained boundary constants, and require precise absent/duplicate-formal and definition failures. change_line now retains the unique anchored instruction-expression span and matches bare SSA operands exactly; numeric SSA renaming also uses exact tokens, function renames include @name(, wrong-width mutation is signature-scoped and count relocation uses anchored destinations. replace_once retains its original body.count(old)==1 assertion. Existing exact-label construction checks and all production code in check-reduction-fission.py and the C executable comparisons are unchanged. Actual completed/participating-count provenance, ordinal/increment/export placement, metadata, one-way integer refinement, guard/branch polarity, predecessor and direct/one-hop exit certificates remain mandatory. Fixture acceptance is not executable transformation evidence. Fresh harness validation must compare actual transformed LV1/LV2 scalar-remainder code against original IR and independent C references, with enclosing-row scratch reuse/reduction carry, zero-entry null behavior, future-row aliases, exact visits, ordered FP bits/signed zero, masks, tails, canaries and inactive invalid operands. Uninstrumented EVL/scalar-remainder RVV code requires machine verification. Strict FP and explicitly enabled fission reordering remain separate, with no added fast-math/errno assumptions.",
-  "costs": "Fixture-only changes add no target scratch capacity/traffic, original-input rereads, contribution recomputation, producer duplication, runtime guards, compiler analyses or profitability checks. The small helper reuses the existing function extractor, scans a flat supported signature, splices one formal by offsets and scans body lines with exact SSA-token substitution; it uses linear string scans/copies over fixed-size fixtures, without a general IR parser, solver or new CFG machinery. The audited mutation constructors use unique anchored spans or exact tokens and preserve their existing intended mutations. Underlying scratch remains capped at the existing 65536-byte per-candidate ceiling and signed pointer-index bound: entry allocation is M times unique contribution sizes plus padding. At M=65 mixed fixtures account for 1044 bytes (65*i32 + 65*double + 65*float + 4 padding), with 16*N logical store bytes and 16*N load bytes, or 16*P each for compact streams. Enclosing rows reuse 784 accounted bytes (65*i32 + 65*double plus padding), with 12*N stores and 12*N loads per row and capacity independent of row count. Scalar i32 boundary fixtures reserve 4/1020/65536 bytes at M=1/255/16384 and transfer 8*N total bytes (131072 at the ceiling). Noncanonical producers retain the ordinal PHI, unit latch increment and actual completed export; compaction retains P and its empty guard. No new mask arrays, alias/SCEV versioning guards, dynamic or unbounded storage are introduced. Physical stack traffic, pressure, RVV execution and speedup are unmeasured.",
+  "task_id": "t000033",
+  "base_revision": "3f2a4e9035d95fdea545f485ee19e04d1e4319f5",
+  "hypothesis": "Compact scalar-remainder consumers after a second LV invocation may exit through one dedicated LCSSA forwarding block before the existing result join. Checking that edge structurally, and tracing exact typed scalar/vector results to stores, admits the retained sound LV2 form without relying on label suffixes or weakening count provenance. This is an execution-validator repair, not a compiler legality or profitability change.",
+  "semantics": "The scalar-remainder branch retains all existing participating P/export/guard, rounded-bound, bypass, branch-polarity and tail-termination checks, then invokes a bounded fixture certificate. It derives predecessors from actual label operands in instructions (including unexpected switch/invoke edges), discarding printed predecessor comments. The true tail edge remains the self backedge; the false edge goes directly to the existing join or to exactly one block with that tail as its sole predecessor, typed single-input PHIs forwarding the actual reduction updates, and an unconditional edge to the join. The join has exactly the vector-middle and direct/forwarded tail predecessors and exact typed result operands. Every tail recurrence and scalar resume start/backedge is checked. Integer vector results must come from corresponding typed vector-add reductions; ordered double/float results must come from flag-free ordered reduction calls. Direct vector updates or the observed one typed middle.block LCSSA PHI are linked to the resume and result join; vector recurrence starts/backedges are retained. Arbitrary copy expressions, extra computations/effects, wrong types/values, extra predecessors, conditional forwarding, cycles and longer chains fail. The result join and empty-path starts then link through the demonstrated optional output LCSSA block and final PHIs to exact stores, integer result combination or enclosing compact row stores/carry. All matching is fixture-scoped; it is not a general LLVM IR equivalence proof. Existing EVL, completed-count, enclosing-exit, metadata/refinement and signature-specialization certificates are unchanged. Fresh actual-opt original/transformed/independent execution comparisons remain mandatory under separate strict and explicitly reordered policies.",
+  "costs": "No target transformation changes: scratch capacity, traffic, input rereads, contribution recomputation, producer duplication, guards, analysis passes and profitability remain unchanged. The new certificate uses fixed-depth typed patterns, exact PHI operand lists and predecessor scans over fixed-size fixtures; it never walks arbitrary chains, solves equivalences or allocates target storage. The C harness adds per-variant coverage bits to the existing full P sweep, with no added target instructions or comparison iterations. Existing scratch is entry-allocated M times unique contribution sizes plus padding, capped at 65536 bytes per candidate and the signed pointer-index bound. M=65 mixed streams account for 1044 bytes (65*i32 + 65*double + 65*float + 4 padding), with 16*P logical store bytes and 16*P load bytes for compact streams (16*N each for full streams). Enclosing rows reuse 784 accounted bytes with 12*N stores and 12*N loads per row; capacity does not grow with row count. Scalar i32 capacity fixtures reserve 4/1020/65536 bytes at M=1/255/16384, transferring 8*N bytes total. Ordinal/participating counters and existing empty-stream guards remain. No new mask arrays, alias/SCEV versioning, unbounded/dynamic scratch or additional original-input reads are introduced. Physical stack traffic, pressure, target execution and speedup are unmeasured.",
   "tests": [
     "llvm/test/Other/reduction-fission-execution-checker.test",
+    "llvm/test/Other/reduction-fission-compact-tail-checker.test",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-trip-count.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-call-tail.ll",
@@ -51,96 +52,76 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
   ],
   "checker_input": "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
-  "limitations": "The worker invoked no build, compiler (including host compilation), test runner, lit RUN, VectorizeTests, execution checker or try.sh. Fresh independent harness validation is requested and pending; requests/static inspection are not passing results. The immutable t000030 build compiled successfully and passed 43/44 mandatory lit files. The owning checker failed at the first enclosing boundary formal removal: i64 %n, also occurs in guards and shifts, so replace_once correctly found multiple matches. All fourteen retained affine positives and preceding exact-label construction coverage were reached, but subsequent certificate rejection mutations, completed-boundary suites, VectorizeTests, complete executable comparisons and the primary corpus were not completed. No later actual affine LV2 or scalar-remainder output from that failed run justifies a production-checker adjustment, and none is made. The helper intentionally supports only the documented fixture syntax and %n/%rows unsigned-i64 specializations, not arbitrary LLVM IR, quoted tokens, nested parameter types or attributed integer formals. Production limitations remain conditional/multihop/PHI-bearing exit forwarding, arbitrary guard/arithmetic forms, non-affine/pointer/FP controls, non-lattice exits, unbounded/unrepresentable counts, oversized untiled scratch, producer cycles/extra recurrences, unsupported effects/live-outs/calls, independent participant streams and strictfp/constrained FP. Host fixed-vscale scalar-remainder execution is neither EVL/VP execution nor RVV target execution; RVV code generation is not a speedup measurement. No selection gain, direction maturity or performance improvement is claimed. Original benchmarks, harness, other worktrees, binaries, Git history/index/refs and unfinished d2 work are untouched.",
-  "test_expectations": "Intentional fixture-construction change: boundary specialization no longer aborts on repeated typed uses in comparisons, shifts and calls; those operands remain typed constants and all guards remain. Both %n and %rows support first/middle/last/sole parameters and multiline signatures. Complete expected strings preserve similarly named formals/SSA values, unrelated parameters/instructions, comments, metadata and adjacent similarly named functions. Absent/duplicate exact formals and target definitions fail precise uniqueness assertions; unsupported i32/attributed/variadic formal syntax is rejected. Constants remain n=0/1/65/66/UINT64_MAX and rows=0/1/4/5/UINT64_MAX, preserving zero, maximum-valid, first-invalid and unsigned-maximum cases. Instruction mutations now leave a copied instruction in a comment and same-prefix definitions/operands unchanged, reject prefix-only matches, and distinguish numeric %3 from %30. Function renames and runtime count relocation/width mutations keep their intended rejection shapes with safer scopes. No production compiler/checker expectation or correctness check is removed. Existing exact-label bare/commented/suffix/missing/duplicate cases, all fourteen retained EVL inputs, metadata/integer refinement, actual completed/participant counts, placement, compact P=0 and direct/one-hop outer-exit tests remain. Inputs/reduction-fission-affine-counts.ll remains an input to its owning RUN, not a standalone lit test. Retained/specialized checker positives require independent actual-opt executable validation.",
-  "evidence_read": [
-    "tasks/t000032.json assignment; tasks/t000030.json recorded revise decision at revision 209fdd0c9df5c66586a9d69f635e080777a7066f; full immutable diffs/t000030.patch; builds/t000030/progress.json and retained lit failure/traceback. Compilation passed, 43/44 lit files passed, and the owning checker failed in boundary removal because the formal and instruction operands share i64 %n, .",
-    "Frozen harness/BENCHMARKS_ANALYSIS.md; read-only aggregation of all 234 evaluations/t000017/primary/*/*/result.json confirms per policy 117 exit-code-zero compilations, 91 exact-target rejections, 26 no_decision and zero selected. These historical results do not validate this revision; nested/helper activity is separate.",
-    "All formal-specialization sites, nearby affine count/guard/metadata/mutation/renaming/placement constructors, compact fixtures and actual source/retained affine function signatures, including original multiline signatures.",
-    "Unchanged production check_affine_function structural exit/guard/count/placement certificates and actual-opt LV1/LV2 execution/codegen matrix, exact-source Selected/VF/scratch assertions and C comparison contracts. Earlier failure/audit history remains below and in immutable campaign records."
+  "limitations": "The worker ran no builds, compilers, test runners, lit RUNs, VectorizeTests, execution checker or try.sh. This revision is unvalidated until the harness completes all requested work. The certificate only covers the demonstrated compact reduction fixture shapes, one tail forwarding hop, optional single middle.block forwarding and the existing bounded output forms; arbitrary types/opcodes/CFGs, copy chains, conditional forwarding and longer chains remain rejected. It does not prove arbitrary memory equivalence or substitute for IR verification and executable comparison. New retained fixtures are parser/checker inputs, not RVV or host executable evidence. Other affine LV2 exits were inspected structurally only; their existing count/preservation certificates were not broadened. Compiler limitations such as unbounded/oversized untiled storage, producer cycles/extra recurrences, unsupported calls/effects/live-outs, independent participation streams, non-affine controls and strictfp/constrained FP remain. Fixed-vscale host execution is not EVL/VP or RVV target execution; verified code generation is not a speedup measurement. No selection gain, performance improvement or direction maturity is claimed. Immutable benchmarks, production fission legality, other worktrees, Git index/history/refs, binaries and unfinished d2 work are untouched.",
+  "test_expectations": [
+    "New reduction-fission-compact-tail-checker.test retains the exact full affine_compact LV1 and LV2 scalar-remainder functions from t000032. Direct and one-hop outputs, renamed forwarding/output labels, renamed LCSSA values, untrusted predecessor comments and probe insertion must pass the production affine checker.",
+    "Focused mutations require the compact scalar-result diagnostic and the intended obligation. They cover wrong tail/join/output values and types, wrong starts/backedges, reversed tail/middle/bypass edges, extra branch/switch predecessors, conditional forwarding, self cycles, longer chains, additional PHIs/arithmetic/calls/stores, copy/same-prefix values, broken vector LCSSA values/types/edges/cardinality, final output linkage and ordered-FP flags. Existing count-branch tests explicitly require their existing count-provenance diagnostic instead.",
+    "The older synthetic scalar-tail fixture formerly used constants as tail results, omitted scalar/vector accumulators and discarded outputs. It now supplies real typed recurrences, distinct integer vector results, scalar resume values, an explicit zero-entry branch and final output PHIs/stores so its existing positive/probe/count mutations must satisfy the stronger certificate. No correctness rejection is removed; signature-specialization helpers/tests and exact-label construction tests are untouched.",
+    "The C harness retains all existing original/transformed/independent comparisons, aliases/canaries/signed-zero/inactive-operand checks and enclosing-row tests. It now requires entered-producer P=0, scalar-only, vector-exact and mixed paths for each compact compiled LV1/LV2, FP-option and vscale variant. It separately requires P=VF-1, VF and VF+1 where these fit the existing P=0..65 sweep. For VF>65 only zero-participant and scalar-only execution are feasible and required."
   ],
   "prior_validation": {
-    "task_id": "t000030",
-    "revision": "209fdd0c9df5c66586a9d69f635e080777a7066f",
+    "task_id": "t000032",
+    "revision": "3f2a4e9035d95fdea545f485ee19e04d1e4319f5",
+    "source": "builds/t000032/progress.json, lit.log, unit.log and execution.log",
     "compilation_exit_code": 0,
-    "lit_exit_code": 1,
-    "lit_passed_files": 43,
+    "lit_exit_code": 0,
+    "lit_passed_files": 44,
     "lit_total_files": 44,
-    "lit_failed_files": 1,
-    "lit_unresolved_files": 0,
-    "retained_affine_positives_completed": 14,
-    "exact_label_construction_checks_reached": true,
-    "failures": [
-      "replace_once(text, 'i64 ' + argument + ', ', '') matches both the formal parameter and typed instruction operands; its unchanged uniqueness assertion aborts the first enclosing %n boundary construction"
-    ],
-    "new_certificate_mutations_completed": false,
-    "unit_tests_reached": false,
-    "complete_executable_comparisons_reached": false,
+    "vectorize_tests_exit_code": 0,
+    "vectorize_tests_passed": 99,
+    "execution_exit_code": 1,
+    "failure": "check_compact_count expected the scalar tail false edge to go directly to scalar.fission.consumer.loopexit; actual affine_compact LV2 goes through scalar.fission.consumer.loopexit.loopexit with four typed single-input forwarding PHIs.",
+    "complete_executable_comparisons_completed": false,
     "primary_corpus_reached": false,
+    "host_objects_are_not_completed_comparisons": true,
     "this_revision_validated": false
   },
-  "diagnosis": {
-    "status": "Narrow fixture-only repair of the recorded t000030 failure; fresh harness validation pending.",
-    "observed_failure": "replace_once(text, 'i64 ' + argument + ', ', '') matches both the formal parameter and typed instruction operands; its unchanged uniqueness assertion aborts the first enclosing %n boundary construction",
-    "repair": "Retain unique definition/signature/parameter spans for formal removal, then substitute exact argument uses inside that definition. Keep guards, all boundary cases and replace_once uniqueness.",
-    "compiler_changes_in_this_task": false,
-    "production_checker_changes_in_this_task": false,
-    "no_new_count_provenance_rule": true,
-    "standalone_fixture": {
-      "standalone": false,
-      "owning_test": "llvm/test/Other/reduction-fission-execution-checker.test",
-      "owning_RUN_retained": true,
-      "input_file_retained_unchanged": true,
-      "explanation": "t000026 validation listed the input as a standalone test and lit reported no RUN line. The initialized t000027 report already omits it; this report explicitly preserves that exclusion while retaining checker_input, the file and its owning RUN. No dummy RUN or correctness-check removal is used."
-    },
-    "expected_outcome": "Existing enclosing and all thirteen ordinal boundary specialization suites become constructible without erasing typed operands; the new focused cases must pass before later mandatory validation can be accepted.",
-    "previous_label_construction_repair": {
-      "status": "Fixture-only repair of the concrete t000029 construction failure; fresh harness validation pending.",
-      "observed_failure": "Anchored matching found exact exit, but extracting its text discarded the position. Unrestricted replace_once then found the same exit:\\n suffix in row.exit and asserted before source.bridge could be constructed.",
-      "repair": "Require exactly one anchored match and retain its start/end for insertion or replacement. Keep row.exit, the unrestricted replace_once uniqueness assertion and all semantic checks.",
-      "compiler_changes_in_this_task": false,
-      "production_checker_changes_in_this_task": false,
-      "no_new_count_provenance_rule": true,
-      "standalone_fixture": {
-        "standalone": false,
-        "owning_test": "llvm/test/Other/reduction-fission-execution-checker.test",
-        "owning_RUN_retained": true,
-        "input_file_retained_unchanged": true,
-        "explanation": "t000026 validation listed the input as a standalone test and lit reported no RUN line. The initialized t000027 report already omits it; this report explicitly preserves that exclusion while retaining checker_input, the file and its owning RUN. No dummy RUN or correctness-check removal is used."
+  "retained_output_audit": {
+    "source": "builds/t000032/execution/scalar-affine_ordered_scalar-remainder_lv1.rvv.ll and scalar-affine_ordered_scalar-remainder_lv2.rvv.ll",
+    "functions_audited": 14,
+    "compact": "LV1 has a direct tail->consumer.loopexit edge and four join PHIs. LV2 has one dedicated tail forwarding block with four PHIs, then the same four join PHIs; middle.block has two vector-i32 and double/float LCSSA PHIs. The complete compact functions are retained verbatim in the new split-file regression.",
+    "other_mixed": "The twelve noncompact/non-enclosing functions have tail->exit.loopexit directly at LV1, and tail->exit.loopexit.loopexit with four LCSSA PHIs at LV2. Their LV2 middle.block has four typed LCSSA PHIs. Existing completed-count/producer checks do not impose the failing compact direct-exit assertion; no broader acceptance is added.",
+    "enclosing": "affine_enclosing has tail->row.exit directly at LV1 and tail->row.exit.loopexit with two LCSSA PHIs at LV2. Its middle.block has two LCSSA PHIs at LV2. Existing row control, completed-count and enclosing outer-exit certificates remain unchanged.",
+    "evidence_limit": "Static read-only shape audit, not running the checker or accepting any other actual path. Fresh full execution and verification must discover any later failure.",
+    "other_actual_compact_forms": "Read the retained scalar-compact_ordered_scalar-remainder.rvv.ll mixed, i64 integer and enclosing compact forms to retain their direct tail joins, dynamic integer vector starts, integer flags, final result combination and row carry."
+  },
+  "frozen_corpus_evidence": {
+    "analysis": "harness/BENCHMARKS_ANALYSIS.md",
+    "evidence": "Read-only reaggregation of evaluations/t000017/primary/*/*/result.json",
+    "per_policy": {
+      "strict": {
+        "inputs": 117,
+        "exit_code_zero": 117,
+        "rejected": 91,
+        "no_decision": 26,
+        "selected": 0
       },
-      "expected_outcome": "The new construction cases and previous enclosing direct/forwarded/renamed/metadata mutations should become reachable without the substring collision. Subsequent mandatory failures still block acceptance and require exact retained output plus a narrowly justified proof.",
-      "previous_certificate_repair": {
-        "status": "Narrow repair based on immutable t000027 failure and static inspection, with fresh independent validation pending.",
-        "observed_failure": "The retained enclosing output has br i1 %rows.done, label %exit.loopexit, label %outer; exit.loopexit has one row.exit predecessor and only br label %exit. The direct-edge-only certificate returned no kind and therefore rejected the otherwise recognized %8 consumer count expansion.",
-        "repair": "Discover the direct/forwarded true successor structurally; verify exact conditional/polarity/backedge, one-hop predecessor/successor and absence of any work, plus guarded outer entry/backedge and final exit predecessors in both IRs.",
-        "no_new_count_provenance_rule": true,
-        "compiler_changes_in_this_task": false,
-        "standalone_fixture": {
-          "standalone": false,
-          "owning_test": "llvm/test/Other/reduction-fission-execution-checker.test",
-          "owning_RUN_retained": true,
-          "input_file_retained_unchanged": true,
-          "explanation": "t000026 validation listed the input as a standalone test and lit reported no RUN line. The initialized t000027 report already omits it; this report explicitly preserves that exclusion while retaining checker_input, the file and its owning RUN. No dummy RUN or correctness-check removal is used."
-        },
-        "expected_outcome": "The observed enclosing shape and its direct/renamed/metadata analogues should cease blocking the production checker. Mutations should reject every new certificate obligation. Any later mandatory failure still requires exact retained artifacts and a narrowly justified repair; no passing result is claimed."
+      "reordered": {
+        "inputs": 117,
+        "exit_code_zero": 117,
+        "rejected": 91,
+        "no_decision": 26,
+        "selected": 0
       }
-    }
+    },
+    "interpretation": "Historical exact-original-target records only; inner/helper activity is separate. These totals do not validate this revision or measure target speedup."
   },
   "validation_requested": {
-    "task_id": "t000032",
+    "task_id": "t000033",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
       "required": true,
       "snapshot": "this worktree after harness freeze",
+      "base_revision": "3f2a4e9035d95fdea545f485ee19e04d1e4319f5",
       "agent_compilation": false,
-      "base_revision": "209fdd0c9df5c66586a9d69f635e080777a7066f",
       "prior_build_is_not_acceptance": true
     },
     "lit": {
       "mandatory_fission_suite": true,
       "changed_and_explicit_paths": [
         "llvm/test/Other/reduction-fission-execution-checker.test",
+        "llvm/test/Other/reduction-fission-compact-tail-checker.test",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-trip-count.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-call-tail.ll",
@@ -185,191 +166,57 @@
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-speculation.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
       ],
-      "verify_each": true,
-      "analyses": [
-        "domtree",
-        "loops",
-        "scalar-evolution"
-      ],
-      "all_RUN_lines_required": true,
-      "retain_full_ir": [
-        "single LV default EVL",
-        "repeated LV default EVL",
-        "scalar remainder",
-        "scalar-only affine capacities and overflow/ceiling rejections",
-        "exact source-location remarks",
-        "original scalar-evolution print %t.scev before transformations",
-        "full admission/count/scratch/witness analysis remarks before FileCheck",
-        "all original and new modular relational/control and capacity outputs"
-      ],
-      "retain_unchanged_native_cycle_rejection": true,
-      "checker_positive_and_negative_RUN_required": true,
-      "input_fixture_registration": {
-        "standalone": false,
-        "owning_test": "llvm/test/Other/reduction-fission-execution-checker.test",
-        "owning_RUN_retained": true,
-        "input_file_retained_unchanged": true,
-        "explanation": "t000026 validation listed the input as a standalone test and lit reported no RUN line. The initialized t000027 report already omits it; this report explicitly preserves that exclusion while retaining checker_input, the file and its owning RUN. No dummy RUN or correctness-check removal is used."
-      },
-      "construction_cases_required": {
-        "positive_exit_headers": [
-          "exit without predecessor comment",
-          "exit with predecessor comment"
-        ],
-        "collision_labels": [
-          "row.exit",
-          "other.exit",
-          "commented.exit",
-          "exit.more",
-          "exit.loopexit",
-          "other.exit.loopexit",
-          "after.exit"
-        ],
-        "comment_only_exit_is_not_a_label": true,
-        "missing_exact_label": true,
-        "duplicate_exact_label_header_combinations": 4,
-        "unrelated_blocks_unchanged": true,
-        "entire_expected_output_compared": true,
-        "exact_failure_pattern_and_match_count_required": true
-      },
-      "formal_specialization_construction_cases_required": {
-        "arguments": [
-          "%n",
-          "%rows"
-        ],
-        "positions": [
-          "first",
-          "middle",
-          "last",
-          "sole"
-        ],
-        "multiline_signatures": true,
-        "similarly_named_formals_and_ssa_values_unchanged": true,
-        "adjacent_similarly_named_functions_unchanged": true,
-        "repeated_typed_uses": [
-          "comparisons",
-          "shifts",
-          "calls"
-        ],
-        "guards_comments_metadata_and_unrelated_instructions_preserved": true,
-        "boundary_constants": {
-          "n": [
-            0,
-            1,
-            65,
-            66,
-            18446744073709551615
-          ],
-          "rows": [
-            0,
-            1,
-            4,
-            5,
-            18446744073709551615
-          ]
-        },
-        "missing_duplicate_formals_and_definitions_rejected_precisely": true,
-        "unsupported_formal_syntax_rejected": true,
-        "whole_expected_output_compared": true,
-        "mutation_instruction_comment_and_ssa_prefix_collisions": true,
-        "fixture_acceptance_is_execution_evidence": false
-      }
+      "every_RUN_required": true,
+      "new_test": "llvm/test/Other/reduction-fission-compact-tail-checker.test",
+      "preserve_signature_specialization_and_completed_enclosing_certificates": true,
+      "input_files_are_not_standalone_tests": true
     },
-    "unit_tests": {
-      "required": [
-        "VectorizeTests"
-      ]
+    "unit": {
+      "required": true,
+      "target": "VectorizeTests"
     },
     "execution": {
       "required": true,
-      "script": "llvm/utils/check-reduction-fission.py",
+      "checker": "llvm/utils/check-reduction-fission.py",
       "harness": "llvm/utils/reduction-fission-execution.c.in",
-      "retain_all_existing_cases": true,
-      "fixed_vscales": [
+      "vscales": [
         1,
         2,
         4,
         8,
         32
       ],
-      "fp_reordering_option_settings": [
-        false,
-        true
-      ],
-      "new_ordinary_lv_invocations": [
+      "loop_vectorize_invocations": [
         1,
         2
       ],
-      "new_affine_functions": [
-        "affine_const",
-        "affine_runtime",
-        "affine_unsigned",
-        "affine_signed",
-        "affine_down",
-        "affine_signed_down",
-        "affine_compact",
-        "affine_enclosing",
-        "affine_wrap",
-        "affine_current",
-        "affine_unsigned_early",
-        "affine_signed_early",
-        "affine_down_early",
-        "affine_signed_down_early"
+      "fp_policies": [
+        "strict ordered early scalar fission",
+        "explicitly enabled existing fission FP-reordering option; no additional fast-math/errno assumptions"
       ],
-      "new_scalar_capacity_functions": {
-        "affine_one": 1,
-        "affine_i8_max": 255,
-        "affine_default_limit": 16384,
-        "affine_relational_limit": 16384,
-        "affine_relational_i8_max": 255
-      },
-      "requirements": [
-        "Actual transformed producer/control and vector/scalar-tail execution, never ordinary original-loop vectorization as a substitute",
-        "Original scalar IR plus independent C formulas, including simultaneous integer/FP input-output aliases and enclosing future-row aliases",
-        "Exact N producer/header and N latch visits; exact P participants for compaction; floor(N/VF),N%VF or floor(P/VF),P%VF consumer vector/tail visits; per-row sums for enclosing reuse",
-        "N=0..65,66,UINT64_MAX and compact P=0..65, with zero-entry null inputs and signed-zero P=0 bypass results",
-        "Unconstrained runtime starts including INT64_MIN/INT64_MAX, modular control wrapping and current-IV comparisons; only IR-visible bounds count",
-        "Integer/non-NaN FP bits and signed zero, NaNs by classification; cancellation, subnormals, infinities, inactive invalid operands, negative divisors, preserved inputs, canaries and repeated scratch reuse",
-        "Both actual vector and nonzero tail execution somewhere in the affine matrix are mandatory",
-        "Full scratch capacity comparisons at 1,255,16384 trips; retain i8 256-trip overflow and scratch ceiling rejection correctness",
-        "Keep all existing canonical, diamond, compact, acyclic, boundary and VPlan comparisons and assertions",
-        "Retain every existing case/trial and correctness assertion; original affine begins remain Trial%7",
-        "Four modular relational controls must demonstrate earlier-than-witness exits and full 65-trip execution, exact actual N rather than span, and nonzero vector and tail visits per class",
-        "New relational scalar boundary execution: full 255 and 16384 trips; retain current-IV i8 256-trip rejection and 16385-slot scratch rejection",
-        "Retain commands.jsonl, failed-command.json, failed-command.stdin and the complete persistent work directory on failure",
-        "Run the expanded production-checker metadata/preservation mutation lit RUN, with the unchanged real affine source fixture.",
-        "No acceptance from copied checker fixture or previous build progress: complete the linked executable and all original/transformed/independent comparisons.",
-        "If a later mandatory assertion fails, retain the exact function, original/transformed/probe/fixed-vscale IR and visit/result diagnostics; do not remove preservation or actual-count assertions.",
-        "Run the production affine checker on all fourteen retained EVL outputs and its new flag/count/guard/SSA mutations, retaining the earlier metadata, prefix, comment and placement cases.",
-        "Complete actual transformed affine execution after BOTH one and two ordinary loop-vectorize invocations, for both separate FP option settings, scalar-remainder host execution at every fixed vscale, and uninstrumented EVL/scalar-remainder RVV machine verification.",
-        "Preserve actual completed counts for all four modular relational early-exit siblings, and participation counts plus the empty-stream bypass for compaction; equality-witness bounds must never replace these.",
-        "Retain complete scalar-tail/LV2 affine IR on any later failure. The worker only inspected the retained LV1 EVL output; a different unobserved expansion is not automatically accepted.",
-        "Run the direct generated completed-increment positives and rejection mutations in the owning checker RUN, including both flag spellings, 13 ordinal controls, exact PHI edges and specialized boundary arguments.",
-        "Do not mistake the 14 retained checker inputs or specialized boundary positives for executable validation. Complete every existing actual-opt LV1/LV2 original/transformed/independent comparison and exact visit-count assertion.",
-        "Run all new production-checker direct/forwarded/renamed outer-exit positives and rejection mutations on both original and candidate, including metadata and branch/switch predecessor cases; retain the exact failed obligation.",
-        "The full actual-opt matrix remains required after both one and two ordinary LV invocations. No affine LV2 or scalar-remainder artifact existed for worker diagnosis. Preserve all fourteen full functions, original IR, probe/fixed-vscale IR, remarks and stage/result diagnostics on failure.",
-        "Do not replace the actual completed count by a capacity witness for any modular early-exit sibling, or actual P by N for compact streams. Preserve zero entry, enclosing-row scratch reuse/reduction carry and future-input aliases, masks/tails, inactive invalid operands and canaries.",
-        "The t000030 fixture-only repair is not executable evidence. Complete every original/transformed/independent LV1/LV2 comparison, both separate FP policy settings and all existing probe assertions after the entire owning checker RUN, VectorizeTests and mandatory lit pass. Retain any subsequent exact output mismatch; do not relax legality/count/placement/metadata proofs to pass.",
-        "The t000032 signature-specialization and mutation construction repair is not executable evidence. Complete every actual transformed LV1/LV2 comparison against original IR and independent references after all mandatory RUNs and VectorizeTests pass, under both separate FP contracts. Retain exact later output and a narrow proof before any production-checker adjustment."
+      "required_comparisons": [
+        "Complete linked actual transformed LV1/LV2 scalar-remainder paths against original IR AND independent C references, all existing fixtures and all fourteen affine functions",
+        "N=0..65,66,UINT64_MAX and compact P=0..65; each compact variant must cover zero participants and VF-1/VF/VF+1 boundaries when feasible",
+        "Exact producer/completed/participant/vector/tail visits; modular early exits retain actual completed N rather than capacity witness",
+        "Enclosing-row scratch reuse/reduction carry and future-row output/input aliases, zero-entry null operands, masks, tails and inactive invalid operands",
+        "Integer and non-NaN FP bits/signed zero, NaN classification, infinities/cancellation/subnormals, input preservation, canaries and repeated scratch reuse",
+        "Retain all scalar capacity-boundary tests at 1/255/16384, rejection cases and VPlan comparisons; no correctness-check removal"
       ],
-      "comparison_status": "pending fresh independent harness; no worker execution",
-      "persistent_work_dir_required": true
+      "comparison_status": "pending fresh independent harness",
+      "persistent_work_dir_required": true,
+      "generated_objects_are_not_completed_comparisons": true
     },
     "rvv_machine_verification": {
       "required": true,
       "target": "riscv64 +v",
       "policies": [
-        "default EVL/VP",
-        "scalar remainder",
-        "one and two ordinary LV invocations",
-        "scalar capacity boundaries",
-        "four modular strict relational controls",
-        "relational i8 and full scratch capacity analogues"
+        "uninstrumented default EVL/VP",
+        "uninstrumented scalar remainder",
+        "actual LV1/LV2 and capacity-boundary variants"
       ],
-      "instrumentation": false,
+      "verify_machineinstrs": true,
       "target_execution": false,
       "speedup_measurement": false,
-      "must_retain_uninstrumented_ir_and_assembly": true,
       "host_comparison_is_not_target_execution": true
     },
     "primary_corpus": {
@@ -386,37 +233,33 @@
       "exact_original_target_location_required": true,
       "nested_or_helper_activity_cannot_substitute": true,
       "retain": [
-        "immutable input hashes",
-        "individual command, exit code, IR, remarks and machine-verified assembly",
-        "exact original-loop Selected/Rejected records and reasons",
-        "exact original-loop producer/consumer VF and scratch capacity/bytes evidence",
-        "other inner/helper records separately"
-      ],
-      "reordered_contract": "Only the existing explicitly enabled fission FP-reordering policy; no extra fast-math or errno flags."
+        "input hashes and every command/exit code",
+        "exact original-loop source-location Selected/Rejected records and reasons",
+        "independent producer/consumer VF plus scratch capacity/bytes for that exact loop",
+        "other loop/helper records separately",
+        "IR and machine-verified assembly"
+      ]
     },
     "artifact_requests": [
       {
-        "kind": "mandatory_lit",
+        "kind": "compact_scalar_tail_exit_and_result_certificate",
         "required": true,
         "retain": [
-          "all RUN commands and exit codes",
-          "full FileCheck input IR and remarks on failure",
-          "new affine scalar/EVL/tail and boundary IR"
+          "every new and existing mandatory lit RUN command/result",
+          "full exact failed mutation, block, typed PHI, predecessor/branch and result diagnostic",
+          "fresh full LV1/LV2 original/transformed/probe/fixed-vscale IR and stage remarks",
+          "actual vector result, optional middle LCSSA, scalar resume, tail result, optional tail LCSSA, join, empty result and final store linkage"
         ]
       },
       {
         "kind": "executable_comparisons",
         "required": true,
         "retain": [
-          "original reference IR",
-          "uninstrumented RVV IR and verified assembly",
-          "host probe IR before/after fixed-vscale specialization",
-          "comparison and exact visit-count failures",
-          "command and stderr",
-          "commands.jsonl",
-          "failed-command.json",
-          "failed-command.stdin",
-          "persistent execution work directory even on failure"
+          "complete final linked execution output with original/transformed/independent comparison counts",
+          "per-variant compact boundary coverage diagnostics",
+          "enclosing carry/scratch/alias and modular actual-count diagnostics",
+          "commands.jsonl, failed-command.json and failed-command.stdin",
+          "persistent execution directory even on failure"
         ]
       },
       {
@@ -424,805 +267,13 @@
         "required": true,
         "compilations": 234,
         "retain": [
-          "strict/reordered exact target records and complete artifacts",
+          "strict/reordered exact-source Selected/Rejected/stage-VF/scratch evidence",
           "input hashes",
-          "separate stage VF/scratch versus other activity"
-        ]
-      },
-      {
-        "kind": "affine_admission_diagnostics",
-        "required": true,
-        "retain": [
-          "%t.scev",
-          "%t",
-          "%t.remarks",
-          "ScalarFissionBound all fields at each original location",
-          "every later scalar/repeat/tail RUN and machine-verifier artifact"
-        ]
-      },
-      {
-        "kind": "affine_metadata_checker_regressions",
-        "required": true,
-        "retain": [
-          "every split-file/check.py RUN command and result",
-          "baseline retained EVL fixture and original production affine source",
-          "exact failed preservation instruction/block for any mutation failure",
-          "full later actual transformed affine IR/probes/remarks on failure"
-        ]
-      },
-      {
-        "kind": "affine_integer_refinement_and_count_provenance",
-        "required": true,
-        "retain": [
-          "all RUN commands and results from reduction-fission-execution-checker.test",
-          "original scalar-affine.ll, retained Inputs/reduction-fission-affine-counts.ll and actual fresh transformed IR",
-          "exact failed function, block, instruction or count-provenance mutation",
-          "complete LV1/LV2 EVL and scalar-remainder IR, probes, specialized host IR, remarks and machine-verifier results",
-          "final executable comparison output and all primary exact-location Selected/Rejected/stage-VF/scratch records"
-        ]
-      },
-      {
-        "kind": "generated_completed_count_refinement",
-        "required": true,
-        "retain": [
-          "owning execution-checker.test RUN output including completed-increment and boundary mutations",
-          "full exact failed function/block/SSA definition/edge if a subsequent mutation fails",
-          "fresh actual LV1/LV2 EVL and scalar-remainder output, original IR, probes, fixed-vscale host IR and final linked comparison output",
-          "RVV machine verification and all 234 strict/reordered original-loop Selected/Rejected reasons and stage VF/scratch artifacts"
-        ]
-      },
-      {
-        "kind": "enclosing_affine_exit_forwarding_certificate",
-        "required": true,
-        "retain": [
-          "all owning checker lit RUN commands/results and exact failed mutation",
-          "fresh complete original and LV1/LV2 EVL/scalar-remainder affine IR",
-          "row guard/PHI/increment/comparison, actual row.exit true/false edges, forwarding instruction list and CFG-derived predecessor/successor evidence",
-          "full generated count expansion and actual completed/participant exports",
-          "final executable original/transformed/independent result and visit comparisons",
-          "RVV machine-verifier outputs and all 234 strict/reordered immutable primary exact-source Selected/Rejected/stage-VF/scratch artifacts"
-        ]
-      },
-      {
-        "kind": "anchored_enclosing_exit_fixture_construction",
-        "required": true,
-        "retain": [
-          "entire owning checker RUN command/result, including bare/commented headers, suffix collisions, exact missing/duplicate match counts and unchanged unrelated-block assertions",
-          "exact failed constructor/mutation inputs and traceback if any later obligation fails",
-          "fresh compiled toolchain identity, all mandatory RUN outputs, VectorizeTests, complete actual-opt LV1/LV2 original/transformed/independent execution results and RVV machine verification",
-          "all 234 immutable primary strict/reordered exact-target source remarks, independent stage VFs, scratch capacity/bytes and separate inner/helper activity"
-        ]
-      },
-      {
-        "kind": "signature_scoped_affine_boundary_construction",
-        "required": true,
-        "retain": [
-          "complete owning checker RUN, focused construction inputs/expected outputs and precise absent/duplicate formal/definition diagnostics",
-          "all existing enclosing and thirteen ordinal completed-export boundary specializations, including guards and zero/valid/invalid/unsigned-maximum constants",
-          "full exact original/transformed/probe/fixed-vscale IR, remarks and visit/result diagnostics on any subsequent failure",
-          "fresh compilation identity, every mandatory RUN, VectorizeTests, actual LV1/LV2 original/transformed/independent comparisons, RVV machine verification and all 234 immutable primary compilations"
+          "complete IR/remarks/assembly and exit codes"
         ]
       }
     ],
-    "acceptance": "Pending fresh compilation of this frozen t000032 worktree, EVERY RUN in all 44 mandatory fission/checker lit files, VectorizeTests, the complete existing actual transformed LV1/LV2 host fixed-vscale original/transformed/independent executable matrix under both separate FP option settings, uninstrumented EVL/scalar-remainder RVV machine verification and all 234 immutable original primary compilations (117 strict and 117 explicitly reordered). Preserve enclosing-row scratch reuse/reduction carry, zero-entry behavior, ordered FP, masks, tails, aliases, canaries, inactive invalid operands and every visit/result assertion. Preserve exact original-loop source-location Selected/Rejected reasons and independent producer/consumer VF plus scratch capacity/bytes evidence; other loop activity stays separate. Retained fixture/static/historical results do not satisfy acceptance. Any compiler crash, incorrect transformation or mandatory failure blocks acceptance. Host execution, RVV code generation and measured performance remain distinct; no speedup is claimed or required.",
-    "diagnostics": {
-      "required": true,
-      "worker_executed": false,
-      "base_revision": "209fdd0c9df5c66586a9d69f635e080777a7066f",
-      "contract": "Retain all existing scalar-affine.ll SCEV/analysis/Selected/Rejected/stage RUNs through the harness, together with complete execution checker artifacts; the worker invokes no compiler or test.",
-      "commands": [
-        {
-          "tool": "opt",
-          "args": [
-            "-passes=loop-simplify,lcssa,print<scalar-evolution>",
-            "-disable-output",
-            "-mtriple=riscv64",
-            "-mattr=+v",
-            "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll"
-          ],
-          "stderr_artifact": "%t.scev",
-          "before_any_FileCheck": true
-        },
-        {
-          "tool": "opt",
-          "args": [
-            "-passes=loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>",
-            "-verify-each",
-            "-mtriple=riscv64",
-            "-mattr=+v",
-            "-force-vector-interleave=1",
-            "-force-vector-width=4",
-            "-scalable-vectorization=always",
-            "-hints-allow-reordering=false",
-            "-enable-vplan-reduction-fission",
-            "-pass-remarks=vplan-reduction-fission",
-            "-pass-remarks-missed=vplan-reduction-fission",
-            "-pass-remarks-analysis=vplan-reduction-fission",
-            "-S",
-            "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll"
-          ],
-          "ir_artifact": "%t",
-          "stderr_artifact": "%t.remarks",
-          "before_any_FileCheck": true
-        }
-      ],
-      "original_admission_replay": "ScalarFissionBound emits the unchanged ordinary helper outcome and the same scratch ceiling before applying the new certificate, only after every earlier admission check passes.",
-      "locations": [
-        "scalar-affine.c:12:3",
-        "scalar-affine.c:22:3",
-        "scalar-affine.c:32:3",
-        "scalar-affine.c:42:3",
-        "scalar-affine.c:52:3",
-        "scalar-affine.c:62:3",
-        "scalar-affine.c:72:3",
-        "scalar-affine.c:82:3",
-        "scalar-affine.c:92:3",
-        "scalar-affine.c:102:3",
-        "scalar-affine.c:112:3",
-        "scalar-affine.c:122:3",
-        "scalar-affine.c:132:3",
-        "scalar-affine.c:142:3"
-      ],
-      "must_preserve_on_failure": [
-        "all command arguments and exit codes",
-        "complete original and transformed IR",
-        "raw SCEV print and every analysis/Selected/Rejected/stage VF remark",
-        "full FileCheck input, not its truncated log excerpt"
-      ]
-    },
-    "status": "Pending fresh independent harness compilation and ALL mandatory checks; worker invoked no compiler or tests"
+    "acceptance": "Pending fresh compilation, EVERY RUN in all 44 previous mandatory fission/checker lit files plus the new compact-tail checker test, VectorizeTests, all complete actual-opt LV1/LV2 original/transformed/independent fixed-vscale comparisons under both separate FP settings, uninstrumented EVL/scalar-remainder RVV machine verification and all 234 immutable primary corpus compilations. Compiler crashes, incorrect transformations or mandatory failures block acceptance. Retained fixtures, object generation, prior checks and code generation alone do not satisfy execution validation. No speedup claim or maturity decision is made."
   },
-  "future_work": "Consume fresh immutable t000032 harness results before acceptance or maturity. Complete mandatory RUNs, VectorizeTests, actual LV1/LV2 original/transformed/independent executable comparisons, RVV machine verification and all 234 original corpus compilations. Repair later mismatches only from concrete retained output and a narrow proof, preserving completed/participant provenance, guards, placement, metadata and correctness assertions. Broader scalar legality, producer cycles, independent participation, bounded tiling/whole-function scratch budgets and actual RVV execution/performance remain future work. No unfinished d2 integration or new direction dispatch.",
-  "fixture_registration": {
-    "standalone": false,
-    "owning_test": "llvm/test/Other/reduction-fission-execution-checker.test",
-    "owning_RUN_retained": true,
-    "input_file_retained_unchanged": true,
-    "explanation": "t000026 validation listed the input as a standalone test and lit reported no RUN line. The initialized t000027 report already omits it; this report explicitly preserves that exclusion while retaining checker_input, the file and its owning RUN. No dummy RUN or correctness-check removal is used."
-  },
-  "older_validation": {
-    "task_id": "t000025",
-    "revision": "e780928b5e46ba0cebaf7581fc800b56ad007d70",
-    "compilation_exit_code": 0,
-    "lit_exit_code": 0,
-    "lit_passed_files": 44,
-    "lit_total_files": 44,
-    "unit_exit_code": 0,
-    "unit_tests": "99 VectorizeTests cases passed",
-    "execution_exit_code": 1,
-    "execution_failure": "affine_runtime preheader %span = shl nuw nsw i64 %n, 1 became shl i64 %n, 1",
-    "complete_executable_comparisons_reached": false,
-    "primary_corpus_reached": false,
-    "this_revision_validated": false,
-    "t000026_preceding_generated_count_failure": {
-      "task_id": "t000026",
-      "revision": "db36048c5d6a5fd51f9b0f572566afb431596f74",
-      "compilation_exit_code": 0,
-      "lit_exit_code": 1,
-      "lit_passed_files": 43,
-      "lit_total_files": 45,
-      "lit_failed_files": 1,
-      "lit_unresolved_files": 1,
-      "failures": [
-        "check_affine_function exact equality rejects affine_down %fission.completed = add i64 %fission.ordinal, 1",
-        "standalone Inputs/reduction-fission-affine-counts.ll: Test has no RUN line"
-      ],
-      "unit_tests_reached": false,
-      "complete_executable_comparisons_reached": false,
-      "primary_corpus_reached": false,
-      "this_revision_validated": false
-    },
-    "t000027_preceding_exit_certificate_failure": {
-      "task_id": "t000027",
-      "revision": "34e72c2608bf01cb378cf2b7980be4f8b394f2c5",
-      "compilation_exit_code": 0,
-      "lit_exit_code": 1,
-      "lit_passed_files": 43,
-      "lit_total_files": 44,
-      "lit_failed_files": 1,
-      "lit_unresolved_files": 0,
-      "failures": [
-        "full_count_kind requires direct row.exit -> exit in both IRs; retained transformed affine_enclosing has an empty dedicated exit.loopexit hop and a recognized %8 count expansion"
-      ],
-      "unit_tests_reached": false,
-      "complete_executable_comparisons_reached": false,
-      "primary_corpus_reached": false,
-      "this_revision_validated": false
-    },
-    "t000029_preceding_label_construction_failure": {
-      "task_id": "t000029",
-      "revision": "79db86fe5904532f42363915bfe4dc5eb545b6eb",
-      "compilation_exit_code": 0,
-      "lit_exit_code": 1,
-      "lit_passed_files": 43,
-      "lit_total_files": 44,
-      "lit_failed_files": 1,
-      "lit_unresolved_files": 0,
-      "retained_affine_positives_completed": 14,
-      "failures": [
-        "forward_row_exit passes its anchored exit-label text to replace_once; bare exit:\\n also occurs as a suffix of row.exit:\\n, so the intact uniqueness assertion fails"
-      ],
-      "new_certificate_mutations_reached": false,
-      "unit_tests_reached": false,
-      "complete_executable_comparisons_reached": false,
-      "primary_corpus_reached": false,
-      "this_revision_validated": false
-    }
-  },
-  "retained_output_audit": {
-    "kind": "Static printed-IR inspection, not checker execution or executable validation",
-    "input": "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
-    "functions": 14,
-    "flagged_completed_increments": 8,
-    "unflagged_completed_increments": 5,
-    "unflagged_functions": [
-      "affine_down",
-      "affine_unsigned_early",
-      "affine_signed_early",
-      "affine_down_early",
-      "affine_signed_down_early"
-    ],
-    "participant_controls": 1,
-    "conclusion": "Static inspection confirms all fourteen fixtures are exact printed t000025 LV1 EVL definitions. All 13 ordinal controls retain zero-based ordinal, actual unit completed count at the latch and a single completed export in consumer.ph; five remove nuw and eight retain it. Compact retains actual P and the empty bypass. The observed enclosing consumer uses %8 from its existing outer.ph/outer expansion, while its row exit uses the sole empty forwarding block. The seven other full-count controls use n or the existing recognized expansions; descending and four modular early-exit controls consume actual completed. No other demonstrated mismatch was found by text inspection. This is not production-checker or executable validation.",
-    "observations": [
-      {
-        "function": "affine_const",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add nuw i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %n, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:12:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:12:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:12:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:12:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_runtime",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add nuw i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %5, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:22:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:22:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:22:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:22:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_unsigned",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add nuw i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %9, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:32:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:32:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:32:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:32:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_signed",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add nuw i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %8, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:42:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:42:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:42:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:42:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_down",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %fission.completed, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:52:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:52:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:52:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:52:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_signed_down",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add nuw i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %8, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:62:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:62:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:62:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:62:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_compact",
-        "observed_definitions": {
-          "%fission.participating": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.participating.merge, %latch ]"
-          },
-          "%fission.participating.next": {
-            "block": "left",
-            "expression": "add nuw i64 %fission.participating, 1"
-          },
-          "%fission.participating.merge": {
-            "block": "latch",
-            "expression": "phi i64 [ %fission.participating.next, %left ], [ %fission.participating, %loop ]"
-          },
-          "%fission.participating.count": {
-            "block": "scalar.fission.consumer.guard",
-            "expression": "phi i64 [ %fission.participating.merge, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %fission.participating.merge, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:72:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:72:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:72:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:72:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_enclosing",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "inner",
-            "expression": "phi i64 [ 0, %inner.ph ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add nuw i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %8, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:82:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:82:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 784",
-          "remark: scalar-affine.c:82:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:82:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_wrap",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add nuw i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %5, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:92:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:92:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:92:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:92:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_current",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add nuw i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %6, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:102:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:102:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:102:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:102:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_unsigned_early",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %fission.completed, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:112:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:112:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:112:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:112:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_signed_early",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %fission.completed, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:122:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:122:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:122:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:122:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_down_early",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %fission.completed, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:132:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:132:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:132:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:132:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      },
-      {
-        "function": "affine_signed_down_early",
-        "observed_definitions": {
-          "%fission.ordinal": {
-            "block": "loop",
-            "expression": "phi i64 [ 0, %preheader ], [ %fission.completed, %latch ]"
-          },
-          "%fission.completed": {
-            "block": "latch",
-            "expression": "add i64 %fission.ordinal, 1"
-          },
-          "%fission.completed.count": {
-            "block": "scalar.fission.consumer.ph",
-            "expression": "phi i64 [ %fission.completed, %latch ]"
-          },
-          "%avl": {
-            "block": "vector.body",
-            "expression": "phi i64 [ %fission.completed, %vector.ph ], [ %avl.next, %vector.body ]"
-          }
-        },
-        "historical_source_location": "scalar-affine.c:142:3",
-        "historical_remarks": [
-          "remark: scalar-affine.c:142:3: split scalar-IR reduction loop; stage VFs selected independently by normal vectorization; scratch capacity 65, scratch bytes 1044",
-          "remark: scalar-affine.c:142:3: scalar-IR fission producer VF 1",
-          "remark: scalar-affine.c:142:3: scalar-IR fission consumer VF vscale x 4"
-        ],
-        "fixture_matches_immutable_printed_definition": true
-      }
-    ],
-    "historical_evidence": "Exact printed function definitions were compared as text to immutable t000025 LV1 EVL IR. Attached remarks at each function's actual DILocation record selection, producer VF 1, consumer VF vscale x 4, capacity 65 and scratch bytes 1044 (784 for enclosing 82:3). These historical observations and reference IR inspection do not establish completion of executable comparisons, RVV execution, performance or this revision's acceptance."
-  },
-  "output_shape_audit": {
-    "kind": "read-only immutable printed-IR/source inspection; no tests run",
-    "available_affine_transformed_artifacts": [
-      "builds/t000022/execution/scalar-affine_ordered_default-evl_lv1.rvv.ll",
-      "builds/t000025/execution/scalar-affine_ordered_default-evl_lv1.rvv.ll"
-    ],
-    "affine_lv2_available": false,
-    "affine_scalar_remainder_available": false,
-    "enclosing_original_exit": {
-      "row_exit_branch": "br i1 %rows.done, label %exit, label %outer",
-      "exit_predecessors": [
-        "entry",
-        "row.exit"
-      ]
-    },
-    "enclosing_observed_transformed_exit": {
-      "row_exit_branch": "br i1 %rows.done, label %exit.loopexit, label %outer",
-      "forwarding_predecessors": [
-        "row.exit"
-      ],
-      "forwarding_instructions": [
-        "br label %exit"
-      ],
-      "exit_predecessors": [
-        "entry",
-        "exit.loopexit"
-      ],
-      "hoisted_count_blocks": [
-        "outer.ph",
-        "outer"
-      ],
-      "consumer_count": "%8",
-      "source_location": "scalar-affine.c:82:3",
-      "scratch_capacity": 65,
-      "scratch_bytes": 784,
-      "producer_vf": "1",
-      "consumer_vf": "vscale x 4"
-    },
-    "frozen_primary_t000017": {
-      "per_policy": {
-        "strict": {
-          "inputs": 117,
-          "exit_zero": 117,
-          "rejected": 91,
-          "no_decision": 26,
-          "selected": 0
-        },
-        "reordered": {
-          "inputs": 117,
-          "exit_zero": 117,
-          "rejected": 91,
-          "no_decision": 26,
-          "selected": 0
-        }
-      },
-      "this_revision_validation": false
-    },
-    "follow_up": "Only repair a later shape mismatch after the harness retains the exact failed actual output. No preemptive LV2/tail count expression or CFG relaxation is introduced.",
-    "t000029_follow_up": "Compilation and all fourteen retained checker positives reached the new constructor; mandatory lit then stopped there. No later affine LV2/scalar-remainder output was produced to justify another production-checker repair.",
-    "t000030_follow_up": "Compilation and all fourteen retained affine positives passed before formal-specialization construction stopped the owning RUN. No later actual LV2/scalar-remainder affine output was produced, so no further production checker/count/CFG relaxation is justified."
-  },
-  "fixture_construction_audit": {
-    "scope": "Both affine boundary-specialization loops, shared instruction mutation, SSA/function renaming and adjacent runtime count/argument mutation constructors; compact and production specialization callers reviewed read-only.",
-    "corrected": [
-      "Formal removal uses exact target definition, signature and selected parameter offsets; it cannot delete typed operands from guards/shifts/calls.",
-      "Exact SSA substitution is limited to the selected definition's body and preserves comment text and similar identifiers.",
-      "change_line retains its unique anchored expression match span, so identical instruction text in an earlier comment cannot redirect mutation; bare SSA operands use token boundaries.",
-      "Numeric SSA renames distinguish %3/%4/%5 from longer identifiers; function renames use unique @name( text inside extracted definitions.",
-      "Wrong-width mutation is scoped to the unique runtime signature; count-chain relocation uses unique anchored instruction/label sites and complete-chain uniqueness."
-    ],
-    "retained_operations": [
-      "replace_once body.count(old)==1 remains unchanged.",
-      "All existing exact-label construction checks and counter-placement anchored spans remain intact.",
-      "Multi-token expression mutations remain confined to a unique full SSA definition; repeated PHI operands are intentionally mutated together and punctuation/order remain explicit.",
-      "Forwarder/bypass mutations use full indented branch lines or operand-delimited branch text; appended predecessor/cycle blocks stay before the exact function close.",
-      "Production fixed-vscale specialization rejects EVL/VP and uses syntax-delimited vector types/intrinsic stems; production symbol renames use @name(. No production specialization code changes are made."
-    ],
-    "focused_cases": {
-      "arguments": [
-        "%n",
-        "%rows"
-      ],
-      "positions": [
-        "first",
-        "middle",
-        "last",
-        "sole"
-      ],
-      "multiline_signatures": true,
-      "similarly_named_formals_and_ssa_values_unchanged": true,
-      "adjacent_similarly_named_functions_unchanged": true,
-      "repeated_typed_uses": [
-        "comparisons",
-        "shifts",
-        "calls"
-      ],
-      "guards_comments_metadata_and_unrelated_instructions_preserved": true,
-      "boundary_constants": {
-        "n": [
-          0,
-          1,
-          65,
-          66,
-          18446744073709551615
-        ],
-        "rows": [
-          0,
-          1,
-          4,
-          5,
-          18446744073709551615
-        ]
-      },
-      "missing_duplicate_formals_and_definitions_rejected_precisely": true,
-      "unsupported_formal_syntax_rejected": true,
-      "whole_expected_output_compared": true,
-      "mutation_instruction_comment_and_ssa_prefix_collisions": true,
-      "fixture_acceptance_is_execution_evidence": false
-    },
-    "previous_exact_label_audit": {
-      "scope": "All t000029 fixture additions plus nearby label-based counter-placement mutations",
-      "corrected": [
-        "forward_row_exit inserts before the exact unique exit-label match, never its extracted text",
-        "direct-exit fixture removes the exact unique forwarding block using an anchored match span",
-        "direct-exit fixture retargets one complete anchored row branch",
-        "counter-placement mutations insert after the exact unique destination label match"
-      ],
-      "retained_operations": [
-        "replace_once retains its body.count(old)==1 assertion and never receives extracted label text",
-        "row/guard/arithmetic changes select full indented SSA definitions or operand-delimited instruction strings; their exact current fixture occurrences are unique",
-        "forwarder-work mutations include the complete indented branch and newline, so a suffixed destination cannot match; there is one such branch in each actual constructor output",
-        "guard/row bypass mutations include both branch operands separated by a comma; bound specializations include argument type and comma, and value replacement has an SSA-token boundary",
-        "metadata marking anchors complete physical branch lines; appended predecessor/cycle blocks splice before the function's final closing brace"
-      ],
-      "focused_cases": {
-        "positive_exit_headers": [
-          "exit without predecessor comment",
-          "exit with predecessor comment"
-        ],
-        "collision_labels": [
-          "row.exit",
-          "other.exit",
-          "commented.exit",
-          "exit.more",
-          "exit.loopexit",
-          "other.exit.loopexit",
-          "after.exit"
-        ],
-        "comment_only_exit_is_not_a_label": true,
-        "missing_exact_label": true,
-        "duplicate_exact_label_header_combinations": 4,
-        "unrelated_blocks_unchanged": true,
-        "entire_expected_output_compared": true,
-        "exact_failure_pattern_and_match_count_required": true
-      },
-      "execution_evidence": false,
-      "worker_executed_cases": false
-    },
-    "execution_evidence": false,
-    "worker_executed_cases": false
-  }
+  "future_work": "Consume immutable fresh harness results, repair only concrete later failures with narrow certificates, and finish all mandatory comparisons and corpus compilations before considering acceptance/maturity. Unsupported arbitrary forwarding/IR equivalence, broader scalar legality, bounded tiling/whole-function scratch budgets and actual RVV execution/performance remain future work. No unfinished d2 integration."
 }

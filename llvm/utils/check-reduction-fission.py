@@ -223,8 +223,228 @@ def check_compact_count(producer, consumer, name, evl):
         tail = block(consumer, 'scalar.fission.consumer.body')
         require(r'^  %fission\.consumer\.more = icmp ne i64 '
                 rf'%fission\.consumer\.next, {counts}(?:, ![^\n]*)?$', tail)
-        branch(tail, '%fission.consumer.more', 'scalar.fission.consumer.body',
-               'scalar.fission.consumer.loopexit')
+        check_compact_scalar_results(whole, starts[name], results)
+
+
+def check_compact_scalar_results(body, starts, results):
+    """Certify the demonstrated compact scalar-tail joins, not arbitrary IR."""
+    # Ignore printed predecessor comments and metadata, never instructions.
+    blocks = re.findall(r'^([-\w.$]+):[^\n]*\n(.*?)'
+                        r'(?=^[-\w.$]+:|^}|\Z)', body, re.M | re.S)
+    assert len({label for label, _ in blocks}) == len(blocks), 'compact scalar results: duplicate label'
+    table = dict(blocks)
+    table = {label: [line.split(', !', 1)[0].strip() for line in text.splitlines()
+                     if line.strip() and not line.lstrip().startswith(';')]
+             for label, text in table.items()}
+
+    def need(condition, obligation):
+        assert condition, 'compact scalar results: ' + obligation
+
+    def match(pattern, label):
+        matches = [m for line in table.get(label, [])
+                   if (m := re.fullmatch(pattern, line))]
+        need(len(matches) == 1, label + ': instruction ' + pattern)
+        return matches[0]
+
+    ssa = r'%[-\w.$]+'
+
+    def phi(label, value, ty):
+        text = match(re.escape(value) + r' = phi ' + re.escape(ty) + r' (.+)', label)[1]
+        pairs = re.findall(r'\[ (insertelement \([^()\n]+\)|[^,\]\n]+), %([-\w.$]+) \]', text)
+        need(', '.join(f'[ {v}, %{edge} ]' for v, edge in pairs) == text,
+             label + ': PHI operands')
+        return sorted(pairs)
+
+    def incoming(destination):
+        # Also count unexpected switch/invoke label operands. They cannot
+        # hide an extra predecessor behind otherwise plausible PHI text.
+        return sorted(label for label, lines in table.items() for line in lines
+                      for target in re.findall(r'\blabel %([-\w.$]+)', line)
+                      if target == destination)
+
+    def jump(label):
+        target = match(r'br label %([-\w.$]+)', label)[1]
+        need(table[label][-1] == 'br label %' + target, label + ': terminator')
+        return target
+
+    def forwarded(value, ty, source, destination):
+        # One typed LCSSA PHI, with no name/suffix assumptions or copy chains.
+        candidates = [m[1] for line in table.get(destination, []) if (m := re.fullmatch(
+            rf'({ssa}) = phi {re.escape(ty)} \[ {re.escape(value)}, %{re.escape(source)} \]', line))]
+        need(len(candidates) == 1, destination + ': forwarding PHI for ' + value)
+        return candidates[0]
+
+    tail, middle = 'scalar.fission.consumer.body', 'middle.block'
+    join, end = 'scalar.fission.consumer.loopexit', 'scalar.fission.consumer.exit'
+    entry, resume = 'scalar.fission.consumer.ph', 'scalar.ph'
+    need(incoming('vector.ph') == [entry], 'vector preheader predecessors')
+    need(incoming('vector.body') == ['vector.body', 'vector.ph'], 'vector body predecessors')
+    need(incoming(middle) == ['vector.body'], 'middle predecessors')
+    need(incoming(resume) == sorted([entry, middle]), 'resume predecessors')
+    need(incoming(tail) == sorted([resume, tail]), 'tail predecessors')
+    need(jump(resume) == tail, 'resume edge')
+    match(r'br i1 %cmp\.n, label %' + re.escape(join) + r', label %scalar\.ph', middle)
+    destination = match(r'br i1 %fission\.consumer\.more, label %' + re.escape(tail) +
+                        r', label %([-\w.$]+)', tail)[1]
+    need(destination == join or (destination not in (tail, middle, resume, end) and
+         incoming(destination) == [tail] and jump(destination) == join),
+         'tail forwarding edge/predecessors')
+    need(incoming(join) == sorted([middle, tail if destination == join else destination]),
+         'join predecessors')
+    need(jump(join) == end, 'join edge')
+    need(incoming(end) == sorted(['scalar.fission.consumer.guard', join]), 'result predecessors')
+
+    # Resume at zero on the vector bypass, or at the rounded vector bound.
+    iv = match(r'(' + ssa + r') = add nuw i64 (' + ssa + r'), 1', tail)
+    need(iv[1] == '%fission.consumer.next', 'tail increment')
+    resume_iv = phi(tail, iv[2], 'i64')
+    need(('%fission.consumer.next', tail) in resume_iv and len(resume_iv) == 2,
+         'tail induction')
+    seed = [v for v, edge in resume_iv if edge == resume]
+    need(len(seed) == 1 and phi(resume, seed[0], 'i64') == sorted([
+        ('0', entry), ('%n.vec', middle)]), 'resume induction')
+
+    # Integer result calls occur in reduction order in middle.block; ordered
+    # FP calls occur in vector.body. Their operands may pass through exactly
+    # one typed PHI in middle.block after the second LV invocation.
+    integer_calls = [m for line in table[middle] if (m := re.fullmatch(
+        rf'({ssa}) = call (i32|i64) @llvm\.vector\.reduce\.add\.nxv4\2'
+        rf'\(<vscale x 4 x (i32|i64)> ({ssa})\)', line))]
+    need(len(integer_calls) == sum(ty.startswith('i') for _, ty, _ in starts),
+         'integer vector results')
+    forwards, middle_forwards = [], []
+    integer_count = len(integer_calls)
+    for value, ty, start in starts:
+        recurrence = '%' + value + '.consume'
+        tail_inputs = phi(tail, recurrence, ty)
+        update = [v for v, edge in tail_inputs if edge == tail]
+        initial = [v for v, edge in tail_inputs if edge == resume]
+        need(len(update) == len(initial) == 1 and len(tail_inputs) == 2, 'tail recurrence')
+        op = r'add(?: nuw)?(?: nsw)?' if ty.startswith('i') else 'fadd'
+        arithmetic = match(re.escape(update[0]) + rf' = {op} {ty} ({ssa}), ({ssa})', tail)
+        operands = [arithmetic[1], arithmetic[2]]
+        need(operands.count(recurrence) == 1, 'tail reduction update')
+        contribution = operands[1] if operands[0] == recurrence else operands[0]
+        match(re.escape(contribution) + rf' = load {ty}, ptr {ssa}(?:, align \d+)?', tail)
+        if not ty.startswith('i'):
+            need(operands[0] == recurrence, 'ordered tail operands')
+
+        vty = '<vscale x 4 x ' + ty + '>'
+        if ty.startswith('i'):
+            call = integer_calls.pop(0)
+            need(call[2] == call[3] == ty, 'integer reduction type')
+            vector_result, vector_update = call[1], call[4]
+            if any(line.startswith(vector_update + ' = phi ') for line in table[middle]):
+                middle_forwards.append(vector_update)
+                pairs = phi(middle, vector_update, vty)
+                need(len(pairs) == 1 and pairs[0][1] == 'vector.body', 'vector forwarding PHI')
+                vector_update = pairs[0][0]
+            arithmetic = match(rf'{re.escape(vector_update)} = add {re.escape(vty)} '
+                               rf'({ssa}), ({ssa})', 'vector.body')
+            vector_operands = [arithmetic[1], arithmetic[2]]
+        else:
+            suffix = 'f64' if ty == 'double' else 'f32'
+            call = match(rf'({ssa}) = call {ty} @llvm\.vector\.reduce\.fadd\.nxv4{suffix}'
+                         rf'\({ty} ({ssa}), {re.escape(vty)} ({ssa})\)', 'vector.body')
+            vector_update, vector_operands = call[1], [call[2], call[3]]
+            vector_result = vector_update
+            if any(line.startswith(vector_result + ' = ') for line in table[middle]):
+                need(False, 'redefined vector result')
+            # The scalar resume PHI and the result join must use the same
+            # direct result or the demonstrated single LCSSA forwarding PHI.
+            resume_pairs = phi(resume, initial[0], ty)
+            candidate = [v for v, edge in resume_pairs if edge == middle]
+            need(len(candidate) == 1, 'resume vector result')
+            if candidate[0] != vector_result:
+                need(phi(middle, candidate[0], ty) == [(vector_result, 'vector.body')],
+                     'FP vector forwarding PHI')
+                vector_result = candidate[0]
+                middle_forwards.append(vector_result)
+
+        # Locate the vector recurrence by its checked update, not an SSA suffix.
+        vector_phis = [operand for operand in vector_operands if any(
+            line.startswith(operand + ' = phi ') for line in table['vector.body'])]
+        need(len(vector_phis) == 1, 'vector recurrence')
+        vector_phi = vector_phis[0]
+        loaded = vector_operands[1] if vector_operands[0] == vector_phi else vector_operands[0]
+        match(re.escape(loaded) + rf' = load {re.escape(vty)}, ptr {ssa}(?:, align \d+)?',
+              'vector.body')
+        if not ty.startswith('i'):
+            need(vector_operands[0] == vector_phi, 'ordered vector operands')
+        pairs = phi('vector.body', vector_phi, vty if ty.startswith('i') else ty)
+        if ty.startswith('i'):
+            seed = 'zeroinitializer' if start == '0' else (
+                f'insertelement ({vty} zeroinitializer, {ty} {start}, i32 0)')
+            # Dynamic integer starts use an instruction in vector.ph.
+            init = [v for v, edge in pairs if edge == 'vector.ph']
+            if len(init) == 1 and re.fullmatch(ssa, init[0]):
+                match(re.escape(init[0]) + rf' = insertelement {re.escape(vty)} '
+                      rf'zeroinitializer, {ty} {re.escape(start)}, i32 0', 'vector.ph')
+                seed = init[0]
+        else:
+            seed = start
+        need(pairs == sorted([(seed, 'vector.ph'), (vector_update, 'vector.body')]),
+             'vector recurrence start/backedge')
+        need(phi(resume, initial[0], ty) == sorted([(start, entry), (vector_result, middle)]),
+             'resume reduction')
+        tail_result = update[0]
+        if destination != join:
+            tail_result = forwarded(tail_result, ty, tail, destination)
+            forwards.append(tail_result)
+        need(phi(join, results[value], ty) == sorted([
+            (tail_result, destination if destination != join else tail), (vector_result, middle)]),
+             'join reduction ' + value)
+    if destination != join:
+        need(len(table[destination]) == len(forwards) + 1, 'tail forwarding work')
+    need(len(table[middle]) == integer_count + len(middle_forwards) + 2, 'middle forwarding work')
+    need(len(table[resume]) == len(starts) + 2, 'resume work')
+    need(len(table[join]) == len(starts) + 1, 'join work')
+    need(len(table[end]) == len(starts) + 1, 'result work')
+
+    # Follow the compact results to the fixture's observable stores. The
+    # nested fixture instead exports row values which also carry to outer.
+    final = 'row.exit' if starts[0][0] == 'sum' and starts[0][1] == 'i32' else 'exit'
+    destination = jump(end)
+    output = {}
+    for value, ty, start in starts:
+        result = '%' + value + '.result'
+        if destination != final:
+            output[value] = forwarded(result, ty, end, destination)
+        else:
+            output[value] = result
+    if destination != final:
+        need(incoming(destination) == [end] and jump(destination) == final and
+             len(table[destination]) == len(starts) + 1, 'output forwarding')
+    predecessor = destination if destination != final else end
+    need(incoming(final) == sorted([predecessor] + ([] if final == 'row.exit' else ['entry'])),
+         'output predecessors')
+    names = (['%row.sum', '%row.dsum'] if final == 'row.exit' else
+             ['%result', '%result2'] if starts[0][1] == 'i64' else ['%v0', '%v1', '%vd', '%vf'])
+    for (value, ty, start), result in zip(starts, names):
+        need(phi(final, result, ty) == sorted([(output[value], predecessor)] +
+             ([] if final == 'row.exit' else [(start, 'entry')])), 'output PHI ' + value)
+    stores = ([('i32', '%row.sum', '%dst'), ('double', '%row.dsum', '%ddst')]
+              if final == 'row.exit' else [('i64', '%combined', '%out')]
+              if starts[0][1] == 'i64' else
+              [('i32', '%v0', '%out'), ('i32', '%v1', '%o1'),
+               ('double', '%vd', '%dout'), ('float', '%vf', '%fout')])
+    if starts[0][1] == 'i64':
+        match(r'%combined = add i64 %result, %result2', final)
+    elif final == 'exit':
+        match(r'%o1 = getelementptr i32, ptr %out, i64 1', final)
+    else:
+        match(r'%dst = getelementptr i32, ptr %out, i64 %row', final)
+        match(r'%ddst = getelementptr double, ptr %dout, i64 %row', final)
+    for ty, value, pointer in stores:
+        match(rf'store {ty} {re.escape(value)}, ptr {re.escape(pointer)}(?:, align \d+)?', final)
+    need(len(table[final]) == (9 if final == 'row.exit' else
+                              5 if starts[0][1] == 'i64' else 10), 'output work')
+    if final == 'exit':
+        match(r'ret void', final)
+    if final == 'row.exit':
+        need(phi('outer', '%carry', 'i32') == sorted([('19', 'outer.ph'), ('%row.sum', 'row.exit')]) and
+             phi('outer', '%dcarry', 'double') == sorted([('%start', 'outer.ph'), ('%row.dsum', 'row.exit')]),
+             'row reduction carry')
 
 
 def check_scalar_function(ir, name, evl, probe=False, fixed_narrow=False):
