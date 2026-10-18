@@ -14,9 +14,10 @@
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=3 -S %s | FileCheck %s --check-prefix=TINY --implicit-check-not=scalar.fission
 ;
 ; One module exercises affine full-trip counts, an acyclic cross edge and a
-; canonical chunk controller. Only the last loop can use N-base scheduling.
-; 260 fits 65 i32s exactly; 259 must reject the first two and chunk the last
-; at 64. The executable checker compares fresh LV1/LV2 output with original
+; canonical chunk controller. Both canonical loops can use N-base scheduling.
+; 260 fits 65 i32s exactly; 259 rejects the affine loop and chunks the cross
+; edge and last loop at capacity 64 (256 bytes). Three bytes cannot hold one
+; i32 slot, so all three reject there. The executable checker compares fresh LV1/LV2 output with original
 ; IR and an independent C sum, including every N through 66, narrow capacity
 ; boundaries, bypasses, output aliases and exact producer/vector/tail/chunk
 ; counts. Both separate FP option settings are retained.
@@ -81,7 +82,23 @@ exit:
 ; FIT: scalar.fission.consumer.body:
 ; FIT: ret void
 ; BELOW-LABEL: define void @integration_cross_edge(
-; BELOW-NOT: scalar.fission
+; BELOW: alloca [64 x i32], align 4
+; BELOW: scalar.fission.chunk:
+; BELOW: %fission.chunk.remaining = sub {{(nuw )?}}i64 %n, %fission.chunk.base
+; BELOW: %fission.chunk.count = select i1 %fission.chunk.partial, i64 %fission.chunk.remaining, i64 64
+; BELOW: %iv = phi i64 [ %fission.chunk.base, %scalar.fission.producer.ph ], [ %next, %latch ]
+; BELOW: br i1 %choose, label %left, label %right
+; BELOW: left:
+; BELOW: %lc = mul i32 %x, 3
+; BELOW: br label %right
+; BELOW: right:
+; BELOW: %first = phi i32 [ %lc, %left ], [ %x, %loop ]
+; BELOW: %c = call i32 @scalar_helper(i32 %arg)
+; BELOW: br label %latch
+; BELOW: latch:
+; BELOW: store i32 %c
+; BELOW: br i1 %fission.producer.more, label %loop, label %scalar.fission.consumer.ph
+; BELOW: scalar.fission.chunk.latch:
 ; BELOW: ret void
 ; TINY-LABEL: define void @integration_cross_edge(
 ; TINY: ret void

@@ -201,7 +201,7 @@ static const struct {
 static const struct {
   const char *Name;
   ScalarSumFn *Fn, *Reference;
-  unsigned Mode, VectorLanes;
+  unsigned Mode, VectorLanes, ChunkCapacity;
 } Integration[] = {@INTEGRATION@};
 
 // No memory access, exceptions, convergence, or FP-environment effects. opt
@@ -2423,6 +2423,8 @@ static void check_integration(void) {
   unsigned Total = 0;
   for (unsigned C = 0; C < sizeof(Integration) / sizeof(*Integration); ++C) {
     unsigned Mode = Integration[C].Mode, Lanes = Integration[C].VectorLanes;
+    unsigned Capacity = Integration[C].ChunkCapacity;
+    unsigned Runs = 0;
     unsigned Vectors = 0, Tails = 0, Zeros = 0, Multiple = 0, Complete = 0, Partial = 0;
     for (unsigned K = 0; K < 75; ++K)
       for (unsigned Trial = 0; Trial < 8; ++Trial)
@@ -2453,7 +2455,7 @@ static void check_integration(void) {
           ChunkName = Integration[C].Name;
           ChunkN = Enter ? N : 0;
           ChunkRows = Enter ? 1 : 0;
-          ChunkCapacity = 65;
+          ChunkCapacity = Capacity;
           ChunkLanes = Lanes;
           ChunkActive = false;
           ChunkProgress = ChunkCompletedRows = ChunkBegins = ChunkEnds = 0;
@@ -2463,9 +2465,9 @@ static void check_integration(void) {
           if (memcmp(&Actual, &Formula, sizeof(Actual)) ||
               memcmp(&Actual, &Original, sizeof(Actual)))
             fail(Integration[C].Name, N, Trial, "integration transformed result/alias/input/canary");
-          if (Mode == 2) {
-            unsigned Full = ChunkN / 65, Rem = ChunkN % 65;
-            unsigned EV = Full * (65 / Lanes) + Rem / Lanes;
+          if (Capacity) {
+            unsigned Full = ChunkN / Capacity, Rem = ChunkN % Capacity;
+            unsigned EV = Full * (Capacity / Lanes) + Rem / Lanes;
             if (ChunkActive || ChunkProgress || ChunkCompletedRows != ChunkRows ||
                 ChunkBegins != Full + (Rem != 0) || ChunkEnds != ChunkBegins ||
                 ChunkComplete != Full || ChunkPartial != (Rem != 0) ||
@@ -2485,13 +2487,14 @@ static void check_integration(void) {
             Tails += ScalarTailVisits;
           }
           Zeros += !Enter;
+          ++Runs;
           ++Total;
         }
-    if (!Tails || !Zeros || ((Lanes <= 65) != (Vectors != 0)) ||
-        (Mode == 2 && (!Multiple || !Complete || !Partial)))
+    if (!Tails || !Zeros || ((Lanes <= (Capacity ? Capacity : 65)) != (Vectors != 0)) ||
+        (Capacity && (!Multiple || !Complete || !Partial)))
       fail(Integration[C].Name, 65, 0, "missing integration execution paths");
-    printf("Integration %s: vector=%u tail=%u bypass=%u multi=%u full=%u partial=%u\n",
-           Integration[C].Name, Vectors, Tails, Zeros, Multiple, Complete, Partial);
+    printf("Integration %s: comparisons=%u vector=%u tail=%u bypass=%u multi=%u full=%u partial=%u\n",
+           Integration[C].Name, Runs, Vectors, Tails, Zeros, Multiple, Complete, Partial);
   }
   if (!Total) abort();
   printf("Integration: %u additional original/transformed/independent host comparisons\n", Total);
