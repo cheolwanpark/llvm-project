@@ -273,6 +273,9 @@ exit:
 
 ; REASON: scalar-recurrence.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
 ; CHECK-LABEL: define void @recurrence_partial_export(
+; CHECK: %partial.exit = phi i32
+; CHECK: %partial = add i32 %result0, %partial.exit
+; CHECK: store i32 %partial, ptr %out
 ; CHECK: ret void
 define void @recurrence_partial_export(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !30 {
@@ -312,8 +315,10 @@ exit:
   %result0 = phi i32 [17, %entry], [%u0, %loop]
   %result1 = phi i32 [-7, %entry], [%u1, %loop]
   %resultd = phi double [%start, %entry], [%ud, %loop]
+  ; Export the pre-update accumulator; entry bypass uses its initial value.
+  %partial.exit = phi i32 [17, %entry], [%r0, %loop]
   %o1 = getelementptr i32, ptr %out, i64 1
-  %partial = add i32 %result0, %r0
+  %partial = add i32 %result0, %partial.exit
   store i32 %partial, ptr %out
   store i32 %result1, ptr %o1
   store double %resultd, ptr %dout
@@ -322,6 +327,9 @@ exit:
 
 ; REASON: scalar-recurrence.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
 ; CHECK-LABEL: define void @recurrence_state_export(
+; CHECK: %state.exit = phi i32
+; CHECK: %state.export = add i32 %result0, %state.exit
+; CHECK: store i32 %state.export, ptr %out
 ; CHECK: ret void
 define void @recurrence_state_export(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !32 {
@@ -361,8 +369,10 @@ exit:
   %result0 = phi i32 [17, %entry], [%u0, %loop]
   %result1 = phi i32 [-7, %entry], [%u1, %loop]
   %resultd = phi double [%start, %entry], [%ud, %loop]
+  ; Retained producer state is observable even without an entered iteration.
+  %state.exit = phi i32 [23, %entry], [%prev, %loop]
   %o1 = getelementptr i32, ptr %out, i64 1
-  %state.export = add i32 %result0, %prev
+  %state.export = add i32 %result0, %state.exit
   store i32 %state.export, ptr %out
   store i32 %result1, ptr %o1
   store double %resultd, ptr %dout
