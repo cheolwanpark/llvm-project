@@ -1,9 +1,9 @@
 {
-  "task_id": "t000033",
-  "base_revision": "3f2a4e9035d95fdea545f485ee19e04d1e4319f5",
-  "hypothesis": "Compact scalar-remainder consumers after a second LV invocation may exit through one dedicated LCSSA forwarding block before the existing result join. Checking that edge structurally, and tracing exact typed scalar/vector results to stores, admits the retained sound LV2 form without relying on label suffixes or weakening count provenance. This is an execution-validator repair, not a compiler legality or profitability change.",
-  "semantics": "The scalar-remainder branch retains all existing participating P/export/guard, rounded-bound, bypass, branch-polarity and tail-termination checks, then invokes a bounded fixture certificate. It derives predecessors from actual label operands in instructions (including unexpected switch/invoke edges), discarding printed predecessor comments. The true tail edge remains the self backedge; the false edge goes directly to the existing join or to exactly one block with that tail as its sole predecessor, typed single-input PHIs forwarding the actual reduction updates, and an unconditional edge to the join. The join has exactly the vector-middle and direct/forwarded tail predecessors and exact typed result operands. Every tail recurrence and scalar resume start/backedge is checked. Integer vector results must come from corresponding typed vector-add reductions; ordered double/float results must come from flag-free ordered reduction calls. Direct vector updates or the observed one typed middle.block LCSSA PHI are linked to the resume and result join; vector recurrence starts/backedges are retained. Arbitrary copy expressions, extra computations/effects, wrong types/values, extra predecessors, conditional forwarding, cycles and longer chains fail. The result join and empty-path starts then link through the demonstrated optional output LCSSA block and final PHIs to exact stores, integer result combination or enclosing compact row stores/carry. All matching is fixture-scoped; it is not a general LLVM IR equivalence proof. Existing EVL, completed-count, enclosing-exit, metadata/refinement and signature-specialization certificates are unchanged. Fresh actual-opt original/transformed/independent execution comparisons remain mandatory under separate strict and explicitly reordered policies.",
-  "costs": "No target transformation changes: scratch capacity, traffic, input rereads, contribution recomputation, producer duplication, guards, analysis passes and profitability remain unchanged. The new certificate uses fixed-depth typed patterns, exact PHI operand lists and predecessor scans over fixed-size fixtures; it never walks arbitrary chains, solves equivalences or allocates target storage. The C harness adds per-variant coverage bits to the existing full P sweep, with no added target instructions or comparison iterations. Existing scratch is entry-allocated M times unique contribution sizes plus padding, capped at 65536 bytes per candidate and the signed pointer-index bound. M=65 mixed streams account for 1044 bytes (65*i32 + 65*double + 65*float + 4 padding), with 16*P logical store bytes and 16*P load bytes for compact streams (16*N each for full streams). Enclosing rows reuse 784 accounted bytes with 12*N stores and 12*N loads per row; capacity does not grow with row count. Scalar i32 capacity fixtures reserve 4/1020/65536 bytes at M=1/255/16384, transferring 8*N bytes total. Ordinal/participating counters and existing empty-stream guards remain. No new mask arrays, alias/SCEV versioning, unbounded/dynamic scratch or additional original-input reads are introduced. Physical stack traffic, pressure, target execution and speedup are unmeasured.",
+  "task_id": "t000034",
+  "base_revision": "71ef4cb4893aa87c2e849eec06d2aa566b39168a",
+  "hypothesis": "Compact reduction consumers with direct or single-hop scalar-tail exits need regression oracles that distinguish ambiguous typed forwarding from unrelated extra block work. The certificate checks exactly one matching forwarding PHI while tracing each reduction, before checking total block work. Correct diagnostic expectations let mandatory affine-fission validation proceed without changing the compiler transformation, legality, profitability or accepted checker shapes.",
+  "semantics": "This revision changes only regression expectations and the validation request. Duplicate matching PHIs now require the existing compact scalar results diagnostic naming the forwarding block and exact reduction update. The original duplicate-i32 mutation is retained and generalized to the second integer stream, double and float. Calls, stores and arithmetic retain the tail forwarding work obligation; an additional nonmatching constant PHI must reach that same check. Malformed forwarding and copy-chain mutations now also name the exact block/update. Conditional forwarding and wrong middle-vector types retain their instruction diagnostics, narrowed to the responsible block. No mutation, provenance check or production legality is removed. The scalar-remainder branch retains all existing participating P/export/guard, rounded-bound, bypass, branch-polarity and tail-termination checks, then invokes a bounded fixture certificate. It derives predecessors from actual label operands in instructions (including unexpected switch/invoke edges), discarding printed predecessor comments. The true tail edge remains the self backedge; the false edge goes directly to the existing join or to exactly one block with that tail as its sole predecessor, typed single-input PHIs forwarding the actual reduction updates, and an unconditional edge to the join. The join has exactly the vector-middle and direct/forwarded tail predecessors and exact typed result operands. Every tail recurrence and scalar resume start/backedge is checked. Integer vector results must come from corresponding typed vector-add reductions; ordered double/float results must come from flag-free ordered reduction calls. Direct vector updates or the observed one typed middle.block LCSSA PHI are linked to the resume and result join; vector recurrence starts/backedges are retained. Arbitrary copy expressions, extra computations/effects, wrong types/values, extra predecessors, conditional forwarding, cycles and longer chains fail. The result join and empty-path starts then link through the demonstrated optional output LCSSA block and final PHIs to exact stores, integer result combination or enclosing compact row stores/carry. All matching is fixture-scoped; it is not a general LLVM IR equivalence proof. Existing EVL, completed-count, enclosing-exit, metadata/refinement and signature-specialization certificates are unchanged. Fresh actual-opt original/transformed/independent execution comparisons remain mandatory under separate strict and explicitly reordered policies.",
+  "costs": "The only added work in this task is four fixture mutation cases: three analogous duplicate streams and one nonmatching-PHI boundary. No checker or C harness implementation changes. No target transformation changes: scratch capacity, traffic, input rereads, contribution recomputation, producer duplication, guards, analysis passes and profitability remain unchanged. The inherited certificate uses fixed-depth typed patterns, exact PHI operand lists and predecessor scans over fixed-size fixtures; it never walks arbitrary chains, solves equivalences or allocates target storage. The inherited C harness retains per-variant coverage bits for the existing full P sweep, with no added target instructions or comparison iterations. Existing scratch is entry-allocated M times unique contribution sizes plus padding, capped at 65536 bytes per candidate and the signed pointer-index bound. M=65 mixed streams account for 1044 bytes (65*i32 + 65*double + 65*float + 4 padding), with 16*P logical store bytes and 16*P load bytes for compact streams (16*N each for full streams). Enclosing rows reuse 784 accounted bytes with 12*N stores and 12*N loads per row; capacity does not grow with row count. Scalar i32 capacity fixtures reserve 4/1020/65536 bytes at M=1/255/16384, transferring 8*N bytes total. Ordinal/participating counters and existing empty-stream guards remain. No new mask arrays, alias/SCEV versioning, unbounded/dynamic scratch or additional original-input reads are introduced. Physical stack traffic, pressure, target execution and speedup are unmeasured.",
   "tests": [
     "llvm/test/Other/reduction-fission-execution-checker.test",
     "llvm/test/Other/reduction-fission-compact-tail-checker.test",
@@ -52,28 +52,29 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
   ],
   "checker_input": "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
-  "limitations": "The worker ran no builds, compilers, test runners, lit RUNs, VectorizeTests, execution checker or try.sh. This revision is unvalidated until the harness completes all requested work. The certificate only covers the demonstrated compact reduction fixture shapes, one tail forwarding hop, optional single middle.block forwarding and the existing bounded output forms; arbitrary types/opcodes/CFGs, copy chains, conditional forwarding and longer chains remain rejected. It does not prove arbitrary memory equivalence or substitute for IR verification and executable comparison. New retained fixtures are parser/checker inputs, not RVV or host executable evidence. Other affine LV2 exits were inspected structurally only; their existing count/preservation certificates were not broadened. Compiler limitations such as unbounded/oversized untiled storage, producer cycles/extra recurrences, unsupported calls/effects/live-outs, independent participation streams, non-affine controls and strictfp/constrained FP remain. Fixed-vscale host execution is not EVL/VP or RVV target execution; verified code generation is not a speedup measurement. No selection gain, performance improvement or direction maturity is claimed. Immutable benchmarks, production fission legality, other worktrees, Git index/history/refs, binaries and unfinished d2 work are untouched.",
+  "limitations": "The worker ran no builds, compilers, test runners, lit RUNs, VectorizeTests, execution checker or try.sh. This revision is unvalidated until the harness completes all requested work. The certificate only covers the demonstrated compact reduction fixture shapes, one tail forwarding hop, optional single middle.block forwarding and the existing bounded output forms; arbitrary types/opcodes/CFGs, copy chains, conditional forwarding and longer chains remain rejected. It does not prove arbitrary memory equivalence or substitute for IR verification and executable comparison. Retained fixtures and new mutations are parser/checker inputs, not RVV or host executable evidence. Other affine LV2 exits were inspected structurally only; their existing count/preservation certificates were not broadened. Compiler limitations such as unbounded/oversized untiled storage, producer cycles/extra recurrences, unsupported calls/effects/live-outs, independent participation streams, non-affine controls and strictfp/constrained FP remain. Fixed-vscale host execution is not EVL/VP or RVV target execution; verified code generation is not a speedup measurement. No selection gain, performance improvement or direction maturity is claimed. Immutable benchmarks, production fission legality, other worktrees, Git index/history/refs, binaries and unfinished d2 work are untouched. All post-failure mutation expectations were audited statically, not executed. Correcting this first failing oracle does not establish that the complete mandatory run will pass.",
   "test_expectations": [
-    "New reduction-fission-compact-tail-checker.test retains the exact full affine_compact LV1 and LV2 scalar-remainder functions from t000032. Direct and one-hop outputs, renamed forwarding/output labels, renamed LCSSA values, untrusted predecessor comments and probe insertion must pass the production affine checker.",
+    "Existing reduction-fission-compact-tail-checker.test retains the exact full affine_compact LV1 and LV2 scalar-remainder functions from t000032. Direct and one-hop outputs, renamed forwarding/output labels, renamed LCSSA values, untrusted predecessor comments and probe insertion must pass the production affine checker.",
     "Focused mutations require the compact scalar-result diagnostic and the intended obligation. They cover wrong tail/join/output values and types, wrong starts/backedges, reversed tail/middle/bypass edges, extra branch/switch predecessors, conditional forwarding, self cycles, longer chains, additional PHIs/arithmetic/calls/stores, copy/same-prefix values, broken vector LCSSA values/types/edges/cardinality, final output linkage and ordered-FP flags. Existing count-branch tests explicitly require their existing count-provenance diagnostic instead.",
     "The older synthetic scalar-tail fixture formerly used constants as tail results, omitted scalar/vector accumulators and discarded outputs. It now supplies real typed recurrences, distinct integer vector results, scalar resume values, an explicit zero-entry branch and final output PHIs/stores so its existing positive/probe/count mutations must satisfy the stronger certificate. No correctness rejection is removed; signature-specialization helpers/tests and exact-label construction tests are untouched.",
-    "The C harness retains all existing original/transformed/independent comparisons, aliases/canaries/signed-zero/inactive-operand checks and enclosing-row tests. It now requires entered-producer P=0, scalar-only, vector-exact and mixed paths for each compact compiled LV1/LV2, FP-option and vscale variant. It separately requires P=VF-1, VF and VF+1 where these fit the existing P=0..65 sweep. For VF>65 only zero-participant and scalar-only execution are feasible and required."
+    "The C harness retains all existing original/transformed/independent comparisons, aliases/canaries/signed-zero/inactive-operand checks and enclosing-row tests. It now requires entered-producer P=0, scalar-only, vector-exact and mixed paths for each compact compiled LV1/LV2, FP-option and vscale variant. It separately requires P=VF-1, VF and VF+1 where these fit the existing P=0..65 sweep. For VF>65 only zero-participant and scalar-only execution are feasible and required.",
+    "Separate duplicate matching forwarding-PHI rejection from unrelated work. All four reduction streams require compact scalar results: scalar.fission.consumer.loopexit.loopexit: forwarding PHI for the exact %u0.consume/%u1.consume/%ud.consume/%uf.consume update. Calls/stores/arithmetic and a nonmatching phi i32 [ 0, %scalar.fission.consumer.body ] still require tail forwarding work. The earlier generic forwarding PHI, conditional instruction and wrong-vector-type obligations are narrowed, never broadened."
   ],
   "prior_validation": {
-    "task_id": "t000032",
-    "revision": "3f2a4e9035d95fdea545f485ee19e04d1e4319f5",
-    "source": "builds/t000032/progress.json, lit.log, unit.log and execution.log",
+    "task_id": "t000033",
+    "revision": "71ef4cb4893aa87c2e849eec06d2aa566b39168a",
+    "source": "builds/t000033/progress.json and lit.log",
     "compilation_exit_code": 0,
-    "lit_exit_code": 0,
+    "lit_exit_code": 1,
     "lit_passed_files": 44,
-    "lit_total_files": 44,
-    "vectorize_tests_exit_code": 0,
-    "vectorize_tests_passed": 99,
-    "execution_exit_code": 1,
-    "failure": "check_compact_count expected the scalar tail false edge to go directly to scalar.fission.consumer.loopexit; actual affine_compact LV2 goes through scalar.fission.consumer.loopexit.loopexit with four typed single-input forwarding PHIs.",
+    "lit_total_files": 45,
+    "failed_test": "llvm/test/Other/reduction-fission-compact-tail-checker.test",
+    "failure": "Duplicate matching %extra = phi i32 [ %u0.consume, %scalar.fission.consumer.body ] expected tail forwarding work, but forwarded() correctly rejected two candidates first: compact scalar results: scalar.fission.consumer.loopexit.loopexit: forwarding PHI for %u0.consume.",
+    "later_mutations_reached": false,
+    "vectorize_tests_reached": false,
     "complete_executable_comparisons_completed": false,
+    "rvv_execution": false,
     "primary_corpus_reached": false,
-    "host_objects_are_not_completed_comparisons": true,
     "this_revision_validated": false
   },
   "retained_output_audit": {
@@ -107,13 +108,13 @@
     "interpretation": "Historical exact-original-target records only; inner/helper activity is separate. These totals do not validate this revision or measure target speedup."
   },
   "validation_requested": {
-    "task_id": "t000033",
+    "task_id": "t000034",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
       "required": true,
       "snapshot": "this worktree after harness freeze",
-      "base_revision": "3f2a4e9035d95fdea545f485ee19e04d1e4319f5",
+      "base_revision": "71ef4cb4893aa87c2e849eec06d2aa566b39168a",
       "agent_compilation": false,
       "prior_build_is_not_acceptance": true
     },
@@ -167,9 +168,12 @@
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
       ],
       "every_RUN_required": true,
-      "new_test": "llvm/test/Other/reduction-fission-compact-tail-checker.test",
       "preserve_signature_specialization_and_completed_enclosing_certificates": true,
-      "input_files_are_not_standalone_tests": true
+      "input_files_are_not_standalone_tests": true,
+      "mandatory_file_count": 45,
+      "all_45_mandatory_plus_additions": true,
+      "expanded_test": "llvm/test/Other/reduction-fission-compact-tail-checker.test",
+      "additional_cases_in_existing_test": "Three analogous typed duplicate-forwarding mutations plus a nonmatching-PHI block-work boundary; all existing mutations and retained LV1/LV2 positives remain."
     },
     "unit": {
       "required": true,
@@ -204,7 +208,18 @@
       ],
       "comparison_status": "pending fresh independent harness",
       "persistent_work_dir_required": true,
-      "generated_objects_are_not_completed_comparisons": true
+      "generated_objects_are_not_completed_comparisons": true,
+      "per_variant_compact_boundary_coverage_required": {
+        "variants": "Every compact function, LV1/LV2, FP option and vscale in the existing matrix",
+        "required": [
+          "Entered producer with P=0 participants, separately from N=0 entry bypass",
+          "Scalar-only, vector-exact and mixed vector/tail paths when feasible",
+          "P=VF-1, VF and VF+1 when in the existing P=0..65 sweep",
+          "Vscale=32 has VF=128, so only zero-participant and scalar-only compact execution are feasible"
+        ]
+      },
+      "both_original_ir_and_independent_references_required": true,
+      "complete_inherited_and_affine_comparisons_required": true
     },
     "rvv_machine_verification": {
       "required": true,
@@ -217,7 +232,8 @@
       "verify_machineinstrs": true,
       "target_execution": false,
       "speedup_measurement": false,
-      "host_comparison_is_not_target_execution": true
+      "host_comparison_is_not_target_execution": true,
+      "both_fp_policies_required": true
     },
     "primary_corpus": {
       "inputs": 117,
@@ -248,7 +264,8 @@
           "every new and existing mandatory lit RUN command/result",
           "full exact failed mutation, block, typed PHI, predecessor/branch and result diagnostic",
           "fresh full LV1/LV2 original/transformed/probe/fixed-vscale IR and stage remarks",
-          "actual vector result, optional middle LCSSA, scalar resume, tail result, optional tail LCSSA, join, empty result and final store linkage"
+          "actual vector result, optional middle LCSSA, scalar resume, tail result, optional tail LCSSA, join, empty result and final store linkage",
+          "Exact duplicate-PHI uniqueness diagnostics for both i32 streams, double and float; separate tail forwarding work diagnostics for calls/stores/arithmetic/nonmatching PHIs"
         ]
       },
       {
@@ -273,7 +290,76 @@
         ]
       }
     ],
-    "acceptance": "Pending fresh compilation, EVERY RUN in all 44 previous mandatory fission/checker lit files plus the new compact-tail checker test, VectorizeTests, all complete actual-opt LV1/LV2 original/transformed/independent fixed-vscale comparisons under both separate FP settings, uninstrumented EVL/scalar-remainder RVV machine verification and all 234 immutable primary corpus compilations. Compiler crashes, incorrect transformations or mandatory failures block acceptance. Retained fixtures, object generation, prior checks and code generation alone do not satisfy execution validation. No speedup claim or maturity decision is made."
+    "acceptance": "Pending fresh compilation from this frozen worktree, EVERY RUN in all 45 mandatory fission/checker lit files plus additions, VectorizeTests, all complete inherited and affine actual-opt LV1/LV2 original/transformed/independent fixed-vscale comparisons under both separate FP settings, uninstrumented EVL/scalar-remainder RVV machine verification and all 234 immutable primary corpus compilations. Retain per-variant P=0/VF boundaries, aliases, zero entry, enclosing-row carry and scratch reuse, masks, tails and signed zero. Preserve exact original-loop source-location Selected/Rejected remarks and independent stage-VF/scratch evidence. Compiler crashes, incorrect transformations and mandatory failures block acceptance. Retained fixtures, generated objects, prior checks and code generation alone do not satisfy execution validation. No speedup claim or maturity decision is made."
   },
-  "future_work": "Consume immutable fresh harness results, repair only concrete later failures with narrow certificates, and finish all mandatory comparisons and corpus compilations before considering acceptance/maturity. Unsupported arbitrary forwarding/IR equivalence, broader scalar legality, bounded tiling/whole-function scratch budgets and actual RVV execution/performance remain future work. No unfinished d2 integration."
+  "future_work": "Consume the fresh immutable harness results and complete all requested validation. Repair any concrete later failure without dropping mutations or correctness checks. Broader scalar legality, bounded tiling/whole-function scratch budgets, arbitrary forwarding equivalence and actual RVV execution/performance remain future work. No d2 integration or maturity claim.",
+  "validation_history": [
+    {
+      "task_id": "t000032",
+      "revision": "3f2a4e9035d95fdea545f485ee19e04d1e4319f5",
+      "source": "builds/t000032/progress.json, lit.log, unit.log and execution.log",
+      "compilation_exit_code": 0,
+      "lit_exit_code": 0,
+      "lit_passed_files": 44,
+      "lit_total_files": 44,
+      "vectorize_tests_exit_code": 0,
+      "vectorize_tests_passed": 99,
+      "execution_exit_code": 1,
+      "failure": "check_compact_count expected the scalar tail false edge to go directly to scalar.fission.consumer.loopexit; actual affine_compact LV2 goes through scalar.fission.consumer.loopexit.loopexit with four typed single-input forwarding PHIs.",
+      "complete_executable_comparisons_completed": false,
+      "primary_corpus_reached": false,
+      "host_objects_are_not_completed_comparisons": true,
+      "this_revision_validated": false
+    }
+  ],
+  "diagnostic_order_audit": {
+    "method": "Read-only inspection of immutable builds/t000033/lit.log, diffs/t000033.patch, current test/checker sources and retained actual LV1/LV2 fixtures. No test, mutation driver or checker was executed by the worker.",
+    "ordering": [
+      "check_affine_function first checks unique SSA definitions and retained producer instructions.",
+      "check_compact_count checks participating-count exports, guards, rounding and bypass/termination provenance.",
+      "check_compact_scalar_results checks actual incoming edges and unconditional forwarding before reduction results.",
+      "Each typed scalar/vector recurrence, resume and result join is checked in reduction order; forwarded() requires exactly one matching PHI.",
+      "Only after all reductions pass are forwarding/middle/resume/join/result block-work counts checked.",
+      "Finally the exact output forwarding, PHIs, stores, integer combination and enclosing-row carry are checked."
+    ],
+    "remaining_mutations": [
+      {
+        "mutation": "copy/same-prefix arithmetic feeding %u0.consume.lcssa",
+        "expected": "scalar.fission.consumer.loopexit.loopexit: forwarding PHI for %u0.consume",
+        "reason": "There is no PHI forwarding the exact original reduction update; the later block-work count is not reached."
+      },
+      {
+        "mutation": "conditional tail-hop branch with both successors naming the join",
+        "expected": "scalar.fission.consumer.loopexit.loopexit: instruction br label",
+        "reason": "jump() requires the unconditional branch before any PHI tracing."
+      },
+      {
+        "mutation": "self-cycle, unexpected branch/switch predecessor or longer forwarding chain",
+        "expected": "tail forwarding edge/predecessors",
+        "reason": "The tail destination must have only the real tail predecessor and jump directly to the existing join."
+      },
+      {
+        "mutation": "%.lcssa16 forwards %10 instead of %9",
+        "expected": "vector recurrence start/backedge",
+        "reason": "The forwarding syntax remains valid, but r0 now traces the r1 recurrence seeded with -7 instead of 17."
+      },
+      {
+        "mutation": "%.lcssa15 changes vector element type from i32 to i64",
+        "expected": "middle.block: instruction",
+        "reason": "The exact typed vector PHI lookup fails before arithmetic or block-work checks."
+      },
+      {
+        "mutation": "FP middle PHIs have wrong value, predecessor, arity or an additional forwarding chain",
+        "expected": "FP vector forwarding PHI",
+        "reason": "The resume candidate must be a single typed PHI forwarding the actual flag-free ordered reduction call on the vector.body edge."
+      }
+    ],
+    "preserved": [
+      "Direct LV1 and single-hop LV2 positives, renamed forwarding/output labels and LCSSA values, untrusted printed predecessor comments and probes",
+      "Exact typed tail/vector recurrences, distinct integer starts, resume values, result joins, empty-path starts and final stores",
+      "Actual predecessor operands, ordered FP and count provenance; conditional/cyclic/longer-chain and extra-work rejection",
+      "Existing signature specialization, completed-count and enclosing-exit certificates"
+    ],
+    "observed_result": "Only the prior immutable harness failure is observed; fresh results are pending."
+  }
 }

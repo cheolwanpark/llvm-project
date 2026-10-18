@@ -153,24 +153,34 @@ for lv, path in enumerate(sys.argv[3:], 1):
         # The exact actual tail-hop PHIs must be the only work in that block.
         for value, ty, update in reductions:
             forwarded = '%' + update + '.consume.lcssa'
+            forwarding_obligation = hop + ': forwarding PHI for %' + update + '.consume'
             for old, new in [('%' + update + '.consume,', '%start,'),
                              ('phi ' + ty, 'phi i8'),
                              ('%' + tail + ' ]', '%middle.block ]'),
                              (' ]', ' ], [ %start, %entry ]')]:
-                rejected(definition(body, forwarded, old, new), 'forwarding PHI')
+                rejected(definition(body, forwarded, old, new), forwarding_obligation)
             rejected(definition(body, forwarded, '%' + update + '.consume,', forwarded + ','),
-                     'forwarding PHI')
+                     forwarding_obligation)
+            # Duplicate matching PHIs fail uniqueness while tracing this
+            # reduction, before the later block-work count is checked.
+            rejected(edit_block(body, hop, '  br label %' + join,
+                                '  %extra = phi ' + ty + ' [ %' + update + '.consume, %' +
+                                tail + ' ]\n  br label %' + join),
+                     forwarding_obligation)
+        # Unrelated work leaves each forwarding PHI unique and reaches the
+        # block-work check. The extra PHI here does not match any reduction.
         for instruction in ('call void @unexpected()', 'store i32 0, ptr %out',
                             '%extra = add i32 %u0.consume, 0',
-                            '%extra = phi i32 [ %u0.consume, %' + tail + ' ]'):
+                            '%extra = phi i32 [ 0, %' + tail + ' ]'):
             rejected(edit_block(body, hop, '  br label %' + join,
                                 '  ' + instruction + '\n  br label %' + join), 'tail forwarding work')
         copied = edit_block(body, hop, '  %u0.consume.lcssa =',
                             '  %u0.consume.more = add i32 %u0.consume, 0\n  %u0.consume.lcssa =')
         rejected(definition(copied, '%u0.consume.lcssa', '%u0.consume,', '%u0.consume.more,'),
-                 'forwarding PHI')
+                 hop + ': forwarding PHI for %u0.consume')
         rejected(edit_block(body, hop, 'br label %' + join,
-                            'br i1 %choose, label %' + join + ', label %' + join), 'instruction')
+                            'br i1 %choose, label %' + join + ', label %' + join),
+                 hop + ': instruction br label')
         rejected(edit_block(body, hop, 'br label %' + join, 'br label %' + hop),
                  'tail forwarding edge/predecessors')
         at = block(body, hop).start()
@@ -183,9 +193,12 @@ for lv, path in enumerate(sys.argv[3:], 1):
         rejected(longer[:at] + 'longer:\n  br label %' + join + '\n' + longer[at:],
                  'tail forwarding edge/predecessors')
         # Middle PHIs forward actual updates, never suffixes or copy chains.
+        # A swapped integer update has valid forwarding syntax but the wrong
+        # recurrence seed; a wrong vector type fails the typed PHI match first.
         for value, old, new, obligation in [
             ('%.lcssa16', '%9,', '%10,', 'vector recurrence start/backedge'),
-            ('%.lcssa15', 'phi <vscale x 4 x i32>', 'phi <vscale x 4 x i64>', 'instruction'),
+            ('%.lcssa15', 'phi <vscale x 4 x i32>', 'phi <vscale x 4 x i64>',
+             'middle.block: instruction'),
             ('%.lcssa14', '%11,', '%start,', 'FP vector forwarding PHI'),
             ('%.lcssa', '%vector.body ]', '%vector.ph ]', 'FP vector forwarding PHI'),
             ('%.lcssa14', ' ]', ' ], [ %start, %vector.ph ]', 'FP vector forwarding PHI'),
