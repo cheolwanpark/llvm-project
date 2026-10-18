@@ -1,7 +1,7 @@
 # REQUIRES: riscv-registered-target
 # RUN: split-file %s %t
 # RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py \
-# RUN:   %S/../Transforms/LoopVectorize/RISCV opt %t
+# RUN:   %S/../Transforms/LoopVectorize/RISCV opt %t %S/Inputs
 
 # Own generated mutations of actual LV1/LV2 output for both the inherited
 # retained-state and analogous unconditional multiblock fixtures. Keep the
@@ -21,11 +21,16 @@ checker = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = checker
 spec.loader.exec_module(checker)
 tests, opt, work = Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4])
+identity_spec = importlib.util.spec_from_file_location(
+    'identity', Path(sys.argv[5]) / 'reduction-fission-consumer-identity.py')
+identity = importlib.util.module_from_spec(identity_spec)
+identity_spec.loader.exec_module(identity)
 
 def reject(ir, source, name, capacity, scalar, evl, old, new):
     body = checker.function_definition(ir, name)
     assert old != new and body.count(old) == 1, (name, old, new)
     candidate = ir.replace(body, body.replace(old, new, 1), 1)
+    assert candidate != ir
     try:
         checker.check_state_chunk(candidate, source, name, capacity, scalar=scalar, evl=evl)
     except AssertionError:
@@ -65,6 +70,10 @@ for fixture, functions in [('state', checker.STATE_CHUNK_FUNCTIONS),
                       for label, code in checker.loop_blocks(body).items()}
             vector = 'vector.body' in blocks
             checker.check_state_chunk(ir, source, name, capacity, scalar=scalar, evl=evl)
+            certify = lambda candidate: checker.check_state_chunk(
+                candidate, source, name, capacity, scalar=scalar, evl=evl)
+            for renamed in identity.exercise(checker, ir, name, evl, certify):
+                checker.run([opt, '-passes=verify', '-disable-output'], input=renamed)
             checker.check_state_chunk_remarks(opt_result.stderr, name, capacity,
                                               16 if capacity == 1 else 112, vector)
             policies = [(scalar, evl)]

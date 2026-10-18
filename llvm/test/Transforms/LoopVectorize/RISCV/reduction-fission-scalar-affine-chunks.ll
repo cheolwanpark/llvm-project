@@ -15,6 +15,10 @@
 ; and vector-tail paths with independent C oracles, state/scratch/edge probes.
 ; C=1/8/9/16, zero entry, exact capacity, partial and empty compact chunks.
 ; EVL is separately machine verified, never labeled target execution.
+; Producer ordinals deliberately occupy %index (offset/compact), %index.next
+; (stride), and %current.iteration.next (down). LV must retain separate consumer
+; PHI/update identities. These are SSA-only fixture variations; every operation,
+; control, memory access and debug source location is unchanged.
 ; Keep ABI alignment explicit on every load/store: source-versus-printed
 ; certificates compare whole memory instructions, including final exports.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
@@ -139,10 +143,10 @@ loop:
   %r1 = phi i32 [-7, %preheader], [%u1, %latch]
   %rd = phi double [%start, %preheader], [%ud, %latch]
   %distance = sub i64 %iv, %begin
-  %index = udiv i64 %distance, 3
-  %p = getelementptr i32, ptr %a, i64 %index
+  %index.next = udiv i64 %distance, 3
+  %p = getelementptr i32, ptr %a, i64 %index.next
   %x = load i32, ptr %p, align 4
-  %dp = getelementptr double, ptr %fp, i64 %index
+  %dp = getelementptr double, ptr %fp, i64 %index.next
   %dx = load double, ptr %dp, align 8
   %state.next = add i32 %x, %older
   %dnext = fadd double %dstate, %dx
@@ -225,10 +229,10 @@ loop:
   %r1 = phi i32 [-7, %preheader], [%u1, %latch]
   %rd = phi double [%start, %preheader], [%ud, %latch]
   %distance = sub i64 %begin, %iv
-  %index = udiv i64 %distance, 3
-  %p = getelementptr i32, ptr %a, i64 %index
+  %current.iteration.next = udiv i64 %distance, 3
+  %p = getelementptr i32, ptr %a, i64 %current.iteration.next
   %x = load i32, ptr %p, align 4
-  %dp = getelementptr double, ptr %fp, i64 %index
+  %dp = getelementptr double, ptr %fp, i64 %current.iteration.next
   %dx = load double, ptr %dp, align 8
   %state.next = add i32 %x, %older
   %dnext = fadd double %dstate, %dx

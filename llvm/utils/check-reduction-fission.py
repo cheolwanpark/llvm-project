@@ -423,6 +423,7 @@ def check_compact_count(producer, consumer, name, evl, starts=None,
                          r'@llvm\.experimental\.get\.vector\.length\.i64'
                          r'\(i64 %avl, i32 4, i1 true\)', vector)[1]
         step = require(rf'^  (%[-\w.$]+) = zext i32 {re.escape(length)} to i64', vector)[1]
+        index, next_index = vector_consumer_induction(whole, 'vector.body', step, evl)
         require(rf'^  %avl\.next = sub nuw i64 %avl, {re.escape(step)}(?:, ![^\n]*)?$', vector)
         for line in vector.splitlines():
             if re.search(r'@llvm\.vp\.(?:load|reduce\.fadd)\.', line):
@@ -453,12 +454,22 @@ def check_compact_count(producer, consumer, name, evl, starts=None,
     else:
         # Check the vector bound's rounding input, its bypass/tail checks, and
         # the scalar tail's terminating bound. Incidental/dead uses do not count.
-        require(rf'^  %min\.iters\.check = icmp ult i64 {counts}, %[-\w.$]+', consumer)
+        minimum = require(rf'^  %min\.iters\.check = icmp ult i64 {counts}, '
+                          r'(%[-\w.$]+)(?:, ![^\n]*)?$', consumer)[1]
         branch('scalar.fission.consumer.ph', '%min.iters.check', 'scalar.ph', 'vector.ph')
         rounding = block(consumer, 'vector.ph')
-        require(rf'^  %n\.mod\.vf = urem i64 {counts}, %[-\w.$]+', rounding)
+        step = require(rf'^  %n\.mod\.vf = urem i64 {counts}, (%[-\w.$]+)(?:, ![^\n]*)?$', rounding)[1]
+        scales = []
+        for width, owner in [(minimum, blocks['scalar.fission.consumer.ph']), (step, rounding)]:
+            scale = require(rf'^  {re.escape(width)} = shl nuw i64 (%[-\w.$]+), 2(?:, ![^\n]*)?$', owner)[1]
+            require(rf'^  {re.escape(scale)} = call i64 @llvm\.vscale\.i64\(\)(?:, ![^\n]*)?$',
+                    blocks['scalar.fission.consumer.ph'])
+            scales.append(scale)
+        need(scales[0] == scales[1], 'same consumer VF at entry and rounding')
+        index, next_index = vector_consumer_induction(whole, 'vector.body', step, evl)
         require(rf'^  %n\.vec = sub i64 {counts}, %n\.mod\.vf(?:, ![^\n]*)?$', rounding)
-        done = require(r'^  (%[-\w.$]+) = icmp eq i64 %[-\w.$]+, %n\.vec(?:, ![^\n]*)?$', vector)[1]
+        done = require(r'^  (%[-\w.$]+) = icmp eq i64 ' + re.escape(next_index) +
+                       r', %n\.vec(?:, ![^\n]*)?$', vector)[1]
         branch('vector.body', done, 'middle.block', 'vector.body')
         middle = block(consumer, 'middle.block')
         require(rf'^  %cmp\.n = icmp eq i64 {counts}, %n\.vec(?:, ![^\n]*)?$', middle)
@@ -557,6 +568,16 @@ def check_compact_count(producer, consumer, name, evl, starts=None,
         else:
             check_compact_scalar_results(whole, starts, results, recurrence=recurrence,
                                          delay=delay)
+
+    # Every private stream traverses the same checked consumer ordinal. A
+    # producer index with a plausible spelling cannot stand in for this PHI.
+    for slot, capacity, ty in re.findall(
+            r'^  (%[-\w.$]+) = alloca \[(\d+) x (i32|i64|double|float)\]', producer, re.M):
+        addresses = [line for line in instructions(vector) if re.fullmatch(
+            rf'%[-\w.$]+ = getelementptr inbounds \[{capacity} x {ty}\], '
+            rf'ptr {re.escape(slot)}, i32 0, i64 {re.escape(index)}', line)]
+        need(len(addresses) == 1, ty + ' consumer scratch ordinal')
+    return index, next_index
 
 
 def check_compact_scalar_results(body, starts, results, recurrence=False, delay=False):
@@ -3204,6 +3225,38 @@ def require_chunk_instruction(body, label, instruction):
         assert len(re.findall(rf'^[ \t]+{re.escape(value)} = ', body, re.M)) == 1, body
 
 
+def vector_consumer_induction(body, vector, step, evl):
+    """Bind a zero-based consumer recurrence, independently of SSA spelling.
+
+    The producer may already own LV's preferred index/increment names. Only a
+    PHI in this consumer, with exactly its real entry/self predecessors and a
+    checked local backedge update, identifies the scratch traversal. The caller
+    proves step is this stage's VF or zero-extended EVL, never a producer IV.
+    """
+    blocks = loop_blocks(body)
+    predecessors = {label for label, code in blocks.items() if vector in re.findall(
+        r'\blabel %([-\w.$]+)', chunk_instructions(code)[-1])}
+    assert predecessors == {'vector.ph', vector}, (vector, predecessors)
+    candidates = []
+    for line in chunk_instructions(blocks[vector]):
+        match = re.fullmatch(r'(%[-\w.$]+) = phi i64 (.+)', line)
+        if not match:
+            continue
+        inputs = re.findall(r'\[ ([^,\]\n]+), %([-\w.$]+) \]', match[2])
+        assert match[2] == ', '.join(f'[ {v}, %{p} ]' for v, p in inputs), line
+        assert len(inputs) == len(predecessors) and {p for _, p in inputs} == predecessors, line
+        incoming = {p: v for v, p in inputs}
+        if incoming['vector.ph'] == '0':
+            candidates.append((match[1], incoming[vector], line))
+    assert len(candidates) == 1, (vector, candidates, body)
+    index, next_index, line = candidates[0]
+    assert re.fullmatch(r'%[-\w.$]+', next_index), line
+    require_chunk_instruction(body, vector, line)
+    operands = f'{step}, {index}' if evl else f'{index}, {step}'
+    require_chunk_instruction(body, vector, f'{next_index} = add nuw i64 {operands}')
+    return index, next_index
+
+
 def check_chunk_controller(body, capacity, ty='i64', preheader='preheader',
                            exit='producer.exit', count='%n', compact=False):
     # Fixed, checked controller vocabulary, shared by scalar and vector-stage
@@ -3799,13 +3852,9 @@ def check_compact_chunk(ir, original, name, capacity, scalar=False, evl=False, p
                                r'@llvm.experimental.get.vector.length.i64'
                                r'\(i64 %avl, i32 4, i1 true\)', vector)[1]
             step = re.search(r'(%[-\w.$]+) = zext i32 ' + re.escape(length) + ' to i64', vector)[1]
-            next_index = re.search(r'(%[-\w.$]+) = add i64 ' + re.escape(step) + ', %index', vector)[1]
         else:
-            next_index = '%index.next'
-            step = re.search(r'%index.next = add nuw i64 %index, (%[-\w.$]+)', vector)[1]
-            modulus_step = re.search(r'%n.mod.vf = urem i64 %[-\w.$]+, (%[-\w.$]+)',
-                                     blocks['vector.ph'])[1]
-            assert step == modulus_step, (name, vector)
+            step = re.search(r'%n.mod.vf = urem i64 %[-\w.$]+, (%[-\w.$]+)',
+                             blocks['vector.ph'])[1]
             # Entry check can have a distinct, equivalent VF computation.
             minimum = re.search(r'%min.iters.check = icmp ult i64 %[-\w.$]+, (%[-\w.$]+)',
                                 blocks['scalar.fission.consumer.ph'])[1]
@@ -3815,14 +3864,12 @@ def check_compact_chunk(ir, original, name, capacity, scalar=False, evl=False, p
                 assert re.search(re.escape(scale) + r' = call i64 @llvm.vscale.i64\(\)', body)
                 scales.append(scale)
             assert len(set(scales)) == 1, body
-        require_chunk_instruction(body, 'vector.body',
-                                  '%index = phi i64 [ 0, %vector.ph ], '
-                                  f'[ {next_index}, %vector.body ]')
+        consumer_index, _ = vector_consumer_induction(body, vectors[0], step, evl)
         for t, suffix in [('i32', 'i32'), ('double', 'f64')]:
             slot = re.findall(rf'(%[-\w.$]+) = alloca \[{capacity} x {t}\]', producer)[0]
             addresses = re.findall(
                 rf'(%[-\w.$]+) = getelementptr inbounds \[{capacity} x {t}\], '
-                rf'ptr {re.escape(slot)}, i32 0, i64 %index(?:\n|,)', vector)
+                rf'ptr {re.escape(slot)}, i32 0, i64 {re.escape(consumer_index)}(?:\n|,)', vector)
             assert len(addresses) == 1, (name, vector)
             if evl:
                 pattern = (rf'call <vscale x 4 x {t}> @llvm.vp.load.nxv4{suffix}.p0'
@@ -3989,7 +4036,8 @@ def check_state_chunk_remarks(remarks, name, capacity, size, vectorized):
         assert f'{loc} scalar-IR fission {role} VF {vf}\n' in remarks, (name, remarks)
 
 
-def check_state_chunk_consumer(body, capacity, preheader, exit, initial, evl):
+def check_state_chunk_consumer(body, capacity, preheader, exit, initial, evl,
+                               count='%fission.chunk.count'):
     """Certify these fixtures' emitted scalar, scalar-tail and EVL layouts.
 
     The emitted CFG decides the contract: requesting vectors can still leave
@@ -4046,7 +4094,7 @@ def check_state_chunk_consumer(body, capacity, preheader, exit, initial, evl):
         require_chunk_instruction(body, scalar,
                                   '%fission.consumer.next = add nuw i64 %fission.consumer.iv, 1')
         require_chunk_instruction(body, scalar,
-                                  '%fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.chunk.count')
+                                  f'%fission.consumer.more = icmp ne i64 %fission.consumer.next, {count}')
         require_chunk_instruction(body, scalar_entry, f'br label %{scalar}')
         assert phi('%fission.consumer.iv', 'i64', scalar) == {
             scalar_entry: '%bc.resume.val' if vector else '0', scalar: '%fission.consumer.next'}
@@ -4073,20 +4121,21 @@ def check_state_chunk_consumer(body, capacity, preheader, exit, initial, evl):
         if evl:
             assert scalar not in blocks, body
             require_chunk_instruction(body, entry, 'br label %vector.ph')
-            assert phi('%avl', 'i64', vector) == {'vector.ph': '%fission.chunk.count', vector: '%avl.next'}
+            assert phi('%avl', 'i64', vector) == {'vector.ph': count, vector: '%avl.next'}
             length = single(vector, r'(%[-\w.$]+) = call i32 @llvm.experimental.get.vector.length.i64'
                             r'\(i64 %avl, i32 4, i1 true\)')[1]
             step = single(vector, r'(%[-\w.$]+) = zext i32 ' + re.escape(length) + ' to i64')[1]
-            next_index = '%current.iteration.next'
-            require_chunk_instruction(body, vector, f'{next_index} = add nuw i64 {step}, %index')
+            index, next_index = vector_consumer_induction(body, vector, step, evl)
             require_chunk_instruction(body, vector, f'%avl.next = sub nuw i64 %avl, {step}')
             condition = single(vector, r'(%[-\w.$]+) = icmp eq i64 %avl.next, 0')[1]
             vp_args = f', <vscale x 4 x i1> splat (i1 true), i32 {length}'
         else:
             assert scalar in blocks, body
-            minimum = single(entry, r'%min.iters.check = icmp ult i64 %fission.chunk.count, (%[-\w.$]+)')[1]
+            minimum = single(entry, re.escape('%min.iters.check = icmp ult i64 ' + count) +
+                             r', (%[-\w.$]+)')[1]
             require_chunk_instruction(body, entry, 'br i1 %min.iters.check, label %scalar.ph, label %vector.ph')
-            step = single('vector.ph', r'%n.mod.vf = urem i64 %fission.chunk.count, (%[-\w.$]+)')[1]
+            step = single('vector.ph', re.escape('%n.mod.vf = urem i64 ' + count) +
+                          r', (%[-\w.$]+)')[1]
             scales = []
             for width in (minimum, step):
                 owner, expression = definitions[width]
@@ -4095,16 +4144,16 @@ def check_state_chunk_consumer(body, capacity, preheader, exit, initial, evl):
                 assert definitions[match[1]] == (entry, 'call i64 @llvm.vscale.i64()'), body
                 scales.append(match[1])
             assert scales[0] == scales[1], body
-            require_chunk_instruction(body, 'vector.ph', '%n.vec = sub i64 %fission.chunk.count, %n.mod.vf')
-            next_index = '%index.next'
-            require_chunk_instruction(body, vector, f'{next_index} = add nuw i64 %index, {step}')
-            condition = single(vector, r'(%[-\w.$]+) = icmp eq i64 %index.next, %n.vec')[1]
+            require_chunk_instruction(body, 'vector.ph', f'%n.vec = sub i64 {count}, %n.mod.vf')
+            index, next_index = vector_consumer_induction(body, vector, step, evl)
+            condition = single(vector, r'(%[-\w.$]+) = icmp eq i64 ' +
+                               re.escape(next_index) + ', %n.vec')[1]
             assert phi('%bc.resume.val', 'i64', 'scalar.ph') == {
                 'middle.block': '%n.vec', entry: '0'}
-            require_chunk_instruction(body, 'middle.block', '%cmp.n = icmp eq i64 %fission.chunk.count, %n.vec')
+            require_chunk_instruction(body, 'middle.block', f'%cmp.n = icmp eq i64 {count}, %n.vec')
             require_chunk_instruction(body, 'middle.block', f'br i1 %cmp.n, label %{latch}, label %scalar.ph')
             vp_args = ''
-        assert phi('%index', 'i64', vector) == {'vector.ph': '0', vector: next_index}
+        assert phi(index, 'i64', vector) == {'vector.ph': '0', vector: next_index}
         require_chunk_instruction(body, 'vector.ph', f'br label %{vector}')
         require_chunk_instruction(body, vector, f'br i1 {condition}, label %middle.block, label %{vector}')
         if evl:
@@ -4113,7 +4162,7 @@ def check_state_chunk_consumer(body, capacity, preheader, exit, initial, evl):
         for ty, suffix, alignment in [('i32', 'i32', 4), ('double', 'f64', 8)]:
             slot = single('entry', rf'(%[-\w.$]+) = alloca \[{capacity} x {ty}\], align {alignment}')[1]
             address = single(vector, rf'(%[-\w.$]+) = getelementptr inbounds \[{capacity} x {ty}\], '
-                             rf'ptr {re.escape(slot)}, i32 0, i64 %index')[1]
+                             rf'ptr {re.escape(slot)}, i32 0, i64 {re.escape(index)}')[1]
             load = (rf'call <vscale x 4 x {ty}> @llvm.vp.load.nxv4{suffix}.p0'
                     rf'\(ptr align {alignment} {re.escape(address)}{re.escape(vp_args)}\)' if evl else
                     rf'load <vscale x 4 x {ty}>, ptr {re.escape(address)}, align {alignment}')
@@ -4199,6 +4248,8 @@ def check_state_chunk_consumer(body, capacity, preheader, exit, initial, evl):
             assert set(incoming) == {'middle.block', tail}, incoming
             forward(incoming[tail], tail, f'%{u}.consume', scalar, ty)
         assert phi(f'%out.{r}', ty, exit) == {latch: result}, body
+
+    return (index, next_index) if vector else None
 
 
 NC_CHUNK_FUNCTIONS = ('nc_offset', 'nc_stride', 'nc_down', 'nc_early',
@@ -4332,21 +4383,22 @@ def check_noncanonical_chunk(ir, original, name, capacity, evl=False, probe=Fals
     assert len(vectors) <= 1 and not (narrow and vectors), body
     if compact:
         producer, consumer = scalar_consumer(body, name)
-        check_compact_count(producer, consumer, 'export_compact', evl,
-                            starts=[(r, t, f'%{r}.chunk.carry') for r, t in
-                                    [('r0', 'i32'), ('r1', 'i32'), ('rd', 'double')]],
-                            vectorized=bool(vectors), bypass_edges=['loop'], chunked=True, freeze_count=True)
+        consumer_induction = check_compact_count(
+            producer, consumer, 'export_compact', evl,
+            starts=[(r, t, f'%{r}.chunk.carry') for r, t in
+                    [('r0', 'i32'), ('r1', 'i32'), ('rd', 'double')]],
+            vectorized=bool(vectors), bypass_edges=['loop'], chunked=True, freeze_count=True)
         for r, t, seed in [('r0', 'i32', '17'), ('r1', 'i32', '-7'), ('rd', 'double', '%start')]:
             require('scalar.fission.chunk', f'%{r}.chunk.carry = phi {t} [ {seed}, %preheader ], '
                     f'[ %{r}.result, %scalar.fission.chunk.latch ]')
             require('producer.exit', f'%out.{r} = phi {t} [ %{r}.result, %scalar.fission.chunk.latch ]')
     elif not narrow:
-        # Pure alpha-renaming: the fallback has no chunk.count definition or
-        # uses (certified above). Reuse the full scalar/tail/EVL result proof,
-        # with the actual completed-count SSA value as its only bound.
+        # Reuse the full scalar/tail/EVL result proof with the actual completed
+        # count as its bound. Preserve all producer and consumer SSA identities.
         require(ph, '%fission.consumer.count = freeze i64 %fission.producer.completed')
-        check_state_chunk_consumer(body.replace('%fission.consumer.count', '%fission.chunk.count'),
-                                   capacity, 'preheader', 'producer.exit', ['17', '-7', '%start'], evl)
+        consumer_induction = check_state_chunk_consumer(
+            body, capacity, 'preheader', 'producer.exit', ['17', '-7', '%start'], evl,
+            count='%fission.consumer.count')
     else:
         for inst in ['%fission.consumer.iv = phi i8 [ 0, %scalar.fission.consumer.ph ], '
                      '[ %fission.consumer.next, %scalar.fission.consumer.body ]',
@@ -4397,6 +4449,15 @@ def check_noncanonical_chunk(ir, original, name, capacity, evl=False, probe=Fals
     def wide(value, stem, value_ty=ty):
         return ('', value) if value_ty == 'i64' else (f'  %{stem} = zext {value_ty} {value} to i64\n', '%' + stem)
 
+    # The global input ordinal belongs to the retained producer, separately
+    # from the consumer's local scratch ordinal. Bind it from the exact original
+    # input addresses whose definitions and order were certified above.
+    input_indices = [m[1] for line in chunk_instructions(source['loop']) if (m := re.fullmatch(
+        r'%(?:p|dp) = getelementptr (?:i32|double), ptr %(?:a|fp), i64 (%[-\w.$]+)', line))]
+    assert len(input_indices) == 2 and len(set(input_indices)) == 1, input_indices
+    producer_index = input_indices[0]
+    assert any(line.startswith(producer_index + ' = ') for line in chunk_instructions(blocks['loop'])), body
+
     code, base = wide('%fission.chunk.base', 'nc.base')
     insert('scalar.fission.chunk', code + f'  call void @record_nc_begin(i64 {base}, '
            'i32 %prev.chunk.carry, i32 %older.chunk.carry, double %dstate.chunk.carry)\n')
@@ -4409,11 +4470,11 @@ def check_noncanonical_chunk(ir, original, name, capacity, evl=False, probe=Fals
     original_branch = chunk_instructions(source['latch'])[-1]
     cont = '%done' if 'label %loop, label %producer.exit' in original_branch else '%fission.original.continue'
     code += f'  %nc.cont = zext i1 {cont} to i32\n'
-    insert('latch', code + f'  call void @record_nc_iteration(i64 %index, i64 {args[0]}, i64 {args[1]}, '
+    insert('latch', code + f'  call void @record_nc_iteration(i64 {producer_index}, i64 {args[0]}, i64 {args[1]}, '
            f'i64 {args[2]}, i32 %nc.cont, i32 %prev, i32 %older, i32 %state.next, '
            'double %dstate, double %dnext)\n')
     prefix, local = wide(index, 'nc.store.index')
-    insert(store_block, prefix + f'  call void @record_nc_store(i64 %index, i64 {local}, i32 %c, double %dc, '
+    insert(store_block, prefix + f'  call void @record_nc_store(i64 {producer_index}, i64 {local}, i32 %c, double %dc, '
            f'ptr {addresses["i32"]}, ptr {addresses["double"]})\n')
     prefix, completed = wide('%fission.producer.completed', 'nc.completed')
     code, next_iv = wide('%fission.producer.iv.next', 'nc.carried.iv')
@@ -4421,7 +4482,8 @@ def check_noncanonical_chunk(ir, original, name, capacity, evl=False, probe=Fals
            f'  call void @record_nc_end(i64 {completed}, i32 %nc.carried.cont, i64 {next_iv})\n')
     for label in vectors + (['scalar.fission.consumer.body'] if 'scalar.fission.consumer.body' in blocks else []):
         vector = label in vectors
-        prefix, ordinal = wide('%index' if vector else '%fission.consumer.iv', 'nc.consume.index',
+        consumer_index = consumer_induction[0] if vector else '%fission.consumer.iv'
+        prefix, ordinal = wide(consumer_index, 'nc.consume.index',
                                'i64' if vector else ty)
         lanes = '1'
         if vector:
@@ -4437,7 +4499,7 @@ def check_noncanonical_chunk(ir, original, name, capacity, evl=False, probe=Fals
             if narrow:
                 require(label, f'{offset} = zext i8 %fission.consumer.iv to i64')
             else:
-                assert offset == ('%index' if vector else '%fission.consumer.iv'), body
+                assert offset == consumer_index, body
             consumer_addresses[t] = addr
         insert(label, prefix + f'  call void @record_nc_consume(i64 {ordinal}, i64 {lanes}, '
                f'ptr {consumer_addresses["i32"]}, ptr {consumer_addresses["double"]}, i32 {int(vector)})\n')

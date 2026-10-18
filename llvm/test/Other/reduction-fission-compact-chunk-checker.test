@@ -22,7 +22,7 @@
 # RUN:   -o %t/evl.ll 2> %t/evl.remarks
 # RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py \
 # RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-chunks.ll \
-# RUN:   %t/scalar.ll %t/tail.ll %t/evl.ll %t/scalar.remarks %t/tail.remarks %t/evl.remarks
+# RUN:   %t/scalar.ll %t/tail.ll %t/evl.ll %t/scalar.remarks %t/tail.remarks %t/evl.remarks opt %S/Inputs
 
 # The numerical driver executes real scalar/vector/tail paths against exact
 # original IR and C. This test mutates fresh actual transformed IR; none of the
@@ -39,7 +39,12 @@ spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
 checker = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = checker
 spec.loader.exec_module(checker)
-source, scalar, tail, evl, sr, tr, er = (Path(p).read_text() for p in sys.argv[2:])
+source, scalar, tail, evl, sr, tr, er = (Path(p).read_text() for p in sys.argv[2:9])
+opt = sys.argv[9]
+identity_spec = importlib.util.spec_from_file_location(
+    'identity', Path(sys.argv[10]) / 'reduction-fission-consumer-identity.py')
+identity = importlib.util.module_from_spec(identity_spec)
+identity_spec.loader.exec_module(identity)
 for ir, remarks, is_scalar, is_evl in [(scalar, sr, True, False),
                                       (tail, tr, False, False), (evl, er, False, True)]:
     for name in checker.COMPACT_CHUNK_FUNCTIONS:
@@ -64,6 +69,10 @@ for ir, remarks, is_scalar, is_evl in [(scalar, sr, True, False),
         body = checker.function_definition(ir, name)
         checked = checker.check_compact_chunk(ir, source, name, 9,
                                              scalar=is_scalar, evl=is_evl, probe=not is_evl)
+        certify = lambda candidate: checker.check_compact_chunk(
+            candidate, source, name, 9, scalar=is_scalar, evl=is_evl)
+        for renamed in identity.exercise(checker, ir, name, is_evl, certify):
+            checker.run([opt, '-passes=verify', '-disable-output'], input=renamed)
         if not is_evl:
             for hook in ('begin', 'producer', 'participant', 'guard', 'end', 'tail'):
                 assert checked.count('call void @record_cc_' + hook + '(') == 1, (name, hook)
@@ -75,6 +84,7 @@ for ir, remarks, is_scalar, is_evl in [(scalar, sr, True, False),
             return body[:line.start()] + line[0].replace(old, new, 1) + body[line.end():]
 
         def reject(candidate, reason):
+            assert candidate != body, (name, reason)
             try:
                 checker.check_compact_chunk(candidate, source, name, 9,
                                              scalar=is_scalar, evl=is_evl)
