@@ -196,6 +196,63 @@ def boundary_variant(ir, bounds, tag, references, used_symbols):
     return ir, declarations, rows
 
 
+def check_export_signature(ir, name):
+    """Check the fixture ABI represented by the C harness's ExportFn typedef."""
+    body = function_definition(ir, name)
+    signature = re.match(r'define void @' + re.escape(name) + r'\((.*?)\)', body, re.S)
+    parameters = ([r'ptr(?: readonly)? %[-\w.$]+'] * 6 +
+                  [r'i64 %[-\w.$]+', r'i64 %[-\w.$]+', r'double %[-\w.$]+'])
+    if not signature or not re.fullmatch(r'\s*' + r',\s*'.join(parameters) + r'\s*',
+                                         signature[1]):
+        raise ValueError(f'ExportFn signature mismatch for @{name}')
+
+
+def export_reference_declarations(source, reference, references):
+    """Declare the actual mapped references, requiring exact original bodies.
+
+    Both modules contain only the selected fixture definitions. Keep this a
+    fixture ABI/origin check, rather than attempting to infer C types from IR.
+    """
+    functions = {m['name'] for m in FUNCTION_DEFINITION.finditer(source)}
+    if set(references) != functions:
+        raise ValueError('export reference mapping does not cover source definitions')
+    if len(set(references.values())) != len(references):
+        raise ValueError('duplicate export reference symbol')
+    declarations = []
+    for function, name in references.items():
+        if execution_symbol(name) != name:
+            raise ValueError(f'noncanonical export reference symbol: {name!r}')
+        check_export_signature(source, function)
+        check_export_signature(reference, name)
+        expected = re.sub(r'@([-\w.$]+)',
+                          lambda m: '@' + references.get(m[1], m[1]),
+                          function_definition(source, function))
+        if function_definition(reference, name) != expected:
+            raise ValueError(f'export reference definition mismatch for @{function}: @{name}')
+        declarations.append(f'extern ExportFn {name};')
+    if {m['name'] for m in FUNCTION_DEFINITION.finditer(reference)} != set(references.values()):
+        raise ValueError('export reference definitions do not match mapping')
+    return declarations
+
+
+def export_variant(ir, functions, tag, references, used_symbols, first_mode, lanes):
+    """Use one mapping for export definitions, declarations and dispatch rows."""
+    if len(set(functions)) != len(functions):
+        raise ValueError('duplicate export function')
+    if set(references) != set(functions):
+        raise ValueError('export reference mapping does not cover variant functions')
+    for function in functions:
+        check_export_signature(ir, function)
+    ir, names = rename_execution_functions(
+        ir, {function: f'{function}_{tag}' for function in functions}, used_symbols)
+    declarations, rows = [], []
+    for mode, function in enumerate(functions, first_mode):
+        name = names[function]
+        declarations.append(f'extern ExportFn {name};')
+        rows.append(f'{{"{name}", {name}, {references[function]}, {mode}, {lanes}}}')
+    return ir, declarations, rows
+
+
 def scalar_consumer(body, name):
     parts = re.split(r'^scalar\.fission\.consumer\.ph:[^\n]*\n', body, flags=re.M)
     if len(parts) != 2:
@@ -794,6 +851,17 @@ COMPACT_CFG_BASES = {
 COMPACT_CFG_FUNCTIONS = tuple(COMPACT_CFG_BASES)
 STATE_CFG_FUNCTIONS = ('state_cfg_serial', 'state_cfg_nested', 'state_cfg_affine')
 COMPACT_CFG_BASES.update(dict.fromkeys(STATE_CFG_FUNCTIONS, 'export_compact'))
+
+EXPORT_FAMILIES = (
+    ('reduction-fission-scalar-exports.ll', EXPORT_FUNCTIONS, 0,
+     'scalar-exports.c', 'exports'),
+    ('reduction-fission-scalar-export-controls.ll', EXPORT_CONTROL_FUNCTIONS, 4,
+     'scalar-export-controls.c', 'export_controls'),
+    ('reduction-fission-scalar-compact-cfg.ll', COMPACT_CFG_FUNCTIONS, 12,
+     'scalar-compact-cfg.c', 'compact_cfg'),
+    ('reduction-fission-scalar-state-cfg.ll', STATE_CFG_FUNCTIONS, 16,
+     'scalar-state-cfg.c', 'state_cfg'),
+)
 
 
 def check_compact_cfg_producer(producer, name):
@@ -4157,19 +4225,12 @@ def check(args, work):
 
     # Final producer exports are an additional matrix. Keep all inherited
     # fixtures, reference origins, probes and adapter comparisons unchanged.
-    for filename, functions, first_mode, location, fixture in (
-            ('reduction-fission-scalar-exports.ll', EXPORT_FUNCTIONS, 0,
-             'scalar-exports.c', 'exports'),
-            ('reduction-fission-scalar-export-controls.ll', EXPORT_CONTROL_FUNCTIONS, 4,
-             'scalar-export-controls.c', 'export_controls'),
-            ('reduction-fission-scalar-compact-cfg.ll', COMPACT_CFG_FUNCTIONS, 12,
-             'scalar-compact-cfg.c', 'compact_cfg'),
-            ('reduction-fission-scalar-state-cfg.ll', STATE_CFG_FUNCTIONS, 16,
-             'scalar-state-cfg.c', 'state_cfg')):
+    for filename, functions, first_mode, location, fixture in EXPORT_FAMILIES:
         source = keep_functions((tests / filename).read_text(),
                                 functions)
         reference, references = rename_execution_functions(
             source, {function: f'ref_{function}' for function in functions}, used_symbols)
+        declarations.extend(export_reference_declarations(source, reference, references))
         compile_ir('reference_' + fixture, reference)
         export_flags = [flag for flag in common
                         if flag != '-enable-scalar-reduction-fission=false' and
@@ -4232,13 +4293,11 @@ def check(args, work):
                              'declare void @record_export_final(i32)\n'
                              'declare void @record_compact_cfg_bypass(i32)\n')
             for scale in ([1] if scalar else args.vscales):
-                fixed, names = rename_execution_functions(
-                    specialize(instrumented, scale),
-                    {function: f'{function}_{tag}_s{scale}' for function in functions}, used_symbols)
-                for mode, function in enumerate(functions):
-                    name = names[function]
-                    declarations.append(f'extern ExportFn {name};')
-                    export_rows.append(f'{{"{name}", {name}, {references[function]}, {mode + first_mode}, {0 if scalar else 4 * scale}}}')
+                fixed, variant_declarations, rows = export_variant(
+                    specialize(instrumented, scale), functions, f'{tag}_s{scale}',
+                    references, used_symbols, first_mode, 0 if scalar else 4 * scale)
+                declarations.extend(variant_declarations)
+                export_rows.extend(rows)
                 compile_ir(f'{tag}_s{scale}', fixed)
                 records.append(dict(record, vscale=scale,
                                     execution='host fixed-vscale scalar remainder, not RVV',
@@ -4252,6 +4311,7 @@ def check(args, work):
                             CHUNK_FUNCTIONS)
     reference, references = rename_execution_functions(
         source, {function: f'ref_{function}' for function in CHUNK_FUNCTIONS}, used_symbols)
+    declarations.extend(export_reference_declarations(source, reference, references))
     compile_ir('reference_scalar_chunks', reference)
     for capacity, ceiling in ((1, 20), (9, 148), (16, 256)):
         # Exact scalar carry/forwarding proof, independent of LV exit folding.

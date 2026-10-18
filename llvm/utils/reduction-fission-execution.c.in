@@ -34,14 +34,7 @@ typedef void ScalarNestedFn(const uint32_t *, const double *, uint32_t *,
                             double *, uint64_t, uint64_t, double);
 typedef void ExportFn(const uint32_t *, const double *, uint32_t *, uint64_t *,
                       double *, float *, uint64_t, uint64_t, double);
-extern ExportFn ref_export_unconditional, ref_export_diamond;
-extern ExportFn ref_export_compact, ref_export_nested;
-extern ExportFn ref_export_offset, ref_export_stride, ref_export_down;
-extern ExportFn ref_export_current, ref_export_affine_compact, ref_export_serial;
-extern ExportFn ref_export_acyclic_nested, ref_export_enclosing;
-extern ExportFn ref_compact_cfg_serial, ref_compact_cfg_nested;
-extern ExportFn ref_compact_cfg_affine, ref_compact_cfg_enclosing;
-extern ExportFn ref_chunk_mixed, ref_chunk_narrow, ref_chunk_ne, ref_chunk_nested;
+// ExportFn references and variants are declared from the driver's mappings.
 extern ShortFPFn ref_chunk_ordered;
 typedef void AffineFn(const uint32_t *, const double *, uint32_t *, double *,
                       float *, uint64_t, double, int64_t);
