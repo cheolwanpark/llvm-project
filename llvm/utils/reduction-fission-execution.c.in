@@ -185,6 +185,11 @@ static const struct {
 } Chunks[] = {@CHUNKS@};
 static const struct {
   const char *Name;
+  ExportFn *Fn, *Reference;
+  unsigned Mode, Capacity, VectorLanes;
+} StateChunks[] = {@STATE_CHUNKS@};
+static const struct {
+  const char *Name;
   ShortFPFn *Fn;
   unsigned ProducerLanes, ConsumerLanes;
 } AosChunks[] = {@AOS_CHUNKS@};
@@ -1669,6 +1674,209 @@ static void check_chunks(void) {
   printf("Bounded chunks: %u additional host comparisons (not RVV execution)\n", Total);
 }
 
+
+// Exact producer-state probes, validation only. Expected state advances once
+// per original iteration using input arrays, independently of transformed SSA.
+// Chunk boundaries never reset it. Nested rows seed from the preceding row's
+// final next state; current exports are separately checked at each chunk exit.
+static const uint32_t *StateChunkA;
+static const double *StateChunkD;
+static unsigned StateChunkMode, StateProducerVisits;
+static uint32_t StatePrev, StateOlder;
+static double StateD;
+
+void record_state_chunk_begin(uint64_t Base, uint64_t Count, uint32_t Prev,
+                              uint32_t Older, double D) {
+  record_chunk_begin(Base, Count);
+  if (Prev != StatePrev || Older != StateOlder || memcmp(&D, &StateD, sizeof(D)))
+    fail(ChunkName, ChunkN, ChunkBegins, "producer state initial/carry mismatch");
+}
+
+void record_state_chunk_producer(uint64_t Global, uint64_t Local) {
+  record_chunk_producer(Global, Local);
+  ++StateProducerVisits;
+}
+
+void record_state_chunk_end(uint32_t Prev, uint32_t Older, uint32_t Next,
+                            double D, double DNext) {
+  uint32_t Current = StatePrev, Old = StateOlder, Updated = StatePrev;
+  double CurrentD = StateD, UpdatedD = StateD;
+  bool Pair = StateChunkMode == 1 || StateChunkMode == 3;
+  for (unsigned I = 0; I < ChunkCount; ++I) {
+    unsigned Offset = (StateChunkMode == 3 ? 65 * ChunkCompletedRows : 0) + ChunkBase + I;
+    Current = StatePrev;
+    Old = StateOlder;
+    CurrentD = StateD;
+    Updated = Pair ? StateChunkA[Offset] + Old : StateChunkA[Offset];
+    UpdatedD = CurrentD + StateChunkD[Offset];
+    StatePrev = Updated;
+    if (Pair) StateOlder = Current;
+    StateD = UpdatedD;
+  }
+  if (Prev != Current || Older != Old || Next != Updated ||
+      memcmp(&D, &CurrentD, sizeof(D)) || memcmp(&DNext, &UpdatedD, sizeof(DNext)))
+    fail(ChunkName, ChunkN, ChunkBegins, "producer current/next exports or simultaneous carry");
+  record_chunk_end();
+}
+
+typedef struct {
+  uint32_t A[262], Out[22];
+  double D[262], DOut[18];
+  float FOut[10];
+  uint64_t Indices[10];
+} StateChunkState;
+
+// One original-order traversal, no chunk arithmetic and no probe inputs.
+// Writes happen after each row, preserving permitted aliasing with future rows.
+static void state_chunk_oracle(unsigned Mode, const uint32_t *A, const double *D,
+                                uint32_t *Out, uint64_t *Indices, double *DOut,
+                                uint64_t Rows, uint64_t N, double Start) {
+  bool Nested = Mode == 3, Pair = Mode == 1 || Nested;
+  if (!N || N > 65 || (Nested && (!Rows || Rows > 4))) return;
+  uint32_t R0 = 17, R1 = (uint32_t)-7, Prev = 23, Older = (uint32_t)-11;
+  double RD = Start, DS = Start;
+  for (unsigned Row = 0; Row < (Nested ? Rows : 1); ++Row) {
+    uint32_t Current = Prev, Old = Older, Updated = Prev;
+    double CurrentD = DS, NextD = DS, DC = 0;
+    for (unsigned I = 0; I < N; ++I) {
+      unsigned Offset = (Nested ? 65 * Row : 0) + I;
+      Current = Prev;
+      Old = Older;
+      CurrentD = DS;
+      Updated = Pair ? A[Offset] + Old : A[Offset];
+      uint32_t C = scalar_helper(Current ^ Updated);
+      NextD = CurrentD + D[Offset];
+      DC = Mode == 2 ? CurrentD - D[Offset] : NextD - CurrentD;
+      R0 += C;
+      R1 = C + R1;
+      RD = RD + DC;
+      Prev = Updated;
+      if (Pair) Older = Current;
+      DS = NextD;
+    }
+    unsigned O = Nested ? 5 * Row : 0, F = Nested ? 4 * Row : 0;
+    unsigned J = Nested ? 2 * Row : 0;
+    Out[O] = R0;
+    Out[O + 1] = R1;
+    Out[O + 2] = Current;
+    Out[O + 3] = Old;
+    Out[O + 4] = Updated;
+    DOut[F] = RD;
+    DOut[F + 1] = CurrentD;
+    DOut[F + 2] = NextD;
+    DOut[F + 3] = DC;
+    Indices[J] = N - 1;
+    Indices[J + 1] = N;
+  }
+}
+
+static void state_chunk_pointers(StateChunkState *S, bool Alias, bool Enter,
+                                  const uint32_t **A, const double **D,
+                                  uint32_t **Out, double **DOut) {
+  *A = Enter ? S->A + 1 : NULL;
+  *D = Enter ? S->D + 1 : NULL;
+  *Out = Alias ? S->A + 66 : S->Out + 1;
+  *DOut = Alias ? S->D + 66 : S->DOut + 1;
+}
+
+static void check_state_chunks(void) {
+  static const uint64_t RowCounts[] = {0, 1, 2, 4, 5, UINT64_MAX};
+  static const double Values[] = {-0.0, 0.0, 0x1p54, -0x1p54, 0.25, -0.125, 1.0, -1.0};
+  unsigned Total = 0;
+  for (unsigned C = 0; C < sizeof(StateChunks) / sizeof(*StateChunks); ++C) {
+    unsigned Mode = StateChunks[C].Mode, Capacity = StateChunks[C].Capacity;
+    unsigned Lanes = StateChunks[C].VectorLanes;
+    bool Nested = Mode == 3;
+    unsigned Runs = 0, Produced = 0, Consumed = 0, Begins = 0;
+    unsigned Vectors = 0, Tails = 0, Zero = 0, Multi = 0, Partial = 0, Full = 0;
+    for (unsigned K = 0; K < 68; ++K)
+      for (unsigned R = 0; R < (Nested ? 6u : 1u); ++R)
+        for (unsigned Trial = 0; Trial < 8; ++Trial)
+          for (unsigned Alias = 0; Alias < 2; ++Alias) {
+            uint64_t N = K == 67 ? UINT64_MAX : K;
+            uint64_t Rows = Nested ? RowCounts[R] : 1;
+            bool Enter = N && N <= 65 && (!Nested || (Rows && Rows <= 4));
+            double Start = Trial == 0 ? -0.0 : Trial == 1 ? 0.0 :
+                           Trial == 2 ? 0.25 : -8.25;
+            StateChunkState Actual, Original, Independent;
+            memset(&Actual, 0x5a, sizeof(Actual));
+            for (unsigned I = 0; I < 260; ++I) {
+              Actual.A[1 + I] = Trial == 0 ? 0 : Trial == 1 ? I + 1 : random_value();
+              Actual.D[1 + I] = Values[(I + Trial) % 8];
+            }
+            memcpy(&Original, &Actual, sizeof(Actual));
+            memcpy(&Independent, &Actual, sizeof(Actual));
+            const uint32_t *A;
+            const double *D;
+            uint32_t *Out;
+            double *DOut;
+            state_chunk_pointers(&Independent, Alias, Enter, &A, &D, &Out, &DOut);
+            state_chunk_oracle(Mode, A, D, Out, Independent.Indices + 1, DOut, Rows, N, Start);
+            state_chunk_pointers(&Original, Alias, Enter, &A, &D, &Out, &DOut);
+            StateChunks[C].Reference(A, D, Out, Original.Indices + 1, DOut,
+                                     Original.FOut + 1, Rows, N, Start);
+            if (memcmp(&Original, &Independent, sizeof(Original)))
+              fail(StateChunks[C].Name, N, Trial, "original state IR versus independent oracle");
+
+            state_chunk_pointers(&Actual, Alias, Enter, &A, &D, &Out, &DOut);
+            ChunkName = StateChunks[C].Name;
+            ChunkN = Enter ? N : 0;
+            ChunkRows = Enter ? Rows : 0;
+            ChunkCapacity = Capacity;
+            ChunkLanes = Lanes;
+            ChunkActive = false;
+            ChunkProgress = ChunkCompletedRows = ChunkBegins = ChunkEnds = 0;
+            ChunkVectors = ChunkTails = ChunkComplete = ChunkPartial = 0;
+            StateProducerVisits = 0;
+            StateChunkA = A;
+            StateChunkD = D;
+            StateChunkMode = Mode;
+            StatePrev = 23;
+            StateOlder = (uint32_t)-11;
+            StateD = Start;
+            StateChunks[C].Fn(A, D, Out, Actual.Indices + 1, DOut,
+                              Actual.FOut + 1, Rows, N, Start);
+            unsigned Complete = ChunkN / Capacity, Rem = ChunkN % Capacity;
+            unsigned ExpectedChunks = ChunkRows * (Complete + (Rem != 0));
+            unsigned ExpectedVectors = Lanes ? ChunkRows *
+                (Complete * (Capacity / Lanes) + Rem / Lanes) : 0;
+            unsigned ExpectedIterations = ChunkRows * ChunkN;
+            if (ChunkActive || ChunkProgress || ChunkCompletedRows != ChunkRows ||
+                ChunkBegins != ExpectedChunks || ChunkEnds != ExpectedChunks ||
+                StateProducerVisits != ExpectedIterations ||
+                ChunkVectors != ExpectedVectors ||
+                ChunkTails != ExpectedIterations - ExpectedVectors * Lanes ||
+                ChunkComplete != Complete * ChunkRows ||
+                ChunkPartial != (Rem != 0) * ChunkRows)
+              fail(ChunkName, N, Trial, "exact retained-state chunk/stage/row counts");
+            if (memcmp(&Actual, &Original, sizeof(Actual)) ||
+                memcmp(&Actual, &Independent, sizeof(Actual)))
+              fail(ChunkName, N, Trial, "state chunk result/current/next/alias/input/canary mismatch");
+            Produced += StateProducerVisits;
+            Consumed += ChunkVectors * Lanes + ChunkTails;
+            Begins += ChunkBegins;
+            Vectors += ChunkVectors;
+            Tails += ChunkTails;
+            Full += ChunkComplete;
+            Partial += ChunkPartial;
+            Zero += !Enter;
+            Multi += Enter && N > Capacity;
+            ++Runs;
+          }
+    if (!Produced || Produced != Consumed || !Begins || !Tails || !Full || !Zero ||
+        !Multi || (Capacity > 1 && !Partial) ||
+        (Lanes && Lanes <= Capacity && !Vectors) || ((!Lanes || Lanes > Capacity) && Vectors))
+      fail(StateChunks[C].Name, 65, 0, "missing retained-state transformed-path evidence");
+    printf("State chunks %s: comparisons=%u producer=%u consumer=%u chunks=%u "
+           "vector=%u tail=%u complete=%u partial=%u zero=%u multi=%u\n",
+           StateChunks[C].Name, Runs, Produced, Consumed, Begins, Vectors, Tails,
+           Full, Partial, Zero, Multi);
+    Total += Runs;
+  }
+  printf("State chunks: %u original/transformed/oracle host comparisons (not RVV)\n", Total);
+}
+
+
 // AoS probes use the actual load/store addresses from each emitted stage.
 // In particular a global producer IV must never index the reused scratch.
 static const double *AosInput;
@@ -2833,6 +3041,7 @@ int main(void) {
   check_deinterleave_adapter();
   check_exports();
   check_chunks();
+  check_state_chunks();
   check_aos_chunks();
   check_integration();
   printf("PASS: %u executions; interleave stages/tails counted with guarded "

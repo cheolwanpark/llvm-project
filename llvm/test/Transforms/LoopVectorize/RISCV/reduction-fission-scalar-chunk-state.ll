@@ -1,0 +1,486 @@
+; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
+; RUN:   -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 \
+; RUN:   -scalable-vectorization=off -vplan-reduction-fission-max-scratch-bytes=112 \
+; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t.scalar 2> %t.remarks
+; RUN: FileCheck %s --check-prefix=SCALAR < %t.scalar
+; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
+; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
+; RUN:   -force-vector-width=4 -force-vector-interleave=1 -hints-allow-reordering=false \
+; RUN:   -scalable-vectorization=always -vplan-reduction-fission-max-scratch-bytes=112 \
+; RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
+; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t.vector 2> %t.vremarks
+; RUN: FileCheck %s --check-prefix=VF < %t.vremarks
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.vector -o /dev/null
+; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=15 -pass-remarks-missed=vplan-reduction-fission \
+; RUN:   -S %s -o %t.reject 2> %t.reject.remarks
+; RUN: FileCheck %s --check-prefix=REJECT < %t.reject.remarks
+; RUN: FileCheck %s --check-prefix=UNCHANGED --implicit-check-not=scalar.fission < %t.reject
+; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 \
+; RUN:   -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=16 -pass-remarks=vplan-reduction-fission \
+; RUN:   -disable-output %s 2>&1 | FileCheck %s --check-prefix=ONE
+;
+; Canonical bounded chunks only. Delay, coupled state, ordered FP state, and
+; enclosing rows retain their original producer operations and initial edges.
+; The pair's older backedge is the *previous* prev, not state.next. Current
+; state, next state, contribution and indices have separate final exports.
+; Two integer reductions share c, while the FP reduction consumes dc in order.
+; C=1/9/16 reserves 16/112/192 bytes; logical traffic is 12*N each way.
+; No state arrays, rereads, duplicated helper calls, new guards or FP flags.
+; The executable checker covers both policies and LV1/LV2, actual scalar and
+; vector/tail consumers, and compares exact originals plus a nonchunked oracle.
+
+declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
+
+; ONE: scalar-chunk-state.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
+; ONE-SAME: producer state carries 2
+; ONE: scalar-chunk-state.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
+; ONE-SAME: producer state carries 3
+; ONE: scalar-chunk-state.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
+; ONE-SAME: producer state carries 2
+; ONE: scalar-chunk-state.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
+; ONE-SAME: producer state carries 3
+
+; REMARK: scalar-chunk-state.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 112, producer live-outs 7, chunked schedule, trip bound 65
+; REMARK-SAME: producer state carries 2
+; VF: scalar-chunk-state.c:12:3: scalar-IR fission producer VF 1
+; VF: scalar-chunk-state.c:12:3: scalar-IR fission consumer VF vscale x 4
+; REJECT: scalar-chunk-state.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; UNCHANGED-LABEL: define void @chunk_state_delay(
+; UNCHANGED: ret void
+; SCALAR-LABEL: define void @chunk_state_delay(
+; SCALAR: alloca [9 x i32]
+; SCALAR: alloca [9 x double]
+; SCALAR: scalar.fission.chunk:
+; SCALAR: %prev.chunk.carry = phi i32 [ 23, %preheader ], [ %prev.chunk.backedge, %scalar.fission.chunk.latch ]
+; SCALAR: %dstate.chunk.carry = phi double [ %start, %preheader ], [ %dstate.chunk.backedge, %scalar.fission.chunk.latch ]
+; SCALAR: %prev = phi i32 [ %prev.chunk.carry, %scalar.fission.producer.ph ], [ %x, %loop ]
+; SCALAR: %dstate = phi double [ %dstate.chunk.carry, %scalar.fission.producer.ph ], [ %dnext, %loop ]
+; SCALAR: %dnext = fadd double %dstate, %dx
+; SCALAR: scalar.fission.consumer.ph:
+; SCALAR-DAG: %prev.fission.export = phi i32 [ %prev, %loop ]
+; SCALAR-DAG: %x.fission.export = phi i32 [ %x, %loop ]
+; SCALAR-DAG: %prev.chunk.backedge = phi i32 [ %x, %loop ]
+; SCALAR-DAG: %dstate.chunk.backedge = phi double [ %dnext, %loop ]
+; SCALAR-DAG: %dstate.fission.export = phi double [ %dstate, %loop ]
+; SCALAR-DAG: %dnext.fission.export = phi double [ %dnext, %loop ]
+; SCALAR: producer.exit:
+; SCALAR: %out.prev = phi i32 [ %prev.fission.export, %scalar.fission.chunk.latch ]
+; SCALAR: ret void
+define void @chunk_state_delay(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
+                         ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !10 {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %inner.enter = and i1 %valid, %nonzero
+  br i1 %inner.enter, label %preheader, label %bypass
+preheader:
+  br label %loop, !dbg !11
+loop:
+  %iv = phi i64 [0, %preheader], [%next, %loop]
+  %prev = phi i32 [23, %preheader], [%x, %loop]
+  %r0 = phi i32 [17, %preheader], [%u0, %loop]
+  %dstate = phi double [%start, %preheader], [%dnext, %loop]
+  %r1 = phi i32 [-7, %preheader], [%u1, %loop]
+  %rd = phi double [%start, %preheader], [%ud, %loop]
+  %p = getelementptr i32, ptr %a, i64 %iv
+  %x = load i32, ptr %p, align 4
+  %raw = xor i32 %prev, %x
+  %c = call i32 @scalar_helper(i32 %raw)
+  %dp = getelementptr double, ptr %fp, i64 %iv
+  %dx = load double, ptr %dp, align 8
+  %dnext = fadd double %dstate, %dx
+  %dc = fsub double %dnext, %dstate
+  %u0 = add i32 %r0, %c
+  %u1 = add i32 %c, %r1
+  %ud = fadd double %rd, %dc
+  %next = add nuw i64 %iv, 1
+  %done = icmp eq i64 %next, %n
+  br i1 %done, label %producer.exit, label %loop, !dbg !11
+producer.exit:
+  %out.r0 = phi i32 [%u0, %loop]
+  %out.r1 = phi i32 [%u1, %loop]
+  %out.prev = phi i32 [%prev, %loop]
+  %out.state.next = phi i32 [%x, %loop]
+  %out.rd = phi double [%ud, %loop]
+  %out.dstate = phi double [%dstate, %loop]
+  %out.dnext = phi double [%dnext, %loop]
+  %out.dc = phi double [%dc, %loop]
+  %out.iv = phi i64 [%iv, %loop]
+  %out.next = phi i64 [%next, %loop]
+  %o0 = getelementptr i32, ptr %out, i64 0
+  store i32 %out.r0, ptr %o0, align 4
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %out.r1, ptr %o1, align 4
+  %o2 = getelementptr i32, ptr %out, i64 2
+  store i32 %out.prev, ptr %o2, align 4
+  %o3 = getelementptr i32, ptr %out, i64 3
+  store i32 -11, ptr %o3, align 4
+  %o4 = getelementptr i32, ptr %out, i64 4
+  store i32 %out.state.next, ptr %o4, align 4
+  %d0 = getelementptr double, ptr %dout, i64 0
+  store double %out.rd, ptr %d0, align 8
+  %d1 = getelementptr double, ptr %dout, i64 1
+  store double %out.dstate, ptr %d1, align 8
+  %d2 = getelementptr double, ptr %dout, i64 2
+  store double %out.dnext, ptr %d2, align 8
+  %d3 = getelementptr double, ptr %dout, i64 3
+  store double %out.dc, ptr %d3, align 8
+  %idx0 = getelementptr i64, ptr %indices, i64 0
+  store i64 %out.iv, ptr %idx0, align 8
+  %idx1 = getelementptr i64, ptr %indices, i64 1
+  store i64 %out.next, ptr %idx1, align 8
+  ret void
+bypass:
+  ret void
+}
+
+; REMARK: scalar-chunk-state.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 112, producer live-outs 8, chunked schedule, trip bound 65
+; REMARK-SAME: producer state carries 3
+; VF: scalar-chunk-state.c:22:3: scalar-IR fission producer VF 1
+; VF: scalar-chunk-state.c:22:3: scalar-IR fission consumer VF vscale x 4
+; REJECT: scalar-chunk-state.c:22:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; UNCHANGED-LABEL: define void @chunk_state_pair(
+; UNCHANGED: ret void
+; SCALAR-LABEL: define void @chunk_state_pair(
+; SCALAR: alloca [9 x i32]
+; SCALAR: alloca [9 x double]
+; SCALAR: scalar.fission.chunk:
+; SCALAR: %prev.chunk.carry = phi i32 [ 23, %preheader ], [ %prev.chunk.backedge, %scalar.fission.chunk.latch ]
+; SCALAR: %older.chunk.carry = phi i32 [ -11, %preheader ], [ %older.chunk.backedge, %scalar.fission.chunk.latch ]
+; SCALAR: %dstate.chunk.carry = phi double [ %start, %preheader ], [ %dstate.chunk.backedge, %scalar.fission.chunk.latch ]
+; SCALAR: %prev = phi i32 [ %prev.chunk.carry, %scalar.fission.producer.ph ], [ %state.next, %loop ]
+; SCALAR: %older = phi i32 [ %older.chunk.carry, %scalar.fission.producer.ph ], [ %prev, %loop ]
+; SCALAR: %dstate = phi double [ %dstate.chunk.carry, %scalar.fission.producer.ph ], [ %dnext, %loop ]
+; SCALAR: %dnext = fadd double %dstate, %dx
+; SCALAR: scalar.fission.consumer.ph:
+; SCALAR-DAG: %prev.fission.export = phi i32 [ %prev, %loop ]
+; SCALAR-DAG: %state.next.fission.export = phi i32 [ %state.next, %loop ]
+; SCALAR-DAG: %prev.chunk.backedge = phi i32 [ %state.next, %loop ]
+; SCALAR-DAG: %older.chunk.backedge = phi i32 [ %prev, %loop ]
+; SCALAR-DAG: %dstate.chunk.backedge = phi double [ %dnext, %loop ]
+; SCALAR-DAG: %dstate.fission.export = phi double [ %dstate, %loop ]
+; SCALAR-DAG: %dnext.fission.export = phi double [ %dnext, %loop ]
+; SCALAR: producer.exit:
+; SCALAR: %out.prev = phi i32 [ %prev.fission.export, %scalar.fission.chunk.latch ]
+; SCALAR: ret void
+define void @chunk_state_pair(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
+                         ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !12 {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %inner.enter = and i1 %valid, %nonzero
+  br i1 %inner.enter, label %preheader, label %bypass
+preheader:
+  br label %loop, !dbg !13
+loop:
+  %iv = phi i64 [0, %preheader], [%next, %loop]
+  %prev = phi i32 [23, %preheader], [%state.next, %loop]
+  %older = phi i32 [-11, %preheader], [%prev, %loop]
+  %r0 = phi i32 [17, %preheader], [%u0, %loop]
+  %dstate = phi double [%start, %preheader], [%dnext, %loop]
+  %r1 = phi i32 [-7, %preheader], [%u1, %loop]
+  %rd = phi double [%start, %preheader], [%ud, %loop]
+  %p = getelementptr i32, ptr %a, i64 %iv
+  %x = load i32, ptr %p, align 4
+  %state.next = add i32 %x, %older
+  %raw = xor i32 %prev, %state.next
+  %c = call i32 @scalar_helper(i32 %raw)
+  %dp = getelementptr double, ptr %fp, i64 %iv
+  %dx = load double, ptr %dp, align 8
+  %dnext = fadd double %dstate, %dx
+  %dc = fsub double %dnext, %dstate
+  %u0 = add i32 %r0, %c
+  %u1 = add i32 %c, %r1
+  %ud = fadd double %rd, %dc
+  %next = add nuw i64 %iv, 1
+  %done = icmp eq i64 %next, %n
+  br i1 %done, label %producer.exit, label %loop, !dbg !13
+producer.exit:
+  %out.r0 = phi i32 [%u0, %loop]
+  %out.r1 = phi i32 [%u1, %loop]
+  %out.prev = phi i32 [%prev, %loop]
+  %out.older = phi i32 [%older, %loop]
+  %out.state.next = phi i32 [%state.next, %loop]
+  %out.rd = phi double [%ud, %loop]
+  %out.dstate = phi double [%dstate, %loop]
+  %out.dnext = phi double [%dnext, %loop]
+  %out.dc = phi double [%dc, %loop]
+  %out.iv = phi i64 [%iv, %loop]
+  %out.next = phi i64 [%next, %loop]
+  %o0 = getelementptr i32, ptr %out, i64 0
+  store i32 %out.r0, ptr %o0, align 4
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %out.r1, ptr %o1, align 4
+  %o2 = getelementptr i32, ptr %out, i64 2
+  store i32 %out.prev, ptr %o2, align 4
+  %o3 = getelementptr i32, ptr %out, i64 3
+  store i32 %out.older, ptr %o3, align 4
+  %o4 = getelementptr i32, ptr %out, i64 4
+  store i32 %out.state.next, ptr %o4, align 4
+  %d0 = getelementptr double, ptr %dout, i64 0
+  store double %out.rd, ptr %d0, align 8
+  %d1 = getelementptr double, ptr %dout, i64 1
+  store double %out.dstate, ptr %d1, align 8
+  %d2 = getelementptr double, ptr %dout, i64 2
+  store double %out.dnext, ptr %d2, align 8
+  %d3 = getelementptr double, ptr %dout, i64 3
+  store double %out.dc, ptr %d3, align 8
+  %idx0 = getelementptr i64, ptr %indices, i64 0
+  store i64 %out.iv, ptr %idx0, align 8
+  %idx1 = getelementptr i64, ptr %indices, i64 1
+  store i64 %out.next, ptr %idx1, align 8
+  ret void
+bypass:
+  ret void
+}
+
+; REMARK: scalar-chunk-state.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 112, producer live-outs 7, chunked schedule, trip bound 65
+; REMARK-SAME: producer state carries 2
+; VF: scalar-chunk-state.c:32:3: scalar-IR fission producer VF 1
+; VF: scalar-chunk-state.c:32:3: scalar-IR fission consumer VF vscale x 4
+; REJECT: scalar-chunk-state.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; UNCHANGED-LABEL: define void @chunk_state_fp(
+; UNCHANGED: ret void
+; SCALAR-LABEL: define void @chunk_state_fp(
+; SCALAR: alloca [9 x i32]
+; SCALAR: alloca [9 x double]
+; SCALAR: scalar.fission.chunk:
+; SCALAR: %prev.chunk.carry = phi i32 [ 23, %preheader ], [ %prev.chunk.backedge, %scalar.fission.chunk.latch ]
+; SCALAR: %dstate.chunk.carry = phi double [ %start, %preheader ], [ %dstate.chunk.backedge, %scalar.fission.chunk.latch ]
+; SCALAR: %prev = phi i32 [ %prev.chunk.carry, %scalar.fission.producer.ph ], [ %x, %loop ]
+; SCALAR: %dstate = phi double [ %dstate.chunk.carry, %scalar.fission.producer.ph ], [ %dnext, %loop ]
+; SCALAR: %dnext = fadd double %dstate, %dx
+; SCALAR: scalar.fission.consumer.ph:
+; SCALAR-DAG: %prev.fission.export = phi i32 [ %prev, %loop ]
+; SCALAR-DAG: %x.fission.export = phi i32 [ %x, %loop ]
+; SCALAR-DAG: %prev.chunk.backedge = phi i32 [ %x, %loop ]
+; SCALAR-DAG: %dstate.chunk.backedge = phi double [ %dnext, %loop ]
+; SCALAR-DAG: %dstate.fission.export = phi double [ %dstate, %loop ]
+; SCALAR-DAG: %dnext.fission.export = phi double [ %dnext, %loop ]
+; SCALAR: producer.exit:
+; SCALAR: %out.prev = phi i32 [ %prev.fission.export, %scalar.fission.chunk.latch ]
+; SCALAR: ret void
+define void @chunk_state_fp(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
+                         ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !14 {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %inner.enter = and i1 %valid, %nonzero
+  br i1 %inner.enter, label %preheader, label %bypass
+preheader:
+  br label %loop, !dbg !15
+loop:
+  %iv = phi i64 [0, %preheader], [%next, %loop]
+  %prev = phi i32 [23, %preheader], [%x, %loop]
+  %r0 = phi i32 [17, %preheader], [%u0, %loop]
+  %dstate = phi double [%start, %preheader], [%dnext, %loop]
+  %r1 = phi i32 [-7, %preheader], [%u1, %loop]
+  %rd = phi double [%start, %preheader], [%ud, %loop]
+  %p = getelementptr i32, ptr %a, i64 %iv
+  %x = load i32, ptr %p, align 4
+  %raw = xor i32 %prev, %x
+  %c = call i32 @scalar_helper(i32 %raw)
+  %dp = getelementptr double, ptr %fp, i64 %iv
+  %dx = load double, ptr %dp, align 8
+  %dnext = fadd double %dstate, %dx
+  %dc = fsub double %dstate, %dx
+  %u0 = add i32 %r0, %c
+  %u1 = add i32 %c, %r1
+  %ud = fadd double %rd, %dc
+  %next = add nuw i64 %iv, 1
+  %done = icmp eq i64 %next, %n
+  br i1 %done, label %producer.exit, label %loop, !dbg !15
+producer.exit:
+  %out.r0 = phi i32 [%u0, %loop]
+  %out.r1 = phi i32 [%u1, %loop]
+  %out.prev = phi i32 [%prev, %loop]
+  %out.state.next = phi i32 [%x, %loop]
+  %out.rd = phi double [%ud, %loop]
+  %out.dstate = phi double [%dstate, %loop]
+  %out.dnext = phi double [%dnext, %loop]
+  %out.dc = phi double [%dc, %loop]
+  %out.iv = phi i64 [%iv, %loop]
+  %out.next = phi i64 [%next, %loop]
+  %o0 = getelementptr i32, ptr %out, i64 0
+  store i32 %out.r0, ptr %o0, align 4
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %out.r1, ptr %o1, align 4
+  %o2 = getelementptr i32, ptr %out, i64 2
+  store i32 %out.prev, ptr %o2, align 4
+  %o3 = getelementptr i32, ptr %out, i64 3
+  store i32 -11, ptr %o3, align 4
+  %o4 = getelementptr i32, ptr %out, i64 4
+  store i32 %out.state.next, ptr %o4, align 4
+  %d0 = getelementptr double, ptr %dout, i64 0
+  store double %out.rd, ptr %d0, align 8
+  %d1 = getelementptr double, ptr %dout, i64 1
+  store double %out.dstate, ptr %d1, align 8
+  %d2 = getelementptr double, ptr %dout, i64 2
+  store double %out.dnext, ptr %d2, align 8
+  %d3 = getelementptr double, ptr %dout, i64 3
+  store double %out.dc, ptr %d3, align 8
+  %idx0 = getelementptr i64, ptr %indices, i64 0
+  store i64 %out.iv, ptr %idx0, align 8
+  %idx1 = getelementptr i64, ptr %indices, i64 1
+  store i64 %out.next, ptr %idx1, align 8
+  ret void
+bypass:
+  ret void
+}
+
+; REMARK: scalar-chunk-state.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 112, producer live-outs 8, chunked schedule, trip bound 65
+; REMARK-SAME: producer state carries 3
+; VF: scalar-chunk-state.c:42:3: scalar-IR fission producer VF 1
+; VF: scalar-chunk-state.c:42:3: scalar-IR fission consumer VF vscale x 4
+; REJECT: scalar-chunk-state.c:42:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; UNCHANGED-LABEL: define void @chunk_state_nested(
+; UNCHANGED: ret void
+; SCALAR-LABEL: define void @chunk_state_nested(
+; SCALAR: alloca [9 x i32]
+; SCALAR: alloca [9 x double]
+; SCALAR: scalar.fission.chunk:
+; SCALAR: %prev.chunk.carry = phi i32 [ %seed, %inner.ph ], [ %prev.chunk.backedge, %scalar.fission.chunk.latch ]
+; SCALAR: %older.chunk.carry = phi i32 [ %oldseed, %inner.ph ], [ %older.chunk.backedge, %scalar.fission.chunk.latch ]
+; SCALAR: %dstate.chunk.carry = phi double [ %dseed, %inner.ph ], [ %dstate.chunk.backedge, %scalar.fission.chunk.latch ]
+; SCALAR: %prev = phi i32 [ %prev.chunk.carry, %scalar.fission.producer.ph ], [ %state.next, %loop ]
+; SCALAR: %older = phi i32 [ %older.chunk.carry, %scalar.fission.producer.ph ], [ %prev, %loop ]
+; SCALAR: %dstate = phi double [ %dstate.chunk.carry, %scalar.fission.producer.ph ], [ %dnext, %loop ]
+; SCALAR: %dnext = fadd double %dstate, %dx
+; SCALAR: scalar.fission.consumer.ph:
+; SCALAR-DAG: %prev.fission.export = phi i32 [ %prev, %loop ]
+; SCALAR-DAG: %state.next.fission.export = phi i32 [ %state.next, %loop ]
+; SCALAR-DAG: %prev.chunk.backedge = phi i32 [ %state.next, %loop ]
+; SCALAR-DAG: %older.chunk.backedge = phi i32 [ %prev, %loop ]
+; SCALAR-DAG: %dstate.chunk.backedge = phi double [ %dnext, %loop ]
+; SCALAR-DAG: %dstate.fission.export = phi double [ %dstate, %loop ]
+; SCALAR-DAG: %dnext.fission.export = phi double [ %dnext, %loop ]
+; SCALAR: row.exit:
+; SCALAR: %out.prev = phi i32 [ %prev.fission.export, %scalar.fission.chunk.latch ]
+; SCALAR: ret void
+define void @chunk_state_nested(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
+                         ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !16 {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %inner.enter = and i1 %valid, %nonzero
+  %rows.valid = icmp ule i64 %rows, 4
+  %rows.nonzero = icmp ne i64 %rows, 0
+  %rows.enter = and i1 %rows.valid, %rows.nonzero
+  %enter = and i1 %inner.enter, %rows.enter
+  br i1 %enter, label %outer.ph, label %bypass
+outer.ph:
+  br label %outer
+outer:
+  %row = phi i64 [0, %outer.ph], [%row.next, %row.exit]
+  %carry0 = phi i32 [17, %outer.ph], [%out.r0, %row.exit]
+  %carry1 = phi i32 [-7, %outer.ph], [%out.r1, %row.exit]
+  %carryd = phi double [%start, %outer.ph], [%out.rd, %row.exit]
+  %seed = phi i32 [23, %outer.ph], [%out.state.next, %row.exit]
+  %oldseed = phi i32 [-11, %outer.ph], [%out.prev, %row.exit]
+  %dseed = phi double [%start, %outer.ph], [%out.dnext, %row.exit]
+  %input.base = mul nuw i64 %row, 65
+  %output.base = mul nuw i64 %row, 5
+  %double.base = mul nuw i64 %row, 4
+  %index.base = mul nuw i64 %row, 2
+  br label %inner.ph
+inner.ph:
+  br label %loop, !dbg !17
+loop:
+  %iv = phi i64 [0, %inner.ph], [%next, %loop]
+  %prev = phi i32 [%seed, %inner.ph], [%state.next, %loop]
+  %older = phi i32 [%oldseed, %inner.ph], [%prev, %loop]
+  %r0 = phi i32 [%carry0, %inner.ph], [%u0, %loop]
+  %dstate = phi double [%dseed, %inner.ph], [%dnext, %loop]
+  %r1 = phi i32 [%carry1, %inner.ph], [%u1, %loop]
+  %rd = phi double [%carryd, %inner.ph], [%ud, %loop]
+  %offset = add nuw i64 %input.base, %iv
+  %p = getelementptr i32, ptr %a, i64 %offset
+  %x = load i32, ptr %p, align 4
+  %state.next = add i32 %x, %older
+  %raw = xor i32 %prev, %state.next
+  %c = call i32 @scalar_helper(i32 %raw)
+  %dp = getelementptr double, ptr %fp, i64 %offset
+  %dx = load double, ptr %dp, align 8
+  %dnext = fadd double %dstate, %dx
+  %dc = fsub double %dnext, %dstate
+  %u0 = add i32 %r0, %c
+  %u1 = add i32 %c, %r1
+  %ud = fadd double %rd, %dc
+  %next = add nuw i64 %iv, 1
+  %done = icmp eq i64 %next, %n
+  br i1 %done, label %row.exit, label %loop, !dbg !17
+row.exit:
+  %out.r0 = phi i32 [%u0, %loop]
+  %out.r1 = phi i32 [%u1, %loop]
+  %out.prev = phi i32 [%prev, %loop]
+  %out.older = phi i32 [%older, %loop]
+  %out.state.next = phi i32 [%state.next, %loop]
+  %out.rd = phi double [%ud, %loop]
+  %out.dstate = phi double [%dstate, %loop]
+  %out.dnext = phi double [%dnext, %loop]
+  %out.dc = phi double [%dc, %loop]
+  %out.iv = phi i64 [%iv, %loop]
+  %out.next = phi i64 [%next, %loop]
+  %oi0 = add nuw i64 %output.base, 0
+  %o0 = getelementptr i32, ptr %out, i64 %oi0
+  store i32 %out.r0, ptr %o0, align 4
+  %oi1 = add nuw i64 %output.base, 1
+  %o1 = getelementptr i32, ptr %out, i64 %oi1
+  store i32 %out.r1, ptr %o1, align 4
+  %oi2 = add nuw i64 %output.base, 2
+  %o2 = getelementptr i32, ptr %out, i64 %oi2
+  store i32 %out.prev, ptr %o2, align 4
+  %oi3 = add nuw i64 %output.base, 3
+  %o3 = getelementptr i32, ptr %out, i64 %oi3
+  store i32 %out.older, ptr %o3, align 4
+  %oi4 = add nuw i64 %output.base, 4
+  %o4 = getelementptr i32, ptr %out, i64 %oi4
+  store i32 %out.state.next, ptr %o4, align 4
+  %di0 = add nuw i64 %double.base, 0
+  %d0 = getelementptr double, ptr %dout, i64 %di0
+  store double %out.rd, ptr %d0, align 8
+  %di1 = add nuw i64 %double.base, 1
+  %d1 = getelementptr double, ptr %dout, i64 %di1
+  store double %out.dstate, ptr %d1, align 8
+  %di2 = add nuw i64 %double.base, 2
+  %d2 = getelementptr double, ptr %dout, i64 %di2
+  store double %out.dnext, ptr %d2, align 8
+  %di3 = add nuw i64 %double.base, 3
+  %d3 = getelementptr double, ptr %dout, i64 %di3
+  store double %out.dc, ptr %d3, align 8
+  %ii0 = add nuw i64 %index.base, 0
+  %idx0 = getelementptr i64, ptr %indices, i64 %ii0
+  store i64 %out.iv, ptr %idx0, align 8
+  %ii1 = add nuw i64 %index.base, 1
+  %idx1 = getelementptr i64, ptr %indices, i64 %ii1
+  store i64 %out.next, ptr %idx1, align 8
+  %row.next = add nuw i64 %row, 1
+  %row.done = icmp eq i64 %row.next, %rows
+  br i1 %row.done, label %exit, label %outer
+exit:
+  ret void
+bypass:
+  ret void
+}
+
+!llvm.dbg.cu = !{!0}
+!llvm.module.flags = !{!2, !3}
+!0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: "test", isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly)
+!1 = !DIFile(filename: "scalar-chunk-state.c", directory: "/")
+!2 = !{i32 2, !"Dwarf Version", i32 4}
+!3 = !{i32 2, !"Debug Info Version", i32 3}
+!5 = !DISubroutineType(types: !6)
+!6 = !{}
+!10 = distinct !DISubprogram(name: "chunk_state_delay", scope: !1, file: !1, line: 10, type: !5, scopeLine: 10, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!11 = !DILocation(line: 12, column: 3, scope: !10)
+!12 = distinct !DISubprogram(name: "chunk_state_pair", scope: !1, file: !1, line: 20, type: !5, scopeLine: 20, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!13 = !DILocation(line: 22, column: 3, scope: !12)
+!14 = distinct !DISubprogram(name: "chunk_state_fp", scope: !1, file: !1, line: 30, type: !5, scopeLine: 30, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!15 = !DILocation(line: 32, column: 3, scope: !14)
+!16 = distinct !DISubprogram(name: "chunk_state_nested", scope: !1, file: !1, line: 40, type: !5, scopeLine: 40, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!17 = !DILocation(line: 42, column: 3, scope: !16)

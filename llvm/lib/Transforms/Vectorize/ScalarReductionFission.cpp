@@ -403,7 +403,16 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     }
     return Reduction{&Phi, Update, Merge, Contribution, ContributionOperand};
   };
-  bool RetainedState = false;
+  // Snapshot both edges before mutation. In particular, a backedge can name
+  // another retained PHI: all chunk carries must read the same final producer
+  // iteration, rather than successively substituting already updated state.
+  struct ProducerState {
+    PHINode *Phi;
+    Value *Start;
+    Value *Backedge;
+    PHINode *Carry = nullptr;
+  };
+  SmallVector<ProducerState, 4> RetainedState;
   for (PHINode &Phi : Header->phis()) {
     if (&Phi == IV)
       continue;
@@ -411,7 +420,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     if (!R) {
       if (!Phi.getType()->isSingleValueType() || Phi.getType()->isVectorTy())
         return Reject("scalar-unsupported-recurrence");
-      RetainedState = true;
+      RetainedState.push_back({&Phi, Phi.getIncomingValueForBlock(Preheader),
+                               Phi.getIncomingValueForBlock(Latch)});
       continue;
     }
     if (R->Merge) {
@@ -600,7 +610,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     // IV exits on equality may use the invariant operand as the actual N.
     // An affine endpoint or relational termination witness only bounds storage:
     // it must never reach the N-base arithmetic or replace original control.
-    if (L.getNumBlocks() != 1 || ParticipationArm || RetainedState ||
+    if (L.getNumBlocks() != 1 || ParticipationArm ||
         !CanonicalCount || !ScratchSize(1))
       return Reject("scalar-scratch-limit");
     if ((Compare->getPredicate() == ICmpInst::ICMP_EQ) !=
@@ -656,6 +666,9 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
            << ore::NV("ProducerRereadBytesPerIteration", 0)
            << ", duplicated producer instructions "
            << ore::NV("DuplicatedProducerInstructions", 0);
+    if (Chunked)
+      Remark << ", producer state carries "
+             << ore::NV("ProducerStateCarries", RetainedState.size());
     return Remark;
   });
 
@@ -700,6 +713,11 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       Carry->addIncoming(R.Phi->getIncomingValueForBlock(Preheader), Preheader);
       ChunkCarries[R.Phi] = Carry;
     }
+    for (ProducerState &S : RetainedState) {
+      S.Carry = CB.CreatePHI(S.Phi->getType(), 2,
+                            S.Phi->getName() + ".chunk.carry");
+      S.Carry->addIncoming(S.Start, Preheader);
+    }
     // The original exiting equality and finite, representable trip proof imply
     // N > 0 on the entering edge. On chunk entry 0 <= base < N, so
     // count = min(N-base, C) > 0 and base+count <= N cannot overflow.
@@ -713,6 +731,10 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     Preheader->getTerminator()->replaceSuccessorWith(Header, ChunkHeader);
     IV->replaceIncomingBlockWith(Preheader, ProducerPH);
     IV->setIncomingValueForBlock(ProducerPH, ChunkBase);
+    for (ProducerState &S : RetainedState) {
+      S.Phi->replaceIncomingBlockWith(Preheader, ProducerPH);
+      S.Phi->setIncomingValueForBlock(ProducerPH, S.Carry);
+    }
   }
   BasicBlock *ConsumerGuard =
       ParticipationArm
@@ -763,6 +785,20 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                              Value->getName() + ".fission.export",
                              ProducerExit->getFirstNonPHIIt());
     Forward->addIncoming(Value, Latch);
+  }
+  if (Chunked) {
+    // Forward each original backedge through the producer's dedicated exit.
+    // These PHIs dominate the consumer and ChunkLatch, and are themselves
+    // inside the chunk loop. No consumer-exit PHI, evaluation, or reread is
+    // needed. Keep original current/next-value exports independent: the value
+    // exported on final exit need not be the one that seeds the next chunk.
+    for (ProducerState &S : RetainedState) {
+      auto *Forward = PHINode::Create(
+          S.Phi->getType(), 1, S.Phi->getName() + ".chunk.backedge",
+          ProducerExit->getFirstNonPHIIt());
+      Forward->addIncoming(S.Backedge, Latch);
+      S.Carry->addIncoming(Forward, ChunkLatch);
+    }
   }
   for (const ProducerExport &E : ProducerExportEdges)
     E.ExitPhi->setIncomingValue(E.IncomingIndex,

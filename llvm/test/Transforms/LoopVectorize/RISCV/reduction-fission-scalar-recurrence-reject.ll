@@ -522,9 +522,17 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: scalar-IR reduction fission rejected: {{non-constant-trip-count|scalar-scratch-limit}}
+; Despite its historical name this canonical nonzero equality loop is finite,
+; just like reject_unbounded in scalar-ir-reject.ll. The existing count proof
+; is unchanged; checked chunk storage no longer rejects its retained state.
+; Huge counts are IR/analysis coverage only, never executed by the checker.
+; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 5461, scratch bytes 65536, producer live-outs 0, chunked schedule, trip bound {{[0-9]+}}
+; REASON-SAME: producer state carries 4
 ; CHECK-LABEL: define void @recurrence_unbounded(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [5461 x i32]
+; CHECK: alloca [5461 x double]
+; CHECK: %prev.chunk.carry = phi i32 [ 23, %preheader ], [ %prev.chunk.backedge, %scalar.fission.chunk.latch ]
+; CHECK: %older.chunk.backedge = phi i32 [ %prev, %loop ]
 ; CHECK: ret void
 define void @recurrence_unbounded(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !38 {
@@ -571,9 +579,14 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; Intentionally positive: the 5462-trip bound now uses C=5461 and four
+; retained-state carries, without exceeding the existing 65536-byte ceiling.
+; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 5461, scratch bytes 65536, producer live-outs 0, chunked schedule, trip bound 5462
+; REASON-SAME: producer state carries 4
 ; CHECK-LABEL: define void @recurrence_over_capacity(
-; CHECK-NOT: scalar.fission
+; CHECK: %prev.chunk.carry = phi i32 [ 23, %preheader ], [ %prev.chunk.backedge, %scalar.fission.chunk.latch ]
+; CHECK: %older.chunk.carry = phi i32 [ 11, %preheader ], [ %older.chunk.backedge, %scalar.fission.chunk.latch ]
+; CHECK: %older.chunk.backedge = phi i32 [ %prev, %loop ]
 ; CHECK: ret void
 define void @recurrence_over_capacity(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !40 {

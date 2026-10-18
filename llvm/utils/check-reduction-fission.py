@@ -3637,6 +3637,228 @@ def check_chunk_function(ir, name, capacity, evl=False, scalar=False, probe=Fals
     return body
 
 
+
+STATE_CHUNK_FUNCTIONS = ('chunk_state_delay', 'chunk_state_pair',
+                         'chunk_state_fp', 'chunk_state_nested')
+
+
+def check_state_chunk_remarks(remarks, name, capacity, size, vectorized):
+    mode = STATE_CHUNK_FUNCTIONS.index(name)
+    pair = mode in (1, 3)
+    loc = f'scalar-chunk-state.c:{12 + 10 * mode}:3:'
+    selection = (rf'{re.escape(loc)} split scalar-IR reduction loop;[^\n]*'
+                 rf'scratch capacity {capacity}, scratch bytes {size}, '
+                 rf'producer live-outs {8 if pair else 7}, chunked schedule, trip bound 65, '
+                 r'scratch store bytes/iteration 12, scratch load bytes/iteration 12, '
+                 r'producer reread bytes/iteration 0, duplicated producer instructions 0, '
+                 rf'producer state carries {3 if pair else 2}\b')
+    assert len(re.findall(selection, remarks)) == 1, (name, remarks)
+    # Independently observed roles: the scalar helper keeps the producer scalar.
+    for role, vf in [('producer', '1'),
+                     ('consumer', 'vscale x 4' if vectorized else '1')]:
+        assert f'{loc} scalar-IR fission {role} VF {vf}\n' in remarks, (name, remarks)
+
+
+def check_state_chunk(ir, original, name, capacity, scalar=False, evl=False, probe=False):
+    """Fixture-scoped exact state/edge certificate, independent of C formulas.
+
+    Retained operations must be the original instruction sequence. Every carry
+    forwards the original backedge (including prev -> older simultaneously);
+    original current/next exports remain separate. Scalar results are also
+    certified before LV changes consumer exits. Execution covers actual LV code.
+    """
+    body = function_definition(ir, name)
+    blocks = loop_blocks(body)
+    source = loop_blocks(function_definition(original, name))
+    mode = STATE_CHUNK_FUNCTIONS.index(name)
+    pair, nested = mode in (1, 3), mode == 3
+    ph, exit = ('inner.ph', 'row.exit') if nested else ('preheader', 'producer.exit')
+    check_chunk_controller(body, capacity, preheader=ph, exit=exit)
+    starts = (['%seed', '%oldseed', '%dseed'] if nested else
+              ['23', '-11', '%start'])
+    states = [('prev', 'i32', starts[0], 'state.next' if pair else 'x')]
+    if pair:
+        states += [('older', 'i32', starts[1], 'prev')]
+    states += [('dstate', 'double', starts[2], 'dnext')]
+    for state, ty, start, backedge in states:
+        for label, instruction in [
+                ('scalar.fission.chunk',
+                 f'%{state}.chunk.carry = phi {ty} [ {start}, %{ph} ], '
+                 f'[ %{state}.chunk.backedge, %scalar.fission.chunk.latch ]'),
+                ('loop', f'%{state} = phi {ty} [ %{state}.chunk.carry, '
+                 f'%scalar.fission.producer.ph ], [ %{backedge}, %loop ]'),
+                ('scalar.fission.consumer.ph',
+                 f'%{state}.chunk.backedge = phi {ty} [ %{backedge}, %loop ]')]:
+            require_chunk_instruction(body, label, instruction)
+
+    # Keep original arithmetic/flags/operand order, loads and calls. Check
+    # sequence, not just membership, and do not normalize FP flags.
+    retained = []
+    for instruction in chunk_instructions(source['loop']):
+        if (' = phi ' in instruction or instruction.startswith('br ') or
+                re.match(r'%(u0|u1|ud|done) = ', instruction)):
+            continue
+        require_chunk_instruction(body, 'loop', instruction)
+        retained.append(instruction.split(' = ')[0])
+    actual = chunk_instructions(blocks['loop'])
+    positions = [next(i for i, instruction in enumerate(actual)
+                      if instruction.startswith(value + ' = ')) for value in retained]
+    assert positions == sorted(positions), (name, positions)
+    for instruction in [
+            '%iv = phi i64 [ %fission.chunk.base, %scalar.fission.producer.ph ], [ %next, %loop ]',
+            '%fission.producer.ordinal = phi i64 [ 0, %scalar.fission.producer.ph ], '
+            '[ %fission.producer.next, %loop ]',
+            '%fission.producer.next = add nuw i64 %fission.producer.ordinal, 1',
+            '%fission.producer.more = icmp ne i64 %fission.producer.next, %fission.chunk.count',
+            'br i1 %fission.producer.more, label %loop, label %scalar.fission.consumer.ph']:
+        require_chunk_instruction(body, 'loop', instruction)
+    assert body.count('alloca ') == 2, body
+    assert body.count('call i32 @scalar_helper(') == 1, body
+    assert blocks['loop'].count('load ') == 2 and blocks['loop'].count('store ') == 2, body
+    assert '<vscale x' not in blocks['loop'] and 'freeze ' not in body, body
+    for ty, value in [('i32', 'c'), ('double', 'dc')]:
+        slot = re.findall(rf'(%[-\w.$]+) = alloca \[{capacity} x {ty}\]', body)
+        assert len(slot) == 1, body
+        addresses = re.findall(
+            rf'(%[-\w.$]+) = getelementptr inbounds \[{capacity} x {ty}\], '
+            rf'ptr {re.escape(slot[0])}, i32 0, i64 %fission.producer.ordinal',
+            blocks['loop'])
+        assert len(addresses) == 1, body
+        assert f'store {ty} %{value}, ptr {addresses[0]},' in blocks['loop'], body
+
+    # Derive final export edges from exact original IR, never a last-value
+    # surrogate. Same-type swaps and current/next conflation must fail.
+    for instruction in chunk_instructions(source[exit]):
+        match = re.fullmatch(r'(%out\.[-\w.$]+) = phi (i32|i64|double) '
+                             r'\[\s*(%[-\w.$]+), %loop\s*\]', instruction)
+        if not match or match[1] in ('%out.r0', '%out.r1', '%out.rd'):
+            continue
+        out, ty, value = match.groups()
+        require_chunk_instruction(body, 'scalar.fission.consumer.ph',
+                                  f'{value}.fission.export = phi {ty} [ {value}, %loop ]')
+        require_chunk_instruction(body, exit, f'{out} = phi {ty} '
+                                  f'[ {value}.fission.export, %scalar.fission.chunk.latch ]')
+    # The enclosing recurrence consumes next prev, previous prev, next FP and
+    # final reductions through original row-exit LCSSA. No consumer state seed.
+    if nested:
+        for instruction in chunk_instructions(source['outer']):
+            instruction = re.sub(r'\[\s*([^\]]*?)\s*\]', r'[ \1 ]', instruction)
+            require_chunk_instruction(body, 'outer', instruction)
+    check_loop_provenance(ir, blocks['loop'], 'producer')
+    check_loop_provenance(ir, blocks['scalar.fission.chunk.latch'], 'stage')
+    vectors = [label for label in blocks if label.startswith('vector.body')]
+    assert len(vectors) <= 1 and (not scalar or not vectors), body
+    if scalar:
+        initial = ['%carry0', '%carry1', '%carryd'] if nested else ['17', '-7', '%start']
+        loads = {}
+        consumer = blocks['scalar.fission.consumer.body']
+        for ty in ('i32', 'double'):
+            slot = re.findall(rf'(%[-\w.$]+) = alloca \[{capacity} x {ty}\]', body)[0]
+            address = re.findall(
+                rf'(%[-\w.$]+) = getelementptr inbounds \[{capacity} x {ty}\], '
+                rf'ptr {re.escape(slot)}, i32 0, i64 %fission.consumer.iv', consumer)
+            assert len(address) == 1, consumer
+            values = re.findall(rf'(%[-\w.$]+) = load {ty}, ptr {re.escape(address[0])},', consumer)
+            assert len(values) == 1, consumer
+            loads[ty] = values[0]
+        for r, u, ty, start in zip(('r0', 'r1', 'rd'), ('u0', 'u1', 'ud'),
+                                   ('i32', 'i32', 'double'), initial):
+            require_chunk_instruction(body, 'scalar.fission.consumer.body',
+                                      f'%{r}.consume = phi {ty} [ %{r}.chunk.carry, '
+                                      f'%scalar.fission.consumer.ph ], [ %{u}.consume, '
+                                      '%scalar.fission.consumer.body ]')
+            require_chunk_instruction(body, 'scalar.fission.chunk',
+                                      f'%{r}.chunk.carry = phi {ty} [ {start}, %{ph} ], '
+                                      f'[ %{r}.chunk.result, %scalar.fission.chunk.latch ]')
+            require_chunk_instruction(body, 'scalar.fission.chunk.latch',
+                                      f'%{r}.chunk.result = phi {ty} [ %{u}.consume, '
+                                      '%scalar.fission.consumer.body ]')
+            require_chunk_instruction(body, exit, f'%out.{r} = phi {ty} '
+                                      f'[ %{r}.chunk.result, %scalar.fission.chunk.latch ]')
+        for instruction in [
+                f'%u0.consume = add i32 %r0.consume, {loads["i32"]}',
+                f'%u1.consume = add i32 {loads["i32"]}, %r1.consume',
+                f'%ud.consume = fadd double %rd.consume, {loads["double"]}']:
+            require_chunk_instruction(body, 'scalar.fission.consumer.body', instruction)
+    if vectors:
+        vector = blocks[vectors[0]]
+        check_loop_provenance(ir, vector, 'consumer')
+        assert ('@llvm.vp.reduce.fadd.nxv4f64' if evl else
+                '@llvm.vector.reduce.fadd.nxv4f64') in vector, vector
+        assert '@llvm.vector.reduce.add.nxv4i32' in body, body
+        if not evl:
+            assert vector.count('load <vscale x 4 x i32>') == 1, vector
+            assert vector.count('load <vscale x 4 x double>') == 1, vector
+    if 'scalar.fission.consumer.body' in blocks:
+        check_loop_provenance(ir, blocks['scalar.fission.consumer.body'], 'consumer')
+    if not probe:
+        return body
+
+    def insert(label, instructions, at_end=False):
+        nonlocal body
+        code = loop_blocks(body)[label]
+        if at_end:
+            changed, count = re.subn(r'(?=^  br )', lambda _: instructions, code, flags=re.M)
+        else:
+            changed, count = re.subn(
+                r'\A((?:\s*%[-\w.$]+ = phi [^\n]*\n)*)',
+                lambda m: m[0] + instructions, code)
+        assert count == 1, (name, label, code)
+        body = body.replace(code, changed, 1)
+
+    oldcarry = '%older.chunk.carry' if pair else '-11'
+    insert('scalar.fission.chunk',
+           '  call void @record_state_chunk_begin(i64 %fission.chunk.base, '
+           'i64 %fission.chunk.count, i32 %prev.chunk.carry, '
+           f'i32 {oldcarry}, double %dstate.chunk.carry)\n', True)
+    insert('loop', '  call void @record_state_chunk_producer(i64 %iv, '
+                   'i64 %fission.producer.ordinal)\n')
+    oldexport = '%older.fission.export' if pair else '-11'
+    nextexport = '%state.next.fission.export' if pair else '%x.fission.export'
+    insert('scalar.fission.chunk.latch',
+           '  call void @record_state_chunk_end(i32 %prev.fission.export, '
+           f'i32 {oldexport}, i32 {nextexport}, double %dstate.fission.export, '
+           'double %dnext.fission.export)\n')
+    for label in vectors:
+        insert(label, '  call void @record_chunk_vector()\n')
+    if 'scalar.fission.consumer.body' in blocks:
+        insert('scalar.fission.consumer.body', '  call void @record_chunk_tail()\n')
+    return body
+
+
+
+def state_chunk_execution_counts(stdout, configurations):
+    """Completed stdout only; planned rows are not execution evidence."""
+    completed = {}
+    pattern = (r'^State chunks (\S+): comparisons=(\d+) producer=(\d+) consumer=(\d+) '
+               r'chunks=(\d+) vector=(\d+) tail=(\d+) complete=(\d+) partial=(\d+) '
+               r'zero=(\d+) multi=(\d+)$')
+    fields = ('comparisons', 'producer', 'consumer', 'chunks', 'vector', 'tail',
+              'complete', 'partial', 'zero', 'multi')
+    for match in re.finditer(pattern, stdout, re.M):
+        name = match[1]
+        assert name in configurations and name not in completed, name
+        mode, capacity, lanes = configurations[name]
+        nested = mode == 3
+        row_sum, active_rows = (7, 3) if nested else (1, 1)
+        iterations = 16 * row_sum * sum(range(1, 66))
+        full = 16 * row_sum * sum(n // capacity for n in range(1, 66))
+        partial = 16 * row_sum * sum(n % capacity != 0 for n in range(1, 66))
+        vectors = 16 * row_sum * sum(
+            (n // capacity) * (capacity // lanes) + (n % capacity) // lanes
+            for n in range(1, 66)) if lanes else 0
+        comparisons = 68 * 16 * (6 if nested else 1)
+        expected = dict(comparisons=comparisons, producer=iterations, consumer=iterations,
+                        chunks=full + partial, vector=vectors, tail=iterations - vectors * lanes,
+                        complete=full, partial=partial, zero=comparisons - 65 * 16 * active_rows,
+                        multi=(65 - capacity) * 16 * active_rows)
+        observed = dict(zip(fields, map(int, match.groups()[1:])))
+        assert observed == expected, (name, observed, expected)
+        completed[name] = observed
+    assert set(completed) == set(configurations), (set(completed), set(configurations))
+    return completed
+
+
 def check_integration(ir, original, name, evl, probe=False):
     """Check the small mixed integration module before adding path probes."""
     body = function_definition(ir, name)
@@ -4616,6 +4838,96 @@ def check(args, work):
                                     probes='every chunk begin/end, exact count and local/global producer indices, '
                                            'complete producer before consumer, exact vector/tail lanes'))
 
+
+    # Canonical retained producer state across bounded chunks. This matrix is
+    # additional to every inherited matrix. Scalar configurations execute too;
+    # EVL remains uninstrumented RVV codegen-only evidence.
+    state_chunk_rows = []
+    state_chunk_host_configurations = {}
+    source = (tests / 'reduction-fission-scalar-chunk-state.ll').read_text()
+    reference, references = rename_execution_functions(
+        source, {name: f'ref_{name}' for name in STATE_CHUNK_FUNCTIONS}, used_symbols)
+    declarations.extend(export_reference_declarations(source, reference, references))
+    compile_ir('reference_state_chunks', reference)
+    for capacity, ceiling in ((1, 16), (9, 112), (16, 192)):
+        for repeated, relaxed, kind in product((False, True), (False, True),
+                                                ('scalar', 'tail', 'evl')):
+            scalar, evl = kind == 'scalar', kind == 'evl'
+            flags = [flag for flag in export_flags if not flag.startswith(
+                ('-passes=', '-force-vector-width=', '-force-vector-interleave=',
+                 '-scalable-vectorization='))]
+            options = flags + [
+                '-passes=' + 'loop-vectorize,' * (2 if repeated else 1) +
+                'verify<domtree>,verify<loops>,verify<scalar-evolution>',
+                f'-vplan-reduction-fission-max-scratch-bytes={ceiling}',
+                '-force-vector-width=' + ('1' if scalar else '4'),
+                '-force-vector-interleave=' + ('0' if scalar else '1'),
+                '-scalable-vectorization=' + ('off' if scalar else 'always')]
+            if scalar:
+                options += ['-force-target-max-scalar-interleave=1']
+            if relaxed:
+                options += ['-vplan-reduction-fission-allow-fp-reordering']
+            if kind == 'tail':
+                options += ['-tail-folding-policy=dont-fold-tail',
+                            '-enable-epilogue-vectorization=false']
+            result = run([opt, *options], input=source)
+            tag = (f'state_chunks_c{capacity}_lv{2 if repeated else 1}_'
+                   f'{"reordered" if relaxed else "strict"}_{kind}')
+            (work / f'{tag}.rvv.ll').write_text(result.stdout)
+            (work / f'{tag}.remarks').write_text(result.stderr)
+            assert result.stderr.count('split scalar-IR reduction loop;') == 4, result.stderr
+            instrumented, widths = result.stdout, {}
+            for name in STATE_CHUNK_FUNCTIONS:
+                body = function_definition(result.stdout, name)
+                vectorized = bool(re.search(r'^vector\.body[\w.$-]*:', body, re.M))
+                assert vectorized or scalar or capacity == 1, body
+                actual_widths = set(map(int, re.findall(
+                    r'<vscale x (\d+) x (?:i32|double)>', body)))
+                assert actual_widths == ({4} if vectorized else set()), (name, actual_widths)
+                widths[name] = next(iter(actual_widths)) if vectorized else 0
+                check_state_chunk_remarks(result.stderr, name, capacity, ceiling, vectorized)
+                checked = check_state_chunk(result.stdout, source, name, capacity,
+                                            scalar=scalar, evl=evl, probe=not evl)
+                instrumented = instrumented.replace(body, checked, 1)
+            run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
+                 '-o', str(work / f'{tag}.s')], input=result.stdout)
+            record = dict(fixture='scalar-chunk-state', capacity=capacity, scratch_bytes=ceiling,
+                          options=options, policy='reordered' if relaxed else 'strict',
+                          lv_invocations=2 if repeated else 1, kind=kind,
+                          producer_vf=1, consumer_vfs=widths, producer_carries=[2, 3, 2, 3],
+                          logical_store_bytes_per_iteration=12, logical_load_bytes_per_iteration=12,
+                          rereads=0, duplicated_operations=0, added_runtime_guards=0)
+            if evl:
+                records.append(dict(record, executed=False,
+                                    validation='uninstrumented RVV machine verification; no target execution'))
+                continue
+            instrumented += (
+                '\ndeclare void @record_state_chunk_begin(i64, i64, i32, i32, double)\n'
+                'declare void @record_state_chunk_end(i32, i32, i32, double, double)\n'
+                'declare void @record_state_chunk_producer(i64, i64)\n'
+                'declare void @record_chunk_vector()\n'
+                'declare void @record_chunk_tail()\n')
+            # Validate the actual instrumented scalable module before host
+            # adaptation. Verification is distinct from compilation/execution.
+            run([opt, '-passes=verify', '-disable-output'], input=instrumented)
+            (work / f'{tag}.instrumented.ll').write_text(instrumented)
+            for scale in ((1,) if scalar else args.vscales):
+                fixed, names = rename_execution_functions(
+                    specialize(instrumented, scale),
+                    {name: f'{name}_{tag}_s{scale}' for name in STATE_CHUNK_FUNCTIONS}, used_symbols)
+                for mode, function in enumerate(STATE_CHUNK_FUNCTIONS):
+                    name = names[function]
+                    declarations.append(f'extern ExportFn {name};')
+                    state_chunk_rows.append(f'{{"{name}", {name}, {references[function]}, '
+                                            f'{mode}, {capacity}, {widths[function] * scale}}}')
+                    state_chunk_host_configurations[name] = (
+                        mode, capacity, widths[function] * scale)
+                compile_ir(f'{tag}_s{scale}', fixed)
+                records.append(dict(record, vscale=scale, execution='host fixed-vscale, not RVV',
+                                    comparison='exact original IR and independent nonchunked C oracle',
+                                    probes='chunk entry/exit state, exact producer/global/local and consumer lanes'))
+
+
     # Vectorizable AoS producer at the old dispatch scratch boundary. Keep
     # the entire inherited full-trip/exports/chunk matrices above intact.
     source = keep_functions((tests / 'reduction-fission-dispatch.ll').read_text(),
@@ -5021,6 +5333,7 @@ def check(args, work):
                       ('ACYCLIC_BOUNDS', acyclic_bound_rows), ('AFFINE', affine_rows),
                       ('EXPORTS', export_rows),
                       ('CHUNKS', chunk_rows),
+                      ('STATE_CHUNKS', state_chunk_rows),
                       ('AOS_CHUNKS', aos_chunk_rows),
                       ('SHORT_INT', short_int_rows), ('SHORT_FP', short_fp_rows),
                       ('FIXED_CALL', fixed_call_rows),
@@ -5039,6 +5352,8 @@ def check(args, work):
          '-lm', '-o', executable])
     result = run([executable])
     print(result.stdout, end='')
+    state_chunk_execution = state_chunk_execution_counts(
+        result.stdout, state_chunk_host_configurations)
     dispatch_execution = {}
     for match in re.finditer(r'^Dispatch (\S+): comparisons=(\d+) aliases=(\d+) bypasses=(\d+) '
                              r'producer-vector=(\d+) producer-tail=(\d+) '
@@ -5065,6 +5380,24 @@ def check(args, work):
         'host_triple': triple, 'cases': records, 'result': result.stdout,
         'dispatch_execution': dispatch_execution,
         'state_cfg_focused_execution': state_cfg_execution,
+        'state_chunk_execution': state_chunk_execution,
+        'state_chunks': {
+            'functions': STATE_CHUNK_FUNCTIONS, 'capacities': [1, 9, 16],
+            'scratch_bytes': [16, 112, 192], 'producer_carries': [2, 3, 2, 3],
+            'counts': list(range(67)) + [2**64 - 1],
+            'rows': [0, 1, 2, 4, 5, 2**64 - 1],
+            'planned_configurations': 48 + 48 * len(args.vscales),
+            'planned_comparisons': 9792 * 12 * (1 + len(args.vscales)),
+            'completed_configurations': len(state_chunk_execution),
+            'completed_comparisons': sum(c['comparisons'] for c in state_chunk_execution.values()),
+            'verification': 'instrumented scalable modules verified; uninstrumented RVV machine verified',
+            'execution': 'original/transformed/independent C; scalar and fixed-vscale vector/tail, not RVV',
+            'policies': ['strict', 'explicit fission FP reordering only'],
+            'lv_invocations': [1, 2], 'input_rereads': 0,
+            'logical_store_bytes_per_iteration': 12, 'logical_load_bytes_per_iteration': 12,
+            'checks': 'per-chunk simultaneous carry and separate current/next state, exact stage '
+                      'iterations, entries, full/partial chunks, row exports, aliases and canaries',
+        },
         'coverage_mapping': {
             'vplan_head': '5829f993afeabaabca2dd8e728c5cc637a56ea13',
             'scalar_head': '16d3d9df9d01e0a24000ccf672293ddff87d1fde',

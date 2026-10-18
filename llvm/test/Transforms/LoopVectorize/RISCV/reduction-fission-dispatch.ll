@@ -26,9 +26,9 @@
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.limit -o /dev/null
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=519 -S %s -o %t.limit.scalar
 ; RUN: FileCheck %s --check-prefix=LIMIT-SCALAR < %t.limit.scalar
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=259 -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.retained.limit 2> %t.retained.limit.remarks
+; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=259 -pass-remarks=vplan-reduction-fission -S %s -o %t.retained.limit 2> %t.retained.limit.remarks
 ; RUN: FileCheck %s --check-prefix=RETAINED-LIMIT < %t.retained.limit
-; RUN: FileCheck %s --check-prefix=RETAINED-REJECT < %t.retained.limit.remarks
+; RUN: FileCheck %s --check-prefix=RETAINED-CHUNK < %t.retained.limit.remarks
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 -S %s -o %t.retained.exact
 ; RUN: FileCheck %s --check-prefix=RETAINED-EXACT < %t.retained.exact
 ;
@@ -68,19 +68,23 @@
 ; SELECTED-COUNT-4: : split
 ; SELECTED-NOT: : split
 ;
-; Retained state cannot be chunked to fit 259 bytes. Exactly 260 admits the
-; full stream. Keep the state update and its exact exported result in scalar
-; IR as well as checking actual vectorized stages and their two outputs.
-; RETAINED-REJECT: dispatch.c:10:5: scalar-IR reduction fission rejected: scalar-scratch-limit
-; RETAINED-REJECT: dispatch.c:20:5: scalar-IR reduction fission rejected: scalar-scratch-limit
+; Intentional change: 259 bytes admits C=64 with a scalar XOR carry. Exactly
+; 260 still admits the full stream. Both preserve the exact exported XOR.
+; RETAINED-CHUNK: dispatch.c:10:5: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256, producer live-outs 1, chunked schedule
+; RETAINED-CHUNK-SAME: producer state carries 1
+; RETAINED-CHUNK: dispatch.c:20:5: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256, producer live-outs 1, chunked schedule
+; RETAINED-CHUNK-SAME: producer state carries 1
 ; RETAINED-LIMIT-LABEL: define void @interleave2(
-; RETAINED-LIMIT-NOT: fission
+; RETAINED-LIMIT: %bits.chunk.carry = phi i32 [ 23, %preheader ], [ %bits.chunk.backedge, %scalar.fission.chunk.latch ]
+; RETAINED-LIMIT: %bits = phi i32 [ %bits.chunk.carry, %scalar.fission.producer.ph ], [ %updated.bits, %loop ]
+; RETAINED-LIMIT: %updated.bits = xor i32 %bits, %term
+; RETAINED-LIMIT-DAG: %updated.bits.fission.export = phi i32 [ %updated.bits, %loop ]
+; RETAINED-LIMIT-DAG: %bits.chunk.backedge = phi i32 [ %updated.bits, %loop ]
 ; RETAINED-LIMIT: ret void
-; RETAINED-LIMIT-NOT: fission
 ; RETAINED-LIMIT-LABEL: define void @interleave3(
-; RETAINED-LIMIT-NOT: fission
+; RETAINED-LIMIT: %bits.chunk.carry = phi i32 [ 23, %preheader ], [ %bits.chunk.backedge, %scalar.fission.chunk.latch ]
+; RETAINED-LIMIT: %bits.chunk.backedge = phi i32 [ %updated.bits, %loop ]
 ; RETAINED-LIMIT: ret void
-; RETAINED-LIMIT-NOT: fission
 ; RETAINED-LIMIT-LABEL: define void @interleave2_ordered(
 ; RETAINED-EXACT-LABEL: define void @interleave2(
 ; RETAINED-EXACT: %scalar.fission.scratch = alloca [65 x i32]
