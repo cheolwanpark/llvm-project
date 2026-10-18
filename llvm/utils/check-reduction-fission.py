@@ -72,6 +72,97 @@ def scalar_consumer(body, name):
     return parts
 
 
+def check_compact_count(producer, consumer, name, evl):
+    # These fixtures have one i64 compact counter and one latch. SCEV can
+    # forward the single-input LCSSA export to its incoming latch value when
+    # expanding the consumer trip count. Accept precisely those two values,
+    # after checking their linkage; an arbitrary occurrence of the export in
+    # the consumer says nothing about the bound actually used by its control.
+    def require(pattern, text):
+        match = re.search(pattern, text, re.M)
+        assert match, f'@{name}: compact count provenance: {pattern}\n{text}'
+        return match
+
+    def block(text, label):
+        return require(rf'^{re.escape(label)}:[^\n]*\n'
+                       r'((?s:.*?))(?=^[\w.$-]+:|^}|\Z)', text)[1]
+
+    def branch(text, condition, on_true, on_false):
+        require(rf'^  br i1 {re.escape(condition)}, label %{re.escape(on_true)}, '
+                rf'label %{re.escape(on_false)}(?:, ![^\n]*)?$', text)
+
+    counter = '%fission.participating'
+    merged, exported = counter + '.merge', counter + '.count'
+    header = 'inner' if name == 'compact_nested' else 'loop'
+    preheader = 'inner.ph' if name == 'compact_nested' else 'preheader'
+
+    def phi_inputs(text, value):
+        line = require(rf'^  {re.escape(value)} = phi i64 (\[[^\n]+)', text)[1]
+        return re.findall(r'\[ ([^,\]]+), (%[-\w.$]+) \]', line)
+
+    assert phi_inputs(block(producer, header), counter) == [
+        ('0', '%' + preheader), (merged, '%latch')], producer
+    assert sorted(phi_inputs(block(producer, 'latch'), merged)) == sorted([
+        (counter + '.next', '%left'),
+        (counter, '%' + ('right' if name in ('compact_diamond', 'compact_nested')
+                         else header))]), producer
+    require(r'^  %fission\.participating\.next = add nuw i64 '
+            r'%fission\.participating, 1(?:, ![^\n]*)?$', block(producer, 'left'))
+    guard = block(producer, 'scalar.fission.consumer.guard')
+    assert phi_inputs(guard, exported) == [(merged, '%latch')], guard
+    counts = '(?:' + '|'.join(map(re.escape, (merged, exported))) + ')'
+    require(rf'^  %fission\.empty = icmp eq i64 {counts}, 0$', guard)
+    branch(guard, '%fission.empty', 'scalar.fission.consumer.exit',
+           'scalar.fission.consumer.ph')
+
+    starts = {
+        'compact_triangle': [('r0', 'i32', '17'), ('r1', 'i32', '-7'),
+                             ('rd', 'double', '%start'), ('rf', 'float', '%fstart')],
+        'compact_diamond': [('r0', 'i32', '17'), ('r1', 'i32', '-7'),
+                            ('rd', 'double', '%start'), ('rf', 'float', '%fstart')],
+        'compact_integer': [('sum', 'i64', '%initial'), ('sum2', 'i64', '0')],
+        'compact_nested': [('sum', 'i32', '%carry'), ('dsum', 'double', '%dcarry')],
+    }
+    exit_block = block(consumer, 'scalar.fission.consumer.exit')
+    for value, ty, start in starts[name]:
+        require(rf'^  %{value}\.result = phi {ty} \[ {re.escape(start)}, '
+                r'%scalar\.fission\.consumer\.guard \], '
+                r'\[ %[-\w.$]+, %scalar\.fission\.consumer\.loopexit \]', exit_block)
+
+    vector = block(consumer, 'vector.body')
+    if evl:
+        require(rf'^  %avl = phi i64 \[ {counts}, %vector\.ph \], '
+                r'\[ %avl\.next, %vector\.body \]', vector)
+        length = require(r'^  (%[-\w.$]+) = call i32 '
+                         r'@llvm\.experimental\.get\.vector\.length\.i64'
+                         r'\(i64 %avl, i32 4, i1 true\)', vector)[1]
+        step = require(rf'^  (%[-\w.$]+) = zext i32 {re.escape(length)} to i64', vector)[1]
+        require(rf'^  %avl\.next = sub nuw i64 %avl, {re.escape(step)}(?:, ![^\n]*)?$', vector)
+        for line in vector.splitlines():
+            if re.search(r'@llvm\.vp\.(?:load|reduce\.fadd)\.', line):
+                require(rf', i32 {re.escape(length)}\)(?:, ![^\n]*)?$', line)
+        done = require(r'^  (%[-\w.$]+) = icmp eq i64 %avl\.next, 0(?:, ![^\n]*)?$', vector)[1]
+        branch(vector, done, 'middle.block', 'vector.body')
+    else:
+        # Check the vector bound's rounding input, its bypass/tail checks, and
+        # the scalar tail's terminating bound. Incidental/dead uses do not count.
+        require(rf'^  %min\.iters\.check = icmp ult i64 {counts}, %[-\w.$]+', consumer)
+        branch(consumer, '%min.iters.check', 'scalar.ph', 'vector.ph')
+        rounding = block(consumer, 'vector.ph')
+        require(rf'^  %n\.mod\.vf = urem i64 {counts}, %[-\w.$]+', rounding)
+        require(rf'^  %n\.vec = sub i64 {counts}, %n\.mod\.vf(?:, ![^\n]*)?$', rounding)
+        done = require(r'^  (%[-\w.$]+) = icmp eq i64 %[-\w.$]+, %n\.vec(?:, ![^\n]*)?$', vector)[1]
+        branch(vector, done, 'middle.block', 'vector.body')
+        middle = block(consumer, 'middle.block')
+        require(rf'^  %cmp\.n = icmp eq i64 {counts}, %n\.vec(?:, ![^\n]*)?$', middle)
+        branch(middle, '%cmp.n', 'scalar.fission.consumer.loopexit', 'scalar.ph')
+        tail = block(consumer, 'scalar.fission.consumer.body')
+        require(r'^  %fission\.consumer\.more = icmp ne i64 '
+                rf'%fission\.consumer\.next, {counts}(?:, ![^\n]*)?$', tail)
+        branch(tail, '%fission.consumer.more', 'scalar.fission.consumer.body',
+               'scalar.fission.consumer.loopexit')
+
+
 def check_scalar_function(ir, name, evl, probe=False, fixed_narrow=False):
     body = function_definition(ir, name)
     producer, consumer = scalar_consumer(body, name)
@@ -118,11 +209,7 @@ def check_scalar_function(ir, name, evl, probe=False, fixed_narrow=False):
         assert 'store ' not in header + rest, producer
         assert active.count('store ') == (1 if name == 'compact_integer' else
                                           2 if name == 'compact_nested' else 3), active
-        assert ('%fission.empty = icmp eq i64 %fission.participating.count, 0'
-                in producer), producer
-        assert ('br i1 %fission.empty, label %scalar.fission.consumer.exit, '
-                'label %scalar.fission.consumer.ph') in producer, producer
-        assert 'fission.participating.count' in consumer, consumer
+        check_compact_count(producer, consumer, name, evl)
         if name in ('compact_triangle', 'compact_diamond'):
             assert 'sdiv i32 840, %x' in active, active
             assert 'load double, ptr %dp' in active, active

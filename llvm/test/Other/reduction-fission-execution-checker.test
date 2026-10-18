@@ -1,5 +1,5 @@
 # RUN: split-file %s %t
-# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py %t/functions.ll
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py %t/functions.ll %t/compact-evl.ll
 
 # Parsing and checker boundaries only; transformed execution is exercised by
 # check-reduction-fission.py with the real opt/llc and the C harness.
@@ -70,16 +70,122 @@ for probe in ('compact_iteration', 'compact_participant',
               'scalar_consumer_vector', 'scalar_consumer_tail'):
     assert compact.count('call void @record_' + probe + '()') == 1
 assert compact.startswith('define void @compact_triangle(') and compact.endswith('}')
-assert ('%pi = phi i64 [ 0, %entry ]\n'
+assert ('%pi = phi i64 [ 0, %preheader ], [ %next, %latch ]\n'
         '  call void @record_compact_iteration()') in compact
-unguarded = source.replace('%fission.empty = icmp eq i64 %fission.participating.count, 0',
-                           '%fission.empty = icmp eq i64 %fission.participating.count, 1')
-try:
-    checker.check_scalar_function(unguarded, 'compact_triangle', evl=False)
-except AssertionError:
-    pass
-else:
-    raise AssertionError('missing compact empty-stream guard accepted')
+
+# SCEV expansion can use either the single-input LCSSA export or the identical
+# latch value. Check actual control operands, even if a dead use of the export
+# remains in the consumer. Do not accept any other purported equivalent bound.
+compact_tail = checker.function_definition(source, 'compact_triangle')
+producer, _ = checker.scalar_consumer(compact_tail, 'compact_triangle')
+compact_evl = producer + Path(sys.argv[3]).read_text().rstrip()
+exported = '%fission.participating.count'
+merged = '%fission.participating.merge'
+
+
+def change_line(body, value, old, new):
+    lines = [line for line in body.splitlines() if line.startswith('  ' + value + ' = ')]
+    assert len(lines) == 1 and old in lines[0], (value, old, body)
+    return body.replace(lines[0], lines[0].replace(old, new), 1)
+
+
+def reject_compact(body, evl, reason):
+    try:
+        checker.check_scalar_function(body, 'compact_triangle', evl=evl)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('accepted compact ' + reason)
+
+
+for evl, original in ((False, compact_tail), (True, compact_evl)):
+    for bound in (exported, merged):
+        producer, consumer = checker.scalar_consumer(original, 'compact_triangle')
+        candidate = (producer + 'scalar.fission.consumer.ph:\n' +
+                     consumer.replace(exported, bound))
+        if bound == merged:
+            assert exported not in checker.scalar_consumer(candidate, 'compact_triangle')[1]
+        assert checker.check_scalar_function(candidate, 'compact_triangle', evl=evl) == candidate
+        # Forwarding in the zero check is also valid after proving the export.
+        forwarded_guard = change_line(candidate, '%fission.empty', exported, merged)
+        checker.check_scalar_function(forwarded_guard, 'compact_triangle', evl=evl)
+
+        controls = (['%avl'] if evl else
+                    ['%min.iters.check', '%n.mod.vf', '%n.vec', '%cmp.n',
+                     '%fission.consumer.more'])
+        for control in controls:
+            # Vector control may forward the count while the scalar tail
+            # still uses its export, or conversely. Both are exactly P.
+            other = merged if bound == exported else exported
+            checker.check_scalar_function(change_line(candidate, control, bound, other),
+                                          'compact_triangle', evl=evl)
+            for wrong in ('%n', '%unrelated', '%fission.participating',
+                          '%fission.participating.next', '65'):
+                reject_compact(change_line(candidate, control, bound, wrong), evl,
+                               control + ' bound ' + wrong)
+        conditions = (['%done.evl'] if evl else
+                      ['%min.iters.check', '%vector.done', '%cmp.n', '%fission.consumer.more'])
+        for condition in conditions:
+            reject_compact(candidate.replace('  br i1 ' + condition + ',', '  br i1 %choose,'),
+                           evl, 'unused count-controlled predicate ' + condition)
+        if evl:
+            for value, old, new in [
+                ('%evl', 'i64 %avl', 'i64 %n'),
+                ('%step', 'i32 %evl', 'i32 4'),
+                ('%avl.next', '%avl, %step', '%n, %step'),
+                ('%avl.next', '%avl, %step', '%avl, %n'),
+                ('%done.evl', ', 0', ', 1'),
+                ('%il', 'i32 %evl)', 'i32 4)'),
+                ('%dr', 'i32 %evl)', 'i32 4)'),
+            ]:
+                reject_compact(change_line(candidate, value, old, new), evl,
+                               'broken active-length linkage at ' + value)
+        else:
+            for value, old, new in [
+                ('%n.vec', '%n.mod.vf', '%unrelated'),
+                ('%n.vec', '%n.mod.vf', '%n.mod.vf.unrelated'),
+                ('%cmp.n', '%n.vec', '%unrelated'),
+                ('%vector.done', '%n.vec', '%n'),
+            ]:
+                reject_compact(change_line(candidate, value, old, new), evl,
+                               'broken rounded-bound linkage at ' + value)
+
+        for old, new in [
+            ('icmp eq', 'icmp ne'), (', 0', ', 1'), (exported, '%n'),
+            (exported, '%unrelated'),
+        ]:
+            reject_compact(change_line(candidate, '%fission.empty', old, new),
+                           evl, 'incorrect empty-stream comparison')
+        guard_branch = ('  br i1 %fission.empty, label %scalar.fission.consumer.exit, '
+                        'label %scalar.fission.consumer.ph')
+        for replacement in (
+            '  br label %scalar.fission.consumer.ph',
+            '  br i1 %choose, label %scalar.fission.consumer.exit, label %scalar.fission.consumer.ph',
+            '  br i1 %fission.empty, label %scalar.fission.consumer.ph, label %scalar.fission.consumer.exit',
+        ):
+            reject_compact(candidate.replace(guard_branch, replacement), evl,
+                           'missing/incorrect empty-stream branch')
+        reject_compact(candidate.replace('  %fission.empty = icmp eq i64 ' + exported + ', 0\n', ''),
+                       evl, 'missing empty-stream comparison')
+        reject_compact(change_line(candidate, '%rd.result', '%start', '0.000000e+00'),
+                       evl, 'changed empty-stream initial accumulator')
+
+        # In particular, using the latch bound must not hide a broken guard
+        # export. Check edge, incoming value, cardinality and counter linkage.
+        for value, old, new in [
+            (exported, merged, '%n'),
+            (exported, merged, '%unrelated'),
+            (exported, merged, '%fission.participating.next'),
+            (exported, '%latch', '%left'),
+            (exported, ' ]', ' ], [ %n, %entry ]'),
+            ('%fission.participating', '[ 0,', '[ 1,'),
+            ('%fission.participating', merged, '%pi'),
+            (merged, '%fission.participating, %loop', '%pi, %loop'),
+            ('%fission.participating.next', '%fission.participating, 1', '%pi, 1'),
+            ('%fission.participating.next', ', 1', ', 2'),
+        ]:
+            reject_compact(change_line(candidate, value, old, new), evl,
+                           'broken count linkage at ' + value)
 
 # Fixed-vscale specialization must fail before handing unsupported EVL/VP
 # operations to a host backend. Renaming scalable types alone is not sound.
@@ -155,14 +261,18 @@ scalar.fission.consumer.body:
 }
 
 ; Parser/probe fixture only; actual transformed execution uses scalar-compact.ll.
-define void @compact_triangle(ptr %a, ptr %fp) {
+define void @compact_triangle(ptr %a, ptr %fp, i64 %n, i64 %unrelated, double %start) {
 entry:
   %s = alloca [65 x i32]
   %d = alloca [65 x double]
   %f = alloca [65 x float]
+  %fstart = fptrunc double %start to float
+  br label %preheader
+preheader:
   br label %loop
 loop:
-  %pi = phi i64 [ 0, %entry ]
+  %fission.participating = phi i64 [ 0, %preheader ], [ %fission.participating.merge, %latch ]
+  %pi = phi i64 [ 0, %preheader ], [ %next, %latch ]
   %x = load i32, ptr %a
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %latch
@@ -172,32 +282,95 @@ left:
   %dp = getelementptr double, ptr %fp, i64 0
   %dc = load double, ptr %dp
   %fc = fptrunc double %dc to float
-  %fission.participating.next = add nuw i64 %pi, 1
+  %fission.participating.next = add nuw i64 %fission.participating, 1
   store i32 %lc, ptr %s
   store double %dc, ptr %d
   store float %fc, ptr %f
   br label %latch
 latch:
-  br label %scalar.fission.consumer.guard
+  %fission.participating.merge = phi i64 [ %fission.participating.next, %left ], [ %fission.participating, %loop ]
+  %next = add nuw i64 %pi, 1
+  %done = icmp eq i64 %next, %n
+  br i1 %done, label %scalar.fission.consumer.guard, label %loop
 scalar.fission.consumer.guard:
-  %fission.participating.count = phi i64 [ %fission.participating.next, %latch ]
+  %fission.participating.count = phi i64 [ %fission.participating.merge, %latch ]
   %fission.empty = icmp eq i64 %fission.participating.count, 0
   br i1 %fission.empty, label %scalar.fission.consumer.exit, label %scalar.fission.consumer.ph
 scalar.fission.consumer.ph:
-  %bound = add i64 0, %fission.participating.count
+  %dead.bound = add i64 0, %fission.participating.count
+  %scale = call i64 @llvm.vscale.i64()
+  %vf = shl nuw i64 %scale, 2
+  %min.iters.check = icmp ult i64 %fission.participating.count, %vf
+  br i1 %min.iters.check, label %scalar.ph, label %vector.ph
+vector.ph:
+  %n.mod.vf = urem i64 %fission.participating.count, %vf
+  %n.vec = sub i64 %fission.participating.count, %n.mod.vf
   br label %vector.body
 vector.body:
-  %vi = phi i64 [ 0, %scalar.fission.consumer.ph ]
+  %vi = phi i64 [ 0, %vector.ph ], [ %vector.next, %vector.body ]
   %il = load <vscale x 4 x i32>, ptr %s
   %dl = load <vscale x 4 x double>, ptr %d
   %fl = load <vscale x 4 x float>, ptr %f
   %dr = call double @llvm.vector.reduce.fadd.nxv4f64(double 0.0, <vscale x 4 x double> %dl)
   %fr = call float @llvm.vector.reduce.fadd.nxv4f32(float 0.0, <vscale x 4 x float> %fl)
   %ir = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %il)
+  %vector.next = add nuw i64 %vi, %vf
+  %vector.done = icmp eq i64 %vector.next, %n.vec
+  br i1 %vector.done, label %middle.block, label %vector.body
+middle.block:
+  %cmp.n = icmp eq i64 %fission.participating.count, %n.vec
+  br i1 %cmp.n, label %scalar.fission.consumer.loopexit, label %scalar.ph
+scalar.ph:
+  %resume = phi i64 [ 0, %scalar.fission.consumer.ph ], [ %n.vec, %middle.block ]
   br label %scalar.fission.consumer.body
 scalar.fission.consumer.body:
-  %ti = phi i64 [ 0, %vector.body ]
+  %ti = phi i64 [ %resume, %scalar.ph ], [ %fission.consumer.next, %scalar.fission.consumer.body ]
+  %fission.consumer.next = add nuw i64 %ti, 1
+  %fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.participating.count
+  br i1 %fission.consumer.more, label %scalar.fission.consumer.body, label %scalar.fission.consumer.loopexit
+scalar.fission.consumer.loopexit:
+  %r0.lcssa = phi i32 [ %ir, %middle.block ], [ 23, %scalar.fission.consumer.body ]
+  %r1.lcssa = phi i32 [ %ir, %middle.block ], [ 29, %scalar.fission.consumer.body ]
+  %rd.lcssa = phi double [ %dr, %middle.block ], [ 1.000000e+00, %scalar.fission.consumer.body ]
+  %rf.lcssa = phi float [ %fr, %middle.block ], [ 2.000000e+00, %scalar.fission.consumer.body ]
   br label %scalar.fission.consumer.exit
 scalar.fission.consumer.exit:
+  %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ], [ %r0.lcssa, %scalar.fission.consumer.loopexit ]
+  %r1.result = phi i32 [ -7, %scalar.fission.consumer.guard ], [ %r1.lcssa, %scalar.fission.consumer.loopexit ]
+  %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ %rd.lcssa, %scalar.fission.consumer.loopexit ]
+  %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ %rf.lcssa, %scalar.fission.consumer.loopexit ]
+  ret void
+}
+
+#--- compact-evl.ll
+scalar.fission.consumer.ph:
+  %dead.bound = add i64 0, %fission.participating.count
+  br label %vector.ph
+vector.ph:
+  br label %vector.body
+vector.body:
+  %vi = phi i64 [ 0, %vector.ph ], [ %vector.next, %vector.body ]
+  %avl = phi i64 [ %fission.participating.count, %vector.ph ], [ %avl.next, %vector.body ]
+  %evl = call i32 @llvm.experimental.get.vector.length.i64(i64 %avl, i32 4, i1 true)
+  %il = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr %s, <vscale x 4 x i1> splat (i1 true), i32 %evl)
+  %dl = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr %d, <vscale x 4 x i1> splat (i1 true), i32 %evl)
+  %fl = call <vscale x 4 x float> @llvm.vp.load.nxv4f32.p0(ptr %f, <vscale x 4 x i1> splat (i1 true), i32 %evl)
+  %dr = call double @llvm.vp.reduce.fadd.nxv4f64(double %start, <vscale x 4 x double> %dl, <vscale x 4 x i1> splat (i1 true), i32 %evl)
+  %fr = call float @llvm.vp.reduce.fadd.nxv4f32(float %fstart, <vscale x 4 x float> %fl, <vscale x 4 x i1> splat (i1 true), i32 %evl)
+  %step = zext i32 %evl to i64
+  %vector.next = add i64 %step, %vi
+  %avl.next = sub nuw i64 %avl, %step
+  %done.evl = icmp eq i64 %avl.next, 0
+  br i1 %done.evl, label %middle.block, label %vector.body
+middle.block:
+  %ir = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %il)
+  br label %scalar.fission.consumer.loopexit
+scalar.fission.consumer.loopexit:
+  br label %scalar.fission.consumer.exit
+scalar.fission.consumer.exit:
+  %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ], [ %ir, %scalar.fission.consumer.loopexit ]
+  %r1.result = phi i32 [ -7, %scalar.fission.consumer.guard ], [ %ir, %scalar.fission.consumer.loopexit ]
+  %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ %dr, %scalar.fission.consumer.loopexit ]
+  %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ %fr, %scalar.fission.consumer.loopexit ]
   ret void
 }
