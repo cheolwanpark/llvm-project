@@ -1,16 +1,17 @@
 {
-  "task_id": "t000047",
+  "task_id": "t000049",
   "direction_id": "d1",
-  "base_revision": "f4fbdaaac4960585e4d300705aa15ef1878dc124",
-  "merge_revision": "0746fd4cb01a5bdd1562d493d2969743eb4268c5",
-  "hypothesis": "Bounded acyclic scalar producers can retain scalar recurrences while extracting closed add/fadd reductions from one common terminal update edge, including serial/nested upstream diamonds and multiple identity latch bypasses. Final producer values, including conditionally updated state, can be forwarded independently of the participating stream. This integrates the independently accepted d1 retained-state and d2 CFG/export/chunk contracts. It adds no profitability model, pressure/depth/reduction-count prerequisite, original-loop vectorizability requirement, benchmark identity, source rewrite or supplementary math assumption.",
-  "semantics": "Reduction recognition is a transactional optional result: a failed scalar candidate can remain in the producer but never changes ParticipationArm or ReductionInsts. Conditional candidates require exactly one nonidentity latch input, an add/fadd defined in that predecessor, an unconditional direct edge to the latch, identity header-PHI values on every bypass, and contribution dominance at the original terminal store point. Every header-PHI use is checked by operand number and incoming edge: only its own accumulator operand and identity bypass operands are allowed. Its update has only its own merge use. Before committing a candidate, every result use must be its own header backedge from the latch or the exact original latch edge of an Exit LCSSA PHI. Thus the first edge from any moved state cannot reach a retained recurrence, predicate, address, contribution or other reduction; no recursive dependence walk or PHI-order assumption is needed. Successful reductions still share one participation arm and are all conditional or all unconditional. Retained PHIs/starts/backedges, merges, arithmetic, flags and branches stay at their original sites and iteration order. Final producer exports retain d2 exact value/edge forwarding and dominance checks, including P=0 and a final inactive iteration. No last-participant substitute, speculative arithmetic, freeze or input reread is introduced. Acyclic branch-only CFG and finite/representable full-trip storage proofs, effect/call/load whitelist, strictfp/constrained-FP rejection, pointer-index ceilings, LCSSA and metadata contracts remain. The counter stores at old P and increments exactly once on the common terminal edge, retaining old P on every bypass; 0<=P<=N<=M bounds all stores and consumer reads. Ordered unconstrained FP clones original update operands/flags and executes exactly the original participating additions; P=0 returns the exact start without adding an identity. Explicit fission FP reordering is tested separately and adds no fast-math/errno assumptions. Chunk scheduling retains d2 canonical single-block, unconditional, zero-start/unit-step, equality-exit restrictions and now explicitly also excludes retained state. All compiler IR mutation still follows every rejection point. Executable verification requests actual original/transformed IR and independent C formulas for three new state/CFG/export interactions, eleven exact historical feedback/export fixtures whose whole-loop outcomes change, and the historical cross-reduction fixture, alongside every inherited matrix. Probes check N/P, all bypasses, vector/tail/empty/zero-entry/final-inactive paths before fixed-vscale host execution; uninstrumented original scalable output is separately RVV machine-verified.",
-  "costs": "No new scratch stream, retained-state array, mask array, runtime alias/SCEV/FP guard, input reread, duplicated producer operation or contribution recomputation is added. Full-trip entry allocations remain capped by the existing 65536-byte option and signed alloca pointer-index ceiling. New mixed interactions reserve [65 x i32], [65 x double], [65 x float]: 260+4 ABI padding+520+260=1044 bytes. Four reductions share three contributions. Logical stores are 16*P bytes and loads 16*P bytes (32*P total); P=0 has no scratch accesses despite full capacity reservation. 1043 rejects and 1044 admits, without compact/retained-state chunking. Seven distinct final producer values use seven scalar forwarding PHIs, including the final conditional state, with no scratch traffic. Historical retained-export cases reserve i32/double streams: 260+4+520=784 bytes; logical stores/loads are each 12*N for unconditional or 12*P for compact cases. Observed accumulators stay scalar and can supply a contribution to a moved independent accumulator without duplication. The dead cross-consumer uses one i32 stream with 260-byte full capacity. Enclosing inherited producers reuse their entry scratch per row. Chunk capacity, carried reductions, global input/local scratch indices, partial chunks and source/VF/traffic remarks remain as in d2; no state carry across chunks is implemented. Production analysis remains direct per-PHI incoming/use scans plus O(B+E) acyclic CFG and existing instruction/effect/export scans, SCEV bounds and dominance queries; one retained-state bit restricts chunking. No general SSA reconstruction, path enumeration, target cost model or new analysis framework is introduced. Validation adds small fixture-scoped retention/order/export certificates and independent formulas, reusing inherited typed compact-count, scalar/vector-result and export proofs. Physical stack layout/traffic, spills, RVV execution and speedup remain unmeasured.",
+  "base_revision": "a0e9d9b41aac936252aeba4550450dcec94b43ea",
+  "merge_revision": null,
+  "hypothesis": "Repair integration validation for bounded producers retaining XOR state while extracting an independent closed add reduction. Transactional optional recognition permits these generic sum/XOR AoS patterns to use early scalar fission; ordinary LV then selects the producer and consumer VFs independently. Preserve the integrated acyclic CFG, retained-state and final-export transformations and every inherited VPlan contract. This revision adds no semantic transformation, profitability model, vectorizability prerequisite, benchmark-specific code, source rewrite or math assumption.",
+  "semantics": "Reduction recognition is a transactional optional result: a failed scalar candidate can remain in the producer but never changes ParticipationArm or ReductionInsts. Conditional candidates require exactly one nonidentity latch input, an add/fadd defined in that predecessor, an unconditional direct edge to the latch, identity header-PHI values on every bypass, and contribution dominance at the original terminal store point. Every header-PHI use is checked by operand number and incoming edge: only its own accumulator operand and identity bypass operands are allowed. Its update has only its own merge use. Before committing a candidate, every result use must be its own header backedge from the latch or the exact original latch edge of an Exit LCSSA PHI. Thus the first edge from any moved state cannot reach a retained recurrence, predicate, address, contribution or other reduction; no recursive dependence walk or PHI-order assumption is needed. Successful reductions still share one participation arm and are all conditional or all unconditional. Retained PHIs/starts/backedges, merges, arithmetic, flags and branches stay at their original sites and iteration order. Final producer exports retain d2 exact value/edge forwarding and dominance checks, including P=0 and a final inactive iteration. No last-participant substitute, speculative arithmetic, freeze or input reread is introduced. Acyclic branch-only CFG and finite/representable full-trip storage proofs, effect/call/load whitelist, strictfp/constrained-FP rejection, pointer-index ceilings, LCSSA and metadata contracts remain. The counter stores at old P and increments exactly once on the common terminal edge, retaining old P on every bypass; 0<=P<=N<=M bounds all stores and consumer reads. Ordered unconstrained FP clones original update operands/flags and executes exactly the original participating additions; P=0 returns the exact start without adding an identity. Explicit fission FP reordering is tested separately and adds no fast-math/errno assumptions. Chunk scheduling retains d2 canonical single-block, unconditional, zero-start/unit-step, equality-exit restrictions and now explicitly also excludes retained state. All compiler IR mutation still follows every rejection point. Executable verification requests actual original/transformed IR and independent C formulas for three new state/CFG/export interactions, eleven exact historical feedback/export fixtures whose whole-loop outcomes change, and the historical cross-reduction fixture, alongside every inherited matrix. Probes check N/P, all bypasses, vector/tail/empty/zero-entry/final-inactive paths before fixed-vscale host execution; uninstrumented original scalable output is separately RVV machine-verified. Revision t000049 changes no recognition, operand/edge closure or IR schedule. Default dispatch checks now bind the producer XOR and consumer add to their actual scratch values and observable results, account for every emitted loop, and check role metadata and original DILocation on each latch. Source-located selection certificates require exactly four original targets at dispatch.c:10/20/30/50:5 and independently read both stage VFs rather than applying VPlan forced widths to scalar stages. Exact original dispatch definitions are separately renamed/compiled as references. The C oracle computes wrapping uint32 sum and XOR independently, compares the original result/canaries to that formula and the transformed results to the original, including permitted aliased output. Probe counts use actual producer/consumer widths with no VPlan-tail instrumentation on early stages; per-configuration execution names/counters must match all generated early sum/XOR variants. The original VPlan stage and repeated-LV tail certificates remain unchanged and now run on an explicit isolated dispatch matrix under both policies. The ordered overlap and nested compact matrix remain. Serial/nested predicate select mutations remain; affine uses an applicable icmp eq-to-ne mutation and each must fail its intended export-control certificate after construction. New dispatch mutations check actual scratch, output, role, provenance and source-location obligations. The dispatch stage certificate accounts separately for any ordinary vector remainder emitted by follow-up hints, derives its width from its actual scratch access, and retains independent entry/lane counters alongside the four primary scalar/vector counters. Repeated-LV scalar VF-1 revisit remarks are permitted without overwriting the first observed primary stage width; all actual loops still require the original attached role and source location.",
+  "costs": "No new scratch stream, retained-state array, mask array, runtime alias/SCEV/FP guard, input reread, duplicated producer operation or contribution recomputation is added. Full-trip entry allocations remain capped by the existing 65536-byte option and signed alloca pointer-index ceiling. New mixed interactions reserve [65 x i32], [65 x double], [65 x float]: 260+4 ABI padding+520+260=1044 bytes. Four reductions share three contributions. Logical stores are 16*P bytes and loads 16*P bytes (32*P total); P=0 has no scratch accesses despite full capacity reservation. 1043 rejects and 1044 admits, without compact/retained-state chunking. Seven distinct final producer values use seven scalar forwarding PHIs, including the final conditional state, with no scratch traffic. Historical retained-export cases reserve i32/double streams: 260+4+520=784 bytes; logical stores/loads are each 12*N for unconditional or 12*P for compact cases. Observed accumulators stay scalar and can supply a contribution to a moved independent accumulator without duplication. The dead cross-consumer uses one i32 stream with 260-byte full capacity. Enclosing inherited producers reuse their entry scratch per row. Chunk capacity, carried reductions, global input/local scratch indices, partial chunks and source/VF/traffic remarks remain as in d2; no state carry across chunks is implemented. Production analysis remains direct per-PHI incoming/use scans plus O(B+E) acyclic CFG and existing instruction/effect/export scans, SCEV bounds and dominance queries; one retained-state bit restricts chunking. No general SSA reconstruction, path enumeration, target cost model or new analysis framework is introduced. Validation adds small fixture-scoped retention/order/export certificates and independent formulas, reusing inherited typed compact-count, scalar/vector-result and export proofs. Physical stack layout/traffic, spills, RVV execution and speedup remain unmeasured. Revision t000049: early sum/XOR dispatch reserves one [65 x i32] stream (260 bytes), stores 4*N and loads 4*N logical bytes, with one scalar final XOR forwarding value. 259 bytes rejects retained-state chunking; 260 admits full-trip storage; the existing 519/520 tests retain ordered C=64/B=512 versus full C=65/B=520 behavior and oversized compact rejection. No input reread, producer duplication/recomputation or new runtime guard is added. The only compiler-code change emits the already computed source-located scratch traffic/reread/duplication fields for full-trip and compact schedules as well as chunks, without changing values or transformations. Validation adds fixture-bounded typed result-PHI checks, scratch/result/metadata/source certificates, independent wrapping C formulas and four scalar-stage probes using the inherited AoS counter interface. Default five-vscale matrix has 40 early sum/XOR configurations with 476 calls each (19040 planned comparisons); the explicit isolated VPlan dispatch adds another 19040 calls, preserving all old VPlan checks and ordinary-tail instrumentation. These are planned counts, not observed execution or performance. Ordinary vector remainders, if emitted by the unchanged follow-up hints, use the inherited extra entry/lane counter interface with actual scratch widths; no extra compiler scratch or reread is introduced.",
   "tests": [
     "llvm/test/Other/reduction-fission-chunk-checker.test",
     "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
     "llvm/test/Other/reduction-fission-compact-recurrence-checker.test",
     "llvm/test/Other/reduction-fission-compact-tail-checker.test",
+    "llvm/test/Other/reduction-fission-dispatch-checker.test",
     "llvm/test/Other/reduction-fission-execution-checker.test",
     "llvm/test/Other/reduction-fission-execution-symbols.test",
     "llvm/test/Other/reduction-fission-export-checker.test",
@@ -88,14 +89,18 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stage-metadata.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
   ],
-  "limitations": "This integration has not been compiled or executed by the worker; all mandatory validation is pending harness-only. Only source/diff/immutable-evidence review, Python AST/JSON parsing and text/registration audits were performed. Accepted-head evidence below does not validate the merged snapshot. Nonterminal/conditionally exiting update sites, several update sites, nonidentity extraction bypasses, incompatible extracted participation streams, mixed conditional/unconditional consumers, cycles/early exits, unsafe effects, strictfp/constrained FP and unavailable finite bounds remain unsupported. Safe retained producer state is distinct from illegal extracted-state feedback; feedback is checked as nonextraction, while a different closed accumulator may move. Compact and retained-state chunking remain explicitly unsupported. The exact historical unbounded-R0-address fixture is executed only for N=0/1 and entry bypasses, without inventing an address bound; bounded analogous state-dependent addresses retain inherited full-domain execution. Host specialization executes actual scalar-remainder vectors at fixed vscales 1/2/4/8/32; it is neither EVL/VP host emulation nor RVV target execution. EVL/VP paths receive uninstrumented IR/machine checks only. No whole-function aggregate stack budget, physical traffic, code-size measurement or performance claim is provided. The 117 immutable primary inputs are unchanged. Existing accepted heads and refs remain harness-owned and intact if this combination fails.",
+  "limitations": "This t000049 snapshot has not been compiled or executed by the worker. Only source/immutable-diff/log review, Python AST/JSON parsing and static text/registration audits were performed. t000047 built but mandatory lit failed (78 pass, two fail, one incorrectly registered supporting Input unresolved); that is failure evidence for the prior revision, not validation for this repair. All fresh mandatory validation remains harness-only and pending. Nonterminal/conditionally exiting update sites, several update sites, nonidentity extraction bypasses, incompatible extracted participation streams, mixed conditional/unconditional consumers, cycles/early exits, unsafe effects, strictfp/constrained FP and unavailable finite bounds remain unsupported. Safe retained producer state is distinct from illegal extracted-state feedback; feedback is checked as nonextraction, while a different closed accumulator may move. Compact and retained-state chunking remain explicitly unsupported. The exact historical unbounded-R0-address fixture is executed only for N=0/1 and entry bypasses, without inventing an address bound; bounded analogous state-dependent addresses retain inherited full-domain execution. Host specialization executes actual scalar-remainder vectors at fixed vscales 1/2/4/8/32; it is neither EVL/VP host emulation nor RVV target execution. EVL/VP paths receive uninstrumented IR/machine checks only. No whole-function aggregate stack budget, physical traffic, code-size measurement or performance claim is provided. The 117 immutable primary inputs are unchanged. Existing accepted heads and refs remain harness-owned and intact if this combination fails.",
   "changed_expectations": [
     "Preserve all 78 inherited runnable lit files and every inherited checker mutation; add two runnable interaction files for a mandatory union of 80. Duplicate affine-evl split-file sections from the textual merge are consolidated without changing their contents or obligations.",
     "Keep d2 source-located diagnostic changes and positive final-export/compact-CFG/chunk expectations. The exact reject_conditional_update old-accumulator export remains scalar-reduction-feedback; its only accumulator is not extractable.",
     "The first seven scalar-recurrence-reject fixtures and first four compact-recurrence-reject fixtures become safe retention/export cases. Preserve their original IR, partial-result/output checks and source locations. Require the observed r0 to remain and only closed r1/rd to move, with r0 also moving in independent state-export siblings. All other functions retain per-function no-fission checks and original rejection reasons. Register these exact original functions for independent executable comparison rather than deleting them or weakening their feedback contract.",
     "reject_compact_cross_reduction can retain sum and extract the closed dead sum2. Preserve the original function and require the observed sum update and its compact store to remain on their original paths. Register exact original/transformed/formula return/input comparisons; no vector speedup or observable dead-sum benefit is asserted.",
     "At scalar-affine-reject.c:32:3 and 42:3 retained observed state can now export, but the existing 1043-byte runs still reject because the three streams need 1044 bytes. Change only these reason expectations to scalar-scratch-limit and explain the capacity. The inherited 1044-byte positive export run remains.",
-    "Merge the count-checker interfaces explicitly: retain d1 starts/vectorized/recurrence/delay modes and d2 exact CFG/predecessor/bypass checks. Preserve d1 recurrence_value mode-shadow repair and both nuw/nuw nsw unit increments. Adapt compact-tail mutation diagnostics to the earlier precise CFG certificate without removing mutations. Isolate recurrence option lists from d2 VPlan-only/interleave options; preserve the full union of C tables and substitutions."
+    "Merge the count-checker interfaces explicitly: retain d1 starts/vectorized/recurrence/delay modes and d2 exact CFG/predecessor/bypass checks. Preserve d1 recurrence_value mode-shadow repair and both nuw/nuw nsw unit increments. Adapt compact-tail mutation diagnostics to the earlier precise CFG certificate without removing mutations. Isolate recurrence option lists from d2 VPlan-only/interleave options; preserve the full union of C tables and substitutions.",
+    "t000049: interleave2/interleave3 default, repeated-LV, tail, 519-byte and exact-limit expectations intentionally change from VPlan fallback to retained XOR producer plus moved add consumer. Both outputs, attached stage roles/source locations and actual independent stage VFs are required. The unchanged isolated VPlan expectation and old VPlan-tail certificates remain explicit obligations.",
+    "t000049: source-located Selected traffic fields are now emitted for full-trip and compact scalar schedules as well as chunks. Field values use the same existing ScratchTrafficBytes calculation; chunk remarks retain their text/order.",
+    "t000049: serial/nested choose remains a select mutation. state_cfg_affine uses its actual icmp predicate mutation; construction must succeed and export-control must reject it.",
+    "t000049: tests and mandatory_lit.explicit_paths each list exactly 81 runnable files (80 inherited union plus the new dispatch checker), with no Inputs files. Supporting Inputs are separately registered with their owners and no artificial RUN line. No supporting Input is modified in this revision, avoiding the harness snapshot auto-union that previously reinserted changed Inputs despite report exclusions."
   ],
   "new_execution_obligations": {
     "state_cfg_functions": [
@@ -131,7 +136,72 @@
     "default_vscales_planned_state_cfg_comparisons": 417312,
     "default_vscales_planned_retained_export_comparisons": 784896,
     "default_vscales_planned_cross_return_comparisons": 10880,
-    "status": "planned comparisons only; stdout per-configuration counters and linked execution are required before reporting observed results"
+    "status": "planned comparisons only; stdout per-configuration counters and linked execution are required before reporting observed results",
+    "dispatch": {
+      "functions": [
+        "interleave2",
+        "interleave3"
+      ],
+      "original_source": "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-dispatch.ll",
+      "references": "separately renamed exact original dispatch definitions; inherited references remain for inherited matrices",
+      "formula": "independent uint32 wrapping term, sum initialized 17 and XOR initialized 23, stores after all loads",
+      "policies": [
+        "strict",
+        "explicit fission FP reordering only"
+      ],
+      "lv_invocations": [
+        1,
+        2
+      ],
+      "vscales": [
+        1,
+        2,
+        4,
+        8,
+        32
+      ],
+      "planned_host_configurations": 40,
+      "planned_calls_per_configuration": 476,
+      "planned_comparisons": 19040,
+      "counts": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        7,
+        8,
+        9,
+        15,
+        16,
+        17,
+        31,
+        32,
+        33,
+        63,
+        64,
+        65,
+        66,
+        257,
+        1023,
+        1024,
+        1025
+      ],
+      "checks": [
+        "both final results and canaries against independent formula and exact original IR",
+        "input preservation, guarded input end and output alias at original input base",
+        "all vector/scalar stage entries and exact N participating lanes at independently observed VFs",
+        "per-configuration counters and execution symbol set in results.json",
+        "exactly four original selections at lines 10/20/30/50 and no helper/stage selection",
+        "capacity/traffic/reread/duplication and original-latch DILocation/attached stage provenance",
+        "explicit isolated VPlan stages and repeated-LV ordinary tails retained under both policies",
+        "ordered overlap and nested compact full inherited matrices retained",
+        "all emitted ordinary vector remainders, independent entry/lane counts, and VF-1 stage revisit remarks distinguished from the primary observed VF"
+      ],
+      "isolated_vplan_additional_planned_comparisons": 19040,
+      "status": "planned only; linked execution, counters and uninstrumented machine verification required from harness"
+    }
   },
   "prior_immutable_evidence": {
     "read": [
@@ -146,7 +216,12 @@
       "builds/t000045/execution.log",
       "builds/t000046/execution.log",
       "evaluations/t000045/primary/result.json",
-      "evaluations/t000046/primary/result.json"
+      "evaluations/t000046/primary/result.json",
+      "tasks/t000047.json",
+      "diffs/t000047.patch",
+      "builds/t000047/lit.log",
+      "harness/src/research_loop/campaign.py: snapshot registration (read-only)",
+      "builds/t000046/execution/dispatch_twice_ordered_scalar_remainder.remarks (VF-1 stage revisits)"
     ],
     "heads": {
       "t000045": {
@@ -937,10 +1012,23 @@
         ]
       }
     },
-    "interpretation": "Both accepted heads independently passed their harness checks and all 234 frozen compilations. d1 has no exact-target fission selection; d2 has three per policy, at original dlib and two PySCF target locations, with stage/scratch records below. These are historical codegen observations, not merged results, RVV target execution or speedups. Preserve exact original-loop attribution, not nested/helper activity."
+    "interpretation": "Both accepted heads independently passed their harness checks and all 234 frozen compilations. d1 has no exact-target fission selection; d2 has three per policy, at original dlib and two PySCF target locations, with stage/scratch records below. These are historical codegen observations, not merged results, RVV target execution or speedups. Preserve exact original-loop attribution, not nested/helper activity.",
+    "t000047_failure": {
+      "revision": "a0e9d9b41aac936252aeba4550450dcec94b43ea",
+      "compile_exit_code": 0,
+      "lit_passed": 78,
+      "lit_failed": 2,
+      "lit_unresolved": 1,
+      "failures": [
+        "dispatch expected VPlan instead of early retained-XOR/add split",
+        "affine predicate mutation tried nonexistent select operand",
+        "supporting compact-exits.ll registered standalone without RUN"
+      ],
+      "primary_evaluation": "not run; acceptance blocked by mandatory lit"
+    }
   },
   "validation_requested": {
-    "task_id": "t000047",
+    "task_id": "t000049",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
@@ -951,12 +1039,13 @@
     },
     "mandatory_lit": {
       "required": true,
-      "expected_files": 80,
+      "expected_files": 81,
       "explicit_paths": [
         "llvm/test/Other/reduction-fission-chunk-checker.test",
         "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
         "llvm/test/Other/reduction-fission-compact-recurrence-checker.test",
         "llvm/test/Other/reduction-fission-compact-tail-checker.test",
+        "llvm/test/Other/reduction-fission-dispatch-checker.test",
         "llvm/test/Other/reduction-fission-execution-checker.test",
         "llvm/test/Other/reduction-fission-execution-symbols.test",
         "llvm/test/Other/reduction-fission-export-checker.test",
@@ -1039,8 +1128,40 @@
       "include_all_added_tests": true,
       "standalone_input_exclusions": [
         "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
-        "llvm/test/Other/Inputs/reduction-fission-compact-exits.ll"
-      ]
+        "llvm/test/Other/Inputs/reduction-fission-compact-exits.ll",
+        "llvm/test/Other/Inputs/reduction-fission-host-adapter.py"
+      ],
+      "inherited_runnable_files": 80,
+      "additional_runnable_files": [
+        "llvm/test/Other/reduction-fission-dispatch-checker.test"
+      ],
+      "supporting_inputs": [
+        {
+          "path": "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
+          "runnable_lit": false,
+          "owning_tests": [
+            "llvm/test/Other/reduction-fission-execution-checker.test"
+          ],
+          "modified_by_this_revision": false
+        },
+        {
+          "path": "llvm/test/Other/Inputs/reduction-fission-compact-exits.ll",
+          "runnable_lit": false,
+          "owning_tests": [
+            "llvm/test/Other/reduction-fission-execution-checker.test"
+          ],
+          "modified_by_this_revision": false
+        },
+        {
+          "path": "llvm/test/Other/Inputs/reduction-fission-host-adapter.py",
+          "runnable_lit": false,
+          "owning_tests": [
+            "llvm/test/Other/reduction-fission-host-adapter.test"
+          ],
+          "modified_by_this_revision": false
+        }
+      ],
+      "registration_audit": "report.tests == mandatory_lit.explicit_paths; every path is a file with RUN; no path has an Inputs component. Harness snapshot auto-unions changed llvm/test files regardless of these exclusions. This revision changes runnable tests only and no supporting Input; keep supporting Inputs out of the eventual standalone invocation."
     },
     "mandatory_unit_suite": {
       "required": true,
@@ -1082,9 +1203,13 @@
         "original/transformed IR and commands",
         "exact per-function/configuration N/P/vector/tail/empty/bypass counters",
         "signed-zero/ordered-FP contracts",
-        "source-location Selected/Rejected and independent stage VF/scratch evidence"
+        "source-location Selected/Rejected and independent stage VF/scratch evidence",
+        "complete emitted scalar-fission stage layouts, primary/ordinary widths and per-configuration ordinary entry/lane counters"
       ],
-      "generation_is_not_execution": true
+      "generation_is_not_execution": true,
+      "new_dispatch_original_transformed_independent_formulas": true,
+      "explicit_isolated_dispatch_vplan_tail_matrix": true,
+      "per_configuration_dispatch_execution_counters": true
     },
     "rvv_machine_verification": {
       "required": true,
@@ -1123,11 +1248,42 @@
       ],
       "nested_or_helper_success_is_not_original_target_success": true
     },
-    "acceptance": "Fresh harness-only build; all 80 union lit paths and every RUN/mutation; all VectorizeTests; complete inherited/new linked original/transformed/independent-formula comparisons; uninstrumented RVV machine verification; all 234 immutable primary compilations. A crash, wrong transformation or failed mandatory check blocks acceptance. No measured speedup is required."
+    "acceptance": "Fresh harness-only compilation; all 81 runnable lit files (all 80 inherited union plus dispatch checker), every RUN and mutation; all VectorizeTests; complete inherited/new linked original/transformed/independent-formula comparisons at vscales 1/2/4/8/32 under both FP policies and once/twice LV; actual early dispatch plus explicit isolated VPlan repeated-LV tails; uninstrumented RVV machine verification; all 234 immutable primary corpus compilations. Crashes, incorrect transformations and failed mandatory checks block independent acceptance. Preserve both accepted heads until acceptance; no speedup claim or requirement."
   },
   "future_work": [
     "Review harness artifacts before accepting the integration; existing heads must survive any failure.",
     "Consider compact/retained-state chunk carries only as a separate semantic task with executable path/carry verification.",
     "Keep whole-function stack aggregation, target execution and performance measurement separate from this legality integration."
-  ]
+  ],
+  "supporting_inputs": [
+    {
+      "path": "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
+      "runnable_lit": false,
+      "owning_tests": [
+        "llvm/test/Other/reduction-fission-execution-checker.test"
+      ],
+      "modified_by_this_revision": false
+    },
+    {
+      "path": "llvm/test/Other/Inputs/reduction-fission-compact-exits.ll",
+      "runnable_lit": false,
+      "owning_tests": [
+        "llvm/test/Other/reduction-fission-execution-checker.test"
+      ],
+      "modified_by_this_revision": false
+    },
+    {
+      "path": "llvm/test/Other/Inputs/reduction-fission-host-adapter.py",
+      "runnable_lit": false,
+      "owning_tests": [
+        "llvm/test/Other/reduction-fission-host-adapter.test"
+      ],
+      "modified_by_this_revision": false
+    }
+  ],
+  "integrated_accepted_heads": {
+    "d1": "f4fbdaaac4960585e4d300705aa15ef1878dc124",
+    "d2": "0746fd4cb01a5bdd1562d493d2969743eb4268c5",
+    "status": "inherited integration under revision; neither accepted head/ref changed by worker"
+  }
 }

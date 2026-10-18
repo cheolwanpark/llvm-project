@@ -2594,6 +2594,224 @@ def check_dispatch_interleave(ir, name, factor, repeated, evl):
     return tails
 
 
+def dispatch_stage_vfs(remarks):
+    """Exactly four early selections at the original dispatch loop locations."""
+    selected = re.findall(r'dispatch\.c:(\d+):5: split ([^\n]+)', remarks)
+    assert len(re.findall(r': split (?:scalar-IR )?reduction loop[;:]', remarks)) == 4, remarks
+    assert len(selected) == 4 and {int(line) for line, _ in selected} == {10, 20, 30, 50}, remarks
+    assert all(text.startswith('scalar-IR reduction loop;') for _, text in selected), remarks
+    assert 'split reduction loop:' not in remarks, remarks
+    result = {}
+    for name, line, size, exports, traffic in (
+            ('interleave2', 10, 260, 1, 4), ('interleave3', 20, 260, 1, 4),
+            ('interleave2_ordered', 30, 520, 0, 8), ('compact_nested', 50, 784, 0, 12)):
+        assert re.search(
+            rf'dispatch.c:{line}:5: split scalar-IR reduction loop;[^\n]*'
+            rf'scratch capacity 65, scratch bytes {size}, producer live-outs {exports}, '
+            rf'scratch store bytes/iteration {traffic}, scratch load bytes/iteration {traffic}, '
+            r'producer reread bytes/iteration 0, duplicated producer instructions 0\b', remarks), remarks
+        widths = []
+        for stage in ('producer', 'consumer'):
+            matches = re.findall(rf'dispatch.c:{line}:5: scalar-IR fission {stage} VF '
+                                 r'(1|vscale x [1-9][0-9]*)\b', remarks)
+            # Later LV invocations report VF 1 when revisiting an already
+            # vectorized stage. Explicit follow-up hints may also vectorize a
+            # scalar remainder; the IR certificate accounts for that loop
+            # separately, never replacing the primary stage's first width.
+            scalable = [int(vf.split()[-1]) for vf in matches if vf != '1']
+            if name == 'compact_nested' and stage == 'producer':
+                assert matches and not scalable, (name, stage, remarks)
+                widths.append(0)
+            else:
+                assert scalable and matches[0] != '1', (name, stage, remarks)
+                assert len(scalable) <= (2 if line in (10, 20) else 1), (name, stage, remarks)
+                widths.append(scalable[0])
+        assert (widths == [0, 4] if name == 'compact_nested' else all(widths)), (name, widths)
+        result[name] = widths
+    return result
+
+
+def check_dispatch_scalar_interleave(ir, name, factor, evl, producer_vf, consumer_vf,
+                                    probe=False, stages=None):
+    """Fixture certificate for retained XOR and a separately vectorized add.
+
+    Bind reductions to the actual scratch values, outputs to typed forwarding
+    PHIs/updates, and every emitted loop to its attached role/source location.
+    Independent C formulas additionally check seeds, every contribution and
+    the latest result on executed vector/tail/alias paths. No VPlan certificate
+    is relaxed: check_dispatch_interleave still checks isolated VPlan modules.
+    """
+    body = function_definition(ir, name)
+    producer, consumer = scalar_consumer(body, name)
+    blocks = loop_blocks(body)
+
+    def need(ok, detail):
+        assert ok, f'@{name}: dispatch {detail}'
+
+    def terminator(code):
+        return [line for line in code.splitlines() if line.strip()][-1]
+
+    need(body.count('alloca [65 x i32]') == 1 and
+         '%scalar.fission.scratch = alloca [65 x i32]' in body, 'scratch capacity')
+    need('vector.fission.' not in body and 'scalar.fission.chunk:' not in body, 'early schedule')
+    need(not re.search(r'(?<![\w.])%(?:sum|update) = ', producer), 'add extraction')
+    need('@llvm.vector.reduce.add.' not in producer and
+         '@llvm.vector.reduce.xor.' not in consumer, 'reduction roles')
+    need(not re.search(r'ptr %a\b|%term\b|%bits\.consume\b', consumer), 'no reread/recomputation')
+    scope = re.search(r'^define[^\n]+!dbg !(\d+) \{', body, re.M)
+    need(scope, 'function location')
+    expected_line = 10 if factor == 2 else 20
+    subprogram = re.search(rf'^!{scope[1]} = distinct !DISubprogram\(name: "{name}", '
+                           rf'[^\n]*file: !(\d+), line: {expected_line},', ir, re.M)
+    need(subprogram and re.search(rf'^!{subprogram[1]} = !DIFile\(filename: "dispatch.c",', ir, re.M),
+         'original source file/function')
+    vectors, tails, roots = [], [], []
+    for half, role, vf, scalar, operation in (
+            (producer, 'producer', producer_vf, 'loop', 'xor'),
+            (consumer, 'consumer', consumer_vf, 'scalar.fission.consumer.body', 'add')):
+        region = loop_blocks(half)
+        vector = [label for label in region if re.fullmatch(r'vector\.body[\w.$-]*', label)]
+        need(1 <= len(vector) <= (1 if evl else 2), role + ' vector loop count')
+        vectors.append(vector[0])
+        expected = set(vector) | ({scalar} if not evl else set())
+        loops = {label for label, code in region.items() if '!llvm.loop ' in code or any(
+            re.search(r'\blabel %' + re.escape(label) + r'(?=[,\s]|$)', line)
+            for line in code.splitlines() if line.startswith('  br '))}
+        need(loops == expected, role + ' complete loop accounting')
+        for label in loops:
+            try:
+                check_loop_provenance(ir, region[label], role)
+            except AssertionError:
+                need(False, role + ' attached provenance')
+            # A stage remark must describe the same original target as its
+            # actual latch, including after the second LV invocation.
+            branch = terminator(region[label])
+            dbg = re.search(r'!dbg !(\d+)', branch)
+            need(dbg and re.search(rf'^!{dbg[1]} = !DILocation\(line: {expected_line}, '
+                                   rf'column: 5, scope: !{scope[1]}\)', ir, re.M),
+                 role + ' attached source location')
+        emitted_widths, extra_vf = [], 0
+        for ordinal, vector_label in enumerate(vector):
+            code = region[vector_label]
+            # Widths are bound to the actual scratch value type, not the wide
+            # AoS input type, hints or a later scalar-revisit remark.
+            access = (r'(?:store <vscale x (\d+) x i32>|@llvm\.vp\.store\.nxv(\d+)i32\.)'
+                      if role == 'producer' else
+                      r'(?:load <vscale x (\d+) x i32>|@llvm\.vp\.load\.nxv(\d+)i32\.)')
+            accesses = re.findall(access, code)
+            # Producer input loads cannot satisfy this store-type check;
+            # consumers contain only their single scratch input stream.
+            need(len(accesses) == 1, role + ' scratch stream count')
+            actual_vf = int(next(width for width in accesses[0] if width))
+            need(actual_vf > 0 and (ordinal != 0 or actual_vf == vf), role + ' observed VF')
+            if ordinal:
+                extra_vf = actual_vf
+            ty = f'<vscale x {actual_vf} x i32>'
+            if role == 'producer':
+                need(code.count(f'@llvm.vector.deinterleave{factor}.nxv{actual_vf * factor}i32') == 1,
+                     'producer interleave width')
+                store = (re.search(rf'@llvm\.vp\.store\.nxv{actual_vf}i32\.p0\({re.escape(ty)} '
+                                   r'(%[-\w.$]+), ptr align 4 (%[-\w.$]+),', code) if evl else
+                         re.search(rf'\bstore {re.escape(ty)} (%[-\w.$]+), ptr (%[-\w.$]+), align 4', code))
+                need(store, 'producer scratch store')
+                value, address = store.groups()
+                need(re.search(re.escape(address) + r' = getelementptr inbounds \[65 x i32\], '
+                               r'ptr %scalar\.fission\.scratch, i32 0, i64 %[-\w.$]+', code),
+                     'producer scratch address')
+                need(re.search(r' = xor ' + re.escape(ty) + r' (?:' + re.escape(value) +
+                               r', %[-\w.$]+|%[-\w.$]+, ' + re.escape(value) + r')(?:, ![^\n]*)?$',
+                               code, re.M), 'retained vector XOR contribution')
+            else:
+                load = (re.search(r'(%[-\w.$]+) = call ' + re.escape(ty) +
+                                  rf' @llvm\.vp\.load\.nxv{actual_vf}i32\.p0\(ptr align 4 (%[-\w.$]+),', code)
+                        if evl else re.search(r'(%[-\w.$]+) = load ' + re.escape(ty) +
+                                               r', ptr (%[-\w.$]+), align 4', code))
+                need(load, 'consumer scratch load')
+                value, address = load.groups()
+                need(re.search(re.escape(address) + r' = getelementptr inbounds \[65 x i32\], '
+                               r'ptr %scalar\.fission\.scratch, i32 0, i64 %[-\w.$]+', code),
+                     'consumer scratch address')
+                need(re.search(r' = add ' + re.escape(ty) + r' (?:' + re.escape(value) +
+                               r', %[-\w.$]+|%[-\w.$]+, ' + re.escape(value) + r')(?:, ![^\n]*)?$',
+                               code, re.M), 'moved vector add contribution')
+            emitted_widths.append(actual_vf)
+        reduced = re.findall(r'(%[-\w.$]+) = call i32 @llvm\.vector\.reduce\.' + operation +
+                             r'\.nxv([1-9][0-9]*)i32\(', half)
+        need(sorted(int(width) for _, width in reduced) == sorted(emitted_widths),
+             role + ' vector results/widths')
+        roots.append({value for value, _ in reduced})
+        tails.append({'label': vector[1] if len(vector) == 2 else None, 'vf': extra_vf})
+        if not evl:
+            update = '%updated.bits' if role == 'producer' else '%update.consume'
+            accumulator = '%bits' if role == 'producer' else '%sum.consume'
+            contribution = '%term' if role == 'producer' else '%fission.contribution'
+            need(f'{update} = {operation} i32 {accumulator}, {contribution}' in region[scalar],
+                 role + ' scalar update')
+            roots[-1].add(update)
+
+    # Follow only typed PHIs on actual predecessor edges. Vector results and
+    # scalar updates must both reach their respective observable output; an
+    # unused correct reduction elsewhere cannot satisfy this certificate.
+    definitions = {value: (label, expression) for label, code in blocks.items()
+                   for value, expression in re.findall(r'^  (%[-\w.$]+) = (.+?)(?:, ![^\n]*)?$',
+                                                       code, re.M)}
+    predecessors = {label: {pred for pred, code in blocks.items()
+                           if label in re.findall(r'\blabel %([-\w.$]+)', terminator(code))}
+                    for label in blocks}
+    for pointer, result_roots in (('%out', roots[1]), ('%o1', roots[0])):
+        stores = re.findall(r'^  store i32 (%[-\w.$]+), ptr ' + re.escape(pointer) +
+                            r', align 4(?:, ![^\n]*)?$', blocks['exit'], re.M)
+        need(len(stores) == 1, 'output store ' + pointer)
+        seen = set()
+
+        def forward(value, trail=()):
+            need(value not in trail and len(trail) < 8, 'result forwarding cycle/depth')
+            if value in result_roots:
+                seen.add(value)
+                return
+            need(value in definitions, 'result definition')
+            label, expression = definitions[value]
+            need(expression.startswith('phi i32 '), 'typed result forwarding')
+            inputs = re.findall(r'\[ (%[-\w.$]+), %([-\w.$]+) \]', expression[8:])
+            need(expression == 'phi i32 ' + ', '.join(f'[ {v}, %{p} ]' for v, p in inputs) and
+                 len(inputs) == len(predecessors[label]) and
+                 {p for _, p in inputs} == predecessors[label], 'result value/edge')
+            for incoming, _ in inputs:
+                forward(incoming, trail + (value,))
+
+        forward(stores[0])
+        need(seen == result_roots, 'all vector/tail results reach output')
+    need('%o1 = getelementptr i32, ptr %out, i64 1' in blocks['exit'], 'XOR output address')
+    for instruction in ('store i32 17, ptr %out, align 4',
+                        '%b1 = getelementptr i32, ptr %out, i64 1',
+                        'store i32 23, ptr %b1, align 4'):
+        need(instruction in blocks['bypass'], 'zero-entry results')
+    if stages is not None:
+        stages.update(primary_labels=vectors, ordinary_tails=tails)
+    if probe:
+        need(not evl, 'host scalar-remainder policy')
+        for stage, label in enumerate((vectors[0], 'loop', vectors[1], 'scalar.fission.consumer.body')):
+            pattern = (rf'^{re.escape(label)}:[^\n]*\n'
+                       r'(?:[ \t]+%[^\n]* = phi [^\n]*\n)*')
+            body, count = re.subn(pattern, lambda m: m[0] +
+                                  f'  call void @fission_interleave_probe(i32 {stage})\n',
+                                  body, flags=re.M)
+            need(count == 1, 'stage probe ' + str(stage))
+        for role, tail in enumerate(tails):
+            if not tail['vf']:
+                continue
+            pattern = (rf'^{re.escape(tail["label"])}:[^\n]*\n'
+                       r'(?:[ \t]+%[^\n]* = phi [^\n]*\n)*')
+            code = (f'  %fission.dispatch.probe.scale.{role} = call i64 @llvm.vscale.i64()\n'
+                    f'  %fission.dispatch.probe.lanes.{role} = mul i64 '
+                    f'%fission.dispatch.probe.scale.{role}, {tail["vf"]}\n'
+                    f'  call void @fission_interleave_tail_probe(i32 {role}, '
+                    f'i64 %fission.dispatch.probe.lanes.{role})\n')
+            body, count = re.subn(pattern, lambda m: m[0] + code, body, flags=re.M)
+            need(count == 1, 'ordinary vector remainder probe')
+    return body
+
+
 def instrument_interleave_stages(ir, functions, ordinary_tails=None):
     """Host-only entry counters, after PHIs, for each actual emitted stage.
 
@@ -3770,16 +3988,21 @@ def check(args, work):
                                 'options': flags, 'selection_remarks': result.stderr})
                 print(f'Built {tag}, vscale={scale}', flush=True)
 
-    # The same module enters the early and VPlan paths without isolation flags.
+    # Default dispatch now retains XOR in each AoS producer and extracts add.
     # Its bodies are identical to the independent original scalar references
     # above (only debug locations and LV metadata differ). Keep all inherited
     # matrices intact and append these comparisons, including a second LV run.
     source = keep_functions((tests / 'reduction-fission-dispatch.ll').read_text(),
                             ['interleave2', 'interleave3', 'interleave2_ordered',
                              'compact_nested'])
+    dispatch_reference, dispatch_references = rename_execution_functions(
+        source, {function: f'ref_dispatch_{function}' for function in
+                 ('interleave2', 'interleave3', 'interleave2_ordered', 'compact_nested')}, used_symbols)
+    compile_ir('reference_dispatch', dispatch_reference)
     dispatch_common = [flag for flag in common
                        if flag != '-enable-scalar-reduction-fission=false']
     dispatch_common.append('-scalable-vectorization=always')
+    dispatch_host_functions = set()
     for repeated, relaxed, evl in product((False, True), (False, True), (True, False)):
         options = list(dispatch_common) + [
             '-vplan-reduction-fission-force-producer-vf=2',
@@ -3800,47 +4023,15 @@ def check(args, work):
         result = run([opt, *options], input=source)
         (work / f'{tag}.remarks').write_text(result.stderr)
         (work / f'{tag}.rvv.ll').write_text(result.stdout)
-        assert result.stderr.count('split scalar-IR reduction loop;') == 2, result.stderr
-        assert len(re.findall(r': split reduction loop:', result.stderr)) == 2, result.stderr
-        for line in (10, 20):
-            assert (f'dispatch.c:{line}:5: scalar-IR reduction fission rejected: '
-                    'scalar-unsupported-recurrence') in result.stderr, result.stderr
-            assert re.search(
-                rf'dispatch.c:{line}:5: split reduction loop: baseline VF .*, '
-                r'producer VF vscale x 2, accumulator VF vscale x 4, '
-                r'trip count bounded-runtime, scratch capacity 65, scratch bytes 260, '
-                r'scratch store bytes/iteration 4, scratch load bytes/iteration 4, '
-                r'duplicated recipes 0, reread loads/iteration 0',
-                result.stderr), result.stderr
-        overlap_vfs = []
-        for stage in ('producer', 'consumer'):
-            match = re.search(rf'dispatch.c:30:5: scalar-IR fission {stage} VF '
-                              r'vscale x ([1-9][0-9]*)\b', result.stderr)
-            assert match, result.stderr
-            overlap_vfs.append(int(match[1]))
-        for line, size, producer_vf in ((30, 520, f'vscale x {overlap_vfs[0]}'),
-                                        (50, 784, '1')):
-            assert re.search(
-                rf'dispatch.c:{line}:5: split scalar-IR reduction loop;[^\n]*'
-                rf'scratch capacity 65, scratch bytes {size}\b', result.stderr), result.stderr
-            consumer_vf = overlap_vfs[1] if line == 30 else 4
-            for stage, vf in (('producer', producer_vf),
-                              ('consumer', f'vscale x {consumer_vf}')):
-                assert (f'dispatch.c:{line}:5: scalar-IR fission {stage} VF {vf}'
-                        in result.stderr), result.stderr
-        ordinary_tails = {}
-        for name, factor in (('interleave2', 2), ('interleave3', 3)):
-            body = function_definition(result.stdout, name)
-            assert body.count('alloca [65 x i32]') == 1, body
-            assert body.count('vector.fission.producer.body:') == 1, body
-            assert body.count('vector.fission.accumulator.body:') == 1, body
-            group = re.search(r'^vector\.fission\.producer\.body:[^\n]*\n'
-                              r'((?s:.*?))(?=^[\w.$-]+:|^})', body, re.M)[1]
-            assert group.count(f'@llvm.vector.deinterleave{factor}.') == 1, group
-            assert 'scalar.fission.scratch' not in body, body
-            ordinary_tails[name] = check_dispatch_interleave(result.stdout, name, factor,
-                                                            repeated, evl)
+        stage_vfs = dispatch_stage_vfs(result.stderr)
+        overlap_vfs = stage_vfs['interleave2_ordered']
         instrumented = result.stdout
+        layouts = {name: {} for name in ('interleave2', 'interleave3')}
+        for name, factor in (('interleave2', 2), ('interleave3', 3)):
+            checked = check_dispatch_scalar_interleave(result.stdout, name, factor, evl,
+                                                        *stage_vfs[name], probe=not evl,
+                                                        stages=layouts[name])
+            instrumented = instrumented.replace(function_definition(result.stdout, name), checked, 1)
         for name, checked in (
             ('interleave2_ordered', check_dispatch_overlap(result.stdout, evl,
                                                           *overlap_vfs, probe=not evl)),
@@ -3855,17 +4046,15 @@ def check(args, work):
         if evl:
             records.append({'fixture': 'dispatch', 'repeated_lv': repeated,
                             'fp_reordering_option': relaxed, 'tail_policy': 'default-evl',
-                            'ordered_overlap_stage_vfs': overlap_vfs,
-                            'vplan_ordinary_tails': ordinary_tails,
-                            'accounting': 'each full stage floor(N/VF) entries; ordinary '
-                                          'EVL tails ceil((N%VF)/TVF) entries and N%VF '
-                                          'participating lanes; forwarding blocks are not iterations',
+                            'stage_vfs': stage_vfs, 'emitted_stages': layouts,
+                            'accounting': 'actual early producer/consumer stages; retained XOR '
+                                          'and moved add; EVL is machine verified, not host executed',
                             'executed': False, 'options': options,
                             'selection_remarks': result.stderr})
             continue
-        instrumented = instrument_interleave_stages(instrumented,
-                                                    ['interleave2', 'interleave3'], ordinary_tails)
-        instrumented += ('\ndeclare void @record_scalar_consumer_vector()\n'
+        instrumented += ('\ndeclare void @fission_interleave_probe(i32)\n'
+                         'declare void @fission_interleave_tail_probe(i32, i64)\n'
+                         'declare void @record_scalar_consumer_vector()\n'
                          'declare void @record_scalar_consumer_tail()\n'
                          'declare void @record_compact_participant()\n'
                          'declare void @record_compact_iteration()\n')
@@ -3877,31 +4066,94 @@ def check(args, work):
             for function, factor in (('interleave2', 2), ('interleave3', 3),
                                      ('interleave2_ordered', 2), ('compact_nested', 0)):
                 name = names[function]
+                reference = dispatch_references[function]
                 if function == 'compact_nested':
-                    declarations.append(f'extern ScalarNestedFn {name};')
+                    declarations.append(f'extern ScalarNestedFn {name}, {reference};')
                     compact_nested_rows.append(
-                        f'{{"{name}", {name}, ref_compact_nested, {4 * scale}}}')
+                        f'{{"{name}", {name}, {reference}, {4 * scale}}}')
                 else:
                     fp = function == 'interleave2_ordered'
-                    pvf, avf = overlap_vfs if fp else (2, 4)
+                    pvf, avf = stage_vfs[function]
+                    declarations.append(f'extern {"ShortFPFn" if fp else "ShortIntFn"} {name}, {reference};')
+                    # The final field opts the two early sum/XOR stages into
+                    # independent formulas and per-configuration execution evidence.
+                    formula = '' if fp else ', true'
+                    if not fp:
+                        dispatch_host_functions.add(name)
                     tail_vfs = ([0, 0] if fp else
-                                [tail['vf'] * scale for tail in ordinary_tails[function]])
-                    declarations.append(f'extern {"ShortFPFn" if fp else "ShortIntFn"} {name};')
+                                [tail['vf'] * scale for tail in layouts[function]['ordinary_tails']])
                     row = (f'{{"{name}", {factor}, 2, {pvf * scale}, {avf * scale}, '
-                           f'{name}, ref_{function}, {tail_vfs[0]}, {tail_vfs[1]}}}')
+                           f'{name}, {reference}, {tail_vfs[0]}, {tail_vfs[1]}{formula}}}')
                     (interleave_fp_rows if fp else interleave_int_rows).append(row)
             compile_ir(f'{tag}_s{scale}', fixed)
             records.append({'fixture': 'dispatch', 'repeated_lv': repeated,
                             'fp_reordering_option': relaxed, 'tail_policy': 'scalar-remainder',
-                            'vscale': scale, 'options': options,
-                            'ordered_overlap_stage_vfs': overlap_vfs,
-                            'vplan_ordinary_tails': ordinary_tails,
-                            'comparison': 'exact original scalar references; ordered FP',
-                            'probes': 'four original AoS stages plus every emitted ordinary '
-                                      'vector tail, with independent entry/lane counters and '
-                                      'exact producer/consumer N totals; exact nested N/P/vector/tail',
+                            'vscale': scale, 'options': options, 'stage_vfs': stage_vfs,
+                            'emitted_stages': layouts,
+                            'comparison': 'exact original dispatch IR and independent C sum/XOR '
+                                          'formulas; inherited ordered overlap and compact nest',
+                            'probes': 'actual producer vector/scalar and consumer vector/scalar '
+                                      'entries; exact N totals at independently observed widths; '
+                                      'per-configuration execution totals; exact nested N/P/vector/tail',
                             'selection_remarks': result.stderr})
             print(f'Built combined default dispatch {tag}, vscale={scale}', flush=True)
+
+    # Preserve the old VPlan dispatch/tail certificates explicitly under
+    # isolation. Default dispatch no longer reaches this architecture, but its
+    # four original stages and repeated-LV ordinary tails remain obligations.
+    isolated_source = keep_functions(source, ['interleave2', 'interleave3'])
+    for repeated, relaxed, evl in product((False, True), (False, True), (True, False)):
+        options = list(dispatch_common) + [
+            '-enable-scalar-reduction-fission=false',
+            '-vplan-reduction-fission-force-producer-vf=2',
+            '-vplan-reduction-fission-force-accumulator-vf=4',
+        ]
+        if repeated:
+            options[0] = ('-passes=loop-vectorize,loop-vectorize,verify<domtree>,'
+                          'verify<loops>,verify<scalar-evolution>')
+        if relaxed:
+            options.append('-vplan-reduction-fission-allow-fp-reordering')
+        if not evl:
+            options += ['-tail-folding-policy=dont-fold-tail', '-enable-epilogue-vectorization=false']
+        tag = (f'dispatch_isolated_lv{2 if repeated else 1}_'
+               f'{"reordered" if relaxed else "strict"}_{"evl" if evl else "tail"}')
+        result = run([opt, *options], input=isolated_source)
+        (work / f'{tag}.remarks').write_text(result.stderr)
+        (work / f'{tag}.rvv.ll').write_text(result.stdout)
+        assert result.stderr.count('split reduction loop:') == 2, result.stderr
+        assert 'split scalar-IR reduction loop;' not in result.stderr, result.stderr
+        ordinary_tails = {}
+        for name, factor, line in (('interleave2', 2, 10), ('interleave3', 3, 20)):
+            assert re.search(rf'dispatch.c:{line}:5: split reduction loop: baseline VF .*, '
+                             r'producer VF vscale x 2, accumulator VF vscale x 4, '
+                             r'trip count bounded-runtime, scratch capacity 65, scratch bytes 260, '
+                             r'scratch store bytes/iteration 4, scratch load bytes/iteration 4, '
+                             r'duplicated recipes 0, reread loads/iteration 0', result.stderr), result.stderr
+            body = function_definition(result.stdout, name)
+            assert body.count('alloca [65 x i32]') == 1 and 'scalar.fission.scratch' not in body, body
+            group = loop_blocks(body)['vector.fission.producer.body']
+            assert group.count(f'@llvm.vector.deinterleave{factor}.') == 1, group
+            ordinary_tails[name] = check_dispatch_interleave(result.stdout, name, factor, repeated, evl)
+        run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
+             '-o', str(work / f'{tag}.s')], input=result.stdout)
+        if not evl:
+            instrumented = instrument_interleave_stages(result.stdout, ordinary_tails, ordinary_tails)
+            for scale in args.vscales:
+                fixed, names = rename_execution_functions(
+                    specialize(instrumented, scale),
+                    {function: f'{function}_{tag}_s{scale}' for function in ordinary_tails}, used_symbols)
+                for function, factor in (('interleave2', 2), ('interleave3', 3)):
+                    name, reference = names[function], dispatch_references[function]
+                    tails = [tail['vf'] * scale for tail in ordinary_tails[function]]
+                    declarations.append(f'extern ShortIntFn {name}, {reference};')
+                    interleave_int_rows.append(f'{{"{name}", {factor}, 2, {2 * scale}, {4 * scale}, '
+                                               f'{name}, {reference}, {tails[0]}, {tails[1]}}}')
+                compile_ir(f'{tag}_s{scale}', fixed)
+        records.append({'fixture': 'dispatch-isolated-vplan', 'repeated_lv': repeated,
+                        'fp_reordering_option': relaxed, 'tail_policy': 'default-evl' if evl else 'scalar-remainder',
+                        'vscales': [] if evl else args.vscales, 'host_variants_generated': not evl,
+                        'vplan_ordinary_tails': ordinary_tails, 'options': options,
+                        'selection_remarks': result.stderr})
 
     # Final producer exports are an additional matrix. Keep all inherited
     # fixtures, reference origins, probes and adapter comparisons unchanged.
@@ -4514,9 +4766,24 @@ def check(args, work):
          '-lm', '-o', executable])
     result = run([executable])
     print(result.stdout, end='')
+    dispatch_execution = {}
+    for match in re.finditer(r'^Dispatch (\S+): comparisons=(\d+) aliases=(\d+) bypasses=(\d+) '
+                             r'producer-vector=(\d+) producer-tail=(\d+) '
+                             r'consumer-vector=(\d+) consumer-tail=(\d+) '
+                             r'producer-ordinary=(\d+) producer-ordinary-lanes=(\d+) '
+                             r'consumer-ordinary=(\d+) consumer-ordinary-lanes=(\d+)$', result.stdout, re.M):
+        name = match[1]
+        assert name not in dispatch_execution, name
+        dispatch_execution[name] = dict(zip(
+            ('comparisons', 'aliases', 'bypasses', 'producer_vector', 'producer_tail',
+             'consumer_vector', 'consumer_tail', 'producer_ordinary', 'producer_ordinary_lanes',
+             'consumer_ordinary', 'consumer_ordinary_lanes'), map(int, match.groups()[1:])))
+    assert set(dispatch_execution) == dispatch_host_functions, dispatch_execution
+    assert len(dispatch_execution) == 8 * len(args.vscales), dispatch_execution
     (work / 'results.json').write_text(json.dumps({
         'execution': 'host fixed-vscale specialization (not RVV execution)',
         'host_triple': triple, 'cases': records, 'result': result.stdout,
+        'dispatch_execution': dispatch_execution,
         'coverage_mapping': {
             'vplan_head': '5829f993afeabaabca2dd8e728c5cc637a56ea13',
             'scalar_head': '16d3d9df9d01e0a24000ccf672293ddff87d1fde',
@@ -4529,9 +4796,11 @@ def check(args, work):
                 'scalar_matrix': 227300, 'vplan_matrix': 351600,
                 'shared_comparisons': 7800, 'inherited_union': 571100,
                 'additional_dispatch': 66960, 'union_with_dispatch': 638060,
+                'additional_isolated_dispatch': 19040,
+                'union_with_dispatch_and_isolated': 657100,
                 'additional_adapter': 1358,
             },
-            'dispatch': 'two sum/xor AoS fallbacks, one ordered early AoS overlap, '
+            'dispatch': 'two early retained-XOR/moved-add AoS splits, one ordered early AoS overlap, '
                         'one compact nest; single/repeated LV and both FP options; '
                         'all inherited N/P, aliases, canaries and probes retained',
             'reference_origins': {

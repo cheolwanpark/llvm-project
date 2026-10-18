@@ -260,6 +260,9 @@ static const struct {
   ShortIntFn *Fn, *Reference;
   // Zero means that no additional ordinary vector tail was emitted.
   unsigned ProducerTailVF, AccumulatorTailVF;
+  // Only default early-fission sum/XOR dispatch fixtures use this oracle.
+  // Omitted fields in every inherited VPlan row remain false.
+  bool ScalarDispatch;
 } InterleaveInts[] = {@INTERLEAVE_INT@};
 static const struct {
   const char *Name;
@@ -528,6 +531,23 @@ static void check_interleave_entries(const char *Name, unsigned N,
          "vector/scalar/ordinary-tail entries or participating lanes mismatch");
   OrdinaryTailEntries += InterleaveTailEntries[0] + InterleaveTailEntries[1];
   OrdinaryTailLanes += InterleaveTailLanes[0] + InterleaveTailLanes[1];
+}
+
+static void dispatch_integer_formula(const uint32_t *A, uint32_t *Out,
+                                     uint64_t N, unsigned Factor) {
+  uint32_t Sum = 17, Bits = 23;
+  if (Factor != 2 && Factor != 3) abort();
+  if (N && N <= 65)
+    for (uint64_t I = 0; I < N; ++I) {
+      uint32_t X = A[Factor * I];
+      uint32_t Pair = ((X * 3u) ^ X) - A[Factor * I + 1];
+      uint32_t Term = Factor == 2 ? Pair * 7u : Pair + A[Factor * I + 2];
+      Sum += Term;
+      Bits ^= Term;
+    }
+  // Stores follow all input loads, including when Out aliases A.
+  Out[0] = Sum;
+  Out[1] = Bits;
 }
 static void fill_fp(double *A, unsigned Count, unsigned Trial) {
   for (unsigned I = 0; I < Count; ++I) {
@@ -2536,7 +2556,10 @@ int main(void) {
   // and lanes as well as residual scalar visits. Exact multiples have zero
   // tail visits. The same checks hold when a complete input group is
   // intentionally reread in the consumer.
-  for (unsigned C = 0; C < sizeof(InterleaveInts) / sizeof(*InterleaveInts); ++C)
+  for (unsigned C = 0; C < sizeof(InterleaveInts) / sizeof(*InterleaveInts); ++C) {
+    unsigned DispatchRuns = 0, DispatchAliases = 0, DispatchBypasses = 0;
+    uint64_t DispatchEntries[4] = {0};
+    uint64_t DispatchOrdinaryEntries[2] = {0}, DispatchOrdinaryLanes[2] = {0};
     for (unsigned K = 0; K < sizeof(Counts) / sizeof(*Counts); ++K)
       for (unsigned Trial = 0; Trial < 20; ++Trial) {
         unsigned N = Counts[K], Factor = InterleaveInts[C].Factor;
@@ -2547,6 +2570,13 @@ int main(void) {
         for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I)
           Out[I] = RefOut[I] = random_value();
         InterleaveInts[C].Reference(A, RefOut + 1, N);
+        if (InterleaveInts[C].ScalarDispatch) {
+          uint32_t Independent[InterleaveMaxOutputs + 2];
+          memcpy(Independent, Out, sizeof(Independent));
+          dispatch_integer_formula(A, Independent + 1, N, Factor);
+          if (memcmp(Independent, RefOut, sizeof(Independent)))
+            fail(InterleaveInts[C].Name, N, Trial, "original IR / independent sum-XOR formula mismatch");
+        }
         reset_interleave_probes();
         InterleaveInts[C].Fn(A, Out + 1, N);
         check_interleave_entries(
@@ -2561,11 +2591,27 @@ int main(void) {
           fail(InterleaveInts[C].Name, N, Trial,
                "interleaved integer input modified");
         ++Runs;
+        if (InterleaveInts[C].ScalarDispatch) {
+          ++DispatchRuns;
+          DispatchBypasses += !N || N > 65;
+          for (unsigned S = 0; S < 4; ++S) DispatchEntries[S] += InterleaveEntries[S];
+          for (unsigned S = 0; S < 2; ++S) {
+            DispatchOrdinaryEntries[S] += InterleaveTailEntries[S];
+            DispatchOrdinaryLanes[S] += InterleaveTailLanes[S];
+          }
+        }
         if (Trial == 0 && N >= 2 && N <= 65) {
           uint32_t AliasReference[InterleaveInputElements];
           if (N * Factor < InterleaveInts[C].Outputs) abort();
           memcpy(AliasReference, InterleaveInput, N * Factor * sizeof(*A));
           InterleaveInts[C].Reference(AliasReference, AliasReference, N);
+          if (InterleaveInts[C].ScalarDispatch) {
+            uint32_t Independent[InterleaveInputElements];
+            memcpy(Independent, InterleaveInput, N * Factor * sizeof(*A));
+            dispatch_integer_formula(Independent, Independent, N, Factor);
+            if (memcmp(Independent, AliasReference, N * Factor * sizeof(*A)))
+              fail(InterleaveInts[C].Name, N, Trial, "aliased original IR / independent formula mismatch");
+          }
           reset_interleave_probes();
           InterleaveInts[C].Fn(A, (uint32_t *)A, N);
           check_interleave_entries(
@@ -2576,8 +2622,40 @@ int main(void) {
             fail(InterleaveInts[C].Name, N, Trial,
                  "interleaved integer aliased output mismatch");
           ++Runs;
+          if (InterleaveInts[C].ScalarDispatch) {
+            ++DispatchRuns;
+            ++DispatchAliases;
+            for (unsigned S = 0; S < 4; ++S) DispatchEntries[S] += InterleaveEntries[S];
+            for (unsigned S = 0; S < 2; ++S) {
+              DispatchOrdinaryEntries[S] += InterleaveTailEntries[S];
+              DispatchOrdinaryLanes[S] += InterleaveTailLanes[S];
+            }
+          }
         }
       }
+    if (InterleaveInts[C].ScalarDispatch) {
+      // A width larger than the finite bound legitimately has no vector
+      // entries. A width-one ordinary remainder can also consume its whole
+      // stream. Require scalar visits whenever a scalar remainder can exist.
+      unsigned PT = InterleaveInts[C].ProducerTailVF;
+      unsigned AT = InterleaveInts[C].AccumulatorTailVF;
+      if (!DispatchRuns || !DispatchAliases || !DispatchBypasses ||
+          (InterleaveInts[C].ProducerVF > 1 && PT != 1 && !DispatchEntries[1]) ||
+          (InterleaveInts[C].AccumulatorVF > 1 && AT != 1 && !DispatchEntries[3]) ||
+          (InterleaveInts[C].ProducerVF <= 65 && !DispatchEntries[0]) ||
+          (InterleaveInts[C].AccumulatorVF <= 65 && !DispatchEntries[2]))
+        fail(InterleaveInts[C].Name, 0, 0, "missing dispatch execution path");
+      printf("Dispatch %s: comparisons=%u aliases=%u bypasses=%u "
+             "producer-vector=%llu producer-tail=%llu consumer-vector=%llu consumer-tail=%llu "
+             "producer-ordinary=%llu producer-ordinary-lanes=%llu "
+             "consumer-ordinary=%llu consumer-ordinary-lanes=%llu\n",
+             InterleaveInts[C].Name, DispatchRuns, DispatchAliases, DispatchBypasses,
+             (unsigned long long)DispatchEntries[0], (unsigned long long)DispatchEntries[1],
+             (unsigned long long)DispatchEntries[2], (unsigned long long)DispatchEntries[3],
+             (unsigned long long)DispatchOrdinaryEntries[0], (unsigned long long)DispatchOrdinaryLanes[0],
+             (unsigned long long)DispatchOrdinaryEntries[1], (unsigned long long)DispatchOrdinaryLanes[1]);
+    }
+  }
   for (unsigned C = 0; C < sizeof(InterleaveFP) / sizeof(*InterleaveFP); ++C)
     for (unsigned K = 0; K < sizeof(Counts) / sizeof(*Counts); ++K)
       for (unsigned Trial = 0; Trial < 20; ++Trial) {

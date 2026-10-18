@@ -5,12 +5,12 @@
 ; RUN: FileCheck %s --check-prefix=EXACT < %t.exact
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.exact -o /dev/null
 ; RUN: opt -scalable-vectorization=always -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -vplan-reduction-fission-force-producer-vf=2 -vplan-reduction-fission-force-accumulator-vf=4 -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --check-prefixes=DEFAULT,ONCE < %t
+; RUN: FileCheck %s --check-prefix=DEFAULT < %t
 ; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
 ; RUN: FileCheck %s --check-prefix=SELECTED < %t.remarks
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
 ; RUN: opt -scalable-vectorization=always -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -vplan-reduction-fission-force-producer-vf=2 -vplan-reduction-fission-force-accumulator-vf=4 -vplan-reduction-fission-allow-fp-reordering -pass-remarks=vplan-reduction-fission -S %s -o %t.repeat 2> %t.repeat.remarks
-; RUN: FileCheck %s --check-prefixes=DEFAULT,REPEAT < %t.repeat
+; RUN: FileCheck %s --check-prefix=DEFAULT < %t.repeat
 ; RUN: FileCheck %s --check-prefix=SELECTED < %t.repeat.remarks
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.repeat -o /dev/null
 ; RUN: opt -scalable-vectorization=always -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -vplan-reduction-fission-force-producer-vf=2 -vplan-reduction-fission-force-accumulator-vf=4 -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false -S %s -o %t.tail
@@ -26,34 +26,36 @@
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.limit -o /dev/null
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=519 -S %s -o %t.limit.scalar
 ; RUN: FileCheck %s --check-prefix=LIMIT-SCALAR < %t.limit.scalar
+; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=259 -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.retained.limit 2> %t.retained.limit.remarks
+; RUN: FileCheck %s --check-prefix=RETAINED-LIMIT < %t.retained.limit
+; RUN: FileCheck %s --check-prefix=RETAINED-REJECT < %t.retained.limit.remarks
+; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 -S %s -o %t.retained.exact
+; RUN: FileCheck %s --check-prefix=RETAINED-EXACT < %t.retained.exact
 ;
-; One module enters both paths through default dispatch. A sum/xor AoS
-; candidate fails early recurrence legality, then reaches VPlan interleave
-; planning with intact analyses. The ordered two-sum AoS loop is eligible for
-; both paths and must take the early split exactly once. The nested compact
-; stream retains outer feedback and reuses bounded scratch once per row.
+; Default dispatch retains each XOR recurrence in the producer and extracts
+; only the closed add reduction. Failed optional recognition is transactional:
+; retaining XOR must not block the independent accumulator or change its uses.
+; The ordered two-sum AoS loop also splits early exactly once. The nested
+; compact stream retains outer feedback and reuses bounded scratch per row.
 ; Volatile input rejects early splitting and ordinary LV.
 ;
-; The compact hint fixes ordinary VF4 for its count-provenance checker.
-; Ordinary LV selects both overlapping AoS stage VFs; executable probes use
-; their actual source-located stage remarks. The identical candidate below
-; also takes VPlan fission when the early path is explicitly disabled.
-; Explicit VPlan stage widths apply only after early rejection. No scalar-path
-; isolation flag is present in the default RUNs. The fallback's followup_all deliberately permits
-; another LV invocation: persistent stage provenance must prevent new fission.
-; With default EVL/VP, the second LV turns both scalar tails into VF4 vector
-; loops, even when fewer than VF4 lanes remain. Their old body.middle blocks
-; only forward control. With dont-fold-tail, any additional vector loop uses
-; full chunks and a scalar remainder. The checker accounts for each emitted
-; loop and its participating lanes, separately from the original four stages.
-; Actual transformed execution is in check-reduction-fission.py under both FP
-; option settings, single/repeated LV and all default fixed vscales.
+; Ordinary LV chooses both stage VFs independently; the VPlan force-pair
+; options do not prescribe these widths. Attached producer/consumer provenance,
+; original source locations, both final results, and actual stage widths are
+; certified by reduction-fission-dispatch-checker.test and the host checker.
+; The isolated RUN still exercises the original VPlan interleave path. Its
+; repeated-LV ordinary tails remain covered separately by the host checker.
+; Actual default scalar-fission stages execute under both FP policies, once/
+; twice LV and every inherited fixed vscale, with independent C sum/XOR formulas.
 ;
-; REMARK: dispatch.c:10:5: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; REMARK: dispatch.c:10:5: split reduction loop: baseline VF {{.*}}, producer VF vscale x 2, accumulator VF vscale x 4, trip count bounded-runtime, scratch capacity 65, scratch bytes 260
-; REMARK-SAME: scratch store bytes/iteration 4, scratch load bytes/iteration 4, duplicated recipes 0, reread loads/iteration 0
-; REMARK: dispatch.c:20:5: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; REMARK: dispatch.c:20:5: split reduction loop: baseline VF {{.*}}, producer VF vscale x 2, accumulator VF vscale x 4, trip count bounded-runtime, scratch capacity 65, scratch bytes 260
+; REMARK: dispatch.c:10:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 1
+; REMARK-SAME: scratch store bytes/iteration 4, scratch load bytes/iteration 4, producer reread bytes/iteration 0, duplicated producer instructions 0
+; REMARK-DAG: dispatch.c:10:5: scalar-IR fission producer VF vscale x {{[1-9][0-9]*}}
+; REMARK-DAG: dispatch.c:10:5: scalar-IR fission consumer VF vscale x {{[1-9][0-9]*}}
+; REMARK: dispatch.c:20:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 1
+; REMARK-SAME: scratch store bytes/iteration 4, scratch load bytes/iteration 4, producer reread bytes/iteration 0, duplicated producer instructions 0
+; REMARK-DAG: dispatch.c:20:5: scalar-IR fission producer VF vscale x {{[1-9][0-9]*}}
+; REMARK-DAG: dispatch.c:20:5: scalar-IR fission consumer VF vscale x {{[1-9][0-9]*}}
 ; REMARK: dispatch.c:30:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 520
 ; REMARK-DAG: dispatch.c:30:5: scalar-IR fission producer VF vscale x {{[1-9][0-9]*}}
 ; REMARK-DAG: dispatch.c:30:5: scalar-IR fission consumer VF vscale x {{[1-9][0-9]*}}
@@ -66,39 +68,74 @@
 ; SELECTED-COUNT-4: : split
 ; SELECTED-NOT: : split
 ;
+; Retained state cannot be chunked to fit 259 bytes. Exactly 260 admits the
+; full stream. Keep the state update and its exact exported result in scalar
+; IR as well as checking actual vectorized stages and their two outputs.
+; RETAINED-REJECT: dispatch.c:10:5: scalar-IR reduction fission rejected: scalar-scratch-limit
+; RETAINED-REJECT: dispatch.c:20:5: scalar-IR reduction fission rejected: scalar-scratch-limit
+; RETAINED-LIMIT-LABEL: define void @interleave2(
+; RETAINED-LIMIT-NOT: fission
+; RETAINED-LIMIT: ret void
+; RETAINED-LIMIT-NOT: fission
+; RETAINED-LIMIT-LABEL: define void @interleave3(
+; RETAINED-LIMIT-NOT: fission
+; RETAINED-LIMIT: ret void
+; RETAINED-LIMIT-NOT: fission
+; RETAINED-LIMIT-LABEL: define void @interleave2_ordered(
+; RETAINED-EXACT-LABEL: define void @interleave2(
+; RETAINED-EXACT: %scalar.fission.scratch = alloca [65 x i32]
+; RETAINED-EXACT: %bits = phi i32 [ 23, %preheader ], [ %updated.bits, %loop ]
+; RETAINED-EXACT: %updated.bits = xor i32 %bits, %term
+; RETAINED-EXACT: scalar.fission.consumer.ph:
+; RETAINED-EXACT: [[XOR_EXPORT:%[-a-zA-Z$._0-9]+]] = phi i32 [ %updated.bits, %loop ]
+; RETAINED-EXACT: scalar.fission.consumer.body:
+; RETAINED-EXACT: %update.consume = add i32 %sum.consume, %fission.contribution
+; RETAINED-EXACT: exit:
+; RETAINED-EXACT-DAG: [[SUM_RESULT:%[-a-zA-Z$._0-9]+]] = phi i32 [ %update.consume, %scalar.fission.consumer.body ]
+; RETAINED-EXACT-DAG: [[XOR_RESULT:%[-a-zA-Z$._0-9]+]] = phi i32 [ [[XOR_EXPORT]], %scalar.fission.consumer.body ]
+; RETAINED-EXACT: store i32 [[SUM_RESULT]], ptr %out
+; RETAINED-EXACT: store i32 [[XOR_RESULT]], ptr %o1
+; RETAINED-EXACT-LABEL: define void @interleave3(
+; RETAINED-EXACT: %scalar.fission.scratch = alloca [65 x i32]
+; RETAINED-EXACT: %updated.bits = xor i32 %bits, %term
+; RETAINED-EXACT: scalar.fission.consumer.ph:
+; RETAINED-EXACT: [[XOR3_EXPORT:%[-a-zA-Z$._0-9]+]] = phi i32 [ %updated.bits, %loop ]
+; RETAINED-EXACT: scalar.fission.consumer.body:
+; RETAINED-EXACT: %update.consume = add i32 %sum.consume, %fission.contribution
+; RETAINED-EXACT: exit:
+; RETAINED-EXACT-DAG: [[SUM3_RESULT:%[-a-zA-Z$._0-9]+]] = phi i32 [ %update.consume, %scalar.fission.consumer.body ]
+; RETAINED-EXACT-DAG: [[XOR3_RESULT:%[-a-zA-Z$._0-9]+]] = phi i32 [ [[XOR3_EXPORT]], %scalar.fission.consumer.body ]
+; RETAINED-EXACT: store i32 [[SUM3_RESULT]], ptr %out
+; RETAINED-EXACT: store i32 [[XOR3_RESULT]], ptr %o1
+;
 ; DEFAULT-LABEL: define void @interleave2(
-; DEFAULT: alloca [65 x i32]
-; DEFAULT-NOT: scalar.fission.scratch
-; DEFAULT: vector.fission.producer.body:
+; DEFAULT: %scalar.fission.scratch = alloca [65 x i32]
+; DEFAULT-NOT: vector.fission.
+; DEFAULT: vector.body{{[0-9]*}}:
 ; DEFAULT: @llvm.vector.deinterleave2.
-; ONCE: scalar.fission.producer.body:
-; REPEAT: vector.body{{[0-9]*}}:
-; REPEAT: @llvm.experimental.get.vector.length.i64(i64 {{.*}}, i32 4, i1 true)
-; REPEAT: @llvm.vp.store.nxv4i32
-; REPEAT: scalar.fission.producer.body.middle:
-; DEFAULT: vector.fission.accumulator.body:
-; DEFAULT: @llvm.vector.reduce.add.
-; ONCE: scalar.fission.accumulator.body:
-; REPEAT: vector.body{{[0-9]*}}:
-; REPEAT: @llvm.vp.load.nxv4i32
-; REPEAT: @llvm.vector.reduce.add.nxv4i32
-; REPEAT: scalar.fission.accumulator.body.middle:
-; DEFAULT-NOT: scalar.fission.scratch
+; DEFAULT: @llvm.vp.store.nxv{{[1-9][0-9]*}}i32
+; DEFAULT: @llvm.vector.reduce.xor.nxv{{[1-9][0-9]*}}i32
+; DEFAULT: scalar.fission.consumer.ph:
+; DEFAULT-NOT: @llvm.vector.reduce.xor.
+; DEFAULT: @llvm.vp.load.nxv{{[1-9][0-9]*}}i32
+; DEFAULT: @llvm.vector.reduce.add.nxv{{[1-9][0-9]*}}i32
+; DEFAULT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
+; DEFAULT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
+; DEFAULT-NOT: vector.fission.
 ; DEFAULT-LABEL: define void @interleave3(
-; DEFAULT: alloca [65 x i32]
-; DEFAULT: vector.fission.producer.body:
+; DEFAULT: %scalar.fission.scratch = alloca [65 x i32]
+; DEFAULT-NOT: vector.fission.
+; DEFAULT: vector.body{{[0-9]*}}:
 ; DEFAULT: @llvm.vector.deinterleave3.
-; ONCE: scalar.fission.producer.body:
-; REPEAT: vector.body{{[0-9]*}}:
-; REPEAT: @llvm.experimental.get.vector.length.i64(i64 {{.*}}, i32 4, i1 true)
-; REPEAT: @llvm.vp.store.nxv4i32
-; REPEAT: scalar.fission.producer.body.middle:
-; DEFAULT: vector.fission.accumulator.body:
-; ONCE: scalar.fission.accumulator.body:
-; REPEAT: vector.body{{[0-9]*}}:
-; REPEAT: @llvm.vp.load.nxv4i32
-; REPEAT: @llvm.vector.reduce.add.nxv4i32
-; REPEAT: scalar.fission.accumulator.body.middle:
+; DEFAULT: @llvm.vp.store.nxv{{[1-9][0-9]*}}i32
+; DEFAULT: @llvm.vector.reduce.xor.nxv{{[1-9][0-9]*}}i32
+; DEFAULT: scalar.fission.consumer.ph:
+; DEFAULT-NOT: @llvm.vector.reduce.xor.
+; DEFAULT: @llvm.vp.load.nxv{{[1-9][0-9]*}}i32
+; DEFAULT: @llvm.vector.reduce.add.nxv{{[1-9][0-9]*}}i32
+; DEFAULT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
+; DEFAULT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
+; DEFAULT-NOT: vector.fission.
 ; DEFAULT-LABEL: define void @interleave2_ordered(
 ; DEFAULT: alloca [65 x double]
 ; DEFAULT-NOT: vector.fission.producer.body:
@@ -128,11 +165,27 @@
 ; DEFAULT: !{!"llvm.loop.reduction_fission.stage"}
 ;
 ; TAIL-LABEL: define void @interleave2(
-; TAIL: vector.fission.producer.body:
-; TAIL: vector.fission.accumulator.body:
+; TAIL: %scalar.fission.scratch = alloca [65 x i32]
+; TAIL: @llvm.vector.reduce.xor.
+; TAIL: loop:
+; TAIL: %updated.bits = xor i32 %bits, %term
+; TAIL: scalar.fission.consumer.ph:
+; TAIL: @llvm.vector.reduce.add.
+; TAIL: scalar.fission.consumer.body:
+; TAIL: %update.consume = add i32 %sum.consume, %fission.contribution
+; TAIL: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
+; TAIL: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
 ; TAIL-LABEL: define void @interleave3(
-; TAIL: vector.fission.producer.body:
-; TAIL: vector.fission.accumulator.body:
+; TAIL: %scalar.fission.scratch = alloca [65 x i32]
+; TAIL: @llvm.vector.reduce.xor.
+; TAIL: loop:
+; TAIL: %updated.bits = xor i32 %bits, %term
+; TAIL: scalar.fission.consumer.ph:
+; TAIL: @llvm.vector.reduce.add.
+; TAIL: scalar.fission.consumer.body:
+; TAIL: %update.consume = add i32 %sum.consume, %fission.contribution
+; TAIL: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
+; TAIL: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
 ; TAIL-LABEL: define void @interleave2_ordered(
 ; TAIL: scalar.fission.consumer.ph:
 ; TAIL: @llvm.vector.reduce.fadd.nxv{{[1-9][0-9]*}}f64
@@ -143,21 +196,27 @@
 ; TAIL: @llvm.vector.reduce.fadd.nxv4f64
 ; TAIL: scalar.fission.consumer.body:
 ;
-; At 519 bytes, both VPlan fallbacks still use 260 bytes. The ordered
+; At 519 bytes, both retained-XOR scalar splits still use 260 bytes. The ordered
 ; single-block producer now uses C=64/B=512 instead of rejecting its 520-byte
 ; full-trip allocation. Only the oversized compact CFG retains rejection.
 ; Check the scalar schedule separately so ordinary LV cannot hide its exact
 ; global IV, local scratch ordinal, partial count, and ordered carry edges.
 ; LIMIT-LABEL: define void @interleave2(
-; LIMIT: alloca [65 x i32]
-; LIMIT-NOT: scalar.fission.scratch
-; LIMIT: vector.fission.producer.body:
-; LIMIT: vector.fission.accumulator.body:
+; LIMIT: %scalar.fission.scratch = alloca [65 x i32]
+; LIMIT-NOT: scalar.fission.chunk:
+; LIMIT: @llvm.vector.reduce.xor.
+; LIMIT: scalar.fission.consumer.ph:
+; LIMIT: @llvm.vector.reduce.add.
+; LIMIT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
+; LIMIT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
 ; LIMIT-LABEL: define void @interleave3(
-; LIMIT: alloca [65 x i32]
-; LIMIT-NOT: scalar.fission.scratch
-; LIMIT: vector.fission.producer.body:
-; LIMIT: vector.fission.accumulator.body:
+; LIMIT: %scalar.fission.scratch = alloca [65 x i32]
+; LIMIT-NOT: scalar.fission.chunk:
+; LIMIT: @llvm.vector.reduce.xor.
+; LIMIT: scalar.fission.consumer.ph:
+; LIMIT: @llvm.vector.reduce.add.
+; LIMIT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %out
+; LIMIT: store i32 {{%[-a-zA-Z$._0-9]+}}, ptr %o1
 ; LIMIT-LABEL: define void @interleave2_ordered(
 ; LIMIT: alloca [64 x double]
 ; LIMIT-NOT: alloca
@@ -190,8 +249,8 @@
 ; LIMIT-LABEL: define void @compact_nested(
 ; LIMIT-NOT: fission.scratch
 ; LIMIT: ret void
-; LIMIT-REMARK: dispatch.c:10:5: split reduction loop: {{.*}}scratch capacity 65, scratch bytes 260
-; LIMIT-REMARK: dispatch.c:20:5: split reduction loop: {{.*}}scratch capacity 65, scratch bytes 260
+; LIMIT-REMARK: dispatch.c:10:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 1
+; LIMIT-REMARK: dispatch.c:20:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260, producer live-outs 1
 ; LIMIT-REMARK: dispatch.c:30:5: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 512, producer live-outs 0, chunked schedule, trip bound 65
 ; LIMIT-REMARK-SAME: scratch store bytes/iteration 8, scratch load bytes/iteration 8, producer reread bytes/iteration 0, duplicated producer instructions 0
 ; LIMIT-REMARK-DAG: dispatch.c:30:5: scalar-IR fission producer VF vscale x {{[1-9][0-9]*}}

@@ -79,7 +79,13 @@ for path in sys.argv[3:]:
         reject(definition(body, 'state.next', '%state,', '%fission.participating,'), 'export control:')
         reject(definition(body, 'state.next', '%state.delta', '%r0.consume'), 'export control:')
         reject(definition(body, 'state.merge', '%state.next,', '%state,'), 'export control:')
-        reject(definition(body, 'choose', '%state.choose,', '%nonzero.x,'), 'export control:')
+        if name == 'state_cfg_affine':
+            # This fixture branches directly on x == 0. Mutate its actual
+            # predicate, rather than failing to construct a select mutation.
+            reject(definition(body, 'choose', 'icmp eq i32 %x, 0',
+                              'icmp ne i32 %x, 0'), 'export control:')
+        else:
+            reject(definition(body, 'choose', '%state.choose,', '%nonzero.x,'), 'export control:')
         reject(definition(body, 'state.arg', ', %state', ', %x'), 'export control:')
         delta = re.search(r'^  %state.delta = [^\n]*\n', body, re.M)[0]
         update = re.search(r'^  %state.next = [^\n]*\n', body, re.M)[0]

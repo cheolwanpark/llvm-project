@@ -644,15 +644,18 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
            << ore::NV("ProducerLiveOuts", ProducerExports.size());
     if (Chunked)
       Remark << ", chunked schedule, trip bound "
-             << ore::NV("MaxTripCount", MaxTripCount)
-             << ", scratch store bytes/iteration "
-             << ore::NV("ScratchStoreBytesPerIteration", ScratchTrafficBytes)
-             << ", scratch load bytes/iteration "
-             << ore::NV("ScratchLoadBytesPerIteration", ScratchTrafficBytes)
-             << ", producer reread bytes/iteration "
-             << ore::NV("ProducerRereadBytesPerIteration", 0)
-             << ", duplicated producer instructions "
-             << ore::NV("DuplicatedProducerInstructions", 0);
+             << ore::NV("MaxTripCount", MaxTripCount);
+    // Full-trip and compact schedules need the same original-loop traffic
+    // evidence as chunks. For a compact stream these are participating-iteration
+    // bytes; capacity is still the independently bounded full producer count.
+    Remark << ", scratch store bytes/iteration "
+           << ore::NV("ScratchStoreBytesPerIteration", ScratchTrafficBytes)
+           << ", scratch load bytes/iteration "
+           << ore::NV("ScratchLoadBytesPerIteration", ScratchTrafficBytes)
+           << ", producer reread bytes/iteration "
+           << ore::NV("ProducerRereadBytesPerIteration", 0)
+           << ", duplicated producer instructions "
+           << ore::NV("DuplicatedProducerInstructions", 0);
     return Remark;
   });
 
