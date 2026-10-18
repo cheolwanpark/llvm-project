@@ -182,36 +182,122 @@ for relaxed in (False, True):
 
 # Generate analogous original-program rejections, rather than weakening or
 # deleting inherited controls/effects/CFG/strict-FP rejection files.
-module = checker.keep_functions(source, ['chunk_cfg_diamond'])
-def replace_once(text, old, new):
-    assert text.count(old) == 1, old
-    return text.replace(old, new, 1)
-
-cases = [
-    ('offset', replace_once(replace_once(module, '[0, %preheader], [%next, %latch]',
-                                         '[7, %preheader], [%next, %latch]'),
-                           'preheader:\n', 'preheader:\n  %limit = add nuw i64 %n, 7\n')
-               .replace('%next, %n', '%next, %limit'), 'scalar-scratch-limit'),
-    ('swapped', replace_once(module, '%done = icmp eq i64 %next, %n',
-                             '%done = icmp eq i64 %n, %next'), 'scalar-scratch-limit'),
-    ('volatile', replace_once(module, 'load double, ptr %dp',
-                              'load volatile double, ptr %dp'), 'scalar-non-simple-load'),
-    ('effects', replace_once(module, 'memory(none) nounwind willreturn speculatable',
-                             'memory(read) nounwind willreturn speculatable'), 'scalar-unsafe-call'),
-    ('store', replace_once(module, '%dnext = fadd double',
-                           'store i32 %x, ptr %out\n  %dnext = fadd double'), 'scalar-unsupported-instruction'),
-    ('constrained', replace_once(module, '%dnext = fadd double %dstate, %delta',
-                                 '%dnext = call double @llvm.experimental.constrained.fadd.f64('
-                                 'double %dstate, double %delta, metadata !"round.dynamic", '
-                                 'metadata !"fpexcept.strict")') +
-                    '\ndeclare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)\n',
-     'scalar-strict-fp'),
-    ('feedback', replace_once(module, '%choose = and i1 %nonzero.x, %state.odd',
-                              '%observe = add i32 %r0, %r1\n'
-                              '  %observe.i = icmp ne i32 %observe, 0\n'
-                              '  %observe.d = fcmp one double %rd, 0.0\n'
-                              '  %choose = and i1 %observe.i, %observe.d'), 'scalar-unsupported-recurrence'),
+# Complete lines are fixture-specific anchors, including indentation. A comment
+# containing the same spelling must never select an instruction or declaration.
+# In particular, offset changes all three instructions only in this definition;
+# no unanchored module-wide operand replacement is permitted.
+helper_declaration = 'declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable'
+effect_declaration = 'declare i32 @scalar_helper(i32) memory(read) nounwind willreturn speculatable'
+constrained_declaration = (
+    '\ndeclare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)\n')
+rejection_edits = [
+    ('offset', [
+        ('  %iv = phi i64 [0, %preheader], [%next, %latch]',
+         '  %iv = phi i64 [7, %preheader], [%next, %latch]'),
+        ('  br label %loop, !dbg !11',
+         '  %limit = add nuw i64 %n, 7\n  br label %loop, !dbg !11'),
+        ('  %done = icmp eq i64 %next, %n', '  %done = icmp eq i64 %next, %limit'),
+    ], 'scalar-scratch-limit'),
+    ('swapped', [('  %done = icmp eq i64 %next, %n',
+                  '  %done = icmp eq i64 %n, %next')], 'scalar-scratch-limit'),
+    ('volatile', [('  %dx = load double, ptr %dp, align 8',
+                   '  %dx = load volatile double, ptr %dp, align 8')], 'scalar-non-simple-load'),
+    ('effects', [(helper_declaration, effect_declaration)],
+     'scalar-unsafe-call'),
+    ('store', [('  %dnext = fadd double %dstate, %delta',
+                '  store i32 %x, ptr %out\n  %dnext = fadd double %dstate, %delta')],
+     'scalar-unsupported-instruction'),
+    ('constrained', [('  %dnext = fadd double %dstate, %delta',
+                      '  %dnext = call double @llvm.experimental.constrained.fadd.f64('
+                      'double %dstate, double %delta, metadata !"round.dynamic", '
+                      'metadata !"fpexcept.strict")')], 'scalar-strict-fp'),
+    ('feedback', [('  %choose = and i1 %nonzero.x, %state.odd',
+                   '  %observe = add i32 %r0, %r1\n'
+                   '  %observe.i = icmp ne i32 %observe, 0\n'
+                   '  %observe.d = fcmp one double %rd, 0.0\n'
+                   '  %choose = and i1 %observe.i, %observe.d')], 'scalar-unsupported-recurrence'),
 ]
+
+def code_lines(text):
+    # These fixtures have no semicolons in instruction string literals. This is
+    # only a nonidentity/construction check, never a way to select an anchor.
+    return [line.split(';', 1)[0].strip() for line in text.splitlines()
+            if line.split(';', 1)[0].strip()]
+
+def replace_line(text, old, new):
+    assert '\n' not in old and old != new and code_lines(old) != code_lines(new), (old, new)
+    matches = list(re.finditer('^' + re.escape(old) + '$', text, re.M))
+    assert len(matches) == 1, (old, len(matches))
+    match = matches[0]
+    return text[:match.start()] + new + text[match.end():]
+
+def original_rejections(module):
+    body = checker.function_definition(module, 'chunk_cfg_diamond')
+    assert module.count(body) == 1
+    before, _, after = module.partition(body)
+    cases = []
+    for name, edits, reason in rejection_edits:
+        if name == 'effects':
+            # Match the entire actual declaration, ignoring retained comments
+            # and identically spelled attributes on unrelated declarations.
+            candidate = replace_line(module, *edits[0])
+        else:
+            changed = body
+            for old, new in edits:
+                changed = replace_line(changed, old, new)
+            assert code_lines(changed) != code_lines(body), name
+            candidate = before + changed + after
+            assert checker.function_definition(candidate, 'chunk_cfg_diamond') == changed
+            if name == 'constrained':
+                assert not re.search(r'^declare .*@llvm\.experimental\.constrained\.fadd\.f64\(',
+                                     module, re.M)
+                candidate += constrained_declaration
+        # Construction cannot be swallowed by the expected compiler rejection.
+        assert candidate != module and code_lines(candidate) != code_lines(module), name
+        cases.append((name, candidate, reason))
+    return cases
+
+# Focused construction checks retain the original FileCheck comments and add
+# collisions for every anchor both inside and outside the intended definition.
+# Keep all four definitions here: analogous instructions in the other three
+# functions and an unrelated declaration must remain byte-for-byte unchanged.
+body = checker.function_definition(source, 'chunk_cfg_diamond')
+assert source.count(body) == 1
+before, _, after = source.partition(body)
+comments = ''.join('; retained spelling: ' + old + '\n'
+                   for _, edits, _ in rejection_edits for old, _ in edits)
+assert body.count('\nentry:\n') == 1
+entry = body.index('\nentry:\n')
+commented_body = body[:entry] + '\n' + comments + body[entry:]
+unrelated = 'declare i32 @unrelated_helper(i32) memory(none) nounwind willreturn speculatable\n'
+construction_source = comments + before + commented_body + after + comments + unrelated
+plain_cases = original_rejections(source + unrelated)
+commented_cases = original_rejections(construction_source)
+assert len(plain_cases) == len(commented_cases) == 7
+for (name, plain, reason), (commented_name, candidate, commented_reason) in zip(
+        plain_cases, commented_cases):
+    assert (name, reason) == (commented_name, commented_reason)
+    assert code_lines(candidate) == code_lines(plain), name
+    assert [line for line in candidate.splitlines() if line.lstrip().startswith(';')] == [
+        line for line in construction_source.splitlines() if line.lstrip().startswith(';')], name
+    assert [line for line in candidate.splitlines() if line.startswith('!')] == [
+        line for line in construction_source.splitlines() if line.startswith('!')], name
+    if name == 'effects':
+        # Undo exactly the changed declaration to compare the entire module.
+        assert replace_line(candidate, effect_declaration, helper_declaration) == construction_source
+    else:
+        suffix = constrained_declaration if name == 'constrained' else ''
+        changed = checker.function_definition(candidate, 'chunk_cfg_diamond')
+        assert candidate.count(changed) == 1
+        prefix, _, postfix = construction_source.partition(commented_body)
+        assert candidate == prefix + changed + postfix + suffix, name
+    for other in checker.CFG_CHUNK_FUNCTIONS:
+        if name == 'effects' or other != 'chunk_cfg_diamond':
+            assert checker.function_definition(candidate, other) == checker.function_definition(
+                construction_source, other), (name, other)
+
+module = checker.keep_functions(source, ['chunk_cfg_diamond'])
+cases = original_rejections(module)
 for name, candidate, reason in cases:
     (work / (name + '.input.ll')).write_text(candidate)
     for relaxed in (False, True):
