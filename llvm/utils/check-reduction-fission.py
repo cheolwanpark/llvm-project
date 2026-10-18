@@ -366,7 +366,8 @@ def check_compact_scalar_results(body, starts, results, recurrence=False, delay=
     need(incoming(end) == sorted(['scalar.fission.consumer.guard', join]), 'result predecessors')
 
     # Resume at zero on the vector bypass, or at the rounded vector bound.
-    iv = match(r'(' + ssa + r') = add nuw i64 (' + ssa + r'), 1', tail)
+    # Canonical consumers can retain nsw as well as nuw on their unit step.
+    iv = match(r'(' + ssa + r') = add nuw(?: nsw)? i64 (' + ssa + r'), 1', tail)
     need(iv[1] == '%fission.consumer.next', 'tail increment')
     resume_iv = phi(tail, iv[2], 'i64')
     need(('%fission.consumer.next', tail) in resume_iv and len(resume_iv) == 2,
@@ -386,19 +387,20 @@ def check_compact_scalar_results(body, starts, results, recurrence=False, delay=
     forwards, middle_forwards = [], []
     integer_count = len(integer_calls)
     for value, ty, start in starts:
-        recurrence = '%' + value + '.consume'
-        tail_inputs = phi(tail, recurrence, ty)
+        # Keep the output-interface mode independent of this reduction's SSA.
+        recurrence_value = '%' + value + '.consume'
+        tail_inputs = phi(tail, recurrence_value, ty)
         update = [v for v, edge in tail_inputs if edge == tail]
         initial = [v for v, edge in tail_inputs if edge == resume]
         need(len(update) == len(initial) == 1 and len(tail_inputs) == 2, 'tail recurrence')
         op = r'add(?: nuw)?(?: nsw)?' if ty.startswith('i') else 'fadd'
         arithmetic = match(re.escape(update[0]) + rf' = {op} {ty} ({ssa}), ({ssa})', tail)
         operands = [arithmetic[1], arithmetic[2]]
-        need(operands.count(recurrence) == 1, 'tail reduction update')
-        contribution = operands[1] if operands[0] == recurrence else operands[0]
+        need(operands.count(recurrence_value) == 1, 'tail reduction update')
+        contribution = operands[1] if operands[0] == recurrence_value else operands[0]
         match(re.escape(contribution) + rf' = load {ty}, ptr {ssa}(?:, align \d+)?', tail)
         if not ty.startswith('i'):
-            need(operands[0] == recurrence, 'ordered tail operands')
+            need(operands[0] == recurrence_value, 'ordered tail operands')
 
         vty = '<vscale x 4 x ' + ty + '>'
         if ty.startswith('i'):

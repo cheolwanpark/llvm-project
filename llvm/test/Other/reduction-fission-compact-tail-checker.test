@@ -78,6 +78,27 @@ reductions = [('r0', 'i32', 'u0'), ('r1', 'i32', 'u1'),
 for lv, path in enumerate(sys.argv[3:], 1):
     body = checker.function_definition(Path(path).read_text(), name)
     accepted(body)
+    # Both demonstrated flag spellings must reach the inherited four-stream
+    # output proof, including float. The per-reduction SSA value must never
+    # select the three-stream recurrence output interface.
+    for flags in ('nuw', 'nuw nsw'):
+        flagged = definition(body, '%fission.consumer.next', 'add nuw i64',
+                             'add ' + flags + ' i64')
+        accepted(flagged)
+        for increment in ('0', '2', '-1'):
+            rejected(definition(flagged, '%fission.consumer.next', ', 1, !dbg',
+                                ', ' + increment + ', !dbg'), 'instruction')
+        rejected(definition(flagged, '%fission.consumer.next', '%fission.consumer.iv,',
+                            '%bc.resume.val,'), 'instruction')
+        rejected(definition(flagged, '%fission.consumer.iv', '%fission.consumer.next,',
+                            '%n.vec,'), 'tail induction')
+        for bound in ('%n', '%n.vec', '65'):
+            rejected(definition(flagged, '%fission.consumer.more',
+                                '%fission.participating.count', bound),
+                     'compact count provenance', prefix='compact count provenance')
+    for flags in ('', 'nsw', 'nsw nuw'):
+        rejected(definition(body, '%fission.consumer.next', 'add nuw i64',
+                            'add' + (' ' + flags if flags else '') + ' i64'), 'instruction')
     # Names and printed predecessor comments carry no correctness evidence.
     renamed = rename_label(body, 'exit.loopexit', 'output.bridge')
     if lv == 2:
@@ -125,9 +146,13 @@ for lv, path in enumerate(sys.argv[3:], 1):
         ('%m0.lcssa', '%r0.result,', '%r1.result,', 'forwarding PHI'),
         ('%v0', '%m0.lcssa,', '%m1.lcssa,', 'output PHI r0'),
         ('%vd', '[ %start,', '[ 0.000000e+00,', 'output PHI rd'),
+        ('%vf', '[ %fstart,', '[ 0.000000e+00,', 'output PHI rf'),
+        ('%vf', '%mf.lcssa,', '%fstart,', 'output PHI rf'),
     ]:
         rejected(definition(body, value, old, new), obligation)
     rejected(edit_block(body, 'exit', 'store i32 %v0,', 'store i32 %v1,'), 'instruction')
+    rejected(edit_block(body, 'exit', 'store float %vf,', 'store float %fstart,'), 'instruction')
+    rejected(edit_block(body, 'exit', 'ptr %fout', 'ptr %dout'), 'instruction')
     rejected(edit_block(body, 'exit', '  ret void', '  call void @unexpected()\n  ret void'),
              'output work')
     rejected(edit_block(body, 'middle.block', '  %cmp.n =',

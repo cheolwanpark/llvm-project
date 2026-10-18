@@ -28,6 +28,12 @@
 # RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
 # RUN:   -enable-vplan-reduction-fission -S \
 # RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll -o %t/delay-tail.ll
+# RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+# RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
+# RUN:   -hints-allow-reordering=false -scalable-vectorization=always \
+# RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
+# RUN:   -enable-vplan-reduction-fission -S \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll -o %t/inherited-tail.ll
 # RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py \
 # RUN:   %S/../Transforms/LoopVectorize/RISCV %t
 
@@ -80,14 +86,33 @@ def change(text, pattern, replacement):
     assert count == 1 and changed != text, pattern
     return changed
 
-def reject(text, name='compact_recurrence', kind='scalar', capacity=65):
+def reject(text, name='compact_recurrence', kind='scalar', capacity=65, obligation=None):
     try:
         checker.check_recurrence_function(text, source, name, kind == 'evl',
             vectorized=kind != 'scalar', capacity=capacity, compact=True)
-    except AssertionError:
-        pass
+    except AssertionError as error:
+        if obligation is not None:
+            assert obligation in str(error), (obligation, error)
     else:
         raise AssertionError('accepted compact recurrence mutation')
+
+def tail_flags(text, flags):
+    # Normalize only the demonstrated increment, preserving its SSA operands,
+    # value, type, block and metadata. Either input spelling may occur in opt.
+    text, count = re.subn(r'(^  %fission\.consumer\.next = )add nuw(?: nsw)?( i64 )',
+                         r'\1add ' + flags + r'\2', text, flags=re.M)
+    assert count == 1, count
+    return text
+
+# Exercise every inherited observable-output interface as well as the new
+# recurrence interface below. Reusing an SSA value as the recurrence-mode flag
+# used to route all of these through the three-reduction recurrence interface.
+inherited = (work / 'inherited-tail.ll').read_text()
+for name in ['compact_triangle', 'compact_diamond', 'compact_integer', 'compact_nested']:
+    body = checker.function_definition(inherited, name)
+    for flags in ('nuw', 'nuw nsw'):
+        flagged = tail_flags(body, flags)
+        assert checker.check_scalar_function(flagged, name, evl=False) == flagged
 
 for name in ['compact_recurrence', 'compact_recurrence_merge',
              'compact_recurrence_reverse', 'compact_recurrence_affine',
@@ -123,6 +148,23 @@ for name in ['compact_recurrence', 'compact_recurrence_merge',
         elif kind == 'tail':
             reject(change(body, r'(%n.mod.vf = urem i64 )%[-\w.$]+', r'\1%n'), name, kind)
             reject(change(body, r'(%ud.consume = fadd )double', r'\1reassoc double'), name, kind)
+            for flags in ('nuw', 'nuw nsw'):
+                flagged = tail_flags(body, flags)
+                assert checker.check_recurrence_function(
+                    flagged, source, name, False, compact=True) == flagged
+                for increment in ('0', '2', '-1'):
+                    reject(change(flagged,
+                        r'(%fission\.consumer\.next = add nuw(?: nsw)? i64 %[-\w.$]+, )1(?=, !|$)',
+                        r'\g<1>' + increment), name, kind, obligation='compact scalar results:')
+                for bound in ('%n', '%n.vec', '65'):
+                    reject(change(flagged,
+                        r'(%fission\.consumer\.more = icmp ne i64 %fission\.consumer\.next, )%[-\w.$]+',
+                        r'\g<1>' + bound), name, kind, obligation='compact count provenance')
+                reject(change(flagged, r'(%v0 = phi )i32', r'\1i8'), name, kind,
+                       obligation='compact scalar results:')
+                reject(change(flagged, r'store double %vd, ptr %dout',
+                              'store double %start, ptr %dout'), name, kind,
+                       obligation='compact scalar results:')
         else:
             reject(change(body, r'(%avl = phi i64 \[ )%[-\w.$]+', r'\1%n'), name, kind)
         if name == 'compact_recurrence_merge':
@@ -176,6 +218,10 @@ legacy_source = (tests / 'reduction-fission-scalar-recurrence-compact-legacy.ll'
 for file, vectorized in [('delay.ll', False), ('delay-tail.ll', True)]:
     text = (work / file).read_text()
     checker.check_compact_delay_function(text, legacy_source, False, vectorized, probe=True)
+    if vectorized:
+        for flags in ('nuw', 'nuw nsw'):
+            flagged = tail_flags(text, flags)
+            checker.check_compact_delay_function(flagged, legacy_source, False, vectorized)
     candidate = change(text, r'(%prev = phi i32 \[ 23, %preheader \], \[ )%x', r'\1%c')
     try:
         checker.check_compact_delay_function(candidate, legacy_source, False, vectorized)
