@@ -1451,6 +1451,8 @@ scalar.fission.consumer.body:
 }
 
 ; Parser/probe fixture only; actual transformed execution uses scalar-compact.ll.
+; Keep scratch GEPs connected to the real producer/vector/tail ordinals, and
+; keep the width's SSA name distinct from the float live-out below.
 define void @compact_triangle(ptr %a, ptr %fp, ptr %out, ptr %dout, ptr %fout, i64 %n, i64 %unrelated, double %start) {
 entry:
   %s = alloca [65 x i32]
@@ -1474,9 +1476,12 @@ left:
   %dc = load double, ptr %dp
   %fc = fptrunc double %dc to float
   %fission.participating.next = add nuw i64 %fission.participating, 1
-  store i32 %lc, ptr %s
-  store double %dc, ptr %d
-  store float %fc, ptr %f
+  %s.produced = getelementptr inbounds [65 x i32], ptr %s, i32 0, i64 %fission.participating
+  %d.produced = getelementptr inbounds [65 x double], ptr %d, i32 0, i64 %fission.participating
+  %f.produced = getelementptr inbounds [65 x float], ptr %f, i32 0, i64 %fission.participating
+  store i32 %lc, ptr %s.produced
+  store double %dc, ptr %d.produced
+  store float %fc, ptr %f.produced
   br label %latch
 latch:
   %fission.participating.merge = phi i64 [ %fission.participating.next, %left ], [ %fission.participating, %loop ]
@@ -1490,11 +1495,11 @@ scalar.fission.consumer.guard:
 scalar.fission.consumer.ph:
   %dead.bound = add i64 0, %fission.participating.count
   %scale = call i64 @llvm.vscale.i64()
-  %vf = shl nuw i64 %scale, 2
-  %min.iters.check = icmp ult i64 %fission.participating.count, %vf
+  %consumer.width = shl nuw i64 %scale, 2
+  %min.iters.check = icmp ult i64 %fission.participating.count, %consumer.width
   br i1 %min.iters.check, label %scalar.ph, label %vector.ph
 vector.ph:
-  %n.mod.vf = urem i64 %fission.participating.count, %vf
+  %n.mod.vf = urem i64 %fission.participating.count, %consumer.width
   %n.vec = sub i64 %fission.participating.count, %n.mod.vf
   br label %vector.body
 vector.body:
@@ -1503,14 +1508,17 @@ vector.body:
   %v1.acc = phi <vscale x 4 x i32> [ insertelement (<vscale x 4 x i32> zeroinitializer, i32 -7, i32 0), %vector.ph ], [ %v1.update, %vector.body ]
   %vd.acc = phi double [ %start, %vector.ph ], [ %dr, %vector.body ]
   %vf.acc = phi float [ %fstart, %vector.ph ], [ %fr, %vector.body ]
-  %il = load <vscale x 4 x i32>, ptr %s
-  %dl = load <vscale x 4 x double>, ptr %d
-  %fl = load <vscale x 4 x float>, ptr %f
+  %s.vector = getelementptr inbounds [65 x i32], ptr %s, i32 0, i64 %vi
+  %d.vector = getelementptr inbounds [65 x double], ptr %d, i32 0, i64 %vi
+  %f.vector = getelementptr inbounds [65 x float], ptr %f, i32 0, i64 %vi
+  %il = load <vscale x 4 x i32>, ptr %s.vector
+  %dl = load <vscale x 4 x double>, ptr %d.vector
+  %fl = load <vscale x 4 x float>, ptr %f.vector
   %v0.update = add <vscale x 4 x i32> %v0.acc, %il
   %v1.update = add <vscale x 4 x i32> %il, %v1.acc
   %dr = call double @llvm.vector.reduce.fadd.nxv4f64(double %vd.acc, <vscale x 4 x double> %dl)
   %fr = call float @llvm.vector.reduce.fadd.nxv4f32(float %vf.acc, <vscale x 4 x float> %fl)
-  %vector.next = add nuw i64 %vi, %vf
+  %vector.next = add nuw i64 %vi, %consumer.width
   %vector.done = icmp eq i64 %vector.next, %n.vec
   br i1 %vector.done, label %middle.block, label %vector.body
 middle.block:
@@ -1531,9 +1539,12 @@ scalar.fission.consumer.body:
   %r1.consume = phi i32 [ %r1.resume, %scalar.ph ], [ %u1.consume, %scalar.fission.consumer.body ]
   %rd.consume = phi double [ %rd.resume, %scalar.ph ], [ %ud.consume, %scalar.fission.consumer.body ]
   %rf.consume = phi float [ %rf.resume, %scalar.ph ], [ %uf.consume, %scalar.fission.consumer.body ]
-  %ci = load i32, ptr %s
-  %cd = load double, ptr %d
-  %cf = load float, ptr %f
+  %s.tail = getelementptr inbounds [65 x i32], ptr %s, i32 0, i64 %ti
+  %d.tail = getelementptr inbounds [65 x double], ptr %d, i32 0, i64 %ti
+  %f.tail = getelementptr inbounds [65 x float], ptr %f, i32 0, i64 %ti
+  %ci = load i32, ptr %s.tail
+  %cd = load double, ptr %d.tail
+  %cf = load float, ptr %f.tail
   %u0.consume = add i32 %r0.consume, %ci
   %u1.consume = add i32 %ci, %r1.consume
   %ud.consume = fadd double %rd.consume, %cd
@@ -1582,9 +1593,12 @@ vector.body:
   %vi = phi i64 [ 0, %vector.ph ], [ %vector.next, %vector.body ]
   %avl = phi i64 [ %fission.participating.count, %vector.ph ], [ %avl.next, %vector.body ]
   %evl = call i32 @llvm.experimental.get.vector.length.i64(i64 %avl, i32 4, i1 true)
-  %il = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr %s, <vscale x 4 x i1> splat (i1 true), i32 %evl)
-  %dl = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr %d, <vscale x 4 x i1> splat (i1 true), i32 %evl)
-  %fl = call <vscale x 4 x float> @llvm.vp.load.nxv4f32.p0(ptr %f, <vscale x 4 x i1> splat (i1 true), i32 %evl)
+  %s.vector = getelementptr inbounds [65 x i32], ptr %s, i32 0, i64 %vi
+  %d.vector = getelementptr inbounds [65 x double], ptr %d, i32 0, i64 %vi
+  %f.vector = getelementptr inbounds [65 x float], ptr %f, i32 0, i64 %vi
+  %il = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr %s.vector, <vscale x 4 x i1> splat (i1 true), i32 %evl)
+  %dl = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr %d.vector, <vscale x 4 x i1> splat (i1 true), i32 %evl)
+  %fl = call <vscale x 4 x float> @llvm.vp.load.nxv4f32.p0(ptr %f.vector, <vscale x 4 x i1> splat (i1 true), i32 %evl)
   %dr = call double @llvm.vp.reduce.fadd.nxv4f64(double %start, <vscale x 4 x double> %dl, <vscale x 4 x i1> splat (i1 true), i32 %evl)
   %fr = call float @llvm.vp.reduce.fadd.nxv4f32(float %fstart, <vscale x 4 x float> %fl, <vscale x 4 x i1> splat (i1 true), i32 %evl)
   %step = zext i32 %evl to i64

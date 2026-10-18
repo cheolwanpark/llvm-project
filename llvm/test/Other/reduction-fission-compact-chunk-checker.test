@@ -27,6 +27,8 @@
 # The numerical driver executes real scalar/vector/tail paths against exact
 # original IR and C. This test mutates fresh actual transformed IR; none of the
 # inherited count/result/export/dispatch/state certificates are replaced.
+# The supporting identity helper additionally exercises complete tail induction
+# and load connections, and unique dominating shared/stage-local VF definitions.
 
 #--- check.py
 import importlib.util

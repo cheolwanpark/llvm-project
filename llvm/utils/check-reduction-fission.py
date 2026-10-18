@@ -459,13 +459,10 @@ def check_compact_count(producer, consumer, name, evl, starts=None,
         branch('scalar.fission.consumer.ph', '%min.iters.check', 'scalar.ph', 'vector.ph')
         rounding = block(consumer, 'vector.ph')
         step = require(rf'^  %n\.mod\.vf = urem i64 {counts}, (%[-\w.$]+)(?:, ![^\n]*)?$', rounding)[1]
-        scales = []
-        for width, owner in [(minimum, blocks['scalar.fission.consumer.ph']), (step, rounding)]:
-            scale = require(rf'^  {re.escape(width)} = shl nuw i64 (%[-\w.$]+), 2(?:, ![^\n]*)?$', owner)[1]
-            require(rf'^  {re.escape(scale)} = call i64 @llvm\.vscale\.i64\(\)(?:, ![^\n]*)?$',
-                    blocks['scalar.fission.consumer.ph'])
-            scales.append(scale)
-        need(scales[0] == scales[1], 'same consumer VF at entry and rounding')
+        for width, label, result in [(minimum, 'scalar.fission.consumer.ph', '%min.iters.check'),
+                                     (step, 'vector.ph', '%n.mod.vf')]:
+            use = next(line for line in instructions(blocks[label]) if line.startswith(result + ' = '))
+            check_consumer_width(whole, width, label, use)
         index, next_index = vector_consumer_induction(whole, 'vector.body', step, evl)
         require(rf'^  %n\.vec = sub i64 {counts}, %n\.mod\.vf(?:, ![^\n]*)?$', rounding)
         done = require(r'^  (%[-\w.$]+) = icmp eq i64 ' + re.escape(next_index) +
@@ -496,6 +493,56 @@ def check_compact_count(producer, consumer, name, evl, starts=None,
             join = blocks[join_label]
             jump(join_label, 'scalar.fission.consumer.exit')
 
+            # Prove the whole tail traversal before certifying its reductions.
+            # A terminating compare alone says nothing about the PHI backedge.
+            increment = require(r'^  %fission\.consumer\.next = add(?: nuw)?(?: nsw)? i64 '
+                                r'(%[-\w.$]+), 1(?:, ![^\n]*)?$', tail)
+            tail_index = increment[1]
+            tail_lines = instructions(tail)
+            increment_line = increment[0].strip().split(', !', 1)[0]
+            require_chunk_instruction(whole, tail_label, increment_line)
+            inputs = phi_inputs(tail, tail_index)
+            need(len(inputs) == 2 and sorted(edge for _, edge in inputs) ==
+                 sorted(['%scalar.ph', '%' + tail_label]), 'tail induction predecessors')
+            incoming = {edge: v for v, edge in inputs}
+            need(incoming['%' + tail_label] == '%fission.consumer.next', 'tail induction backedge')
+            resume_index = incoming['%scalar.ph']
+            need(re.fullmatch(r'%[-\w.$]+', resume_index), 'tail induction entry')
+            need(sorted(phi_inputs(blocks['scalar.ph'], resume_index)) == sorted([
+                ('%n.vec', '%middle.block'), ('0', '%scalar.fission.consumer.ph')]),
+                 'tail resume induction')
+            for label, value in [(tail_label, tail_index), ('scalar.ph', resume_index)]:
+                require_chunk_instruction(whole, label,
+                                          next(line for line in instructions(blocks[label])
+                                               if line.startswith(value + ' = ')))
+            def definition_position(value):
+                return next(i for i, line in enumerate(tail_lines) if line.startswith(value + ' = '))
+
+            need(definition_position(tail_index) < definition_position('%fission.consumer.next') <
+                 definition_position('%fission.consumer.more') < len(tail_lines) - 1,
+                 'tail induction instruction order')
+
+            # Bind typed scratch loads to the tail PHI, then reduction operands
+            # to those loads. Producer/next/zero indices and disconnected loads
+            # cannot stand in for the initialized compact contributions.
+            tail_loads = {}
+            for slot, capacity, ty in re.findall(
+                    r'^  (%[-\w.$]+) = alloca \[(\d+) x (i32|i64|double|float)\]', producer, re.M):
+                address = require(rf'^  (%[-\w.$]+) = getelementptr inbounds \[{capacity} x {ty}\], '
+                                  rf'ptr {re.escape(slot)}, i32 0, i64 {re.escape(tail_index)}'
+                                  r'(?:, ![^\n]*)?$', tail)[1]
+                alignment = dict(i32=4, i64=8, double=8, float=4)[ty]
+                load = require(rf'^  (%[-\w.$]+) = load {ty}, ptr {re.escape(address)}, '
+                               rf'align {alignment}(?:, ![^\n]*)?$', tail)[1]
+                for value in (address, load):
+                    require_chunk_instruction(whole, tail_label,
+                                              next(line for line in instructions(tail)
+                                                   if line.startswith(value + ' = ')))
+                need(definition_position(tail_index) < definition_position(address) <
+                     definition_position(load), 'tail scratch instruction order')
+                need(ty not in tail_loads, 'one compact stream per type')
+                tail_loads[ty] = load
+
             # Identify each scalar result by its actual recurrence and update, not
             # by a .lcssa suffix. The update must consume this accumulator and a
             # typed contribution load. Ordered FP never accepts fast-math flags.
@@ -514,7 +561,10 @@ def check_compact_count(producer, consumer, name, evl, starts=None,
                 if not ty.startswith('i'):
                     assert operands[1] == accumulator, tail
                 contribution = operands[2] if operands[1] == accumulator else operands[1]
-                require(rf'^  {re.escape(contribution)} = load {ty}, ptr %[-\w.$]+(?:,|$)', tail)
+                need(contribution == tail_loads.get(ty), 'tail reduction scratch load for ' + value)
+                require_chunk_instruction(whole, tail_label, operands[0].strip().split(', !', 1)[0])
+                need(definition_position(contribution) < definition_position(update),
+                     'tail reduction instruction order')
                 updates[value] = update
                 resumes[value] = incoming['%scalar.ph']
 
@@ -3225,6 +3275,46 @@ def require_chunk_instruction(body, label, instruction):
         assert len(re.findall(rf'^[ \t]+{re.escape(value)} = ', body, re.M)) == 1, body
 
 
+def consumer_stage_definition(body, value, use_label, use):
+    """Resolve one SSA operand in the fixture's three-block consumer stage.
+
+    This is a fixed chain proof, not a general dominator analysis. Entry can
+    bypass vectors; vector.ph has only entry as predecessor, and vector.body
+    has only vector.ph and itself. A definition must precede its use in that
+    chain, including instruction order within a block. Scan the whole function
+    for duplicate definitions of the requested value, even off this path.
+    """
+    blocks = {label: chunk_instructions(code) for label, code in loop_blocks(body).items()}
+    entry, preheader, vector = 'scalar.fission.consumer.ph', 'vector.ph', 'vector.body'
+    for destination, expected in [(preheader, [entry]), (vector, sorted([preheader, vector]))]:
+        incoming = sorted(label for label, code in blocks.items()
+                          for target in re.findall(r'\blabel %([-\w.$]+)', code[-1])
+                          if target == destination)
+        assert incoming == expected, (destination, incoming, expected)
+    definitions = [(label, i, line) for label, code in blocks.items()
+                   for i, line in enumerate(code) if line.startswith(value + ' = ')]
+    assert len(definitions) == 1, ('consumer definition', value, definitions)
+    owner, position, line = definitions[0]
+    chain = [entry, preheader, vector]
+    assert owner in chain and use_label in chain, ('consumer definition stage', value, owner)
+    uses = [i for i, line in enumerate(blocks[use_label]) if line == use]
+    assert len(uses) == 1, ('consumer use', use_label, use)
+    assert (owner == use_label and position < uses[0]) or chain.index(owner) < chain.index(use_label), (
+        'consumer definition dominance/order', value, owner, use_label, use)
+    return owner, line.split(' = ', 1)[1]
+
+
+def check_consumer_width(body, width, use_label, use):
+    """Prove an available vscale-times-four width, shared or stage local."""
+    owner, expression = consumer_stage_definition(body, width, use_label, use)
+    shift = re.fullmatch(r'shl(?: nuw)? i64 (%[-\w.$]+), 2', expression)
+    assert shift, ('consumer VF must be vscale times four', width, expression)
+    _, scale = consumer_stage_definition(body, shift[1], owner, width + ' = ' + expression)
+    assert scale == 'call i64 @llvm.vscale.i64()', ('consumer vscale', shift[1], scale)
+    # All calls to this intrinsic in a function return the same vscale. Distinct
+    # SSA computations of the exact expression are equivalent, not extra VFs.
+
+
 def vector_consumer_induction(body, vector, step, evl):
     """Bind a zero-based consumer recurrence, independently of SSA spelling.
 
@@ -3234,9 +3324,10 @@ def vector_consumer_induction(body, vector, step, evl):
     proves step is this stage's VF or zero-extended EVL, never a producer IV.
     """
     blocks = loop_blocks(body)
-    predecessors = {label for label, code in blocks.items() if vector in re.findall(
-        r'\blabel %([-\w.$]+)', chunk_instructions(code)[-1])}
-    assert predecessors == {'vector.ph', vector}, (vector, predecessors)
+    predecessors = sorted(label for label, code in blocks.items()
+                          for target in re.findall(r'\blabel %([-\w.$]+)', chunk_instructions(code)[-1])
+                          if target == vector)
+    assert predecessors == sorted(['vector.ph', vector]), (vector, predecessors)
     candidates = []
     for line in chunk_instructions(blocks[vector]):
         match = re.fullmatch(r'(%[-\w.$]+) = phi i64 (.+)', line)
@@ -3244,7 +3335,7 @@ def vector_consumer_induction(body, vector, step, evl):
             continue
         inputs = re.findall(r'\[ ([^,\]\n]+), %([-\w.$]+) \]', match[2])
         assert match[2] == ', '.join(f'[ {v}, %{p} ]' for v, p in inputs), line
-        assert len(inputs) == len(predecessors) and {p for _, p in inputs} == predecessors, line
+        assert sorted(p for _, p in inputs) == predecessors, line
         incoming = {p: v for v, p in inputs}
         if incoming['vector.ph'] == '0':
             candidates.append((match[1], incoming[vector], line))
@@ -3252,8 +3343,28 @@ def vector_consumer_induction(body, vector, step, evl):
     index, next_index, line = candidates[0]
     assert re.fullmatch(r'%[-\w.$]+', next_index), line
     require_chunk_instruction(body, vector, line)
-    operands = f'{step}, {index}' if evl else f'{index}, {step}'
-    require_chunk_instruction(body, vector, f'{next_index} = add nuw i64 {operands}')
+    increments = [line for line in chunk_instructions(blocks[vector])
+                  if line.startswith(next_index + ' = ')]
+    assert len(increments) == 1, (next_index, increments)
+    increment = increments[0]
+    arithmetic = re.fullmatch(re.escape(next_index) +
+                              r' = add(?: nuw)?(?: nsw)? i64 (%[-\w.$]+), (%[-\w.$]+)', increment)
+    assert arithmetic and arithmetic.groups().count(index) == 1, increment
+    actual_step = next(value for value in arithmetic.groups() if value != index)
+    require_chunk_instruction(body, vector, increment)
+    consumer_stage_definition(body, index, vector, increment)
+    if evl:
+        assert actual_step == step, (actual_step, step)
+        owner, expression = consumer_stage_definition(body, step, vector, increment)
+        length = re.fullmatch(r'zext i32 (%[-\w.$]+) to i64', expression)
+        assert owner == vector and length, (owner, expression)
+        owner, expression = consumer_stage_definition(body, length[1], vector, step + ' = ' + expression)
+        assert owner == vector and re.fullmatch(
+            r'call i32 @llvm.experimental.get.vector.length.i64\(i64 %avl, i32 4, i1 true\)',
+            expression), (owner, expression)
+    else:
+        check_consumer_width(body, step, vector, increment)
+        check_consumer_width(body, actual_step, vector, increment)
     return index, next_index
 
 
@@ -3858,12 +3969,10 @@ def check_compact_chunk(ir, original, name, capacity, scalar=False, evl=False, p
             # Entry check can have a distinct, equivalent VF computation.
             minimum = re.search(r'%min.iters.check = icmp ult i64 %[-\w.$]+, (%[-\w.$]+)',
                                 blocks['scalar.fission.consumer.ph'])[1]
-            scales = []
-            for width in (step, minimum):
-                scale = re.search(re.escape(width) + r' = shl nuw i64 (%[-\w.$]+), 2', body)[1]
-                assert re.search(re.escape(scale) + r' = call i64 @llvm.vscale.i64\(\)', body)
-                scales.append(scale)
-            assert len(set(scales)) == 1, body
+            for width, label, result in [(minimum, 'scalar.fission.consumer.ph', '%min.iters.check'),
+                                         (step, 'vector.ph', '%n.mod.vf')]:
+                use = next(line for line in chunk_instructions(blocks[label]) if line.startswith(result + ' = '))
+                check_consumer_width(body, width, label, use)
         consumer_index, _ = vector_consumer_induction(body, vectors[0], step, evl)
         for t, suffix in [('i32', 'i32'), ('double', 'f64')]:
             slot = re.findall(rf'(%[-\w.$]+) = alloca \[{capacity} x {t}\]', producer)[0]
@@ -4136,14 +4245,10 @@ def check_state_chunk_consumer(body, capacity, preheader, exit, initial, evl,
             require_chunk_instruction(body, entry, 'br i1 %min.iters.check, label %scalar.ph, label %vector.ph')
             step = single('vector.ph', re.escape('%n.mod.vf = urem i64 ' + count) +
                           r', (%[-\w.$]+)')[1]
-            scales = []
-            for width in (minimum, step):
-                owner, expression = definitions[width]
-                match = re.fullmatch(r'shl nuw i64 (%[-\w.$]+), 2', expression)
-                assert match and owner in (entry, 'vector.ph'), (width, expression)
-                assert definitions[match[1]] == (entry, 'call i64 @llvm.vscale.i64()'), body
-                scales.append(match[1])
-            assert scales[0] == scales[1], body
+            for width, label, result in [(minimum, entry, '%min.iters.check'),
+                                         (step, 'vector.ph', '%n.mod.vf')]:
+                use = next(line for line in blocks[label] if line.startswith(result + ' = '))
+                check_consumer_width(body, width, label, use)
             require_chunk_instruction(body, 'vector.ph', f'%n.vec = sub i64 {count}, %n.mod.vf')
             index, next_index = vector_consumer_induction(body, vector, step, evl)
             condition = single(vector, r'(%[-\w.$]+) = icmp eq i64 ' +

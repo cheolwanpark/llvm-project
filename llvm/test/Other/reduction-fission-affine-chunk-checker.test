@@ -8,6 +8,8 @@
 # meaningful corruption rejection, repeated LV and separate FP policies.
 # Host comparisons and independently predicted path counters are registered in
 # check-reduction-fission.py. RVV machine verification here is codegen only.
+# The supporting identity helper also checks complete scalar-tail traversal,
+# dominating shared/stage-local VFs, and integer increment flags/operand order.
 
 #--- check.py
 import importlib.util

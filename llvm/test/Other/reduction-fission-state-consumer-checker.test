@@ -7,6 +7,8 @@
 # retained-state and analogous unconditional multiblock fixtures. Keep the
 # original global-count mutation in acyclic-chunk-checker.test as well.
 # Numerical execution is separately mandatory in the full checker driver.
+# Import the supporting identity helper for tail traversal and VF definition
+# mutations as well as SSA-renaming and commuted/flagged increment positives.
 
 #--- check.py
 import importlib.util
