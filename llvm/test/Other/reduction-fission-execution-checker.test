@@ -316,6 +316,17 @@ def replace_once(body, old, new):
     return body.replace(old, new, 1)
 
 
+def match_once(body, pattern):
+    matches = list(re.finditer(pattern, body, re.M))
+    assert len(matches) == 1, (pattern, len(matches))
+    return matches[0]
+
+
+def replace_match_once(body, pattern, new):
+    match = match_once(body, pattern)
+    return body[:match.start()] + new + body[match.end():]
+
+
 def attach_metadata(body, value, attachments):
     lines = [line for line in body.splitlines() if line.startswith('  ' + value + ' = ')]
     assert len(lines) == 1, (value, body)
@@ -466,22 +477,63 @@ enclosing_name = 'affine_enclosing'
 enclosing_source = checker.function_definition(affine_originals, enclosing_name)
 enclosing_retained = checker.function_definition(affine_outputs, enclosing_name)
 row_branch = '  br i1 %rows.done, label %exit, label %outer'
-forwarder = re.search(r'^  br i1 %rows.done, label %([-\w.$]+), label %outer$',
-                      enclosing_retained, re.M)[1]
+forwarder = match_once(enclosing_retained,
+                       r'^  br i1 %rows.done, label %([-\w.$]+), label %outer$')[1]
 assert forwarder != 'exit'
-forward_block = re.search(r'^' + re.escape(forwarder) + r':[^\n]*\n.*?(?=^[-\w.$]+:|^})',
-                          enclosing_retained, re.M | re.S)[0]
-enclosing_direct = replace_once(enclosing_retained, forward_block, '')
-enclosing_direct = replace_once(enclosing_direct, 'label %' + forwarder + ', label %outer',
-                                'label %exit, label %outer')
+enclosing_direct = replace_match_once(
+    enclosing_retained, r'^' + re.escape(forwarder) + r':[^\n]*\n(?s:.*?)(?=^[-\w.$]+:|^})', '')
+enclosing_direct = replace_match_once(
+    enclosing_direct, r'^  br i1 %rows.done, label %' + re.escape(forwarder) + r', label %outer$',
+    row_branch)
 
 
 def forward_row_exit(text, label):
-    text = replace_once(text, row_branch,
-                        '  br i1 %rows.done, label %' + label + ', label %outer')
-    site = re.search(r'^exit:[^\n]*\n', text, re.M)[0]
-    return replace_once(text, site, label + ': ; deliberately untrusted preds = %entry\n'
-                        '  br label %exit\n\n' + site)
+    text = replace_match_once(text, '^' + re.escape(row_branch) + '$',
+                              '  br i1 %rows.done, label %' + label + ', label %outer')
+    site = match_once(text, r'^exit:[^\n]*\n')
+    # Keep the anchored location: the text "exit:\n" also occurs at the end
+    # of "row.exit:\n" and must never be searched for again as a substring.
+    return (text[:site.start()] + label + ': ; deliberately untrusted preds = %entry\n'
+            '  br label %exit\n\n' + text[site.start():])
+
+
+# Construction checks run before the certificate mutations. Neither a label's
+# suffix nor a misleading predecessor comment may redirect the insertion.
+# Check the entire result as well as the unchanged unrelated blocks. These
+# strings exercise the constructor only; they are not execution evidence.
+construction_head = 'define void @construction() {\nrow.exit:\n'
+unrelated_before = ('other.exit:\n  br label %exit\n'
+                    'commented.exit: ; preds = %entry, %row.exit\n  unreachable\n'
+                    'exit.more:\n  unreachable\n'
+                    'exit.loopexit: ; preds = %row.exit\n  unreachable\n'
+                    'other.exit.loopexit:\n  unreachable\n'
+                    '; exit:\n')
+unrelated_after = 'after.exit:\n  unreachable\n}\n'
+exit_headers = ('exit:\n', 'exit: ; preds = %entry, %row.exit\n')
+for exit_header in exit_headers:
+    exit_tail = exit_header + '  ret void\n' + unrelated_after
+    constructed = forward_row_exit(construction_head + row_branch + '\n' +
+                                   unrelated_before + exit_tail, 'construction.bridge')
+    expected = (construction_head +
+                '  br i1 %rows.done, label %construction.bridge, label %outer\n' +
+                unrelated_before +
+                'construction.bridge: ; deliberately untrusted preds = %entry\n'
+                '  br label %exit\n\n' + exit_tail)
+    assert constructed == expected, constructed
+    assert unrelated_before in constructed and unrelated_after in constructed, constructed
+    assert construction_head in constructed, constructed
+
+# Missing and duplicate EXACT labels must fail the anchored uniqueness check,
+# even when suffix labels remain. Cover duplicates with either comment form.
+for headers in ((),) + tuple((first, second) for first in exit_headers for second in exit_headers):
+    malformed = (construction_head + row_branch + '\n' + unrelated_before +
+                 ''.join(header + '  ret void\n' for header in headers) + unrelated_after)
+    try:
+        forward_row_exit(malformed, 'construction.bridge')
+    except AssertionError as error:
+        assert error.args == ((r'^exit:[^\n]*\n', len(headers)),), error
+    else:
+        raise AssertionError('accepted missing/duplicate exact exit labels: ' + repr(headers))
 
 
 def mark_enclosing(text):
@@ -696,9 +748,9 @@ for match in retained_affine:
                                     ('%fission.completed.count', 'vector.ph')):
             line = next(line for line in marked.splitlines() if line.startswith('  ' + value + ' = '))
             moved = replace_once(marked, line + '\n', '')
-            site = re.search(r'^' + re.escape(destination) + r':[^\n]*\n', moved, re.M)[0]
+            site = match_once(moved, r'^' + re.escape(destination) + r':[^\n]*\n')
             for altered in (
-                replace_once(moved, site, site + line + '\n'),
+                moved[:site.end()] + line + '\n' + moved[site.end():],
                 replace_once(marked, line + '\n', (line + '\n') * 2),
                 replace_once(marked, line, '  ; ' + line.strip()),
                 replace_once(marked, line, line.replace(value + ' = ', value + '.other = ', 1)),

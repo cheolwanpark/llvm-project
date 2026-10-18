@@ -1,9 +1,9 @@
 {
-  "task_id": "t000029",
-  "base_revision": "34e72c2608bf01cb378cf2b7980be4f8b394f2c5",
-  "hypothesis": "A validation-only structural certificate admits bounded affine scalar-fission loops whose enclosing-row exit is split by ordinary LV into row.exit -> a dedicated empty forwarding block -> exit. Direct exits remain supported. This removes the demonstrated t000027 checker obstruction without changing LLVM transformations, legality/admission, profitability, the C execution harness, the 117 immutable inputs or any FP/errno contract.",
-  "semantics": "In BOTH original and transformed IR, the enclosing certificate retains the unsigned 1<=rows<=4 and 1<=n<=65 entry guard, exact entry polarity and outer.ph/outer/inner.ph edges, zero-based row PHI, row.next=row+1, rows.done=(row.next==rows) and false backedge to outer. The exact true successor of br i1 %rows.done is either exit, or a block discovered from that CFG edge. The latter must have exactly the single incoming row.exit edge and contain only br label %exit after ignoring blank/comment lines and metadata attachments. No PHI, pure arithmetic, load, store, call or other work is admitted. Final exit must have exactly entry and the checked direct/forwarded predecessor. This rejects extra predecessors, guard/exit bypasses, wrong conditions/polarity/backedges/destinations, conditional hops, cycles and additional hops; predecessor comments and block spelling are not trusted. Incoming-edge scans now count label operands on unexpected switch/invoke terminators as well, so they cannot conceal an extra predecessor. The finite forward producer DAG, preserved original controls and instructions, sole exiting latch, exact consumer entry, unique SSA definitions and ordered arithmetic expansion templates are unchanged. The enclosing expansion still spans outer.ph then outer, with checked guard/row bounds proving N=n and origin=row+5. No new count-expression template is accepted. Ordinal/actual-completed/export placement and edges, one-way removal of integer nowrap flags, metadata/prefix/comment/placement checks, actual participant P and empty-stream bypass remain intact. Modular relational early-exit siblings cannot use n or a storage witness as actual N. New production-checker positives/negatives operate on retained IR only and are not executable correctness evidence. Mandatory verification must transform original scalar IR with real opt after one and two ordinary LV invocations and compare actual code against original IR AND independent C formulas, including exact stage/participant/vector/tail visits, null zero entry, enclosing scratch reuse and reduction carry, masks, tails, aliases/future-row aliases, canaries, inactive invalid operands, ordered FP bits and signed zero. Strict and explicitly enabled fission FP reordering remain separate policies without extra assumptions.",
-  "costs": "Validation-only: no target scratch allocation/traffic, input reread, recomputation, producer duplication, runtime guard, profitability or compiler analysis change. The checker adds a constant-size row-exit certificate and a constant number of linear scans of fixture instruction/label operands. Existing SSA maps and bounded arithmetic/CFG templates remain; no solver, arbitrary path enumeration or general exit-walking machinery is added. Only one dedicated empty forwarding hop is accepted. Underlying scratch is unchanged: entry allocation of M times unique contribution allocation sizes plus padding, capped at the existing 65536-byte per-candidate ceiling and signed pointer-index bound. At M=65, mixed fixtures account for 1044 bytes (65*i32+65*double+65*float plus 4 padding bytes), with 16*N logical store bytes and 16*N load bytes, or 16*P each for compact streams. Enclosing rows reuse 784 accounted bytes (65*i32+65*double plus padding), with 12*N stores and 12*N loads per row, without multiplying capacity by rows. Scalar i32 boundary fixtures reserve 4/1020/65536 bytes at M=1/255/16384 and transfer 8*N total bytes (131072 at the ceiling). Noncanonical producers retain an ordinal PHI, one unit latch increment and completed export; compaction retains P and its empty guard. No original-input rereads, contribution recomputation, mask arrays, new alias/SCEV versioning guards, dynamic or unbounded storage are added. Physical stack traffic, register pressure, RVV execution and speedup remain unmeasured.",
+  "task_id": "t000030",
+  "base_revision": "79db86fe5904532f42363915bfe4dc5eb545b6eb",
+  "hypothesis": "Validation-fixture construction must distinguish exact basic-block labels from suffixes. Keeping the anchored exit-label match position allows the existing enclosing affine direct/one-hop certificate tests to run when row.exit and exit coexist, with or without predecessor comments. This task repairs fixture construction only; it changes no LLVM transformation, admitted program class, profitability rule, original benchmark or semantic contract.",
+  "semantics": "forward_row_exit requires one exact anchored row branch and one exact anchored exit label, then inserts at that match position instead of searching again for its text. Zero or duplicate exact labels fail explicitly. Focused construction cases compare the entire expected output and assert unchanged unrelated blocks around bare/commented exit labels, row.exit, other.exit, commented.exit, exit.more, exit.loopexit and other.exit.loopexit. Missing labels and all four bare/commented duplicate combinations must fail the precise match-count assertion. The direct-exit constructor also removes its anchored forwarding block at the match span; counter-placement mutations insert after their anchored label match. The unrestricted replace_once uniqueness assertion is unchanged. All production check_affine_function code and C executable comparisons remain unchanged, including the structural direct/one-hop exit certificate, branch condition/polarity, dedicated predecessors, outer guard and row recurrence, actual completed-count provenance, ordinal/increment/export placement, metadata handling, one-way integer poison refinement and actual compact P plus empty bypass. Neither scratch capacity nor an equality witness may replace actual completed or participating counts. All prior positive, analogous, boundary and rejection cases remain. These retained and synthetic IR fixtures establish checker behavior only. Fresh mandatory verification must execute actual transformed scalar-remainder LV1/LV2 code against both original IR and independent C references, retaining zero-entry null behavior, enclosing-row scratch reuse and reduction carry, future-row aliases, exact producer/latch/participant/vector/tail visits, ordered FP bits and signed zero, masks, tails, aliases, canaries and inactive invalid operands. Uninstrumented EVL/scalar-remainder RVV code requires machine verification. Strict FP and explicitly enabled fission reordering stay separate, with no additional fast-math or errno assumptions.",
+  "costs": "Fixture-only repair: no target scratch allocation/traffic, rereads, recomputation, producer duplication, runtime guards, compiler analyses or profitability changes. Two small test helpers assert a unique regex match and splice at its span; construction, deletion and placement use a constant number of linear string scans/copies. The focused fixtures are fixed size. The existing production certificate still accepts only a direct edge or one dedicated branch-only hop and uses its existing bounded CFG/arithmetic checks; no solver or general path machinery is added. Underlying scratch is unchanged: entry allocation of M times unique contribution allocation sizes plus padding, capped at the existing 65536-byte per-candidate ceiling and signed pointer-index bound. At M=65, mixed fixtures account for 1044 bytes (65*i32+65*double+65*float plus 4 padding bytes), with 16*N logical store bytes and 16*N load bytes, or 16*P each for compact streams. Enclosing rows reuse 784 accounted bytes (65*i32+65*double plus padding), with 12*N stores and 12*N loads per row, without multiplying capacity by rows. Scalar i32 boundary fixtures reserve 4/1020/65536 bytes at M=1/255/16384 and transfer 8*N total bytes (131072 at the ceiling). Noncanonical producers retain an ordinal PHI, one unit latch increment and completed export; compaction retains P and its empty guard. No original-input rereads, contribution recomputation, mask arrays, new alias/SCEV versioning guards, dynamic or unbounded storage are added. Physical stack traffic, register pressure, RVV execution and speedup remain unmeasured.",
   "tests": [
     "llvm/test/Other/reduction-fission-execution-checker.test",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
@@ -51,37 +51,41 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
   ],
   "checker_input": "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
-  "limitations": "No build, compiler including host compilation, lit RUN, VectorizeTests, execution checker, test runner or try.sh was invoked by the worker. Fresh mandatory validation is requested and pending; this task cannot claim completion of it before the independent harness runs. t000027 compiled successfully but passed 43/44 lit files and failed the retained affine_enclosing production-checker case; later mutation suites, VectorizeTests, full executable comparisons and corpus evaluation were not reached. The available affine transformed artifacts contain LV1 EVL only (t000022 and t000025); no affine LV2 or scalar-remainder output is available to diagnose. Static audit of all fourteen retained definitions shows no additional demonstrated mismatch after the recorded forwarding defect and the earlier completed-increment refinement repair. No speculative LV2/tail relaxation is made. The new certificate admits only one branch-only dedicated forwarding hop; equivalent conditional exits, multi-hop forwarding, PHI-bearing forwarding and arbitrary arithmetic/guard forms remain unsupported. Retained fixtures and argument specializations are checker inputs, never executable references. Existing compiler limitations include non-affine/pointer/FP controls, arbitrary non-lattice exits, unbounded/unrepresentable counts, oversized untiled scratch, producer cycles/extra recurrences, unsupported effects/live-outs/calls, independent participant streams and strictfp/constrained FP. Host fixed-vscale scalar-remainder execution is not EVL/VP host execution or RVV target execution. RVV machine verification is code generation, not a speedup measurement. No primary selection, direction maturity or performance improvement is claimed. Benchmarks, harness, other worktrees, binaries, Git index/history/refs and unfinished d2 work remain untouched.",
-  "test_expectations": "Intentional change: affine_enclosing with the observed dedicated empty outer exit forwarding block is expected to pass the same N=n certificate as its direct-exit counterpart. No compiler lit expectations or semantic checks are removed. New owning checker RUN positives cover original/candidate direct and forwarded shapes, unrelated/renamed forwarding blocks and misleading predecessor comments, metadata on either or both sides (including the conditional and unconditional branches), both certified expanded count and n, and actual-export argument specializations at n=0/1/65/66/UINT64_MAX and rows=0/1/4/5/UINT64_MAX. Rejections cover row condition/polarity/backedge, outer guards and PHI/increment/comparison definitions (candidate alone and dual-side mutations), branch and switch extra predecessors, entry/exit bypasses, missing/wrong destinations, conditional forwarding, self/two-block cycles, work in the hop including PHIs/arithmetic/loads/stores/calls, and false count provenance. Forwarder defects are checked on original and candidate separately. The complete earlier completed/participant, integer refinement, count expansion, metadata, SSA, guard, placement, compact P=0, analogous affine and boundary suites remain unchanged and mandatory, including all fourteen retained EVL inputs and all modular early-exit storage-bound rejections. The Inputs fixture remains read only through its owning RUN, with no standalone test registration or dummy RUN. No case, trial, correctness assertion, Selected/Rejected source attribution or stage VF/scratch check is removed. All retained/specialized checker positives require independent actual-opt executable validation.",
+  "limitations": "No build, compiler (including host compilation), lit RUN, VectorizeTests, execution checker, test runner or try.sh was invoked by the worker. This revision requires fresh independent harness validation; requests in this report are not passing results. Immutable t000029 evidence records successful compilation and 43/44 lit files passing. Its owning checker RUN passed the fourteen retained affine positives, then aborted while constructing source.bridge because the extracted 'exit:\\n' also occurs in row.exit. Later new certificate mutations, VectorizeTests, complete executable comparisons and all primary corpus compilations were not reached. No new actual LV2 or scalar-remainder affine output is available from that run, so there is no demonstrated subsequent checker mismatch to repair. Production legality and validation are not relaxed. The one-hop proof still excludes conditional/multihop/PHI-bearing forwarding and arbitrary guard/arithmetic forms. Other compiler limitations remain non-affine/pointer/FP controls, arbitrary non-lattice exits, unbounded/unrepresentable counts, oversized untiled scratch, producer cycles/extra recurrences, unsupported effects/live-outs/calls, independent participant streams and strictfp/constrained FP. Retained fixtures and argument specializations are checker inputs, not executable correctness evidence. Fixed-vscale host scalar-remainder execution is not EVL/VP execution or RVV target execution; RVV code generation is not a speedup measurement. No selection gain, mature direction, target execution or performance improvement is claimed. Benchmarks, harness, other worktrees, binaries, Git history/index/refs and unfinished d2 work remain untouched.",
+  "test_expectations": "Intentional construction change: bare and commented exact exit labels now accept insertion even when their complete text is a suffix of another block label; row.exit remains unchanged. Missing/duplicate exact labels must still fail with an explicit anchored match count, independent of predecessor comments and suffix labels. Unrelated block text and the full constructed result are compared exactly. Existing compiler/checker expectations, uniqueness assertions, mandatory RUNs and rejection cases are retained. The direct-exit and moved-counter fixtures preserve the same intended IR shapes using anchored spans. Inherited certificate expectations: Intentional change: affine_enclosing with the observed dedicated empty outer exit forwarding block is expected to pass the same N=n certificate as its direct-exit counterpart. No compiler lit expectations or semantic checks are removed. New owning checker RUN positives cover original/candidate direct and forwarded shapes, unrelated/renamed forwarding blocks and misleading predecessor comments, metadata on either or both sides (including the conditional and unconditional branches), both certified expanded count and n, and actual-export argument specializations at n=0/1/65/66/UINT64_MAX and rows=0/1/4/5/UINT64_MAX. Rejections cover row condition/polarity/backedge, outer guards and PHI/increment/comparison definitions (candidate alone and dual-side mutations), branch and switch extra predecessors, entry/exit bypasses, missing/wrong destinations, conditional forwarding, self/two-block cycles, work in the hop including PHIs/arithmetic/loads/stores/calls, and false count provenance. Forwarder defects are checked on original and candidate separately. The complete earlier completed/participant, integer refinement, count expansion, metadata, SSA, guard, placement, compact P=0, analogous affine and boundary suites remain unchanged and mandatory, including all fourteen retained EVL inputs and all modular early-exit storage-bound rejections. The Inputs fixture remains read only through its owning RUN, with no standalone test registration or dummy RUN. No case, trial, correctness assertion, Selected/Rejected source attribution or stage VF/scratch check is removed. All retained/specialized checker positives require independent actual-opt executable validation.",
   "evidence_read": [
-    "tasks/t000029.json assignment; immutable tasks/t000027.json revise decision, diffs/t000027.patch, builds/t000027/progress.json and full lit.log (compile succeeded; 43/44 files passed; affine_enclosing count certificate rejected row.exit -> exit.loopexit -> exit).",
-    "Frozen harness/BENCHMARKS_ANALYSIS.md and read-only reaggregation of all 234 evaluations/t000017/primary/*/*/result.json: each policy has 117 exit-code-zero compilations, 91 exact-target rejections, 26 no_decision and zero selected. Historical results do not validate this revision; other nested/helper records remain separate.",
-    "All fourteen definitions in Inputs/reduction-fission-affine-counts.ll compared as text to immutable builds/t000025/execution/scalar-affine_ordered_default-evl_lv1.rvv.ll. Original affine source, reference_scalar-affine.ll, retained source-location remarks and available execution artifact names were inspected. Available affine transformed IR is LV1 EVL only, with no affine LV2/tail artifact.",
-    "Production check_affine_function, full_count_kind and count_expressions; owning checker lit and all earlier completed/participant/guard/metadata/preservation mutations; ScalarReductionFission.cpp finite bound/representability, scratch accounting and ordinal/completed/export emission; unchanged C independent-count formulas, stage-visit assertions and enclosing future-row alias/scratch reuse comparisons."
+    "tasks/t000030.json assignment; tasks/t000029.json revise decision; immutable diffs/t000029.patch; builds/t000029/progress.json and full lit.log. Compilation succeeded; 43/44 lit files passed; forward_row_exit failed after all fourteen retained affine positives because exit:\\n has a second unanchored occurrence at the end of row.exit:\\n.",
+    "Frozen harness/BENCHMARKS_ANALYSIS.md and read-only reaggregation of all 234 evaluations/t000017/primary/*/*/result.json: each policy has 117 exit-code-zero compilations, 91 exact-target rejections, 26 no_decision and zero selected. Historical results do not validate this revision; inner/helper records remain separate.",
+    "Owning checker fixture constructors/mutations, including anchored forwarder deletion, forward_row_exit, branch mutations, argument specialization, metadata attachment, counter placement, extra predecessors and forwarding work/bypass/cycle mutations.",
+    "Unchanged production check_affine_function/full_count_kind structural exit, guard, arithmetic, SSA/count and placement proofs; checker's actual-opt LV1/LV2 execution/codegen matrix and exact-source Selected/VF/scratch assertions; C harness nested independent formulas, zero-entry null pointers, ordered reductions, exact visits, canaries, scratch reuse and future-row aliases.",
+    "Earlier t000027 failure and t000029 retained-output audit remain recorded below; t000029 generated no later affine LV2/tail artifacts before the construction failure."
   ],
   "prior_validation": {
-    "task_id": "t000027",
-    "revision": "34e72c2608bf01cb378cf2b7980be4f8b394f2c5",
+    "task_id": "t000029",
+    "revision": "79db86fe5904532f42363915bfe4dc5eb545b6eb",
     "compilation_exit_code": 0,
     "lit_exit_code": 1,
     "lit_passed_files": 43,
     "lit_total_files": 44,
     "lit_failed_files": 1,
     "lit_unresolved_files": 0,
+    "retained_affine_positives_completed": 14,
     "failures": [
-      "full_count_kind requires direct row.exit -> exit in both IRs; retained transformed affine_enclosing has an empty dedicated exit.loopexit hop and a recognized %8 count expansion"
+      "forward_row_exit passes its anchored exit-label text to replace_once; bare exit:\\n also occurs as a suffix of row.exit:\\n, so the intact uniqueness assertion fails"
     ],
+    "new_certificate_mutations_reached": false,
     "unit_tests_reached": false,
     "complete_executable_comparisons_reached": false,
     "primary_corpus_reached": false,
     "this_revision_validated": false
   },
   "diagnosis": {
-    "status": "Narrow repair based on immutable t000027 failure and static inspection, with fresh independent validation pending.",
-    "observed_failure": "The retained enclosing output has br i1 %rows.done, label %exit.loopexit, label %outer; exit.loopexit has one row.exit predecessor and only br label %exit. The direct-edge-only certificate returned no kind and therefore rejected the otherwise recognized %8 consumer count expansion.",
-    "repair": "Discover the direct/forwarded true successor structurally; verify exact conditional/polarity/backedge, one-hop predecessor/successor and absence of any work, plus guarded outer entry/backedge and final exit predecessors in both IRs.",
-    "no_new_count_provenance_rule": true,
+    "status": "Fixture-only repair of the concrete t000029 construction failure; fresh harness validation pending.",
+    "observed_failure": "Anchored matching found exact exit, but extracting its text discarded the position. Unrestricted replace_once then found the same exit:\\n suffix in row.exit and asserted before source.bridge could be constructed.",
+    "repair": "Require exactly one anchored match and retain its start/end for insertion or replacement. Keep row.exit, the unrestricted replace_once uniqueness assertion and all semantic checks.",
     "compiler_changes_in_this_task": false,
+    "production_checker_changes_in_this_task": false,
+    "no_new_count_provenance_rule": true,
     "standalone_fixture": {
       "standalone": false,
       "owning_test": "llvm/test/Other/reduction-fission-execution-checker.test",
@@ -89,17 +93,32 @@
       "input_file_retained_unchanged": true,
       "explanation": "t000026 validation listed the input as a standalone test and lit reported no RUN line. The initialized t000027 report already omits it; this report explicitly preserves that exclusion while retaining checker_input, the file and its owning RUN. No dummy RUN or correctness-check removal is used."
     },
-    "expected_outcome": "The observed enclosing shape and its direct/renamed/metadata analogues should cease blocking the production checker. Mutations should reject every new certificate obligation. Any later mandatory failure still requires exact retained artifacts and a narrowly justified repair; no passing result is claimed."
+    "expected_outcome": "The new construction cases and previous enclosing direct/forwarded/renamed/metadata mutations should become reachable without the substring collision. Subsequent mandatory failures still block acceptance and require exact retained output plus a narrowly justified proof.",
+    "previous_certificate_repair": {
+      "status": "Narrow repair based on immutable t000027 failure and static inspection, with fresh independent validation pending.",
+      "observed_failure": "The retained enclosing output has br i1 %rows.done, label %exit.loopexit, label %outer; exit.loopexit has one row.exit predecessor and only br label %exit. The direct-edge-only certificate returned no kind and therefore rejected the otherwise recognized %8 consumer count expansion.",
+      "repair": "Discover the direct/forwarded true successor structurally; verify exact conditional/polarity/backedge, one-hop predecessor/successor and absence of any work, plus guarded outer entry/backedge and final exit predecessors in both IRs.",
+      "no_new_count_provenance_rule": true,
+      "compiler_changes_in_this_task": false,
+      "standalone_fixture": {
+        "standalone": false,
+        "owning_test": "llvm/test/Other/reduction-fission-execution-checker.test",
+        "owning_RUN_retained": true,
+        "input_file_retained_unchanged": true,
+        "explanation": "t000026 validation listed the input as a standalone test and lit reported no RUN line. The initialized t000027 report already omits it; this report explicitly preserves that exclusion while retaining checker_input, the file and its owning RUN. No dummy RUN or correctness-check removal is used."
+      },
+      "expected_outcome": "The observed enclosing shape and its direct/renamed/metadata analogues should cease blocking the production checker. Mutations should reject every new certificate obligation. Any later mandatory failure still requires exact retained artifacts and a narrowly justified repair; no passing result is claimed."
+    }
   },
   "validation_requested": {
-    "task_id": "t000029",
+    "task_id": "t000030",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
       "required": true,
       "snapshot": "this worktree after harness freeze",
       "agent_compilation": false,
-      "base_revision": "34e72c2608bf01cb378cf2b7980be4f8b394f2c5",
+      "base_revision": "79db86fe5904532f42363915bfe4dc5eb545b6eb",
       "prior_build_is_not_acceptance": true
     },
     "lit": {
@@ -175,6 +194,27 @@
         "owning_RUN_retained": true,
         "input_file_retained_unchanged": true,
         "explanation": "t000026 validation listed the input as a standalone test and lit reported no RUN line. The initialized t000027 report already omits it; this report explicitly preserves that exclusion while retaining checker_input, the file and its owning RUN. No dummy RUN or correctness-check removal is used."
+      },
+      "construction_cases_required": {
+        "positive_exit_headers": [
+          "exit without predecessor comment",
+          "exit with predecessor comment"
+        ],
+        "collision_labels": [
+          "row.exit",
+          "other.exit",
+          "commented.exit",
+          "exit.more",
+          "exit.loopexit",
+          "other.exit.loopexit",
+          "after.exit"
+        ],
+        "comment_only_exit_is_not_a_label": true,
+        "missing_exact_label": true,
+        "duplicate_exact_label_header_combinations": 4,
+        "unrelated_blocks_unchanged": true,
+        "entire_expected_output_compared": true,
+        "exact_failure_pattern_and_match_count_required": true
       }
     },
     "unit_tests": {
@@ -250,7 +290,8 @@
         "Do not mistake the 14 retained checker inputs or specialized boundary positives for executable validation. Complete every existing actual-opt LV1/LV2 original/transformed/independent comparison and exact visit-count assertion.",
         "Run all new production-checker direct/forwarded/renamed outer-exit positives and rejection mutations on both original and candidate, including metadata and branch/switch predecessor cases; retain the exact failed obligation.",
         "The full actual-opt matrix remains required after both one and two ordinary LV invocations. No affine LV2 or scalar-remainder artifact existed for worker diagnosis. Preserve all fourteen full functions, original IR, probe/fixed-vscale IR, remarks and stage/result diagnostics on failure.",
-        "Do not replace the actual completed count by a capacity witness for any modular early-exit sibling, or actual P by N for compact streams. Preserve zero entry, enclosing-row scratch reuse/reduction carry and future-input aliases, masks/tails, inactive invalid operands and canaries."
+        "Do not replace the actual completed count by a capacity witness for any modular early-exit sibling, or actual P by N for compact streams. Preserve zero entry, enclosing-row scratch reuse/reduction carry and future-input aliases, masks/tails, inactive invalid operands and canaries.",
+        "The t000030 fixture-only repair is not executable evidence. Complete every original/transformed/independent LV1/LV2 comparison, both separate FP policy settings and all existing probe assertions after the entire owning checker RUN, VectorizeTests and mandatory lit pass. Retain any subsequent exact output mismatch; do not relax legality/count/placement/metadata proofs to pass."
       ],
       "comparison_status": "pending fresh independent harness; no worker execution",
       "persistent_work_dir_required": true
@@ -382,13 +423,23 @@
           "final executable original/transformed/independent result and visit comparisons",
           "RVV machine-verifier outputs and all 234 strict/reordered immutable primary exact-source Selected/Rejected/stage-VF/scratch artifacts"
         ]
+      },
+      {
+        "kind": "anchored_enclosing_exit_fixture_construction",
+        "required": true,
+        "retain": [
+          "entire owning checker RUN command/result, including bare/commented headers, suffix collisions, exact missing/duplicate match counts and unchanged unrelated-block assertions",
+          "exact failed constructor/mutation inputs and traceback if any later obligation fails",
+          "fresh compiled toolchain identity, all mandatory RUN outputs, VectorizeTests, complete actual-opt LV1/LV2 original/transformed/independent execution results and RVV machine verification",
+          "all 234 immutable primary strict/reordered exact-target source remarks, independent stage VFs, scratch capacity/bytes and separate inner/helper activity"
+        ]
       }
     ],
-    "acceptance": "Pending fresh compilation of this frozen t000029 worktree, EVERY RUN in all 44 mandatory fission/checker lit files, VectorizeTests, complete existing host fixed-vscale original/transformed/independent executable comparisons after both one and two ordinary LV invocations under both separate FP policy settings, uninstrumented RVV machine verification for EVL/scalar-remainder and scalar capacity boundaries, and all 234 immutable original primary compilations (117 strict, 117 explicitly reordered). Preserve exact original-loop source attribution, Selected/Rejected reasons, independent producer/consumer VFs and scratch capacity/bytes; other loop activity must remain separate. Retained fixtures/static audit and historical results are not acceptance. Compiler crashes, incorrect transformations or any mandatory failure block acceptance. Host execution, RVV code generation and measured performance are distinct; no speedup is claimed or required.",
+    "acceptance": "Pending fresh compilation of this frozen t000030 worktree, EVERY RUN in all 44 mandatory fission/checker lit files, VectorizeTests, complete existing host fixed-vscale original/transformed/independent executable comparisons after both one and two ordinary LV invocations under both separate FP policy settings, uninstrumented RVV machine verification for EVL/scalar-remainder and scalar capacity boundaries, and all 234 immutable original primary compilations (117 strict, 117 explicitly reordered). Preserve exact original-loop source attribution, Selected/Rejected reasons, independent producer/consumer VFs and scratch capacity/bytes; other loop activity must remain separate. Retained fixtures/static audit and historical results are not acceptance. Compiler crashes, incorrect transformations or any mandatory failure block acceptance. Host execution, RVV code generation and measured performance are distinct; no speedup is claimed or required.",
     "diagnostics": {
       "required": true,
       "worker_executed": false,
-      "base_revision": "34e72c2608bf01cb378cf2b7980be4f8b394f2c5",
+      "base_revision": "79db86fe5904532f42363915bfe4dc5eb545b6eb",
       "contract": "Retain all existing scalar-affine.ll SCEV/analysis/Selected/Rejected/stage RUNs through the harness, together with complete execution checker artifacts; the worker invokes no compiler or test.",
       "commands": [
         {
@@ -452,7 +503,7 @@
     },
     "status": "Pending fresh independent harness compilation and ALL mandatory checks; worker ran no compiler or tests"
   },
-  "future_work": "Consume fresh immutable harness results before acceptance or direction maturity. Complete every mandatory RUN, VectorizeTests, original/transformed/independent LV1/LV2 executable comparison, RVV machine verification and all 234 original corpus compilations. Retain any subsequent concrete failure and repair it narrowly without weakening actual-completed/participant counts or control preservation. New equivalent expressions or exit shapes require observed IR and an explicit small proof. Broader scalar legality, producer cycles, independent participation, whole-function scratch budgets/tiling and actual RVV execution/performance remain future work. No unfinished d2 integration or new direction dispatch is performed here.",
+  "future_work": "Consume fresh immutable t000030 harness results before acceptance or direction maturity. Complete every mandatory RUN, VectorizeTests, actual LV1/LV2 original/transformed/independent executable comparison, RVV machine verification and all 234 original corpus compilations. Retain any subsequent concrete failure and repair narrowly without weakening completed/participant counts, control preservation, placement, metadata or other assertions. Equivalent new expressions or exit shapes require observed IR and a small proof. Broader scalar legality, producer cycles, independent participation, bounded tiling/whole-function scratch budgets and actual RVV execution/performance remain future work. No unfinished d2 integration or new direction dispatch.",
   "fixture_registration": {
     "standalone": false,
     "owning_test": "llvm/test/Other/reduction-fission-execution-checker.test",
@@ -486,6 +537,23 @@
       "failures": [
         "check_affine_function exact equality rejects affine_down %fission.completed = add i64 %fission.ordinal, 1",
         "standalone Inputs/reduction-fission-affine-counts.ll: Test has no RUN line"
+      ],
+      "unit_tests_reached": false,
+      "complete_executable_comparisons_reached": false,
+      "primary_corpus_reached": false,
+      "this_revision_validated": false
+    },
+    "t000027_preceding_exit_certificate_failure": {
+      "task_id": "t000027",
+      "revision": "34e72c2608bf01cb378cf2b7980be4f8b394f2c5",
+      "compilation_exit_code": 0,
+      "lit_exit_code": 1,
+      "lit_passed_files": 43,
+      "lit_total_files": 44,
+      "lit_failed_files": 1,
+      "lit_unresolved_files": 0,
+      "failures": [
+        "full_count_kind requires direct row.exit -> exit in both IRs; retained transformed affine_enclosing has an empty dedicated exit.loopexit hop and a recognized %8 count expansion"
       ],
       "unit_tests_reached": false,
       "complete_executable_comparisons_reached": false,
@@ -965,6 +1033,46 @@
       },
       "this_revision_validation": false
     },
-    "follow_up": "Only repair a later shape mismatch after the harness retains the exact failed actual output. No preemptive LV2/tail count expression or CFG relaxation is introduced."
+    "follow_up": "Only repair a later shape mismatch after the harness retains the exact failed actual output. No preemptive LV2/tail count expression or CFG relaxation is introduced.",
+    "t000029_follow_up": "Compilation and all fourteen retained checker positives reached the new constructor; mandatory lit then stopped there. No later affine LV2/scalar-remainder output was produced to justify another production-checker repair."
+  },
+  "fixture_construction_audit": {
+    "scope": "All t000029 fixture additions plus nearby label-based counter-placement mutations",
+    "corrected": [
+      "forward_row_exit inserts before the exact unique exit-label match, never its extracted text",
+      "direct-exit fixture removes the exact unique forwarding block using an anchored match span",
+      "direct-exit fixture retargets one complete anchored row branch",
+      "counter-placement mutations insert after the exact unique destination label match"
+    ],
+    "retained_operations": [
+      "replace_once retains its body.count(old)==1 assertion and never receives extracted label text",
+      "row/guard/arithmetic changes select full indented SSA definitions or operand-delimited instruction strings; their exact current fixture occurrences are unique",
+      "forwarder-work mutations include the complete indented branch and newline, so a suffixed destination cannot match; there is one such branch in each actual constructor output",
+      "guard/row bypass mutations include both branch operands separated by a comma; bound specializations include argument type and comma, and value replacement has an SSA-token boundary",
+      "metadata marking anchors complete physical branch lines; appended predecessor/cycle blocks splice before the function's final closing brace"
+    ],
+    "focused_cases": {
+      "positive_exit_headers": [
+        "exit without predecessor comment",
+        "exit with predecessor comment"
+      ],
+      "collision_labels": [
+        "row.exit",
+        "other.exit",
+        "commented.exit",
+        "exit.more",
+        "exit.loopexit",
+        "other.exit.loopexit",
+        "after.exit"
+      ],
+      "comment_only_exit_is_not_a_label": true,
+      "missing_exact_label": true,
+      "duplicate_exact_label_header_combinations": 4,
+      "unrelated_blocks_unchanged": true,
+      "entire_expected_output_compared": true,
+      "exact_failure_pattern_and_match_count_required": true
+    },
+    "execution_evidence": false,
+    "worker_executed_cases": false
   }
 }
