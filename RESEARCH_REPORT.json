@@ -1,9 +1,9 @@
 {
-  "task_id": "t000027",
-  "base_revision": "db36048c5d6a5fd51f9b0f572566afb431596f74",
-  "hypothesis": "A validation-only repair admits ordinary-vectorized affine scalar-fission producers whose generated completed-count increment loses nuw, using the existing one-way integer refinement rule. It should unblock the retained descending and four modular early-exit controls while preserving exact actual-count provenance. LLVM compiler transformations, admission, profitability, the C execution harness and the immutable 117 primary inputs are unchanged.",
-  "semantics": "Only the generated %fission.completed definition gains the existing affine_instruction_refines relation against add nuw i64 %fission.ordinal, 1. The result SSA identity, add opcode, i64 width, ordered ordinal/1 operands and latch block must match. Candidate flags may only be a subset of the emitted nuw contract, so nuw or no flags are accepted; nsw, nuw nsw, exact, disjoint and duplicate flags are not newly permitted. Dropping nuw replaces poison on overflow with a wrapping integer value and leaves every originally defined execution unchanged. More strongly, the compiler admission proves a finite producer DAG with one latch visit per entered iteration, including the exiting iteration, and a representable N<=M. Here M=65 and CountTy=i64: before iteration i the ordinal is i, its unique latch add produces i+1, and final completed=N cannot overflow. A modular original induction can exit before its equality storage witness: the ordinal still counts actual completed iterations, not n. Zero entry does not enter producer or consumer. The ordinal PHI remains exactly [0,preheader] (inner.ph for enclosing reuse), [completed,latch]; the completed export remains exactly phi i64 [completed,latch] in consumer.ph. Unique definitions, exact block placement and all original instruction/control/metadata preservation checks remain. The existing small guard/control/SSA certificates alone may justify n or observed expanded N=n expressions; no certificate or bound substitution is added. Early-exit siblings still require completed or its verified export, and compaction still requires actual P, the P=0 bypass and unchanged initial states. The owning lit RUN directly calls the production checker on both increment spellings, metadata, analogous controls and specialized boundary arguments; the retained IR is only a checker fixture, never compiled as an executable reference. Fresh executable verification must transform the original scalar IR with real opt after one and two ordinary LV invocations, compare to both original IR and independent C references, and retain exact producer/latch/participant/vector/tail visits, zero entry, empty streams, aliases, canaries, inactive invalid operands, ordered FP bits/signed zero and enclosing-row reuse. Strict and explicitly enabled fission FP reordering remain separate; no FP or errno relaxation is added.",
-  "costs": "Validation-only: no target allocation, scratch traffic, input reread, recomputation, producer duplication, runtime guard, compiler analysis or profitability change. One existing scalar-integer refinement comparison is added per ordinal fixture function; it is constant size. Existing normalized instruction sets/SSA maps, bounded control/expansion templates and small CFG scans remain; no solver, enumeration or new general analysis machinery is introduced. Regression mutations are finite and operate on printed fixtures only. Underlying scratch costs are unchanged: capacity M times unique contribution allocation sizes plus padding, entry allocated and capped by the existing 65536-byte per-candidate limit and signed pointer-index ceiling. Mixed M=65 cases account for 1044 bytes (65*i32+65*double+65*float, including 4 padding bytes), with 16*N logical store bytes and 16*N load bytes, or 16*P each for compaction. Enclosing rows reuse 784 accounted bytes (65*i32+65*double plus padding), with 12*N stores and 12*N loads per row, without multiplying capacity by rows. Scalar capacity fixtures reserve 4/1020/65536 bytes for 1/255/16384 i32 contributions and transfer 8*N bytes total (131072 at the ceiling). Noncanonical producers have one ordinal PHI, one unit latch add (emitted nuw, possibly unflagged after ordinary LV), and one completed export; compact producers count participants and keep the existing empty guard. No mask arrays, contribution recomputation, original-input rereads, alias/SCEV versioning guards, dynamic or unbounded storage are introduced. Physical stack traffic, register pressure, RVV execution and speedup remain unmeasured.",
+  "task_id": "t000029",
+  "base_revision": "34e72c2608bf01cb378cf2b7980be4f8b394f2c5",
+  "hypothesis": "A validation-only structural certificate admits bounded affine scalar-fission loops whose enclosing-row exit is split by ordinary LV into row.exit -> a dedicated empty forwarding block -> exit. Direct exits remain supported. This removes the demonstrated t000027 checker obstruction without changing LLVM transformations, legality/admission, profitability, the C execution harness, the 117 immutable inputs or any FP/errno contract.",
+  "semantics": "In BOTH original and transformed IR, the enclosing certificate retains the unsigned 1<=rows<=4 and 1<=n<=65 entry guard, exact entry polarity and outer.ph/outer/inner.ph edges, zero-based row PHI, row.next=row+1, rows.done=(row.next==rows) and false backedge to outer. The exact true successor of br i1 %rows.done is either exit, or a block discovered from that CFG edge. The latter must have exactly the single incoming row.exit edge and contain only br label %exit after ignoring blank/comment lines and metadata attachments. No PHI, pure arithmetic, load, store, call or other work is admitted. Final exit must have exactly entry and the checked direct/forwarded predecessor. This rejects extra predecessors, guard/exit bypasses, wrong conditions/polarity/backedges/destinations, conditional hops, cycles and additional hops; predecessor comments and block spelling are not trusted. Incoming-edge scans now count label operands on unexpected switch/invoke terminators as well, so they cannot conceal an extra predecessor. The finite forward producer DAG, preserved original controls and instructions, sole exiting latch, exact consumer entry, unique SSA definitions and ordered arithmetic expansion templates are unchanged. The enclosing expansion still spans outer.ph then outer, with checked guard/row bounds proving N=n and origin=row+5. No new count-expression template is accepted. Ordinal/actual-completed/export placement and edges, one-way removal of integer nowrap flags, metadata/prefix/comment/placement checks, actual participant P and empty-stream bypass remain intact. Modular relational early-exit siblings cannot use n or a storage witness as actual N. New production-checker positives/negatives operate on retained IR only and are not executable correctness evidence. Mandatory verification must transform original scalar IR with real opt after one and two ordinary LV invocations and compare actual code against original IR AND independent C formulas, including exact stage/participant/vector/tail visits, null zero entry, enclosing scratch reuse and reduction carry, masks, tails, aliases/future-row aliases, canaries, inactive invalid operands, ordered FP bits and signed zero. Strict and explicitly enabled fission FP reordering remain separate policies without extra assumptions.",
+  "costs": "Validation-only: no target scratch allocation/traffic, input reread, recomputation, producer duplication, runtime guard, profitability or compiler analysis change. The checker adds a constant-size row-exit certificate and a constant number of linear scans of fixture instruction/label operands. Existing SSA maps and bounded arithmetic/CFG templates remain; no solver, arbitrary path enumeration or general exit-walking machinery is added. Only one dedicated empty forwarding hop is accepted. Underlying scratch is unchanged: entry allocation of M times unique contribution allocation sizes plus padding, capped at the existing 65536-byte per-candidate ceiling and signed pointer-index bound. At M=65, mixed fixtures account for 1044 bytes (65*i32+65*double+65*float plus 4 padding bytes), with 16*N logical store bytes and 16*N load bytes, or 16*P each for compact streams. Enclosing rows reuse 784 accounted bytes (65*i32+65*double plus padding), with 12*N stores and 12*N loads per row, without multiplying capacity by rows. Scalar i32 boundary fixtures reserve 4/1020/65536 bytes at M=1/255/16384 and transfer 8*N total bytes (131072 at the ceiling). Noncanonical producers retain an ordinal PHI, one unit latch increment and completed export; compaction retains P and its empty guard. No original-input rereads, contribution recomputation, mask arrays, new alias/SCEV versioning guards, dynamic or unbounded storage are added. Physical stack traffic, register pressure, RVV execution and speedup remain unmeasured.",
   "tests": [
     "llvm/test/Other/reduction-fission-execution-checker.test",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
@@ -51,27 +51,25 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
   ],
   "checker_input": "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
-  "limitations": "The worker ran no build, compiler (including host compilation), lit RUN, VectorizeTests, execution checker, test runner or try.sh. Only source/immutable artifact/JSON inspection and editing were performed. Fresh validation is pending. The t000026 harness compile succeeded, then lit passed 43/45 files, failed the production checker on affine_down's unflagged generated increment and marked the standalone input unresolved. VectorizeTests, complete execution, RVV verification of the affine matrix and primary corpus evaluation were not reached in that attempt. Retained EVL definitions, specialized boundary checker positives and historical corpus results are not executable validation of this revision. No compiler-path or new semantic transformation is introduced here. Unseen LV2 or scalar-tail output can still expose another narrowly diagnosable validation failure; no new arithmetic/count form is preemptively accepted. Existing bounded certificates still reject arbitrary equivalent guards, expansions or hoisting. Inherited compiler limitations include non-affine/pointer/FP controls, arbitrary non-strict/non-lattice exits, unbounded/unrepresentable counts, oversized untiled per-candidate scratch, producer cycles/extra recurrences, unsupported effects/live-outs/calls, independent participation streams and strictfp/constrained FP. Host fixed-vscale scalar-remainder execution is not EVL/VP host execution or RVV target execution; RVV machine verification is code generation, not a speedup measurement. No newly selected primary benchmark, direction maturity or performance improvement is claimed. Benchmarks, the harness, other worktrees, binaries, Git index/history/refs and unfinished d2 work were not modified.",
-  "test_expectations": "Intentional change: %fission.completed = add i64 %fission.ordinal, 1 now succeeds where the generated add nuw form already succeeded. This applies only the existing one-way integer refinement, not an n-based replacement of early-exit counts. Production-checker positives cover flagged and unflagged increments for all 13 ordinal controls (including enclosing reuse), generated-counter metadata, actual completed exports, and argument specializations at 0/1/65/66/UINT64_MAX on both original and candidate while retaining the entry guard. These specializations are checker tests only; runtime coverage still comes from actual transformed code. Mutations for both spellings reject changed opcode/unit step/operand order/SSA identity/width/block, duplicate definitions, comments, prefixes, split lines, unsupported added flags, false exports and altered ordinal/export incoming edges or cardinality. All prior metadata, integer refinement, guard, count expansion, placement, count-provenance, renamed early-exit and compact P=0 regressions remain. All fourteen retained EVL outputs are still passed directly to the checker. The Inputs file has no standalone lit registration; its owning test continues to read it. No correctness assertion, case/trial, source-location Selected/Rejected expectation, stage VF/scratch check or mandatory executable comparison is removed.",
+  "limitations": "No build, compiler including host compilation, lit RUN, VectorizeTests, execution checker, test runner or try.sh was invoked by the worker. Fresh mandatory validation is requested and pending; this task cannot claim completion of it before the independent harness runs. t000027 compiled successfully but passed 43/44 lit files and failed the retained affine_enclosing production-checker case; later mutation suites, VectorizeTests, full executable comparisons and corpus evaluation were not reached. The available affine transformed artifacts contain LV1 EVL only (t000022 and t000025); no affine LV2 or scalar-remainder output is available to diagnose. Static audit of all fourteen retained definitions shows no additional demonstrated mismatch after the recorded forwarding defect and the earlier completed-increment refinement repair. No speculative LV2/tail relaxation is made. The new certificate admits only one branch-only dedicated forwarding hop; equivalent conditional exits, multi-hop forwarding, PHI-bearing forwarding and arbitrary arithmetic/guard forms remain unsupported. Retained fixtures and argument specializations are checker inputs, never executable references. Existing compiler limitations include non-affine/pointer/FP controls, arbitrary non-lattice exits, unbounded/unrepresentable counts, oversized untiled scratch, producer cycles/extra recurrences, unsupported effects/live-outs/calls, independent participant streams and strictfp/constrained FP. Host fixed-vscale scalar-remainder execution is not EVL/VP host execution or RVV target execution. RVV machine verification is code generation, not a speedup measurement. No primary selection, direction maturity or performance improvement is claimed. Benchmarks, harness, other worktrees, binaries, Git index/history/refs and unfinished d2 work remain untouched.",
+  "test_expectations": "Intentional change: affine_enclosing with the observed dedicated empty outer exit forwarding block is expected to pass the same N=n certificate as its direct-exit counterpart. No compiler lit expectations or semantic checks are removed. New owning checker RUN positives cover original/candidate direct and forwarded shapes, unrelated/renamed forwarding blocks and misleading predecessor comments, metadata on either or both sides (including the conditional and unconditional branches), both certified expanded count and n, and actual-export argument specializations at n=0/1/65/66/UINT64_MAX and rows=0/1/4/5/UINT64_MAX. Rejections cover row condition/polarity/backedge, outer guards and PHI/increment/comparison definitions (candidate alone and dual-side mutations), branch and switch extra predecessors, entry/exit bypasses, missing/wrong destinations, conditional forwarding, self/two-block cycles, work in the hop including PHIs/arithmetic/loads/stores/calls, and false count provenance. Forwarder defects are checked on original and candidate separately. The complete earlier completed/participant, integer refinement, count expansion, metadata, SSA, guard, placement, compact P=0, analogous affine and boundary suites remain unchanged and mandatory, including all fourteen retained EVL inputs and all modular early-exit storage-bound rejections. The Inputs fixture remains read only through its owning RUN, with no standalone test registration or dummy RUN. No case, trial, correctness assertion, Selected/Rejected source attribution or stage VF/scratch check is removed. All retained/specialized checker positives require independent actual-opt executable validation.",
   "evidence_read": [
-    "tasks/t000026.json recorded revise decision, diffs/t000026.patch, builds/t000026/progress.json and full lit failure log: generated affine_down increment equality mismatch and standalone input without RUN; initializations/t000027.json.",
-    "Frozen harness/BENCHMARKS_ANALYSIS.md; read-only reaggregation of all 234 evaluations/t000017/primary/*/*/result.json: each policy 117 exit-code-zero compilations, 91 rejected, 26 no_decision, zero selected. Nested/helper records remain separate; this historical evidence does not validate t000027.",
-    "Retained builds/t000025/execution/scalar-affine_ordered_default-evl_lv1.rvv.ll, reference_scalar-affine.ll, remarks and earlier execution.log; unchanged retained Inputs/reduction-fission-affine-counts.ll. Static observations only.",
-    "llvm/lib/Transforms/Vectorize/ScalarReductionFission.cpp finite bound/representability logic and ordinal/completed/export emission; production Python checker, owning checker lit, original scalar-affine.ll controls/remarks and existing capacity execution matrix.",
-    "llvm/utils/reduction-fission-execution.c.in independent modular completed-count formula, exact stage/participant/vector/tail visits, zero entry, aliases, signed-zero/canary/input checks and requirements for early/full/vector/tail execution."
+    "tasks/t000029.json assignment; immutable tasks/t000027.json revise decision, diffs/t000027.patch, builds/t000027/progress.json and full lit.log (compile succeeded; 43/44 files passed; affine_enclosing count certificate rejected row.exit -> exit.loopexit -> exit).",
+    "Frozen harness/BENCHMARKS_ANALYSIS.md and read-only reaggregation of all 234 evaluations/t000017/primary/*/*/result.json: each policy has 117 exit-code-zero compilations, 91 exact-target rejections, 26 no_decision and zero selected. Historical results do not validate this revision; other nested/helper records remain separate.",
+    "All fourteen definitions in Inputs/reduction-fission-affine-counts.ll compared as text to immutable builds/t000025/execution/scalar-affine_ordered_default-evl_lv1.rvv.ll. Original affine source, reference_scalar-affine.ll, retained source-location remarks and available execution artifact names were inspected. Available affine transformed IR is LV1 EVL only, with no affine LV2/tail artifact.",
+    "Production check_affine_function, full_count_kind and count_expressions; owning checker lit and all earlier completed/participant/guard/metadata/preservation mutations; ScalarReductionFission.cpp finite bound/representability, scratch accounting and ordinal/completed/export emission; unchanged C independent-count formulas, stage-visit assertions and enclosing future-row alias/scratch reuse comparisons."
   ],
   "prior_validation": {
-    "task_id": "t000026",
-    "revision": "db36048c5d6a5fd51f9b0f572566afb431596f74",
+    "task_id": "t000027",
+    "revision": "34e72c2608bf01cb378cf2b7980be4f8b394f2c5",
     "compilation_exit_code": 0,
     "lit_exit_code": 1,
     "lit_passed_files": 43,
-    "lit_total_files": 45,
+    "lit_total_files": 44,
     "lit_failed_files": 1,
-    "lit_unresolved_files": 1,
+    "lit_unresolved_files": 0,
     "failures": [
-      "check_affine_function exact equality rejects affine_down %fission.completed = add i64 %fission.ordinal, 1",
-      "standalone Inputs/reduction-fission-affine-counts.ll: Test has no RUN line"
+      "full_count_kind requires direct row.exit -> exit in both IRs; retained transformed affine_enclosing has an empty dedicated exit.loopexit hop and a recognized %8 count expansion"
     ],
     "unit_tests_reached": false,
     "complete_executable_comparisons_reached": false,
@@ -79,9 +77,9 @@
     "this_revision_validated": false
   },
   "diagnosis": {
-    "status": "Narrow repair based on immutable t000026 lit failure and static audit of all fourteen retained outputs; no worker execution.",
-    "observed_failure": "The generated increment used exact normalized equality, unlike retained integer arithmetic and count expansions using affine_instruction_refines.",
-    "repair": "Use the same one-way refinement for the generated increment only; retain exact ordinal/export PHIs, SSA uniqueness and placement.",
+    "status": "Narrow repair based on immutable t000027 failure and static inspection, with fresh independent validation pending.",
+    "observed_failure": "The retained enclosing output has br i1 %rows.done, label %exit.loopexit, label %outer; exit.loopexit has one row.exit predecessor and only br label %exit. The direct-edge-only certificate returned no kind and therefore rejected the otherwise recognized %8 consumer count expansion.",
+    "repair": "Discover the direct/forwarded true successor structurally; verify exact conditional/polarity/backedge, one-hop predecessor/successor and absence of any work, plus guarded outer entry/backedge and final exit predecessors in both IRs.",
     "no_new_count_provenance_rule": true,
     "compiler_changes_in_this_task": false,
     "standalone_fixture": {
@@ -91,17 +89,17 @@
       "input_file_retained_unchanged": true,
       "explanation": "t000026 validation listed the input as a standalone test and lit reported no RUN line. The initialized t000027 report already omits it; this report explicitly preserves that exclusion while retaining checker_input, the file and its owning RUN. No dummy RUN or correctness-check removal is used."
     },
-    "expected_outcome": "Five known unflagged generated increments should cease blocking the checker; removal of standalone input registration should avoid no-RUN discovery. Fresh full validation may expose a later issue, which must retain exact artifacts and receive a narrow repair."
+    "expected_outcome": "The observed enclosing shape and its direct/renamed/metadata analogues should cease blocking the production checker. Mutations should reject every new certificate obligation. Any later mandatory failure still requires exact retained artifacts and a narrowly justified repair; no passing result is claimed."
   },
   "validation_requested": {
-    "task_id": "t000027",
+    "task_id": "t000029",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
       "required": true,
       "snapshot": "this worktree after harness freeze",
       "agent_compilation": false,
-      "base_revision": "db36048c5d6a5fd51f9b0f572566afb431596f74",
+      "base_revision": "34e72c2608bf01cb378cf2b7980be4f8b394f2c5",
       "prior_build_is_not_acceptance": true
     },
     "lit": {
@@ -249,7 +247,10 @@
         "Preserve actual completed counts for all four modular relational early-exit siblings, and participation counts plus the empty-stream bypass for compaction; equality-witness bounds must never replace these.",
         "Retain complete scalar-tail/LV2 affine IR on any later failure. The worker only inspected the retained LV1 EVL output; a different unobserved expansion is not automatically accepted.",
         "Run the direct generated completed-increment positives and rejection mutations in the owning checker RUN, including both flag spellings, 13 ordinal controls, exact PHI edges and specialized boundary arguments.",
-        "Do not mistake the 14 retained checker inputs or specialized boundary positives for executable validation. Complete every existing actual-opt LV1/LV2 original/transformed/independent comparison and exact visit-count assertion."
+        "Do not mistake the 14 retained checker inputs or specialized boundary positives for executable validation. Complete every existing actual-opt LV1/LV2 original/transformed/independent comparison and exact visit-count assertion.",
+        "Run all new production-checker direct/forwarded/renamed outer-exit positives and rejection mutations on both original and candidate, including metadata and branch/switch predecessor cases; retain the exact failed obligation.",
+        "The full actual-opt matrix remains required after both one and two ordinary LV invocations. No affine LV2 or scalar-remainder artifact existed for worker diagnosis. Preserve all fourteen full functions, original IR, probe/fixed-vscale IR, remarks and stage/result diagnostics on failure.",
+        "Do not replace the actual completed count by a capacity witness for any modular early-exit sibling, or actual P by N for compact streams. Preserve zero entry, enclosing-row scratch reuse/reduction carry and future-input aliases, masks/tails, inactive invalid operands and canaries."
       ],
       "comparison_status": "pending fresh independent harness; no worker execution",
       "persistent_work_dir_required": true
@@ -369,13 +370,25 @@
           "fresh actual LV1/LV2 EVL and scalar-remainder output, original IR, probes, fixed-vscale host IR and final linked comparison output",
           "RVV machine verification and all 234 strict/reordered original-loop Selected/Rejected reasons and stage VF/scratch artifacts"
         ]
+      },
+      {
+        "kind": "enclosing_affine_exit_forwarding_certificate",
+        "required": true,
+        "retain": [
+          "all owning checker lit RUN commands/results and exact failed mutation",
+          "fresh complete original and LV1/LV2 EVL/scalar-remainder affine IR",
+          "row guard/PHI/increment/comparison, actual row.exit true/false edges, forwarding instruction list and CFG-derived predecessor/successor evidence",
+          "full generated count expansion and actual completed/participant exports",
+          "final executable original/transformed/independent result and visit comparisons",
+          "RVV machine-verifier outputs and all 234 strict/reordered immutable primary exact-source Selected/Rejected/stage-VF/scratch artifacts"
+        ]
       }
     ],
-    "acceptance": "Pending fresh compilation of this frozen t000027 worktree, every RUN in all 44 mandatory fission/checker lit files, VectorizeTests, the complete existing host fixed-vscale original/transformed/independent executable comparisons after one and two ordinary LV invocations, uninstrumented RVV machine verification, and all 234 immutable original primary compilations under strict and explicitly reordered policies. Preserve exact original-loop source attribution, Selected/Rejected reasons, producer/consumer VFs and scratch capacity/bytes. Prior static successes or retained checker fixtures are not acceptance. Compiler crashes, incorrect transformations or failed mandatory checks block acceptance. No speedup claim is made or required.",
+    "acceptance": "Pending fresh compilation of this frozen t000029 worktree, EVERY RUN in all 44 mandatory fission/checker lit files, VectorizeTests, complete existing host fixed-vscale original/transformed/independent executable comparisons after both one and two ordinary LV invocations under both separate FP policy settings, uninstrumented RVV machine verification for EVL/scalar-remainder and scalar capacity boundaries, and all 234 immutable original primary compilations (117 strict, 117 explicitly reordered). Preserve exact original-loop source attribution, Selected/Rejected reasons, independent producer/consumer VFs and scratch capacity/bytes; other loop activity must remain separate. Retained fixtures/static audit and historical results are not acceptance. Compiler crashes, incorrect transformations or any mandatory failure block acceptance. Host execution, RVV code generation and measured performance are distinct; no speedup is claimed or required.",
     "diagnostics": {
       "required": true,
       "worker_executed": false,
-      "base_revision": "db36048c5d6a5fd51f9b0f572566afb431596f74",
+      "base_revision": "34e72c2608bf01cb378cf2b7980be4f8b394f2c5",
       "contract": "Retain all existing scalar-affine.ll SCEV/analysis/Selected/Rejected/stage RUNs through the harness, together with complete execution checker artifacts; the worker invokes no compiler or test.",
       "commands": [
         {
@@ -437,9 +450,9 @@
         "full FileCheck input, not its truncated log excerpt"
       ]
     },
-    "status": "Pending fresh independent harness compilation and all mandatory checks; worker ran no tests"
+    "status": "Pending fresh independent harness compilation and ALL mandatory checks; worker ran no compiler or tests"
   },
-  "future_work": "Inspect fresh immutable harness results before acceptance or direction maturity. Complete every mandatory RUN, VectorizeTests, original/transformed/independent LV1/LV2 comparison, RVV machine verification and all 234 original corpus compilations. Retain concrete subsequent failures and repair narrowly without weakening participation or actual-completed counts. New equivalent count forms require observed IR and explicit proofs. Broader scalar legality, producer cycles, independent participation, whole-function scratch limits/tiling and actual RVV execution/performance remain future work. No d2 integration or new implementation dispatch is performed in this task.",
+  "future_work": "Consume fresh immutable harness results before acceptance or direction maturity. Complete every mandatory RUN, VectorizeTests, original/transformed/independent LV1/LV2 executable comparison, RVV machine verification and all 234 original corpus compilations. Retain any subsequent concrete failure and repair it narrowly without weakening actual-completed/participant counts or control preservation. New equivalent expressions or exit shapes require observed IR and an explicit small proof. Broader scalar legality, producer cycles, independent participation, whole-function scratch budgets/tiling and actual RVV execution/performance remain future work. No unfinished d2 integration or new direction dispatch is performed here.",
   "fixture_registration": {
     "standalone": false,
     "owning_test": "llvm/test/Other/reduction-fission-execution-checker.test",
@@ -460,7 +473,25 @@
     "execution_failure": "affine_runtime preheader %span = shl nuw nsw i64 %n, 1 became shl i64 %n, 1",
     "complete_executable_comparisons_reached": false,
     "primary_corpus_reached": false,
-    "this_revision_validated": false
+    "this_revision_validated": false,
+    "t000026_preceding_generated_count_failure": {
+      "task_id": "t000026",
+      "revision": "db36048c5d6a5fd51f9b0f572566afb431596f74",
+      "compilation_exit_code": 0,
+      "lit_exit_code": 1,
+      "lit_passed_files": 43,
+      "lit_total_files": 45,
+      "lit_failed_files": 1,
+      "lit_unresolved_files": 1,
+      "failures": [
+        "check_affine_function exact equality rejects affine_down %fission.completed = add i64 %fission.ordinal, 1",
+        "standalone Inputs/reduction-fission-affine-counts.ll: Test has no RUN line"
+      ],
+      "unit_tests_reached": false,
+      "complete_executable_comparisons_reached": false,
+      "primary_corpus_reached": false,
+      "this_revision_validated": false
+    }
   },
   "retained_output_audit": {
     "kind": "Static printed-IR inspection, not checker execution or executable validation",
@@ -476,7 +507,7 @@
       "affine_signed_down_early"
     ],
     "participant_controls": 1,
-    "conclusion": "All 13 ordinal definitions use i64 zero initialization, completed on the latch backedge, one unit latch increment and a single completed/latch export in consumer.ph. Five drop nuw and consume the actual completed value; eight retain nuw and use n or the existing checked expanded chains. Enclosing initialization uses inner.ph. Compact alone uses its flagged participant increment/merge/export and actual P with the empty guard. No analogous generated flag mismatch is visible in the retained compact control. No extra relaxation is inferred for unseen LV2/tail output.",
+    "conclusion": "Static inspection confirms all fourteen fixtures are exact printed t000025 LV1 EVL definitions. All 13 ordinal controls retain zero-based ordinal, actual unit completed count at the latch and a single completed export in consumer.ph; five remove nuw and eight retain it. Compact retains actual P and the empty bypass. The observed enclosing consumer uses %8 from its existing outer.ph/outer expansion, while its row exit uses the sole empty forwarding block. The seven other full-count controls use n or the existing recognized expansions; descending and four modular early-exit controls consume actual completed. No other demonstrated mismatch was found by text inspection. This is not production-checker or executable validation.",
     "observations": [
       {
         "function": "affine_const",
@@ -876,5 +907,64 @@
       }
     ],
     "historical_evidence": "Exact printed function definitions were compared as text to immutable t000025 LV1 EVL IR. Attached remarks at each function's actual DILocation record selection, producer VF 1, consumer VF vscale x 4, capacity 65 and scratch bytes 1044 (784 for enclosing 82:3). These historical observations and reference IR inspection do not establish completion of executable comparisons, RVV execution, performance or this revision's acceptance."
+  },
+  "output_shape_audit": {
+    "kind": "read-only immutable printed-IR/source inspection; no tests run",
+    "available_affine_transformed_artifacts": [
+      "builds/t000022/execution/scalar-affine_ordered_default-evl_lv1.rvv.ll",
+      "builds/t000025/execution/scalar-affine_ordered_default-evl_lv1.rvv.ll"
+    ],
+    "affine_lv2_available": false,
+    "affine_scalar_remainder_available": false,
+    "enclosing_original_exit": {
+      "row_exit_branch": "br i1 %rows.done, label %exit, label %outer",
+      "exit_predecessors": [
+        "entry",
+        "row.exit"
+      ]
+    },
+    "enclosing_observed_transformed_exit": {
+      "row_exit_branch": "br i1 %rows.done, label %exit.loopexit, label %outer",
+      "forwarding_predecessors": [
+        "row.exit"
+      ],
+      "forwarding_instructions": [
+        "br label %exit"
+      ],
+      "exit_predecessors": [
+        "entry",
+        "exit.loopexit"
+      ],
+      "hoisted_count_blocks": [
+        "outer.ph",
+        "outer"
+      ],
+      "consumer_count": "%8",
+      "source_location": "scalar-affine.c:82:3",
+      "scratch_capacity": 65,
+      "scratch_bytes": 784,
+      "producer_vf": "1",
+      "consumer_vf": "vscale x 4"
+    },
+    "frozen_primary_t000017": {
+      "per_policy": {
+        "strict": {
+          "inputs": 117,
+          "exit_zero": 117,
+          "rejected": 91,
+          "no_decision": 26,
+          "selected": 0
+        },
+        "reordered": {
+          "inputs": 117,
+          "exit_zero": 117,
+          "rejected": 91,
+          "no_decision": 26,
+          "selected": 0
+        }
+      },
+      "this_revision_validation": false
+    },
+    "follow_up": "Only repair a later shape mismatch after the harness retains the exact failed actual output. No preemptive LV2/tail count expression or CFG relaxation is introduced."
   }
 }

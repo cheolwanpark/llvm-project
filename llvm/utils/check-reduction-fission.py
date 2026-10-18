@@ -501,17 +501,49 @@ def check_affine_function(ir, source, name, evl, probe=False):
             return all(any(affine_instruction_refines('  ' + instruction, line, normalize)
                            for line in block.splitlines()) for instruction in instructions)
 
+        def instructions(block):
+            return [line.split(', !', 1)[0].strip() for line in block.splitlines()
+                    if line.strip() and not line.lstrip().startswith(';')]
+
         def edges(block):
-            lines = [line.split(', !', 1)[0].strip() for line in block.splitlines()
-                     if line.strip() and not line.lstrip().startswith(';')]
+            lines = instructions(block)
             branches = [line for line in lines if line.startswith('br ')]
             if len(branches) != 1 or branches[0] != lines[-1]:
                 return None
             return re.findall(r'label %([-\w.$]+)', branches[0])
 
         def incoming(table, destination):
+            # Count label operands even on an unexpected switch/invoke, so
+            # an unsupported terminator cannot hide an extra predecessor.
             return sorted(label for label, block in table.items()
-                          for target in (edges(block) or []) if target == destination)
+                          for line in instructions(block)
+                          for target in re.findall(r'\blabel %([-\w.$]+)', line)
+                          if target == destination)
+
+        def enclosing_exit(table):
+            # Ordinary LV may split the outer exit edge for LoopSimplify.
+            # Discover that dedicated block from the true successor, never
+            # from its name. The row comparison/polarity and false backedge
+            # must remain exact. Accept at most one forwarding hop containing
+            # only an unconditional branch: no PHIs, calls or other work.
+            successors = edges(table['row.exit'])
+            if not successors or len(successors) != 2:
+                return False
+            destination, backedge = successors
+            if backedge != 'outer' or not has(
+                    table['row.exit'],
+                    f'br i1 %rows.done, label %{destination}, label %outer'):
+                return False
+            predecessor = 'row.exit'
+            if destination != 'exit':
+                if (destination not in table or
+                        incoming(table, destination) != ['row.exit'] or
+                        instructions(table[destination]) != ['br label %exit']):
+                    return False
+                predecessor = destination
+            # Entry must still bypass the whole nest on a failed guard. No
+            # other edge may bypass the row exit or join its forwarding hop.
+            return incoming(table, 'exit') == sorted(['entry', predecessor])
 
         if not has(before['entry'], '%valid = icmp ule i64 %n, 65',
                    '%nonzero = icmp ne i64 %n, 0'):
@@ -558,8 +590,11 @@ def check_affine_function(ir, source, name, evl, probe=False):
                         has(table['outer'], '%row = phi i64 [ 0, %outer.ph ], [ %row.next, %row.exit ]',
                             'br label %inner.ph') and
                         has(table['row.exit'], '%row.next = add nuw i64 %row, 1',
-                            '%rows.done = icmp eq i64 %row.next, %rows',
-                            'br i1 %rows.done, label %exit, label %outer') and
+                            '%rows.done = icmp eq i64 %row.next, %rows') and
+                        edges(table['entry']) == ['outer.ph', 'exit'] and
+                        edges(table['outer.ph']) == ['outer'] and
+                        edges(table['outer']) == ['inner.ph'] and
+                        enclosing_exit(table) and
                         incoming(table, 'outer.ph') == ['entry'] and
                         incoming(table, 'outer') == ['outer.ph', 'row.exit']):
                     return None

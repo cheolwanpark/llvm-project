@@ -457,6 +457,168 @@ def reject_count(candidate, original=runtime_source, function=runtime_name, reas
         raise AssertionError('accepted affine count mutation: ' + reason)
 
 
+# The enclosing count chain proves N=n only with the checked row guard and
+# recurrence. Ordinary LV splits its outer exit edge with a dedicated empty
+# block. Exercise the production checker with direct and forwarded exits on
+# EITHER side; the successor's spelling and printed predecessor comments are
+# not certificates. These retained/synthetic IRs are checker inputs only.
+enclosing_name = 'affine_enclosing'
+enclosing_source = checker.function_definition(affine_originals, enclosing_name)
+enclosing_retained = checker.function_definition(affine_outputs, enclosing_name)
+row_branch = '  br i1 %rows.done, label %exit, label %outer'
+forwarder = re.search(r'^  br i1 %rows.done, label %([-\w.$]+), label %outer$',
+                      enclosing_retained, re.M)[1]
+assert forwarder != 'exit'
+forward_block = re.search(r'^' + re.escape(forwarder) + r':[^\n]*\n.*?(?=^[-\w.$]+:|^})',
+                          enclosing_retained, re.M | re.S)[0]
+enclosing_direct = replace_once(enclosing_retained, forward_block, '')
+enclosing_direct = replace_once(enclosing_direct, 'label %' + forwarder + ', label %outer',
+                                'label %exit, label %outer')
+
+
+def forward_row_exit(text, label):
+    text = replace_once(text, row_branch,
+                        '  br i1 %rows.done, label %' + label + ', label %outer')
+    site = re.search(r'^exit:[^\n]*\n', text, re.M)[0]
+    return replace_once(text, site, label + ': ; deliberately untrusted preds = %entry\n'
+                        '  br label %exit\n\n' + site)
+
+
+def mark_enclosing(text):
+    for value in ('%rows.valid', '%rows.nonzero', '%rows.enter', '%inner.enter',
+                  '%enter', '%row', '%row.next', '%rows.done'):
+        text = attach_metadata(text, value, ', !dbg !71, !annotation !72')
+    # Include metadata on both the conditional exit and unconditional hop.
+    return re.sub(r'^(  br [^\n]*?)(?:, ![^\n]*)?$',
+                  r'\1, !annotation !72, !dbg !71', text, flags=re.M)
+
+
+enclosing_sources = (enclosing_source, forward_row_exit(enclosing_source, 'source.bridge'))
+enclosing_candidates = (enclosing_direct, enclosing_retained,
+                        forward_row_exit(enclosing_direct, 'return.bridge'),
+                        forward_row_exit(enclosing_direct, 'unrelated_name'))
+for original in enclosing_sources:
+    for candidate in enclosing_candidates:
+        # Both the actual hoisted expansion and n need the full certificate.
+        for count in ('%8', '%n'):
+            counted = change_line(candidate, '%avl', '[ %8, %vector.ph ]',
+                                  '[ ' + count + ', %vector.ph ]')
+            for output, input_ir in ((counted, original), (mark_enclosing(counted), original),
+                                     (counted, mark_enclosing(original)),
+                                     (mark_enclosing(counted), mark_enclosing(original))):
+                assert checker.check_affine_function(output, input_ir, enclosing_name, evl=True) == output
+
+        # Boundary specializations retain the guards on both sides and use
+        # the actual completed export. No specialized fixture is executed.
+        exported = change_line(candidate, '%avl', '[ %8, %vector.ph ]',
+                               '[ %fission.completed.count, %vector.ph ]')
+        for argument, values in (('%n', (0, 1, 65, 66, 2**64 - 1)),
+                                  ('%rows', (0, 1, 4, 5, 2**64 - 1))):
+            for value in values:
+                specialized = [re.sub(re.escape(argument) + r'(?![-\w.$])', str(value),
+                                      replace_once(text, 'i64 ' + argument + ', ', ''))
+                               for text in (exported, original)]
+                assert checker.check_affine_function(specialized[0], specialized[1],
+                                                     enclosing_name, evl=True) == specialized[0]
+
+
+def reject_enclosing(candidate, original=enclosing_source, reason=''):
+    reject_count(candidate, original, enclosing_name, reason)
+
+
+for candidate in enclosing_candidates:
+    marked = mark_enclosing(candidate)
+    destination = re.search(r'^  br i1 %rows.done, label %([-\w.$]+), label %outer',
+                            marked, re.M)[1]
+    branch = 'br i1 %rows.done, label %' + destination + ', label %outer'
+    for replacement in ('br i1 %enter, label %' + destination + ', label %outer',
+                        'br i1 %rows.done, label %outer, label %' + destination,
+                        'br i1 %rows.done, label %' + destination + ', label %inner.ph',
+                        'br i1 %rows.done, label %' + destination + ', label %row.exit',
+                        'br label %' + destination):
+        reject_enclosing(replace_once(marked, branch, replacement), reason='row branch: ' + replacement)
+
+    # Added predecessors/bypasses must be found from actual terminators, not
+    # label comments. A switch predecessor must not disappear from the scan.
+    for target in (destination, 'exit', 'outer', 'outer.ph', 'inner.ph',
+                   'inner', 'scalar.fission.consumer.ph', 'vector.ph'):
+        for terminator in ('br label %' + target,
+                           'switch i64 %n, label %' + target + ' [ i64 0, label %extra ]'):
+            reject_enclosing(marked[:-1] + 'extra:\n  ' + terminator + '\n}',
+                             reason='extra predecessor: ' + target)
+
+    # Apply invalid row definitions to the candidate alone AND to both sides.
+    # Preservation or matching SSA spelling alone must not certify N=n.
+    for value, expressions in (
+        ('%rows.valid', ('icmp ule i64 %rows, 5', 'icmp sle i64 %rows, 4',
+                         'icmp ule i64 %n, 4')),
+        ('%rows.nonzero', ('icmp eq i64 %rows, 0', 'icmp ne i64 %rows, 1')),
+        ('%rows.enter', ('or i1 %rows.valid, %rows.nonzero',)),
+        ('%inner.enter', ('or i1 %valid, %nonzero',)),
+        ('%enter', ('or i1 %rows.enter, %inner.enter',)),
+        ('%row', ('phi i64 [ 1, %outer.ph ], [ %row.next, %row.exit ]',
+                  'phi i64 [ 0, %outer.ph ], [ %row, %row.exit ]',
+                  'phi i64 [ 0, %outer.ph ], [ %row.next, %outer ]')),
+        ('%row.next', ('add nuw i64 %row, 0', 'add nuw i64 %row, 2',
+                       'sub nuw i64 %row, 1', 'add nuw i32 %row, 1')),
+        ('%rows.done', ('icmp ne i64 %row.next, %rows', 'icmp eq i64 %row, %rows',
+                        'icmp eq i64 %row.next, %n', 'icmp eq i32 %row.next, %rows')),
+    ):
+        for expression in expressions:
+            mutated = []
+            for text in (marked, enclosing_source):
+                line = next(line for line in text.splitlines() if line.startswith('  ' + value + ' = '))
+                mutated.append(replace_once(text, line, '  ' + value + ' = ' + expression))
+            reject_enclosing(mutated[0], reason='row definition: ' + expression)
+            reject_enclosing(mutated[0], mutated[1], reason='matching row definition: ' + expression)
+
+    for value in ('%rows', '%row', '%span', '%limit', '%fission.ordinal', '%8.other'):
+        reject_enclosing(change_line(marked, '%avl', '[ %8, %vector.ph ]',
+                                     '[ ' + value + ', %vector.ph ]'), reason='count provenance: ' + value)
+
+for original in enclosing_sources:
+    branch = re.search(r'^  br i1 %rows.done, label %([-\w.$]+), label %outer$', original, re.M)[0]
+    destination = re.search(r'label %([-\w.$]+)', branch)[1]
+    for replacement in ('  br i1 %enter, label %' + destination + ', label %outer',
+                        '  br i1 %rows.done, label %outer, label %' + destination,
+                        '  br i1 %rows.done, label %' + destination + ', label %inner.ph'):
+        reject_enclosing(enclosing_retained, replace_once(original, branch, replacement),
+                         reason='source row branch: ' + replacement)
+
+# A forwarding block must contain just one unconditional branch to exit.
+# Even harmless arithmetic or a PHI is outside this deliberately small proof.
+# Check defects in the original too, independently of the output's shape.
+for text, is_source in ((forward_row_exit(enclosing_direct, 'bridge'), False),
+                        (forward_row_exit(enclosing_source, 'bridge'), True)):
+    for replacement in ('br label %outer', 'br label %row.exit', 'br label %bridge',
+                        'br label %missing', 'ret void', '; br label %exit',
+                        'br i1 %rows.done, label %exit, label %exit',
+                        'switch i64 %row, label %exit [ ]',
+                        '%copy = phi i64 [ %row, %row.exit ]\n  br label %exit',
+                        '%copy = add i64 %row, 0\n  br label %exit',
+                        '%copy = load i32, ptr %out\n  br label %exit',
+                        'store i32 0, ptr %out\n  br label %exit',
+                        'call void @effect()\n  br label %exit',
+                        'br label %second.bridge'):
+        altered = replace_once(text, '  br label %exit\n', '  ' + replacement + '\n')
+        if replacement == 'br label %second.bridge':
+            altered = altered[:-1] + 'second.bridge:\n  br label %bridge\n}'
+        if is_source:
+            reject_enclosing(enclosing_retained, altered, reason='source forwarder: ' + replacement)
+        else:
+            reject_enclosing(altered, reason='forwarder: ' + replacement)
+
+    # A bypass of the true edge cannot leave an orphan hop into exit, and the
+    # failed entry guard cannot join the hop instead of bypassing the nest.
+    for altered in (replace_once(text, 'label %bridge, label %outer', 'label %exit, label %outer'),
+                    replace_once(text, 'label %outer.ph, label %exit', 'label %outer.ph, label %bridge'),
+                    text[:-1] + 'extra:\n  br label %bridge\n}'):
+        if is_source:
+            reject_enclosing(enclosing_retained, altered, reason='source exit bypass/predecessor')
+        else:
+            reject_enclosing(altered, reason='exit bypass/predecessor')
+
+
 # The completed increment has the SAME one-way refinement contract as the
 # retained producer arithmetic. Five retained outputs (down and four modular
 # early exits) drop nuw; eight retain it. Check both spellings directly through
