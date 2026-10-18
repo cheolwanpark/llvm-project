@@ -197,9 +197,9 @@ rejection_edits = [
         ('  br label %loop, !dbg !11',
          '  %limit = add nuw i64 %n, 7\n  br label %loop, !dbg !11'),
         ('  %done = icmp eq i64 %next, %n', '  %done = icmp eq i64 %next, %limit'),
-    ], 'scalar-scratch-limit'),
+    ], None),
     ('swapped', [('  %done = icmp eq i64 %next, %n',
-                  '  %done = icmp eq i64 %n, %next')], 'scalar-scratch-limit'),
+                  '  %done = icmp eq i64 %n, %next')], None),
     ('volatile', [('  %dx = load double, ptr %dp, align 8',
                    '  %dx = load volatile double, ptr %dp, align 8')], 'scalar-non-simple-load'),
     ('effects', [(helper_declaration, effect_declaration)],
@@ -308,7 +308,13 @@ for name, candidate, reason in cases:
         if relaxed:
             flags += ['-vplan-reduction-fission-allow-fp-reordering']
         result = checker.run([opt, *flags], input=candidate)
-        assert 'scalar.fission' not in result.stdout, (name, result.stdout)
-        assert ('scalar-chunk-cfg.c:12:3: scalar-IR reduction fission rejected: ' + reason
-                in result.stderr), (name, result.stderr)
-print('PASS: acyclic chunk paths, guarded operations, original control/effect rejections and corruption rejection')
+        if reason is None:
+            # Offset/swapped controls now use the actual-IV fallback. Preserve
+            # their complete original instructions and certify the new schedule.
+            checker.check_original_chunk_control(result.stdout, candidate, 'chunk_cfg_diamond', 9)
+            assert 'scalar-chunk-cfg.c:12:3: split scalar-IR reduction loop;' in result.stderr
+        else:
+            assert 'scalar.fission' not in result.stdout, (name, result.stdout)
+            assert ('scalar-chunk-cfg.c:12:3: scalar-IR reduction fission rejected: ' + reason
+                    in result.stderr), (name, result.stderr)
+print('PASS: acyclic chunks, admitted offset/swapped control, retained effect rejections and corruption rejection')

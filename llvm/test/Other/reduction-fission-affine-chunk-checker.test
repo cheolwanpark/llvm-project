@@ -1,0 +1,200 @@
+# REQUIRES: riscv-registered-target
+# RUN: split-file %s %t
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-chunks.ll \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-reject.ll opt llc %t
+#
+# Actual transformed modules, exact control/state/scratch/result certificates,
+# meaningful corruption rejection, repeated LV and separate FP policies.
+# Host comparisons and independently predicted path counters are registered in
+# check-reduction-fission.py. RVV machine verification here is codegen only.
+
+#--- check.py
+import importlib.util
+from pathlib import Path
+import re
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = checker
+spec.loader.exec_module(checker)
+source = Path(sys.argv[2]).read_text()
+historical = checker.keep_functions(Path(sys.argv[3]).read_text(),
+                                    ['chunk_noncanonical', 'chunk_reverse_equality'])
+opt, llc, work = sys.argv[4], sys.argv[5], Path(sys.argv[6])
+common = ['-mtriple=riscv64', '-mattr=+v', '-verify-each',
+          '-enable-vplan-reduction-fission', '-hints-allow-reordering=false',
+          '-pass-remarks=vplan-reduction-fission', '-pass-remarks-missed=vplan-reduction-fission']
+declarations = ('\ndeclare void @record_nc_begin(i64, i32, i32, double)\n'
+                'declare void @record_nc_iteration(i64, i64, i64, i64, i32, i32, i32, i32, double, double)\n'
+                'declare void @record_nc_store(i64, i64, i32, double, ptr, ptr)\n'
+                'declare void @record_nc_consume(i64, i64, ptr, ptr, i32)\n'
+                'declare void @record_nc_end(i64, i32, i64)\n')
+
+def reject(ir, name, old, new, capacity, evl=False):
+    body = checker.function_definition(ir, name)
+    assert old != new and body.count(old) == 1, (name, old, body)
+    candidate = ir.replace(body, body.replace(old, new, 1), 1)
+    assert candidate != ir
+    try:
+        checker.check_noncanonical_chunk(candidate, source, name, capacity, evl)
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('accepted noncanonical corruption: ' + old)
+
+for capacity, ceiling in ((1, 16), (9, 112)):
+    for relaxed in (False, True):
+        for kind in ('scalar', 'tail', 'evl'):
+            scalar, evl = kind == 'scalar', kind == 'evl'
+            names = checker.NC_CHUNK_FUNCTIONS if scalar else checker.NC_CHUNK_FUNCTIONS[:-1]
+            original = checker.keep_functions(source, names)
+            flags = common + ['-passes=loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>',
+                              f'-vplan-reduction-fission-max-scratch-bytes={ceiling}',
+                              '-force-vector-width=' + ('1' if scalar else '4'),
+                              '-force-vector-interleave=' + ('0' if scalar else '1'),
+                              '-scalable-vectorization=' + ('off' if scalar else 'always'), '-S']
+            if scalar:
+                flags += ['-force-target-max-scalar-interleave=1']
+            if relaxed:
+                flags += ['-vplan-reduction-fission-allow-fp-reordering']
+            if kind == 'tail':
+                flags += ['-tail-folding-policy=dont-fold-tail', '-enable-epilogue-vectorization=false']
+            result = checker.run([opt, *flags], input=original)
+            ir, instrumented = result.stdout, result.stdout
+            tag = f'c{capacity}_{relaxed}_{kind}'
+            (work / (tag + '.ll')).write_text(ir)
+            (work / (tag + '.remarks')).write_text(result.stderr)
+            for name in names:
+                body = checker.function_definition(ir, name)
+                checked = checker.check_noncanonical_chunk(ir, source, name, capacity, evl, probe=not evl)
+                if not evl:
+                    instrumented = instrumented.replace(body, checked, 1)
+                ty = 'i8' if name == 'nc_narrow' else 'i64'
+                for old, new in [
+                    (f'%fission.producer.more = icmp ne {ty} %fission.producer.next, {capacity}',
+                     f'%fission.producer.more = icmp ne {ty} %fission.producer.next, {capacity+1}'),
+                    (f'%fission.producer.iv.next = phi {ty} [ %next, %latch ]',
+                     f'%fission.producer.iv.next = phi {ty} [ %iv, %latch ]'),
+                    ('%older.chunk.backedge = phi i32 [ %prev, %latch ]',
+                     '%older.chunk.backedge = phi i32 [ %state.next, %latch ]'),
+                    ('br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit',
+                     'br i1 false, label %scalar.fission.chunk, label %producer.exit'),
+                    ('%out.ivnext = phi ' + ty + ' [ %next.fission.export, %scalar.fission.chunk.latch ]',
+                     '%out.ivnext = phi ' + ty + ' [ %iv.fission.export, %scalar.fission.chunk.latch ]'),
+                    (f'%fission.producer.completed = phi {ty} [ %fission.producer.next, %latch ]',
+                     f'%fission.producer.completed = phi {ty} [ {capacity}, %latch ]'),
+                    (f'%fission.producer.ordinal = phi {ty} [ 0, %scalar.fission.producer.ph ],',
+                     f'%fission.producer.ordinal = phi {ty} [ 1, %scalar.fission.producer.ph ],'),
+                ]:
+                    reject(ir, name, old, new, capacity, evl)
+                actual_increment = [line for line in checker.chunk_instructions(
+                    checker.loop_blocks(body)['latch']) if re.fullmatch(
+                    rf'%fission.producer.next = add(?: nuw)? {ty} %fission.producer.ordinal, 1', line)]
+                assert len(actual_increment) == 1
+                reject(ir, name, actual_increment[0], actual_increment[0][:-1] + '2', capacity, evl)
+                exported_continue = [line for line in checker.chunk_instructions(
+                    checker.loop_blocks(body)['scalar.fission.consumer.guard' if name == 'nc_compact'
+                                              else 'scalar.fission.consumer.ph'])
+                                     if line.startswith('%fission.producer.continue = phi i1 ')][0]
+                changed_continue = re.sub(r'\[ %[-\w.$]+, %latch \]', '[ true, %latch ]', exported_continue)
+                reject(ir, name, exported_continue, changed_continue, capacity, evl)
+                if name != 'nc_compact':
+                    reject(ir, name, f'%fission.consumer.count = freeze {ty} %fission.producer.completed',
+                           f'%fission.consumer.count = freeze {ty} {capacity}', capacity, evl)
+                else:
+                    reject(ir, name, '%fission.consumer.count = freeze i64 %fission.participating.count',
+                           '%fission.consumer.count = freeze i64 %fission.producer.completed', capacity, evl)
+                    reject(ir, name, '%fission.empty = icmp eq i64 %fission.consumer.count, 0',
+                           '%fission.empty = icmp eq i64 %fission.consumer.count, 1', capacity, evl)
+                    increment = [line for line in checker.chunk_instructions(checker.loop_blocks(body)['left'])
+                                 if re.fullmatch(r'%fission.participating.next = add(?: nuw)? i64 %fission.participating, 1', line)]
+                    assert len(increment) == 1
+                    reject(ir, name, increment[0], increment[0][:-1] + '2', capacity, evl)
+                stores = checker.loop_blocks(body)['left' if name == 'nc_compact' else 'latch']
+                gep = [line for line in checker.chunk_instructions(stores)
+                       if f'= getelementptr inbounds [{capacity} x i32]' in line][0]
+                changed_gep = re.sub(r'i64 %[-\w.$]+$', 'i64 0', gep)
+                reject(ir, name, gep, changed_gep, capacity, evl)
+                if 'scalar.fission.consumer.body' in checker.loop_blocks(body):
+                    line = [line for line in checker.chunk_instructions(checker.loop_blocks(body)['scalar.fission.consumer.body'])
+                            if line.startswith('%fission.consumer.more = ')][0]
+                    bound = '%small.n' if name == 'nc_narrow' else '%n'
+                    reject(ir, name, line, line.replace('%fission.consumer.count', bound), capacity, evl)
+                    phi = [line for line in checker.chunk_instructions(checker.loop_blocks(body)['scalar.fission.consumer.body'])
+                           if line.startswith('%fission.consumer.iv = phi ')][0]
+                    reject(ir, name, phi, phi.replace('%fission.consumer.next', '0'), capacity, evl)
+                if 'vector.body' in checker.loop_blocks(body):
+                    label, stem = ('vector.body', '%avl = phi ') if evl else ('scalar.fission.consumer.ph', '%min.iters.check = ')
+                    count_use = [line for line in checker.chunk_instructions(checker.loop_blocks(body)[label])
+                                 if line.startswith(stem)][0]
+                    reject(ir, name, count_use, count_use.replace('%fission.consumer.count', '%n'), capacity, evl)
+                # Corrupt the actual original comparison, operands and branch
+                # separately; selection by a complete line ignores comments.
+                original_cmp = [line for line in checker.chunk_instructions(
+                    checker.loop_blocks(body)['latch']) if line.startswith('%done = icmp ')][0]
+                changed_cmp = re.sub(r'icmp \w+ ', 'icmp ne ' if 'icmp eq ' in original_cmp else 'icmp eq ', original_cmp)
+                reject(ir, name, original_cmp, changed_cmp, capacity, evl)
+                original_branch = [line for line in checker.chunk_instructions(
+                    checker.loop_blocks(body)['latch']) if line.startswith('br ')][0]
+                # Explicit destination swap using the whole real branch.
+                m = re.fullmatch(r'br i1 (\S+), label %(\S+), label %(\S+)', original_branch)
+                assert m
+                reject(ir, name, original_branch, f'br i1 {m[1]}, label %{m[3]}, label %{m[2]}', capacity, evl)
+            checker.run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
+                         '-o', str(work / (tag + '.s'))], input=ir)
+            if not evl:
+                checker.run([opt, '-passes=verify', '-disable-output'], input=instrumented + declarations)
+
+# Historical operand-one/two-trip and offset cases now select capacity one.
+# These exact definitions are also executed against originals/C formulas.
+for relaxed in (False, True):
+    flags = common + ['-passes=loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>',
+                      '-force-vector-width=1', '-force-vector-interleave=0',
+                      '-force-target-max-scalar-interleave=1', '-scalable-vectorization=off',
+                      '-vplan-reduction-fission-max-scratch-bytes=4', '-S']
+    if relaxed:
+        flags += ['-vplan-reduction-fission-allow-fp-reordering']
+    result = checker.run([opt, *flags], input=historical)
+    for name in ('chunk_noncanonical', 'chunk_reverse_equality'):
+        checker.check_original_chunk_control(result.stdout, historical, name, 1)
+
+# Unavailable termination bounds, unrepresentable completed counters, feedback,
+# effects and CFG rejections remain in their inherited tests. Insufficient one
+# padded mixed slot is tested here under both contracts, without losing those.
+for relaxed in (False, True):
+    flags = common + ['-passes=loop-vectorize', '-force-vector-width=1',
+                      '-force-vector-interleave=0', '-force-target-max-scalar-interleave=1',
+                      '-scalable-vectorization=off', '-vplan-reduction-fission-max-scratch-bytes=15', '-S']
+    if relaxed:
+        flags += ['-vplan-reduction-fission-allow-fp-reordering']
+    result = checker.run([opt, *flags], input=source)
+    assert 'scalar.fission' not in result.stdout
+    for i in range(7):
+        assert f'scalar-affine-chunks.c:{12+10*i}:3: scalar-IR reduction fission rejected: scalar-scratch-limit' in result.stderr
+# Function-scoped absence checks retain the old global negatives in files that
+# now mix newly admitted scratch-only cases with genuine semantic rejections.
+fixtures = Path(sys.argv[2]).parent
+for filename, admitted, ceiling in [
+    ('affine-reject', {'reject_affine_unproved', 'reject_affine_feedback',
+                       'reject_affine_contribution_feedback', 'reject_affine_liveout'}, 1043),
+    ('compact-chunks-reject', {'compact_chunk_reject_affine'}, 16),
+    ('relational-reject', {'unbounded_witness'}, 65536),
+]:
+    negative_source = (fixtures / ('reduction-fission-scalar-' + filename + '.ll')).read_text()
+    rejected_names = [m['name'] for m in checker.FUNCTION_DEFINITION.finditer(negative_source)
+                      if m['name'] not in admitted]
+    assert rejected_names
+    for relaxed in (False, True):
+        flags = common + ['-passes=loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>',
+                          '-force-vector-width=1', '-force-vector-interleave=0',
+                          '-force-target-max-scalar-interleave=1', '-scalable-vectorization=off',
+                          f'-vplan-reduction-fission-max-scratch-bytes={ceiling}', '-S']
+        if relaxed:
+            flags += ['-vplan-reduction-fission-allow-fp-reordering']
+        result = checker.run([opt, *flags], input=negative_source)
+        for name in rejected_names:
+            assert 'scalar.fission' not in checker.function_definition(result.stdout, name), (filename, name)
+print('PASS: original affine chunk control, counts, carries, exports and corruption rejection')

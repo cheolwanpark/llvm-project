@@ -507,9 +507,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
         // not synthesize a last-participant recurrence or speculate a value.
         // This depends on availability, not on the IV's start/step/test or
         // the number of diamonds. The admitted producer retains its original
-        // full-trip control and instructions. Forward the original SSA value,
+        // control and instructions. Forward the original SSA value,
         // including current/next IVs and latch merges, without evaluating it.
-        // Keep chunk scheduling's separate canonical-control admission below.
         if (!Phi || Phi->getParent() != Exit ||
             Phi->getIncomingBlock(U.getOperandNo()) != Latch ||
             !DT.dominates(&I, Branch))
@@ -641,18 +640,18 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   uint64_t Capacity = MaxTripCount;
   auto ScratchBytes = ScratchSize(Capacity);
   bool Chunked = !ScratchBytes;
+  // Only this control can interpret the invariant operand as the actual N.
+  // Every other admitted affine control uses the original continuation and
+  // actual IV backedge, with a capacity-limited completed ordinal instead.
+  bool CanonicalChunks =
+      CanonicalCount && ((Compare->getPredicate() == ICmpInst::ICMP_EQ) ==
+                         (Branch->getSuccessor(0) == Exit));
   if (Chunked) {
-    // Only a zero-start/unit-step loop whose next IV exits on equality may
-    // use the invariant operand as the actual N. The acyclic CFG proof gives
-    // exactly one latch visit per entered iteration, regardless of whether
-    // reductions are unconditional or use a terminal participation edge.
-    // An affine endpoint or relational termination witness only bounds storage:
-    // it must never reach the N-base arithmetic or replace original control.
-    if (!CanonicalCount || !ScratchSize(1))
+    // Retain the finite representable bound even though the fallback never
+    // materializes a trip expression. The DAG gives one latch visit per
+    // completed iteration, including nonparticipating iterations.
+    if (!ScratchSize(1))
       return Reject("scalar-scratch-limit");
-    if ((Compare->getPredicate() == ICmpInst::ICMP_EQ) !=
-        (Branch->getSuccessor(0) == Exit))
-      return Reject("scalar-unsupported-exit");
     // Size is monotone, including padding; all index limits are checked too.
     // The search takes at most 64 iterations over the unique streams.
     uint64_t Low = 1, High = Capacity;
@@ -721,6 +720,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   BasicBlock *ChunkLatch = nullptr;
   Value *ChunkCount = nullptr;
   PHINode *ChunkBase = nullptr;
+  Value *OriginalContinue = nullptr;
+  PHINode *ContinueExport = nullptr;
   DenseMap<PHINode *, PHINode *> ChunkCarries;
   if (Chunked) {
     ChunkHeader = BasicBlock::Create(Ctx, "scalar.fission.chunk", F, Header);
@@ -745,7 +746,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     IRBuilder<> CB(ChunkHeader);
     CB.SetCurrentDebugLocation(Branch->getDebugLoc());
     ChunkBase = CB.CreatePHI(IV->getType(), 2, "fission.chunk.base");
-    ChunkBase->addIncoming(ConstantInt::get(IV->getType(), 0), Preheader);
+    ChunkBase->addIncoming(IV->getIncomingValueForBlock(Preheader), Preheader);
     for (Reduction &R : Reductions) {
       PHINode *Carry = CB.CreatePHI(R.Phi->getType(), 2,
                                    R.Phi->getName() + ".chunk.carry");
@@ -757,14 +758,16 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                             S.Phi->getName() + ".chunk.carry");
       S.Carry->addIncoming(S.Start, Preheader);
     }
-    // The original exiting equality and finite, representable trip proof imply
-    // N > 0 on the entering edge. On chunk entry 0 <= base < N, so
-    // count = min(N-base, C) > 0 and base+count <= N cannot overflow.
-    Value *Remaining = CB.CreateSub(Compare->getOperand(1), ChunkBase,
-                                   "fission.chunk.remaining", /*HasNUW=*/true);
-    Value *Limit = ConstantInt::get(IV->getType(), Capacity);
-    Value *Partial = CB.CreateICmpULT(Remaining, Limit, "fission.chunk.partial");
-    ChunkCount = CB.CreateSelect(Partial, Remaining, Limit, "fission.chunk.count");
+    if (CanonicalChunks) {
+      // N > 0 on entry, 0 <= base < N, and base+count <= N cannot wrap.
+      Value *Remaining = CB.CreateSub(Compare->getOperand(1), ChunkBase,
+                                     "fission.chunk.remaining", /*HasNUW=*/true);
+      Value *Limit = ConstantInt::get(IV->getType(), Capacity);
+      Value *Partial = CB.CreateICmpULT(Remaining, Limit, "fission.chunk.partial");
+      ChunkCount = CB.CreateSelect(Partial, Remaining, Limit, "fission.chunk.count");
+    } else {
+      ChunkCount = ConstantInt::get(IV->getType(), Capacity);
+    }
     CB.CreateBr(ProducerPH);
     BranchInst::Create(Header, ProducerPH)->setDebugLoc(OriginalLoc);
     Preheader->getTerminator()->replaceSuccessorWith(Header, ChunkHeader);
@@ -838,6 +841,25 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       Forward->addIncoming(S.Backedge, Latch);
       S.Carry->addIncoming(Forward, ChunkLatch);
     }
+    if (!CanonicalChunks) {
+      // Snapshot both actual latch results before changing the branch. These
+      // dedicated-exit PHIs keep the inner producer in LCSSA and dominate the
+      // consumer, its empty-participation bypass, and the outer latch.
+      IRBuilder<> PB(Branch);
+      OriginalContinue = Branch->getSuccessor(0) == Header
+                             ? Branch->getCondition()
+                             : PB.CreateNot(Branch->getCondition(),
+                                            "fission.original.continue");
+      ContinueExport = PHINode::Create(
+          PB.getInt1Ty(), 1, "fission.producer.continue",
+          ProducerExit->getFirstNonPHIIt());
+      ContinueExport->addIncoming(OriginalContinue, Latch);
+      auto *NextExport = PHINode::Create(
+          IV->getType(), 1, "fission.producer.iv.next",
+          ProducerExit->getFirstNonPHIIt());
+      NextExport->addIncoming(Next, Latch);
+      ChunkBase->addIncoming(NextExport, ChunkLatch);
+    }
   }
   for (const ProducerExport &E : ProducerExportEdges)
     E.ExitPhi->setIncomingValue(E.IncomingIndex,
@@ -852,9 +874,10 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     // For an unconditional producer, the DAG reaches the latch once and each
     // contribution dominates its original update (in the latch, or in a
     // supported header). It therefore dominates the latch stores below. For
-    // local ordinal i, 0 <= i < K=min(N-base,C); the one latch increment exits
-    // at exactly K. The consumer visits initialized slots [0,K) in order before
-    // base advances by K. Original branches and arm-local operations stay put.
+    // local ordinal i, 0 <= i < K <= C. Canonical control uses min(N-base,C);
+    // the fallback stops on original termination or the Cth latch visit. The
+    // consumer visits initialized slots [0,K) before resuming the producer.
+    // Original branches and arm-local operations stay put.
     auto *Ordinal = PHINode::Create(IV->getType(), 2, "fission.producer.ordinal",
                                    &*Header->begin());
     Ordinal->addIncoming(ConstantInt::get(IV->getType(), 0), ProducerPH);
@@ -864,12 +887,20 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     Ordinal->addIncoming(ProducerNext, Latch);
     ProducerIndex = Ordinal;
     CompletedCount = ChunkCount;
-    if (ParticipationArm) {
+    if (ParticipationArm || !CanonicalChunks) {
       auto *Completed = PHINode::Create(
           IV->getType(), 1, "fission.producer.completed",
           ProducerExit->getFirstNonPHIIt());
       Completed->addIncoming(ProducerNext, Latch);
       CompletedCount = Completed;
+    }
+    if (!CanonicalChunks && !ParticipationArm) {
+      // The private count is defined and nonpoison by the ordinal proof.
+      // Keep it opaque to downstream SCEV expansion: the consumer must use
+      // the observed completed count, not reconstruct affine termination.
+      IRBuilder<> CountBuilder(ProducerExit, ProducerExit->getFirstNonPHIIt());
+      ConsumerCount =
+          CountBuilder.CreateFreeze(CompletedCount, "fission.consumer.count");
     }
   }
   if (ParticipationArm) {
@@ -902,11 +933,13 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                               "fission.participating.count");
     CountExport->addIncoming(CountMerge, Latch);
     ConsumerCount = CountExport;
+    if (Chunked && !CanonicalChunks)
+      ConsumerCount =
+          GuardBuilder.CreateFreeze(CountExport, "fission.consumer.count");
     Value *Empty = GuardBuilder.CreateICmpEQ(
-        CountExport, ConstantInt::get(IV->getType(), 0), "fission.empty");
+        ConsumerCount, ConstantInt::get(IV->getType(), 0), "fission.empty");
     GuardBuilder.CreateCondBr(Empty, ConsumerExit, ConsumerPH);
-  } else if (!CanonicalCount) {
-    assert(!Chunked && "noncanonical producers must keep original control");
+  } else if (!Chunked && !CanonicalCount) {
     // Before iteration i, ordinal == i. The DAG proof gives exactly one
     // increment per completed iteration, including the exiting iteration.
     // 1 <= N <= MaxTripCount fits CountTy, so ordinal+1 is nuw, and every store
@@ -1041,18 +1074,33 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     IRBuilder<> PB(Branch);
     Value *More = PB.CreateICmpNE(ProducerNext, ChunkCount,
                                  "fission.producer.more");
-    Branch->setCondition(More);
-    Branch->setSuccessor(0, Header);
-    Branch->setSuccessor(1, ProducerExit);
+    if (CanonicalChunks) {
+      Branch->setCondition(More);
+      Branch->setSuccessor(0, Header);
+      Branch->setSuccessor(1, ProducerExit);
+    } else {
+      // Exit on either original termination or capacity. Keep the original
+      // comparison, operands, IV operations and branch polarity. No affine
+      // endpoint or equality witness is used as a completed count.
+      More = PB.CreateAnd(OriginalContinue, More, "fission.producer.continuing");
+      bool TrueContinues = Branch->getSuccessor(0) == Header;
+      Branch->setCondition(TrueContinues
+                               ? More
+                               : PB.CreateNot(More, "fission.producer.done"));
+      Branch->setSuccessor(TrueContinues ? 1 : 0, ProducerExit);
+    }
     // Original exit weights describe N iterations, not a C-iteration chunk.
     Branch->setMetadata(LLVMContext::MD_prof, nullptr);
     IRBuilder<> CB(ChunkLatch);
     CB.SetCurrentDebugLocation(Branch->getDebugLoc());
-    Value *BaseNext = CB.CreateAdd(ChunkBase, CompletedCount, "fission.chunk.next",
-                                  /*HasNUW=*/true);
-    ChunkBase->addIncoming(BaseNext, ChunkLatch);
-    Value *MoreChunks = CB.CreateICmpNE(BaseNext, Compare->getOperand(1),
-                                       "fission.chunk.more");
+    Value *MoreChunks = ContinueExport;
+    if (CanonicalChunks) {
+      Value *BaseNext = CB.CreateAdd(ChunkBase, CompletedCount, "fission.chunk.next",
+                                    /*HasNUW=*/true);
+      ChunkBase->addIncoming(BaseNext, ChunkLatch);
+      MoreChunks = CB.CreateICmpNE(BaseNext, Compare->getOperand(1),
+                                   "fission.chunk.more");
+    }
     CB.CreateCondBr(MoreChunks, ChunkHeader, Exit);
     // The controller is scheduling machinery, never a new candidate.
     // Stage loops retain the original metadata and independent LV selection.

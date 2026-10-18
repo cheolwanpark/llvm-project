@@ -13,7 +13,8 @@
 ; The 255-trip i8 control wraps, but its ordinal/count does not. The 256-trip
 ; sibling needs an unrepresentable completed count and must reject. Nonzero
 ; starts with positive/negative strides reach one trip and the exact default
-; scratch byte ceiling. Every original operation remains in the producer.
+; scratch byte ceiling. The first over-limit siblings now chunk at the
+; ceiling with original control. Every original operation stays in the producer.
 ; Executable comparisons cover all admitted capacities after one and two LVs.
 
 ; CHECK-LABEL: define i32 @affine_one(
@@ -192,8 +193,9 @@ exit:
 }
 
 ; CHECK-LABEL: define i32 @affine_over_limit(
-; CHECK-NOT: scalar.fission
-; REMARK: scalar-affine-bounds.c:52:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; CHECK: alloca [16384 x i32]
+; CHECK: scalar.fission.chunk:
+; REMARK: scalar-affine-bounds.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 16384, scratch bytes 65536
 ; CHECK: ret i32
 ; TINY-LABEL: define i32 @affine_over_limit(
 ; TINY: ret i32
@@ -277,9 +279,10 @@ exit:
 }
 
 ; CHECK-LABEL: define i32 @affine_relational_over_limit(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [16384 x i32]
+; CHECK: scalar.fission.chunk:
 ; CHECK: %done = icmp ult i32 %next, 49178
-; REMARK: scalar-affine-bounds.c:72:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; REMARK: scalar-affine-bounds.c:72:3: split scalar-IR reduction loop; {{.*}}scratch capacity 16384, scratch bytes 65536
 ; CHECK: ret i32
 ; TINY-LABEL: define i32 @affine_relational_over_limit(
 ; TINY: ret i32

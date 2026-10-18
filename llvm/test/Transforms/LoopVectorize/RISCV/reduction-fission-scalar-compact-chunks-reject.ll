@@ -2,28 +2,34 @@
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
 ; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
 ; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=16 \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.strict 2> %t.strict.remarks
-; RUN: FileCheck %s --implicit-check-not=scalar.fission < %t.strict
+; RUN:   -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.strict 2> %t.strict.remarks
+; RUN: FileCheck %s  < %t.strict
 ; RUN: FileCheck %s --check-prefix=REASON < %t.strict.remarks
 ; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
 ; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
 ; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=16 \
-; RUN:   -vplan-reduction-fission-allow-fp-reordering -pass-remarks-missed=vplan-reduction-fission \
+; RUN:   -vplan-reduction-fission-allow-fp-reordering -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission \
 ; RUN:   -S %s -o %t.reordered 2> %t.reordered.remarks
-; RUN: FileCheck %s --implicit-check-not=scalar.fission < %t.reordered
+; RUN: FileCheck %s  < %t.reordered
 ; RUN: FileCheck %s --check-prefix=REASON < %t.reordered.remarks
 ;
-; One slot fits. Chunk scheduling still requires the exact canonical equality
-; count and polarity, and cannot weaken producer closure, effect or FP rules.
+; One padded mixed slot fits. Affine control now uses the fallback, keeping
+; original control and empty-participation bypasses. Other closure/effect/FP
+; and unavailable-bound rejection checks remain.
 ; These siblings share the positive compact CFG; no benchmark input is changed.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare i32 @unsafe(i32) nounwind willreturn
 declare double @llvm.experimental.constrained.fsub.f64(double, double, metadata, metadata)
 
 
-; REASON: scalar-compact-chunks-reject.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; REASON: scalar-compact-chunks-reject.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
 ; CHECK-LABEL: define void @compact_chunk_reject_affine(
+; CHECK: alloca [1 x i32]
+; CHECK: alloca [1 x double]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.continue = phi i1
+; CHECK: %fission.consumer.count = freeze i64 %fission.participating.count
 ; CHECK: ret void
 define void @compact_chunk_reject_affine(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !10 {
@@ -111,6 +117,7 @@ bypass:
 ; its own, independent scalar-unsupported-exit assertion.
 ; REASON: scalar-compact-chunks-reject.c:22:3: scalar-IR reduction fission rejected: non-constant-trip-count
 ; CHECK-LABEL: define void @compact_chunk_reject_reverse_equality(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_chunk_reject_reverse_equality(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !12 {
@@ -194,6 +201,7 @@ bypass:
 
 ; REASON: scalar-compact-chunks-reject.c:32:3: scalar-IR reduction fission rejected: scalar-unsupported-exit
 ; CHECK-LABEL: define void @compact_chunk_reject_unsupported_control(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_chunk_reject_unsupported_control(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !14 {
@@ -278,6 +286,7 @@ bypass:
 
 ; REASON: scalar-compact-chunks-reject.c:42:3: scalar-IR reduction fission rejected: scalar-unsafe-call
 ; CHECK-LABEL: define void @compact_chunk_reject_unsafe_call(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_chunk_reject_unsafe_call(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !16 {
@@ -361,6 +370,7 @@ bypass:
 
 ; REASON: scalar-compact-chunks-reject.c:52:3: scalar-IR reduction fission rejected: scalar-non-simple-load
 ; CHECK-LABEL: define void @compact_chunk_reject_volatile(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_chunk_reject_volatile(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !18 {
@@ -444,6 +454,7 @@ bypass:
 
 ; REASON: scalar-compact-chunks-reject.c:62:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
 ; CHECK-LABEL: define void @compact_chunk_reject_store(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_chunk_reject_store(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !20 {
@@ -528,6 +539,7 @@ bypass:
 
 ; REASON: scalar-compact-chunks-reject.c:72:3: scalar-IR reduction fission rejected: scalar-strict-fp
 ; CHECK-LABEL: define void @compact_chunk_reject_strictfp(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_chunk_reject_strictfp(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) strictfp !dbg !22 {
@@ -611,6 +623,7 @@ bypass:
 
 ; REASON: scalar-compact-chunks-reject.c:82:3: scalar-IR reduction fission rejected: scalar-strict-fp
 ; CHECK-LABEL: define void @compact_chunk_reject_constrained(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_chunk_reject_constrained(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !24 {

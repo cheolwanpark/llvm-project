@@ -38,6 +38,10 @@ typedef void ExportFn(const uint32_t *, const double *, uint32_t *, uint64_t *,
 extern ShortFPFn ref_chunk_ordered;
 typedef void AffineFn(const uint32_t *, const double *, uint32_t *, double *,
                       float *, uint64_t, double, int64_t);
+typedef void NCChunkFn(const uint32_t *, const double *, uint32_t *, uint64_t *,
+                       double *, uint64_t, uint64_t, double);
+typedef uint32_t NCOffsetFn(const uint32_t *, uint64_t);
+typedef uint32_t NCReverseFn(uint32_t);
 typedef uint32_t CompactDelayFn(const uint32_t *, uint64_t);
 typedef void RecurrenceFn(const uint32_t *, const double *, uint32_t *, double *,
                           uint64_t, uint64_t, double, int64_t);
@@ -2500,6 +2504,205 @@ static void check_integration(void) {
   printf("Integration: %u additional original/transformed/independent host comparisons\n", Total);
 }
 
+// Actual fallback executions. The oracle walks the ORIGINAL modular control;
+// N and an equality witness are never substituted for its termination decision.
+static const struct {
+  const char *Name;
+  NCChunkFn *Fn, *Reference;
+  unsigned Mode, Capacity, Lanes;
+} NCChunks[] = {@NC_CHUNKS@};
+static const struct { NCOffsetFn *Fn, *Reference; } NCOffsets[] = {@NC_OFFSET@};
+static const struct { NCReverseFn *Fn, *Reference; } NCReverses[] = {@NC_REVERSE@};
+
+typedef struct {
+  uint64_t IV, Next;
+  uint32_t Prev, Older, Updated, C;
+  double DState, DNext, DC;
+  bool More, Participates;
+} NCStep;
+static NCStep NCTrace[66];
+static unsigned NCTrips, NCProduced, NCStored, NCConsumed, NCFirst, NCCapacity;
+static unsigned NCChunkConsumed, NCChunkStored, NCVector, NCTail, NCChunksSeen;
+static uint32_t *NCIBase;
+static double *NCDBase;
+static const char *NCName;
+
+static void nc_require(bool OK, const char *What) {
+  if (!OK) fail(NCName, NCTrips, NCProduced, What);
+}
+static bool nc_bits(double A, double B) { return !memcmp(&A, &B, sizeof(A)); }
+
+void record_nc_begin(uint64_t IV, uint32_t Prev, uint32_t Older, double DState) {
+  nc_require(NCProduced < NCTrips && NCConsumed == NCStored, "chunk entry before consumption");
+  NCFirst = NCProduced;
+  NCStep *S = &NCTrace[NCFirst];
+  nc_require(IV == S->IV && Prev == S->Prev && Older == S->Older &&
+             nc_bits(DState, S->DState), "actual IV/simultaneous incoming state");
+  NCChunkConsumed = NCChunkStored = 0;
+  ++NCChunksSeen;
+}
+void record_nc_iteration(uint64_t Index, uint64_t IV, uint64_t Next, uint64_t Local,
+                         unsigned More, uint32_t Prev, uint32_t Older,
+                         uint32_t Updated, double DState, double DNext) {
+  nc_require(NCProduced < NCTrips, "extra producer iteration");
+  NCStep *S = &NCTrace[NCProduced];
+  nc_require(Index == NCProduced && Local == NCProduced - NCFirst && Local < NCCapacity &&
+             IV == S->IV && Next == S->Next && More == S->More && Prev == S->Prev &&
+             Older == S->Older && Updated == S->Updated && nc_bits(DState, S->DState) &&
+             nc_bits(DNext, S->DNext), "original continuation/IV/state/ordinal");
+  ++NCProduced;
+}
+void record_nc_store(uint64_t Global, uint64_t Local, uint32_t C, double DC,
+                     uint32_t *IPtr, double *DPtr) {
+  nc_require(Global < NCTrips && Global >= NCFirst, "store outside participating iteration");
+  NCStep *S = &NCTrace[Global];
+  unsigned Expected = 0;
+  for (unsigned I = NCFirst; I < Global; ++I) Expected += NCTrace[I].Participates;
+  nc_require(S->Participates && Local == Expected && Local == NCChunkStored &&
+             Local < NCCapacity && C == S->C && nc_bits(DC, S->DC), "participant order/store index/value");
+  if (!Local) { NCIBase = IPtr; NCDBase = DPtr; }
+  nc_require(IPtr == NCIBase + Local && DPtr == NCDBase + Local &&
+             *IPtr == C && nc_bits(*DPtr, DC), "initialized scratch address/store");
+  ++NCStored;
+  ++NCChunkStored;
+}
+void record_nc_consume(uint64_t Index, uint64_t Lanes, const uint32_t *IPtr,
+                       const double *DPtr, unsigned Vector) {
+  nc_require(Index == NCChunkConsumed && Lanes && Index + Lanes <= NCChunkStored &&
+             IPtr == NCIBase + Index && DPtr == NCDBase + Index, "consumer scratch index/initialized lanes");
+  unsigned Participant = 0;
+  for (unsigned I = NCFirst; I < NCProduced; ++I) {
+    if (!NCTrace[I].Participates) continue;
+    if (Participant >= Index && Participant < Index + Lanes)
+      nc_require(IPtr[Participant - Index] == NCTrace[I].C &&
+                 nc_bits(DPtr[Participant - Index], NCTrace[I].DC), "consumer participant sequence/value");
+    ++Participant;
+  }
+  nc_require(Participant == NCChunkStored, "consumer before all producer stores");
+  NCChunkConsumed += Lanes;
+  NCConsumed += Lanes;
+  if (Vector) ++NCVector; else ++NCTail;
+}
+void record_nc_end(uint64_t Completed, unsigned More, uint64_t NextIV) {
+  nc_require(Completed && Completed == NCProduced - NCFirst && Completed <= NCCapacity &&
+             NCChunkConsumed == NCChunkStored, "actual completed count/empty bypass/consumption");
+  NCStep *S = &NCTrace[NCProduced - 1];
+  nc_require(More == S->More && NextIV == S->Next &&
+             (!More || Completed == NCCapacity), "original exit versus chunk boundary");
+}
+
+static void nc_oracle(unsigned Mode, const uint32_t *A, const double *D,
+                       uint32_t *Out, uint64_t *Indices, double *DOut,
+                       uint64_t N, uint64_t Begin, double Start) {
+  NCTrips = 0;
+  if (!N || N > 65) return;
+  uint64_t IV = Mode == 0 ? 7 : Mode == 6 ? (uint8_t)Begin : Begin;
+  uint64_t Limit = Mode == 0 ? N + 7 : Mode == 2 || Mode == 5 ? Begin - 3*N :
+                   Mode == 4 ? Begin - N : Begin + 3*N;
+  if (Mode == 6) Limit = (uint8_t)Limit;
+  uint32_t Prev = 23, Older = (uint32_t)-11, R0 = 17, R1 = (uint32_t)-7;
+  double DState = Start, RD = Start;
+  for (;;) {
+    unsigned I = NCTrips;
+    if (I >= 66) abort();
+    NCStep *S = &NCTrace[I];
+    S->IV = IV; S->Prev = Prev; S->Older = Older; S->DState = DState;
+    S->Updated = A[I] + Older;
+    S->DNext = DState + D[I];
+    S->Participates = Mode != 5 || A[I] != 0;
+    S->C = scalar_helper(Prev ^ S->Updated);
+    S->DC = S->DNext - DState;
+    if (S->Participates) { R0 += S->C; R1 = S->C + R1; RD += S->DC; }
+    S->Next = IV + (Mode == 0 ? 1 : Mode == 2 || Mode == 5 ? (uint64_t)-3 :
+                          Mode == 4 ? (uint64_t)-1 : 3);
+    if (Mode == 6) S->Next = (uint8_t)S->Next;
+    uint64_t Sign = UINT64_C(1) << 63;
+    S->More = Mode == 2 ? S->Next > Limit : Mode == 3 ? (S->Next ^ Sign) < (Limit ^ Sign) :
+              Mode == 4 ? IV != Limit : Mode == 5 ? (S->Next ^ Sign) > (Limit ^ Sign) : S->Next != Limit;
+    ++NCTrips;
+    if (!S->More) {
+      Out[0] = R0; Out[1] = R1; Out[2] = Prev; Out[3] = Older; Out[4] = S->Updated;
+      Indices[0] = IV; Indices[1] = S->Next;
+      DOut[0] = RD; DOut[1] = DState; DOut[2] = S->DNext;
+      return;
+    }
+    IV = S->Next; Older = Prev; Prev = S->Updated; DState = S->DNext;
+  }
+}
+
+static void check_nc_chunks(void) {
+  static const uint64_t Starts[] = {0, 7, 196, UINT64_MAX - 4,
+                                   INT64_MAX - 4, (uint64_t)INT64_MIN + 4};
+  static const double FPStarts[] = {-0.0, 0.25, 0x1p54, -0x1p54};
+  // Exact original historical functions: endpoint n with start 7, and an
+  // equality-continues loop with operand 1 that actually executes twice.
+  for (unsigned C = 0; C < sizeof(NCOffsets)/sizeof(*NCOffsets); ++C)
+    for (unsigned N = 0; N <= 67; ++N) {
+      uint32_t A[65], Expected = 17;
+      for (unsigned I = 0; I < 65; ++I) A[I] = I * 13 - 27;
+      if (N > 7 && N <= 65)
+        for (unsigned I = 7; I < N; ++I) Expected += scalar_helper(A[I]);
+      if (NCOffsets[C].Reference(A, N) != Expected || NCOffsets[C].Fn(A, N) != Expected) abort();
+    }
+  for (unsigned C = 0; C < sizeof(NCReverses)/sizeof(*NCReverses); ++C)
+    for (unsigned X = 0; X < 128; ++X) {
+      uint32_t Value = X * 0x1234567u, Expected = 17 + 2 * Value;
+      if (NCReverses[C].Reference(Value) != Expected || NCReverses[C].Fn(Value) != Expected) abort();
+    }
+  for (unsigned C = 0; C < sizeof(NCChunks)/sizeof(*NCChunks); ++C) {
+    unsigned Runs = 0, Vectors = 0, Tails = 0, Empty = 0, Full = 0, Partial = 0, Bypass = 0, Early = 0;
+    NCName = NCChunks[C].Name; NCCapacity = NCChunks[C].Capacity;
+    for (unsigned N = 0; N <= 67; ++N)
+      for (unsigned B = 0; B < sizeof(Starts)/sizeof(*Starts); ++B)
+        for (unsigned Trial = 0; Trial < 4; ++Trial)
+          for (unsigned Alias = 0; Alias < 2; ++Alias) {
+          struct NCData { uint32_t A[68], Out[7]; uint64_t Indices[4]; double D[68], Result[5]; } Expected, Original, Actual;
+          memset(&Expected, 0x5a, sizeof(Expected));
+          for (unsigned I = 0; I < 68; ++I) {
+            Expected.A[I] = Trial == 0 ? 0 : Trial == 1 ? I%19 : Trial == 2 ? 1 : (uint32_t)(I*17 - 43);
+            Expected.D[I] = (int)(I%7) * 0.125 - 0.25;
+          }
+          memcpy(&Original, &Expected, sizeof(Expected));
+          memcpy(&Actual, &Expected, sizeof(Expected));
+          double Start = FPStarts[Trial];
+          bool Enter = N && N <= 65;
+          nc_oracle(NCChunks[C].Mode, Enter ? Expected.A + 1 : NULL, Enter ? Expected.D + 1 : NULL,
+                    Alias ? Expected.A + 60 : Expected.Out + 1, Expected.Indices + 1,
+                    Alias ? Expected.D + 60 : Expected.Result + 1, N, Starts[B], Start);
+          Early += Enter && NCTrips < N;
+          NCChunks[C].Reference(Enter ? Original.A + 1 : NULL, Enter ? Original.D + 1 : NULL,
+                                Alias ? Original.A + 60 : Original.Out + 1, Original.Indices + 1,
+                                Alias ? Original.D + 60 : Original.Result + 1, N, Starts[B], Start);
+          nc_require(!memcmp(&Expected, &Original, sizeof(Expected)), "exact original IR versus independent oracle");
+          NCProduced = NCStored = NCConsumed = NCVector = NCTail = NCChunksSeen = 0;
+          unsigned ExpectedVectors = 0, ExpectedTails = 0, ExpectedChunks = 0, Participants = 0;
+          for (unsigned I = 0; I < NCTrips; I += NCCapacity) {
+            unsigned K = NCTrips - I < NCCapacity ? NCTrips - I : NCCapacity, P = 0;
+            for (unsigned J = I; J < I + K; ++J) P += NCTrace[J].Participates;
+            Participants += P; ++ExpectedChunks;
+            unsigned V = NCChunks[C].Lanes ? P / NCChunks[C].Lanes : 0;
+            ExpectedVectors += V; ExpectedTails += P - V * NCChunks[C].Lanes;
+            Empty += P == 0; Full += K == NCCapacity; Partial += K != NCCapacity;
+          }
+          NCChunks[C].Fn(Enter ? Actual.A + 1 : NULL, Enter ? Actual.D + 1 : NULL,
+                         Alias ? Actual.A + 60 : Actual.Out + 1, Actual.Indices + 1,
+                         Alias ? Actual.D + 60 : Actual.Result + 1, N, Starts[B], Start);
+          nc_require(!memcmp(&Expected, &Actual, sizeof(Expected)), "transformed outputs/live-outs/inputs/canaries");
+          nc_require(NCProduced == NCTrips && NCConsumed == Participants && NCStored == Participants &&
+                     NCChunksSeen == ExpectedChunks && NCVector == ExpectedVectors && NCTail == ExpectedTails,
+                     "exact executed chunks/producer/consumer/vector/tail counts");
+          Vectors += NCVector; Tails += NCTail; Bypass += NCTrips == 0; ++Runs;
+        }
+    nc_require(Runs == 3264 && Bypass && Full && (NCCapacity == 1 || Partial) && Tails &&
+               (!NCChunks[C].Lanes || NCChunks[C].Lanes > NCCapacity || Vectors) &&
+               (NCChunks[C].Mode != 5 || Empty) &&
+               ((NCChunks[C].Mode != 2 && NCChunks[C].Mode != 3 && NCChunks[C].Mode != 5) || Early),
+               "missing boundary, early termination or actual vector evidence");
+    printf("Noncanonical chunks %s: comparisons=%u vector=%u tail=%u empty=%u full=%u partial=%u bypass=%u early=%u\n",
+           NCName, Runs, Vectors, Tails, Empty, Full, Partial, Bypass, Early);
+  }
+}
+
 int main(void) {
   check_recurrences();
   check_compact_recurrences();
@@ -3420,6 +3623,7 @@ int main(void) {
   check_compact_chunks();
   check_aos_chunks();
   check_integration();
+  check_nc_chunks();
   printf("PASS: %u executions; interleave stages/tails counted with guarded "
          "input ends; integer and ordered FP exact; relaxed FP "
          "classification/signed-zero/error bounds; max absolute FP difference %.17g\n",

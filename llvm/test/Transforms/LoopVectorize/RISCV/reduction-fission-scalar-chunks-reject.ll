@@ -7,8 +7,9 @@
 ; RUN: FileCheck %s < %t
 ;
 ; A small ceiling cannot bypass any existing legality contract. Every loop
-; would need more than four full-trip scratch bytes. Even the reverse equality
-; loop terminates after two trips, but its bound is not its iteration count.
+; would need more than four full-trip scratch bytes. Noncanonical and reverse
+; equality loops now use capacity-one original-control chunks. The latter's
+; operand is one although it executes twice; executable checks retain this case.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare i32 @unsafe(i32) nounwind willreturn
 declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
@@ -133,13 +134,16 @@ bypass:
   ret i32 17
 }
 
-; Full-trip affine fission is now supported; this four-byte ceiling still
-; rejects its 58-element stream rather than applying canonical chunk math.
-; REASON: scalar-chunks-reject.c:52:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; The four-byte ceiling now schedules the 58-element affine stream in one-slot
+; chunks. It forwards original control and the actual IV, without endpoint math.
+; REASON: scalar-chunks-reject.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 4
 ; CHECK-LABEL: define i32 @chunk_noncanonical(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [1 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.iv.next = phi i64 [ %next, %loop ]
+; CHECK: %fission.producer.completed = phi i64 [ %fission.producer.next, %loop ]
+; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
 ; CHECK: ret i32
-; CHECK-NOT: scalar.fission
 define i32 @chunk_noncanonical(ptr %a, i64 %n) !dbg !18 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -165,11 +169,14 @@ bypass:
   ret i32 17
 }
 
-; REASON: scalar-chunks-reject.c:62:3: scalar-IR reduction fission rejected: scalar-unsupported-exit
+; REASON: scalar-chunks-reject.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 4
 ; CHECK-LABEL: define i32 @chunk_reverse_equality(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [1 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.iv.next = phi i8 [ %next, %loop ]
+; CHECK: %fission.producer.completed = phi i8 [ %fission.producer.next, %loop ]
+; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
 ; CHECK: ret i32
-; CHECK-NOT: scalar.fission
 define i32 @chunk_reverse_equality(i32 %x) !dbg !20 {
 entry:
   br label %preheader

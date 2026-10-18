@@ -15,8 +15,8 @@
 ;
 ; One module exercises affine full-trip counts, an acyclic cross edge and a
 ; canonical chunk controller. Both canonical loops can use N-base scheduling.
-; 260 fits 65 i32s exactly; 259 rejects the affine loop and chunks the cross
-; edge and last loop at capacity 64 (256 bytes). Three bytes cannot hold one
+; 260 fits 65 i32s exactly; 259 chunks all three at capacity 64 (256 bytes).
+; The affine loop carries original control; canonical loops retain N-base. Three bytes cannot hold one
 ; i32 slot, so all three reject there. The executable checker compares fresh LV1/LV2 output with original
 ; IR and an independent C sum, including every N through 66, narrow capacity
 ; boundaries, bypasses, output aliases and exact producer/vector/tail/chunk
@@ -35,7 +35,10 @@ declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 ; FIT: scalar.fission.consumer.body:
 ; FIT: ret void
 ; BELOW-LABEL: define void @integration_affine(
-; BELOW-NOT: scalar.fission
+; BELOW: alloca [64 x i32]
+; BELOW: scalar.fission.chunk:
+; BELOW: %fission.producer.continue = phi i1
+; BELOW: br i1 %fission.producer.continue, label %scalar.fission.chunk
 ; BELOW: ret void
 ; TINY-LABEL: define void @integration_affine(
 ; TINY: ret void

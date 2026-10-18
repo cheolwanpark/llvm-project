@@ -1,13 +1,13 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2>%t.remarks
-; RUN: FileCheck %s --implicit-check-not=scalar.fission < %t
+; RUN:   -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2>%t.remarks
+; RUN: FileCheck %s  < %t
 ; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
 ; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 \
-; RUN:   -S %s | FileCheck %s --implicit-check-not=scalar.fission
+; RUN:   -S %s | FileCheck %s
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
 ; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
@@ -21,8 +21,13 @@
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare i32 @unsafe(i32) memory(read) nounwind willreturn speculatable
 
-; REASON: scalar-affine-reject.c:12:3: scalar-IR reduction fission rejected: {{non-constant-trip-count|scalar-scratch-limit}}
+; REASON: scalar-affine-reject.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
 ; CHECK-LABEL: define void @reject_affine_unproved(
+; CHECK: alloca [64 x i32]
+; CHECK: alloca [64 x double]
+; CHECK: alloca [64 x float]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.continue = phi i1
 ; CHECK: ret void
 define void @reject_affine_unproved(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !6 {
@@ -96,6 +101,7 @@ exit:
 
 ; REASON: scalar-affine-reject.c:22:3: scalar-IR reduction fission rejected: scalar-unsupported-exit
 ; CHECK-LABEL: define void @reject_affine_variable_step(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @reject_affine_variable_step(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !8 {
@@ -168,9 +174,15 @@ exit:
 }
 
 ; The feedback recurrence stays in the producer. Its final export is now
-; legal, but all three unique streams still need 1044 bytes: 1043 rejects.
-; REASON: scalar-affine-reject.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; legal. At 1043 bytes the fallback now uses C=64/B=1024; the
+; observed recurrence remains producer-local and is carried between chunks.
+; REASON: scalar-affine-reject.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
 ; CHECK-LABEL: define void @reject_affine_feedback(
+; CHECK: alloca [64 x i32]
+; CHECK: alloca [64 x double]
+; CHECK: alloca [64 x float]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.continue = phi i1
 ; CHECK: ret void
 define void @reject_affine_feedback(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !10 {
@@ -242,8 +254,13 @@ exit:
   ret void
 }
 
-; REASON: scalar-affine-reject.c:42:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; REASON: scalar-affine-reject.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
 ; CHECK-LABEL: define void @reject_affine_contribution_feedback(
+; CHECK: alloca [64 x i32]
+; CHECK: alloca [64 x double]
+; CHECK: alloca [64 x float]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.continue = phi i1
 ; CHECK: ret void
 define void @reject_affine_contribution_feedback(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !12 {
@@ -317,6 +334,7 @@ exit:
 
 ; REASON: scalar-affine-reject.c:52:3: scalar-IR reduction fission rejected: scalar-unsafe-call
 ; CHECK-LABEL: define void @reject_affine_unsafe_call(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @reject_affine_unsafe_call(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !14 {
@@ -390,6 +408,7 @@ exit:
 
 ; REASON: scalar-affine-reject.c:62:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
 ; CHECK-LABEL: define void @reject_affine_store(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @reject_affine_store(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !16 {
@@ -462,14 +481,20 @@ exit:
   ret void
 }
 
-; The formerly unsupported final IV export is legal. Retain the rejection at
-; 1043 bytes, and require the same source function to split at exactly 1044.
+; The formerly unsupported final IV export is legal. Now split at
+; 1043 bytes as C=64/B=1024 original-control chunks, and keep the same
+; source function's full-trip export check at exactly 1044.
 ; Mixed-type final exports are executed by scalar-export-controls.ll.
 ; PHI operand ordering is semantically irrelevant; the incoming edges are
 ; essential: zero comes from entry, and the final IV comes from the consumer's
 ; dedicated exit. Capture that forwarding block to check both associations.
-; REASON: scalar-affine-reject.c:72:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; REASON: scalar-affine-reject.c:72:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
 ; CHECK-LABEL: define void @reject_affine_liveout(
+; CHECK: alloca [64 x i32]
+; CHECK: alloca [64 x double]
+; CHECK: alloca [64 x float]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.continue = phi i1
 ; CHECK: ret void
 ; EXPORT-LABEL: define void @reject_affine_liveout(
 ; EXPORT: alloca [65 x i32]
@@ -556,6 +581,7 @@ exit:
 
 ; REASON: scalar-affine-reject.c:82:3: scalar-IR reduction fission rejected: scalar-incompatible-participation
 ; CHECK-LABEL: define void @reject_affine_participation(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @reject_affine_participation(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !20 {
@@ -614,6 +640,7 @@ exit:
 
 ; REASON: scalar-affine-reject.c:92:3: scalar-IR reduction fission rejected: scalar-strict-fp
 ; CHECK-LABEL: define void @reject_affine_strictfp(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @reject_affine_strictfp(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) strictfp !dbg !22 {
@@ -687,6 +714,7 @@ exit:
 
 ; REASON: scalar-affine-reject.c:102:3: scalar-IR reduction fission rejected: scalar-unsupported-exit
 ; CHECK-LABEL: define void @reject_affine_zero_step(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @reject_affine_zero_step(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !24 {
@@ -760,6 +788,7 @@ exit:
 
 ; REASON: scalar-affine-reject.c:112:3: scalar-IR reduction fission rejected: scalar-unsupported-exit
 ; CHECK-LABEL: define void @reject_affine_nonlinear(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @reject_affine_nonlinear(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !26 {
@@ -833,6 +862,7 @@ exit:
 
 ; REASON: scalar-affine-reject.c:122:3: scalar-IR reduction fission rejected: scalar-unsupported-exit
 ; CHECK-LABEL: define i32 @reject_affine_pointer(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_affine_pointer(ptr %a, ptr %end) !dbg !28 {
 entry:
@@ -855,6 +885,7 @@ exit:
 
 ; REASON: scalar-affine-reject.c:132:3: scalar-IR reduction fission rejected: scalar-unsupported-exit
 ; CHECK-LABEL: define i32 @reject_affine_fp_control(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_affine_fp_control(ptr %a, ptr %end) !dbg !30 {
 entry:

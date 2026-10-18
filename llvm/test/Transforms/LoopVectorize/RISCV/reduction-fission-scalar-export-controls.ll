@@ -29,10 +29,10 @@
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
 ; RUN:   -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 \
 ; RUN:   -scalable-vectorization=off -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks-missed=vplan-reduction-fission \
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission \
 ; RUN:   -S %s -o %t.limit 2> %t.limit.remarks
 ; RUN: FileCheck %s --check-prefix=LIMIT < %t.limit.remarks
-; RUN: FileCheck %s --check-prefix=UNCHANGED --implicit-check-not=scalar.fission < %t.limit
+; RUN: FileCheck %s --check-prefix=CHUNK < %t.limit
 ;
 ; SELECTED-COUNT-8: : split scalar-IR reduction loop;
 ; SELECTED-NOT: : split
@@ -40,7 +40,7 @@
 ; Final dominating exports depend on latch-edge SSA availability, not the
 ; original induction's start/step/test or the number of acyclic diamonds.
 ; All eight cases have exactly N iterations and require the full 1044-byte
-; capacity. The 1043-byte run must reject, never change chunk admission.
+; capacity. At 1043 bytes the fallback chunks at C=64/B=1024 and preserves original control.
 ; The executable contract checks original IR and independent C under separate
 ; strict/reordered settings, with actual vector/tail/producer/empty-path probes.
 ; It includes zero entry, one iteration, all P=0..65, final inactive iterations,
@@ -54,9 +54,13 @@ declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 ; SCALAR-REMARK: scalar-export-controls.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-export-controls.c:12:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-export-controls.c:12:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-export-controls.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; UNCHANGED-LABEL: define void @export_offset(
-; UNCHANGED: ret void
+; LIMIT: scalar-export-controls.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
+; CHUNK-LABEL: define void @export_offset(
+; CHUNK: alloca [64 x i32]
+; CHUNK: alloca [64 x double]
+; CHUNK: alloca [64 x float]
+; CHUNK: scalar.fission.chunk:
+; CHUNK: ret void
 ; SCALAR-LABEL: define void @export_offset(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -166,9 +170,13 @@ exit:
 ; SCALAR-REMARK: scalar-export-controls.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-export-controls.c:22:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-export-controls.c:22:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-export-controls.c:22:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; UNCHANGED-LABEL: define void @export_stride(
-; UNCHANGED: ret void
+; LIMIT: scalar-export-controls.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
+; CHUNK-LABEL: define void @export_stride(
+; CHUNK: alloca [64 x i32]
+; CHUNK: alloca [64 x double]
+; CHUNK: alloca [64 x float]
+; CHUNK: scalar.fission.chunk:
+; CHUNK: ret void
 ; SCALAR-LABEL: define void @export_stride(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -292,9 +300,13 @@ exit:
 ; SCALAR-REMARK: scalar-export-controls.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-export-controls.c:32:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-export-controls.c:32:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-export-controls.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; UNCHANGED-LABEL: define void @export_down(
-; UNCHANGED: ret void
+; LIMIT: scalar-export-controls.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
+; CHUNK-LABEL: define void @export_down(
+; CHUNK: alloca [64 x i32]
+; CHUNK: alloca [64 x double]
+; CHUNK: alloca [64 x float]
+; CHUNK: scalar.fission.chunk:
+; CHUNK: ret void
 ; SCALAR-LABEL: define void @export_down(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -418,9 +430,13 @@ exit:
 ; SCALAR-REMARK: scalar-export-controls.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-export-controls.c:42:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-export-controls.c:42:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-export-controls.c:42:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; UNCHANGED-LABEL: define void @export_current(
-; UNCHANGED: ret void
+; LIMIT: scalar-export-controls.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
+; CHUNK-LABEL: define void @export_current(
+; CHUNK: alloca [64 x i32]
+; CHUNK: alloca [64 x double]
+; CHUNK: alloca [64 x float]
+; CHUNK: scalar.fission.chunk:
+; CHUNK: ret void
 ; SCALAR-LABEL: define void @export_current(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -532,9 +548,13 @@ exit:
 ; SCALAR-REMARK: scalar-export-controls.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-export-controls.c:52:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-export-controls.c:52:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-export-controls.c:52:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; UNCHANGED-LABEL: define void @export_affine_compact(
-; UNCHANGED: ret void
+; LIMIT: scalar-export-controls.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
+; CHUNK-LABEL: define void @export_affine_compact(
+; CHUNK: alloca [64 x i32]
+; CHUNK: alloca [64 x double]
+; CHUNK: alloca [64 x float]
+; CHUNK: scalar.fission.chunk:
+; CHUNK: ret void
 ; SCALAR-LABEL: define void @export_affine_compact(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -662,9 +682,13 @@ exit:
 ; SCALAR-REMARK: scalar-export-controls.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-export-controls.c:62:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-export-controls.c:62:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-export-controls.c:62:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; UNCHANGED-LABEL: define void @export_serial(
-; UNCHANGED: ret void
+; LIMIT: scalar-export-controls.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
+; CHUNK-LABEL: define void @export_serial(
+; CHUNK: alloca [64 x i32]
+; CHUNK: alloca [64 x double]
+; CHUNK: alloca [64 x float]
+; CHUNK: scalar.fission.chunk:
+; CHUNK: ret void
 ; SCALAR-LABEL: define void @export_serial(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -801,9 +825,13 @@ exit:
 ; SCALAR-REMARK: scalar-export-controls.c:72:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-export-controls.c:72:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-export-controls.c:72:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-export-controls.c:72:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; UNCHANGED-LABEL: define void @export_acyclic_nested(
-; UNCHANGED: ret void
+; LIMIT: scalar-export-controls.c:72:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
+; CHUNK-LABEL: define void @export_acyclic_nested(
+; CHUNK: alloca [64 x i32]
+; CHUNK: alloca [64 x double]
+; CHUNK: alloca [64 x float]
+; CHUNK: scalar.fission.chunk:
+; CHUNK: ret void
 ; SCALAR-LABEL: define void @export_acyclic_nested(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]
@@ -937,9 +965,13 @@ exit:
 ; SCALAR-REMARK: scalar-export-controls.c:82:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
 ; SCALAR-REMARK: scalar-export-controls.c:82:3: scalar-IR fission producer VF 1
 ; SCALAR-REMARK: scalar-export-controls.c:82:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-export-controls.c:82:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; UNCHANGED-LABEL: define void @export_enclosing(
-; UNCHANGED: ret void
+; LIMIT: scalar-export-controls.c:82:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
+; CHUNK-LABEL: define void @export_enclosing(
+; CHUNK: alloca [64 x i32]
+; CHUNK: alloca [64 x double]
+; CHUNK: alloca [64 x float]
+; CHUNK: scalar.fission.chunk:
+; CHUNK: ret void
 ; SCALAR-LABEL: define void @export_enclosing(
 ; SCALAR: alloca [65 x i32]
 ; SCALAR: alloca [65 x double]

@@ -2,7 +2,7 @@
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
 ; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
 ; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=4 \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
+; RUN:   -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
 ; RUN: FileCheck %s < %t
 ; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
 ; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
@@ -17,21 +17,21 @@
 ; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 \
 ; RUN:   -S %s | FileCheck %s --check-prefix=EXPORT
 ;
-; Each control executes exactly 65 iterations. An affine endpoint, a current-IV
-; equality operand, a swapped equality or a strict relational witness is not
-; the canonical next-IV count consumed by N-base chunk scheduling. None may
-; bypass the full-trip ceiling, even when one contribution fits. The final
-; canonical acyclic cross-edge case now chunks at C=1 and retains its IV export.
-; Live-out combinations are legal at sufficient capacity (see scalar-export-controls),
-; but exports do not relax the full-trip scratch requirement here.
-; REASON-COUNT-6: scalar-IR reduction fission rejected: scalar-scratch-limit
+; Each formerly oversized affine control now uses one-slot original-control
+; chunks. The endpoint is never interpreted as N. Current-IV, swapped equality
+; and relational tests remain in the producer. Canonical cross-edge chunks and
+; the sufficient-capacity export checks remain. The new executable fallback
+; matrix supplies original-IR/oracle comparisons and control/state certificates.
+; REASON-COUNT-7: split scalar-IR reduction loop;
 
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 ; CHECK-LABEL: define i32 @oversized_offset(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [1 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.continue = phi i1
+; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
 ; CHECK: ret i32
-; CHECK-NOT: scalar.fission
 define i32 @oversized_offset(i32 %x) {
 entry:
   br label %preheader
@@ -51,9 +51,11 @@ exit:
 }
 
 ; CHECK-LABEL: define i32 @oversized_stride(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [1 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.continue = phi i1
+; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
 ; CHECK: ret i32
-; CHECK-NOT: scalar.fission
 define i32 @oversized_stride(i32 %x) {
 entry:
   br label %preheader
@@ -73,9 +75,11 @@ exit:
 }
 
 ; CHECK-LABEL: define i32 @oversized_current(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [1 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.continue = phi i1
+; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
 ; CHECK: ret i32
-; CHECK-NOT: scalar.fission
 define i32 @oversized_current(i32 %x) {
 entry:
   br label %preheader
@@ -95,9 +99,11 @@ exit:
 }
 
 ; CHECK-LABEL: define i32 @oversized_swapped(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [1 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.continue = phi i1
+; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
 ; CHECK: ret i32
-; CHECK-NOT: scalar.fission
 define i32 @oversized_swapped(i32 %x) {
 entry:
   br label %preheader
@@ -117,9 +123,11 @@ exit:
 }
 
 ; CHECK-LABEL: define i32 @oversized_witness(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [1 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.continue = phi i1
+; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
 ; CHECK: ret i32
-; CHECK-NOT: scalar.fission
 define i32 @oversized_witness(i32 %x) {
 entry:
   br label %preheader
@@ -139,9 +147,11 @@ exit:
 }
 
 ; CHECK-LABEL: define i64 @reject_export_integration_affine(
-; CHECK-NOT: scalar.fission
+; CHECK: alloca [1 x i32]
+; CHECK: scalar.fission.chunk:
+; CHECK: %fission.producer.continue = phi i1
+; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
 ; CHECK: ret i64
-; CHECK-NOT: scalar.fission
 ; EXPORT-LABEL: define i64 @reject_export_integration_affine(
 ; EXPORT: alloca [65 x i32]
 ; EXPORT: scalar.fission.consumer.ph:

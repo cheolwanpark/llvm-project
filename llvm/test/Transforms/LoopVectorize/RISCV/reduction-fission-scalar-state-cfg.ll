@@ -29,7 +29,7 @@
 ; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission \
 ; RUN:   -S %s -o %t.limit 2> %t.limit.remarks
 ; RUN: FileCheck %s --check-prefix=LIMIT < %t.limit.remarks
-; RUN: FileCheck %s --check-prefix=UNCHANGED < %t.limit
+; RUN: FileCheck %s --check-prefix=CHUNK < %t.limit
 ;
 ;
 ; One state recurrence is retained while four closed reductions move. State
@@ -38,7 +38,7 @@
 ; inactive. It occurs before/after reductions to test transactional recognition.
 ; Serial/nested upstream diamonds and three affine latch bypasses stay intact.
 ; At 1043 bytes canonical serial chunks with C=64/B=1024 and retained
-; state. Affine nested/three-bypass cases still reject; 1044 fits all trips.
+; state. Affine nested/three-bypass cases now use original-control chunks; 1044 fits all trips.
 ; Executed by check-reduction-fission.py against original IR and independent C.
 ;
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
@@ -65,11 +65,11 @@ declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 ; REMARK: scalar-state-cfg.c:12:3: scalar-IR fission producer VF 1
 ; REMARK: scalar-state-cfg.c:12:3: scalar-IR fission consumer VF vscale x 4
 ; LIMIT: scalar-state-cfg.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
-; UNCHANGED-LABEL: define void @state_cfg_serial(
-; UNCHANGED: alloca [64 x i32]
-; UNCHANGED: scalar.fission.chunk:
-; UNCHANGED: scalar.fission.consumer.guard:
-; UNCHANGED: ret void
+; CHUNK-LABEL: define void @state_cfg_serial(
+; CHUNK: alloca [64 x i32]
+; CHUNK: scalar.fission.chunk:
+; CHUNK: scalar.fission.consumer.guard:
+; CHUNK: ret void
 ; VECTOR-LABEL: define void @state_cfg_serial(
 ; VECTOR: vector.body:
 ; VECTOR: call i32 @llvm.vector.reduce.add.nxv4i32
@@ -223,12 +223,15 @@ exit:
 ; REMARK: scalar-state-cfg.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 7
 ; REMARK: scalar-state-cfg.c:22:3: scalar-IR fission producer VF 1
 ; REMARK: scalar-state-cfg.c:22:3: scalar-IR fission consumer VF vscale x 4
-; LIMIT: scalar-state-cfg.c:22:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; UNCHANGED-LABEL: define void @state_cfg_nested(
-; UNCHANGED-NOT: scalar.fission
-; UNCHANGED: ret void
-; UNCHANGED-NOT: scalar.fission
-; UNCHANGED: }
+; LIMIT: scalar-state-cfg.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
+; CHUNK-LABEL: define void @state_cfg_nested(
+; CHUNK: alloca [64 x i32]
+; CHUNK: alloca [64 x double]
+; CHUNK: alloca [64 x float]
+; CHUNK: scalar.fission.chunk:
+; CHUNK: scalar.fission.consumer.guard:
+; CHUNK: ret void
+; CHUNK: }
 ; VECTOR-LABEL: define void @state_cfg_nested(
 ; VECTOR: vector.body:
 ; VECTOR: call i32 @llvm.vector.reduce.add.nxv4i32
@@ -383,12 +386,15 @@ exit:
 ; REMARK: scalar-state-cfg.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 7
 ; REMARK: scalar-state-cfg.c:32:3: scalar-IR fission producer VF 1
 ; REMARK: scalar-state-cfg.c:32:3: scalar-IR fission consumer VF vscale x 4
-; LIMIT: scalar-state-cfg.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; UNCHANGED-LABEL: define void @state_cfg_affine(
-; UNCHANGED-NOT: scalar.fission
-; UNCHANGED: ret void
-; UNCHANGED-NOT: scalar.fission
-; UNCHANGED: }
+; LIMIT: scalar-state-cfg.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
+; CHUNK-LABEL: define void @state_cfg_affine(
+; CHUNK: alloca [64 x i32]
+; CHUNK: alloca [64 x double]
+; CHUNK: alloca [64 x float]
+; CHUNK: scalar.fission.chunk:
+; CHUNK: scalar.fission.consumer.guard:
+; CHUNK: ret void
+; CHUNK: }
 ; VECTOR-LABEL: define void @state_cfg_affine(
 ; VECTOR: vector.body:
 ; VECTOR: call i32 @llvm.vector.reduce.add.nxv4i32
