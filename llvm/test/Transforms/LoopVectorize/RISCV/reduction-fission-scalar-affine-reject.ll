@@ -160,7 +160,9 @@ exit:
   ret void
 }
 
-; REASON: scalar-affine-reject.c:32:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
+; The feedback recurrence must stay in the producer, where its final export
+; still fails the producer live-out rule. Other reductions cannot hide it.
+; REASON: scalar-affine-reject.c:32:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
 ; CHECK-LABEL: define void @reject_affine_feedback(
 ; CHECK: ret void
 define void @reject_affine_feedback(ptr readonly %a, ptr readonly %fp, ptr %out,
@@ -233,7 +235,7 @@ exit:
   ret void
 }
 
-; REASON: scalar-affine-reject.c:42:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
+; REASON: scalar-affine-reject.c:42:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
 ; CHECK-LABEL: define void @reject_affine_contribution_feedback(
 ; CHECK: ret void
 define void @reject_affine_contribution_feedback(ptr readonly %a, ptr readonly %fp, ptr %out,

@@ -27,6 +27,8 @@ typedef void ScalarNestedFn(const uint32_t *, const double *, uint32_t *,
                             double *, uint64_t, uint64_t, double);
 typedef void AffineFn(const uint32_t *, const double *, uint32_t *, double *,
                       float *, uint64_t, double, int64_t);
+typedef void RecurrenceFn(const uint32_t *, const double *, uint32_t *, double *,
+                          uint64_t, uint64_t, double, int64_t);
 extern CombinedFn ref_combined;
 extern InductionFn ref_induction, ref_negative_step, ref_truncated;
 extern FPFn ref_fp_reordering;
@@ -102,6 +104,12 @@ static const struct {
   bool Nested, Compact;
   unsigned Control;
 } Affine[] = {@AFFINE@};
+static const struct {
+  const char *Name;
+  RecurrenceFn *Fn, *Reference;
+  unsigned Capacity, VectorLanes;
+  bool Two, Branch, Enclosing;
+} Recurrences[] = {@RECURRENCES@};
 static const struct {
   const char *Name;
   ScalarMixedFn *Fn, *Reference;
@@ -357,7 +365,154 @@ static bool equal_fp(double Actual, double Expected, bool Relaxed,
   return Error <= 16 * DBL_EPSILON * (N + 1) * Magnitude;
 }
 
+
+// Keep this independent of IR names/control expressions. The bounded affine
+// fixtures visit the same n items as their canonical siblings. Delay state is
+// reset per row; reduction starts carry across rows and writes may alias the
+// next row's inputs.
+static void reference_recurrence(bool Two, bool Branch, bool Enclosing,
+                                  unsigned Capacity, const uint32_t *A,
+                                  const double *D, uint32_t *Out, double *Dout,
+                                  uint64_t N, uint64_t Rows, double Start) {
+  uint32_t S0 = 17, S1 = (uint32_t)-7;
+  double DS = Start;
+  if (N && N <= Capacity && (!Enclosing || (Rows && Rows <= 4)))
+    for (unsigned R = 0; R < (Enclosing ? Rows : 1); ++R) {
+      uint32_t Prev = 23, Older = 11;
+      double DPrev = -0.0, DOlder = 0.5;
+      for (unsigned I = 0; I < N; ++I) {
+        unsigned Index = (Enclosing ? 65 * R : 0) + I;
+        uint32_t X = A[Index], Raw = Prev ^ X;
+        double DX = D[Index];
+        bool Left = !Branch || (Prev & 1);
+        uint32_t C = Left ? scalar_helper(Raw) : Raw ^ 7;
+        double Delta = Left ? DX : DX * 0.5;
+        double Contribution = Delta - DPrev;
+        uint32_t Next = Two ? (X & 127) + Older : X;
+        double DNext = Two ? DX - DOlder : DX;
+        S0 += C;
+        S1 = C + S1;
+        DS += Contribution;
+        Older = Prev;
+        DOlder = DPrev;
+        Prev = Next;
+        DPrev = DNext;
+      }
+      if (Enclosing) {
+        Out[0] = S0;
+        Out[1] = S1;
+        *Dout = DS;
+      }
+    }
+  Out[0] = S0;
+  Out[1] = S1;
+  *Dout = DS;
+}
+
+static void check_recurrences(void) {
+  uint32_t SavedSeed = Seed;
+  static uint32_t A[5463], Actual[5463], Ref[5463], Formula[5463];
+  static double D[5463], ActualD[5463], RefD[5463], FormulaD[5463];
+  static const uint64_t RowCounts[] = {0, 1, 2, 4, 5, UINT64_MAX};
+  static const int64_t Origins[] = {INT64_MIN, -1, 0, 255, 256, INT64_MAX};
+  unsigned VectorRuns = 0, TailRuns = 0, Comparisons = 0;
+  for (unsigned C = 0; C < sizeof(Recurrences) / sizeof(*Recurrences); ++C) {
+    unsigned Capacity = Recurrences[C].Capacity;
+    unsigned Size = Recurrences[C].Enclosing ? 262 : Capacity + 2;
+    unsigned Lanes = Recurrences[C].VectorLanes;
+    bool SawVector = false, SawTail = false, SawFull = false, SawZero = false, SawOne = false;
+    for (unsigned K = 0; K < (Capacity == 65 ? 68u : 12u); ++K)
+      for (unsigned R = 0; R < (Recurrences[C].Enclosing ? 6u : 1u); ++R)
+        for (unsigned Trial = 0; Trial < 16; ++Trial) {
+          uint64_t N = Capacity == 65 ? (K == 67 ? UINT64_MAX : K) :
+                       (uint64_t[]){0, 1, 2, 3, 4, 7, 8, Capacity / 2,
+                                    Capacity - 1, Capacity, Capacity + 1, UINT64_MAX}[K];
+          uint64_t Rows = Recurrences[C].Enclosing ? RowCounts[R] : 1;
+          unsigned ActiveRows = N && N <= Capacity && Rows && Rows <= 4 ? Rows : 0;
+          unsigned ActiveN = ActiveRows ? N : 0;
+          unsigned V = Lanes ? ActiveRows * (ActiveN / Lanes) : 0;
+          unsigned T = ActiveRows * (Lanes ? ActiveN % Lanes : ActiveN);
+          SawFull |= ActiveRows && N == Capacity;
+          SawZero |= N == 0;
+          SawOne |= ActiveRows && N == 1;
+          double Start = Trial % 2 ? 3.5 : -0.0;
+          int64_t Begin = Origins[Trial % 6];
+          for (unsigned I = 0; I < Size; ++I)
+            A[I] = Trial / 2 == 0 ? 0 : Trial / 2 == 1 ? UINT32_MAX :
+                   Trial / 2 == 2 ? I : random_value();
+          fill_fp(D, Size, Trial);
+          const uint32_t *Input = ActiveRows ? A : NULL;
+          const double *FPInput = ActiveRows ? D : NULL;
+          memcpy(Actual, A, Size * sizeof(*A));
+          memcpy(ActualD, D, Size * sizeof(*D));
+          uint32_t Out[4] = {123, 0, 0, 456}, RefOut[4] = {123, 0, 0, 456}, FOut[2];
+          double Dout[3] = {17.5, 0.0, -19.5}, RDout[3] = {17.5, 0.0, -19.5}, FDout;
+          reference_recurrence(Recurrences[C].Two, Recurrences[C].Branch,
+                               Recurrences[C].Enclosing, Capacity, Input, FPInput,
+                               FOut, &FDout, N, Rows, Start);
+          Recurrences[C].Reference(Input, FPInput, RefOut + 1, RDout + 1,
+                                    N, Rows, Start, Begin);
+          if (memcmp(FOut, RefOut + 1, sizeof(FOut)) ||
+              !compact_doubles_equal(&FDout, RDout + 1, 1))
+            fail(Recurrences[C].Name, (unsigned)N, Trial, "recurrence original / formula");
+          AcyclicIterations = AcyclicLatches = ScalarVectorVisits = ScalarTailVisits = 0;
+          Recurrences[C].Fn(Input, FPInput, Out + 1, Dout + 1, N, Rows, Start, Begin);
+          if (memcmp(Out, RefOut, sizeof(Out)) || !compact_doubles_equal(Dout, RDout, 3) ||
+              memcmp(A, Actual, Size * sizeof(*A)) ||
+              memcmp(D, ActualD, Size * sizeof(*D)) ||
+              AcyclicIterations != ActiveRows * ActiveN ||
+              AcyclicLatches != ActiveRows * ActiveN ||
+              ScalarVectorVisits != V || ScalarTailVisits != T)
+            fail(Recurrences[C].Name, (unsigned)N, Trial, "recurrence result/canary/count");
+          SawVector |= V != 0;
+          SawTail |= T != 0;
+          VectorRuns += V != 0;
+          TailRuns += T != 0;
+
+          // Compare the entire arrays, including all unwritten elements.
+          // Alias writes in an enclosing loop alter the following row. The
+          // independent formula, original IR and split stages see those writes.
+          memcpy(Actual, A, Size * sizeof(*A));
+          memcpy(Ref, A, Size * sizeof(*A));
+          memcpy(Formula, A, Size * sizeof(*A));
+          memcpy(ActualD, D, Size * sizeof(*D));
+          memcpy(RefD, D, Size * sizeof(*D));
+          memcpy(FormulaD, D, Size * sizeof(*D));
+          unsigned Offset = Recurrences[C].Enclosing ? 65 : 0;
+          reference_recurrence(Recurrences[C].Two, Recurrences[C].Branch,
+                               Recurrences[C].Enclosing, Capacity,
+                               ActiveRows ? Formula : NULL, ActiveRows ? FormulaD : NULL,
+                               Formula + Offset, FormulaD + Offset, N, Rows, Start);
+          Recurrences[C].Reference(ActiveRows ? Ref : NULL, ActiveRows ? RefD : NULL,
+                                    Ref + Offset, RefD + Offset, N, Rows, Start, Begin);
+          if (memcmp(Formula, Ref, Size * sizeof(*Ref)) ||
+              !compact_doubles_equal(FormulaD, RefD, Size))
+            fail(Recurrences[C].Name, (unsigned)N, Trial, "recurrence original / formula alias");
+          AcyclicIterations = AcyclicLatches = ScalarVectorVisits = ScalarTailVisits = 0;
+          Recurrences[C].Fn(ActiveRows ? Actual : NULL, ActiveRows ? ActualD : NULL,
+                             Actual + Offset, ActualD + Offset, N, Rows, Start, Begin);
+          if (memcmp(Actual, Ref, Size * sizeof(*Ref)) ||
+              !compact_doubles_equal(ActualD, RefD, Size) ||
+              AcyclicIterations != ActiveRows * ActiveN ||
+              AcyclicLatches != ActiveRows * ActiveN ||
+              ScalarVectorVisits != V || ScalarTailVisits != T)
+            fail(Recurrences[C].Name, (unsigned)N, Trial, "recurrence alias/reuse/count");
+          Comparisons += 2;
+        }
+    if (!SawFull || !SawZero || !SawOne || !SawTail ||
+        (Lanes && Lanes <= Capacity && !SawVector))
+      fail(Recurrences[C].Name, Capacity, 0, "recurrence coverage missing");
+  }
+  Runs += Comparisons;
+  Seed = SavedSeed;
+  printf("Producer recurrences: %u comparisons, %u vector runs, %u tail runs; "
+         "original IR / transformed / independent formulas; exact counts and scratch reuse\n",
+         Comparisons, VectorRuns, TailRuns);
+}
+
+
 int main(void) {
+  check_recurrences();
   static const unsigned Counts[] = {
       0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 257, 1023, 1024, 1025};
   static const int32_t Steps[] = {0, 1, -3, INT32_MAX, INT32_MIN};

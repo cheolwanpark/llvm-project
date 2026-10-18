@@ -1,0 +1,94 @@
+# REQUIRES: riscv-registered-target
+# RUN: split-file %s %t
+# RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+# RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
+# RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
+# RUN:   -enable-vplan-reduction-fission -S \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll -o %t/scalar.ll
+# RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+# RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
+# RUN:   -hints-allow-reordering=false -scalable-vectorization=always \
+# RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
+# RUN:   -enable-vplan-reduction-fission -S \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll -o %t/tail.ll
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll %t/scalar.ll %t/tail.ll
+
+# Exercise the focused certificate using real output. Parser mutation coverage
+# supplements the complete original/transformed/independent execution matrix;
+# it cannot establish transformed numerical correctness by itself. All prior
+# checker mutation tests remain unchanged.
+
+#--- check.py
+import importlib.util
+from pathlib import Path
+import re
+import sys
+
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(checker)
+source, scalar, tail = (Path(path).read_text() for path in sys.argv[2:])
+core = ['recurrence_first', 'recurrence_two', 'recurrence_affine',
+        'recurrence_runtime', 'recurrence_branch', 'recurrence_enclosing',
+        'recurrence_first_affine', 'recurrence_first_enclosing']
+for name in core:
+    for text, vectorized in [(scalar, False), (tail, True)]:
+        checked = checker.check_recurrence_function(
+            text, source, name, False, vectorized=vectorized, probe=True)
+        for probe in ['acyclic_iteration', 'acyclic_latch', 'scalar_consumer_tail']:
+            assert checked.count('call void @record_' + probe + '()') == 1
+        assert checked.count('call void @record_scalar_consumer_vector()') == int(vectorized)
+for name, capacity in [('recurrence_one', 1), ('recurrence_255', 255),
+                       ('recurrence_limit', 5461)]:
+    checker.check_recurrence_function(scalar, source, name, False,
+                                      vectorized=False, capacity=capacity)
+
+name = 'recurrence_two'
+body = checker.function_definition(scalar, name)
+
+def changed(pattern, replacement, text=body):
+    result, count = re.subn(pattern, replacement, text, count=1, flags=re.M)
+    assert count == 1, pattern
+    assert result != text, pattern
+    return result
+
+def rejected(text, obligation, vectorized=False):
+    try:
+        checker.check_recurrence_function(text, source, name, False, vectorized=vectorized)
+    except AssertionError as error:
+        assert 'recurrence ' + obligation in str(error), (obligation, error)
+    else:
+        raise AssertionError('accepted ' + obligation)
+
+rejected(changed(r'(\[ )%state.next(, %loop \])', r'\1%x\2'), 'retained instruction/order')
+rejected(changed(r'(\[ )23(, %preheader \])', r'\g<1>29\2'), 'retained instruction/order')
+rejected(changed(r'(%state.next = add[^\n]*i32 %bounded, )%older', r'\1%prev'),
+         'retained instruction/order')
+rejected(changed(r'%raw = xor i32 %prev, %x', '%raw = or i32 %prev, %x'),
+         'retained instruction/order')
+rejected(changed(r'(%dc = fsub double )%dx, %dprev', r'\1%dprev, %dx'),
+         'retained instruction/order')
+rejected(changed(r'(  %raw = [^\n]+\n)', r'\1\1'), 'retained instruction/order')
+rejected(changed(r'(getelementptr inbounds \[65 x i32\], ptr %[-\w.$]+, i32 0, i64 )%iv',
+                 r'\g<1>0'), 'scratch index')
+rejected(changed(r'alloca \[65 x i32\]', 'alloca [64 x i32]'), 'scratch capacity/type')
+rejected(changed(r'(  store i32 %c,[^\n]+\n)', r'\1\1'), 'scratch store')
+rejected(changed(r'(icmp eq i64 %fission.consumer.next, )%n', r'\g<1>65'),
+         'scalar actual count')
+rejected(changed(r'%ud.consume = fadd double', '%ud.consume = fadd reassoc double'),
+         'ordered FP flags')
+line = re.search(r'^  %state.next = [^\n]+\n', body, re.M)[0]
+moved = body.replace(line, '', 1)
+moved = changed(r'(^scalar.fission.consumer.body:[^\n]*\n)', r'\1' + line, moved)
+rejected(moved, 'retained instruction/order')
+
+# Normal LV can drop integer poison flags; it cannot add them or change any
+# operation/operand. Retained source/IR SSA renaming is also immaterial.
+unflagged = re.sub(r'\b(?:nuw|nsw) ', '', body)
+checker.check_recurrence_function(unflagged, source, name, False, vectorized=False)
+renamed_source, renamed_body = source, body
+for old, new in [('%prev', '%delay'), ('%older', '%earlier'), ('%dprev', '%fpdelay')]:
+    renamed_source = re.sub(re.escape(old) + r'(?![-\w.$])', new, renamed_source)
+    renamed_body = re.sub(re.escape(old) + r'(?![-\w.$])', new, renamed_body)
+checker.check_recurrence_function(renamed_body, renamed_source, name, False, vectorized=False)

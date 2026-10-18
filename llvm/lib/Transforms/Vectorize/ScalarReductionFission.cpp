@@ -307,17 +307,27 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   SmallPtrSet<Instruction *, 8> ReductionInsts;
   BasicBlock *ParticipationArm = nullptr;
   bool SingleDiamond = hasSingleDiamondProducerCFG(L, Latch);
-  for (PHINode &Phi : Header->phis()) {
-    if (&Phi == IV)
-      continue;
+  // Recognize extractable recurrences independently of producer header state.
+  // A delay, or even a reduction-shaped recurrence used by the producer, can
+  // stay in place. Prove closure using direct uses before selecting anything:
+  // the first edge out of moved state would otherwise reach a predicate,
+  // address, contribution, retained recurrence or another accumulator. No DAG
+  // traversal or dependence on header PHI order is needed.
+  StringRef FailureReason;
+  auto RecognizeReduction = [&](PHINode &Phi) -> std::optional<Reduction> {
+    auto Fail = [&](StringRef Reason) -> std::optional<Reduction> {
+      if (FailureReason.empty())
+        FailureReason = Reason;
+      return std::nullopt;
+    };
     Value *Backedge = Phi.getIncomingValueForBlock(Latch);
     auto *Merge = dyn_cast<PHINode>(Backedge);
     BinaryOperator *Update = nullptr;
     if (Merge) {
       if (!SingleDiamond)
-        return Reject("scalar-unsupported-cfg");
+        return Fail("scalar-unsupported-cfg");
       if (Merge->getParent() != Latch || Merge->getNumIncomingValues() != 2)
-        return Reject("scalar-unsupported-recurrence");
+        return Fail("scalar-unsupported-recurrence");
       int Bypass = Merge->getIncomingValue(0) == &Phi ? 0 : 1;
       BasicBlock *Arm = Merge->getIncomingBlock(1 - Bypass);
       Update = dyn_cast<BinaryOperator>(Merge->getIncomingValue(1 - Bypass));
@@ -325,39 +335,68 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
           Update->getParent() != Arm || Arm == Header || Arm == Latch ||
           !L.contains(Arm) || !Update->hasOneUse() ||
           *Update->user_begin() != Merge || Phi.getNumUses() != 2)
-        return Reject("scalar-unsupported-recurrence");
+        return Fail("scalar-unsupported-recurrence");
       for (User *U : Phi.users())
         if (U != Update && U != Merge)
-          return Reject("scalar-reduction-feedback");
-      if (ParticipationArm && ParticipationArm != Arm)
-        return Reject("scalar-incompatible-participation");
-      ParticipationArm = Arm;
+          return Fail("scalar-reduction-feedback");
     } else {
       Update = dyn_cast<BinaryOperator>(Backedge);
       if (!Update ||
           (Update->getParent() != Latch &&
            !(SingleDiamond && Update->getParent() == Header)) ||
           !Phi.hasOneUse() || *Phi.user_begin() != Update)
-        return Reject("scalar-unsupported-recurrence");
+        return Fail("scalar-unsupported-recurrence");
     }
     Type *Ty = Phi.getType();
     if (!((Ty->isIntegerTy() && Update->getOpcode() == Instruction::Add) ||
           ((Ty->isFloatTy() || Ty->isDoubleTy()) &&
            Update->getOpcode() == Instruction::FAdd)) ||
         (Update->getOperand(0) != &Phi && Update->getOperand(1) != &Phi))
-      return Reject("scalar-unsupported-recurrence");
+      return Fail("scalar-unsupported-recurrence");
     unsigned ContributionOperand = Update->getOperand(0) == &Phi ? 1 : 0;
     Value *Contribution = Update->getOperand(ContributionOperand);
-    Reductions.push_back({&Phi, Update, Merge, Contribution, ContributionOperand});
+    Instruction *Result = Merge ? cast<Instruction>(Merge) : Update;
+    for (User *U : Result->users()) {
+      if (U == &Phi)
+        continue;
+      auto *Export = dyn_cast<PHINode>(U);
+      if (!Export || Export->getParent() != Exit)
+        return Fail("scalar-reduction-feedback");
+    }
+    return Reduction{&Phi, Update, Merge, Contribution, ContributionOperand};
+  };
+  bool RetainedState = false;
+  for (PHINode &Phi : Header->phis()) {
+    if (&Phi == IV)
+      continue;
+    auto R = RecognizeReduction(Phi);
+    if (!R) {
+      if (!Phi.getType()->isSingleValueType() || Phi.getType()->isVectorTy())
+        return Reject("scalar-unsupported-recurrence");
+      RetainedState = true;
+      continue;
+    }
+    if (R->Merge) {
+      BasicBlock *Arm = R->Update->getParent();
+      if (ParticipationArm && ParticipationArm != Arm)
+        return Reject("scalar-incompatible-participation");
+      ParticipationArm = Arm;
+    }
+    Reductions.push_back(*R);
     ReductionInsts.insert(&Phi);
-    ReductionInsts.insert(Update);
-    if (Merge)
-      ReductionInsts.insert(Merge);
+    ReductionInsts.insert(R->Update);
+    if (R->Merge)
+      ReductionInsts.insert(R->Merge);
   }
   if (Reductions.empty())
-    return Reject("scalar-no-reduction");
+    return Reject(FailureReason.empty() ? "scalar-no-reduction" : FailureReason);
+  // Keep the existing compact-participation contract. Retained state is only
+  // admitted with unconditional consumers, even if a new combination could
+  // in principle use the existing participating counter.
+  if (ParticipationArm && RetainedState)
+    return Reject(FailureReason);
 
-  // State can only flow around its own update/bypass recurrence and into final
+  // Extracted state only flows around its update/bypass recurrence and final
   // LCSSA exports. In particular no predicate, contribution, other reduction or
   // partial-state export can observe it. This needs no recursive DAG walk.
   for (const Reduction &R : Reductions) {
@@ -366,14 +405,6 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     if (auto *I = dyn_cast<Instruction>(R.Contribution);
         I && ReductionInsts.contains(I))
       return Reject("scalar-reduction-feedback");
-    Instruction *Result = R.Merge ? cast<Instruction>(R.Merge) : R.Update;
-    for (User *U : Result->users()) {
-      if (U == R.Phi)
-        continue;
-      auto *Phi = dyn_cast<PHINode>(U);
-      if (!Phi || Phi->getParent() != Exit)
-        return Reject("scalar-reduction-feedback");
-    }
   }
 
   for (BasicBlock *BB : L.blocks()) {
