@@ -72,10 +72,11 @@ for kind in ('scalar', 'tail', 'evl'):
 
 def reject_certificate(ir, name, old, new, scalar):
     body = checker.function_definition(ir, name)
-    assert body.count(old) == 1, (name, old, body)
+    assert old != new and body.count(old) == 1, (name, old, new, body)
+    candidate = ir.replace(body, body.replace(old, new, 1), 1)
+    assert candidate != ir, (name, old, new)
     try:
-        checker.check_state_chunk(ir.replace(body, body.replace(old, new), 1),
-                                  source, name, 9, scalar=scalar)
+        checker.check_state_chunk(candidate, source, name, 9, scalar=scalar)
     except AssertionError:
         pass
     else:
@@ -85,10 +86,18 @@ for kind in ('scalar', 'tail'):
     ir = modules[kind]
     scalar = kind == 'scalar'
     for name in checker.CFG_CHUNK_FUNCTIONS:
+        body = checker.function_definition(ir, name)
+        # LV may emit this subtraction with or without nuw. Bind exactly one
+        # actual instruction, retaining its flags; corrupt only its base operand.
+        remaining = [line for line in checker.chunk_instructions(
+            checker.loop_blocks(body)['scalar.fission.chunk'])
+            if re.fullmatch(r'%fission.chunk.remaining = sub(?: nuw)? i64 %n, '
+                            r'%fission.chunk.base', line)]
+        assert len(remaining) == 1, (name, remaining, body)
+        reject_certificate(ir, name, remaining[0],
+                           remaining[0].replace('%fission.chunk.base', '0'), scalar)
         for old, new in [
             ('%fission.chunk.base = phi i64 [ 0,', '%fission.chunk.base = phi i64 [ 1,'),
-            ('%fission.chunk.remaining = sub nuw i64 %n, %fission.chunk.base',
-             '%fission.chunk.remaining = sub nuw i64 %n, 0'),
             ('%fission.chunk.partial = icmp ult i64 %fission.chunk.remaining, 9',
              '%fission.chunk.partial = icmp ult i64 %fission.chunk.remaining, 10'),
             ('%fission.producer.ordinal = phi i64 [ 0,',

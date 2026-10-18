@@ -1,11 +1,11 @@
 {
-  "task_id": "t000070",
+  "task_id": "t000071",
   "direction_id": "d1",
-  "base_revision": "974f1a1251be1530681a41beef8600c593baf193",
+  "base_revision": "93e07c45af5caa1cd339a8b6865fa9e400b7cea9",
   "merge_revision": null,
-  "hypothesis": "Repair the two mandatory t000068 validation failures while preserving its narrow extension: already recognized canonical, finite-count unconditional reductions over acyclic producers may use bounded chunks. A consumer certificate selected from the actual emitted CFG can establish local iteration/control and reduction/result edges for scalar consumers, scalar fallbacks, vector tails and EVL separately. No production C++ changes, recognition extensions, profitability model, corpus edits or extra FP assumptions are introduced in this repair.",
-  "semantics": "The consumer certificate now checks complete typed PHIs against actual predecessor sets, zero scalar entry or vector-rounded resume, the unit next ordinal, next-versus-chunk-count inequality, true backedge and false exit, the producer-independent scratch GEPs/loads, both integer operand orders and ordered FP update, nonidentity chunk seeds, backedge carries and final observable result forwarding. It runs for every emitted scalar consumer regardless of requested scalar/EVL policy, including C=1; vector tails instead certify zero/n.vec resume edges and resumed reductions. Vector control certifies the local count guard, local urem/sub rounding, zero index and exact VF increments/exit; EVL instead certifies local AVL, selected length, VP masks/lengths, merged integer accumulators and no scalar tail. A bounded typed PHI walk follows only real single-predecessor middle/LCSSA bridges before final chunk and original exit results. Existing operation/branch/state/export/provenance checks and the failing total-N mutation remain. The integration certificate now accepts an explicit capacity and checks the cross-edge chunk schedule without skipping original non-latch branches. Exact original IR, independent C formulas, all observable bytes/canaries and per-configuration counters remain the executable oracles. The unchanged branch-only DAG proof removes the latch backedge/exit, admits no other external successors and processes all loop blocks from the header: the latch is the only sink and every entered iteration reaches it exactly once. For an unconditional recurrence, valid original SSA makes the contribution dominate its update. Existing recognition places that update in the latch or in an admitted diamond header; the header dominates the latch. Thus the contribution dominates the new latch scratch store. Exact use-edge closure excludes feedback from every moved accumulator or result into producer conditions, retained state, contributions or memory addresses. Every original producer branch, merge, guarded load/division/helper and original-memory operation stays in its original block/order. Chunking still requires a zero-start unit-step canonical IV with next-IV equality control in the admitted operand order, equality taking the exiting edge, and a finite representable count proof. Other affine/relational/reversed-equality controls retain full-trip-only admission. For an entered chunk, 0<=base<N and K=min(N-base,C)>0. The local ordinal resets to zero on every producer entry; exactly one latch visit increments it per original global iteration. Inductively i=0..K-1, so every scratch index is below K<=C; exit occurs at exactly K completed iterations. The unconditional consumer starts at slot zero and consumes exactly K initialized contributions in original iteration order, seeded by incoming chunk accumulators. Only then does base advance by K, without wrapping, before scratch reuse. Original nonidentity seeds and FP operand order/flags are preserved. Producer-state backedges are snapshotted before mutation and simultaneously forwarded through the dedicated producer exit; current, next, contribution and IV live-outs retain separate forwarding PHIs. All producer blocks remain mapped to the original inner loop and are added to the new chunk parent; existing ancestor membership, dedicated exits, topmost SE invalidation, DT rebuild and recursive LCSSA checks are unchanged. Exact original loop starts stay on stage preheaders and IDs through repeated LV. Strict ordinary FP and explicitly enabled fission FP reordering remain separate test rows; strictfp/constrained intrinsics and unsafe calls remain rejected. No fast-math, errno or additional numerical assumptions are added. The harness must execute actual transformed scalar/vector-tail modules against exact original IR plus an independent C traversal. New probes check actual branch edges and mixed-size scratch addresses/values per iteration, simultaneous incoming/final state, exact counts and actual vector/tail visits across boundaries.",
-  "costs": "This revision adds validation code only; production scheduling, storage, operations, guards and analyses are unchanged from t000068. The fixture certificate builds small definition/predecessor maps and permits at most two scalar exit bridges and four PHI-forwarding steps; it is not a compiler equivalence engine or production analysis. The integration extension adds C=64/B=256 runs with one i32 store and load (4+4 logical bytes) per completed iteration; inherited full-trip C=65/B=260 runs remain. No generated input rereads, producer duplication or alias/versioning guards are added. Existing per-chunk min/select and producer/consumer/continuation branches remain. Production change: one admission-conjunct removal plus proof comments; no new analysis, CFG machinery, guards, memory accesses, streams or state arrays. Reuse the existing checked padded-capacity search (at most 64 steps over unique streams), entry allocations, min/remainder controller, local ordinal, scalar producer and ordinary-LV consumer. Storage is bounded independently of total runtime trips. New shared i32 plus double examples reserve alignTo(4*C,8)+8*C bytes: C=1/8/9/16/65 uses 16/96/112/192/784 bytes. Ceiling15 rejects a complete slot; ceiling111 fits C=8/B=96, ceiling112 fits C=9/B=112. The i32 stream feeds two sums with a single store/load stream. Logical traffic per completed original iteration is 12 bytes stored plus 12 loaded (24 bytes total), with no original input rereads, duplicated producer instructions or contribution recomputation. Three retained state carries and three reduction carries are reused. Original branch guards remain; canonical scheduling adds its existing per-chunk remaining<count select, producer latch/consumer latch and chunk continuation tests. No alias/versioning guards or compact empty-stream test is added for unconditional reductions. Code/analysis complexity remains the existing linear acyclic/effect/use/export analyses, LoopInfo membership over producer blocks and bounded capacity search. Validation adds four small original IR functions, extends the existing state certificate with original-block/latch awareness, adds two fixture-local branch/store probe hooks and one extra matrix. Validation-only input rereads/reference computations/probes are not compiler-generated traffic. Register pressure, stack-frame placement, spills, RVV execution, measured traffic and speedup are unmeasured.",
+  "hypothesis": "Repair the two mandatory t000070 test-driver failures so the existing unconditional multiblock chunk validation can finish. Match the actual chunk-remaining subtraction with optional nuw, preserving its emitted flags while corrupting only its base operand. Keep the subprocess result separate from extracted reduction-result operands across every function and policy. The general transformation remains bounded splitting of recognized canonical, finite-count unconditional reductions over acyclic scalar producers; this revision changes only two regression drivers and this report, with no production legality expansion, profitability model, benchmark edits, d2 import or extra FP assumptions.",
+  "semantics": "This revision changes test-driver construction and variable ownership only. The acyclic driver selects exactly one complete actual chunk-remaining subtraction in the chunk header, accepting only the existing optional nuw spelling; it copies that spelling and substitutes only the base operand with zero. It asserts one anchor, old!=new and a changed module outside the expected-rejection handler, then requires the unchanged semantic certificate to reject the corruption. No flag is added or removed by the mutation. The consumer driver keeps opt_result.stdout/stderr in the subprocess object and uses separate r0_result/r1_result strings for PHI operands, allowing every subsequent function and policy to retain the original diagnostics. All scalar, capacity-one fallback, tail and EVL mutations remain, including global-N termination, initial ordinal, unit increment, predicate, destinations, carries and observable exports. No certificate predicate is weakened. The inherited consumer certificate checks complete typed PHIs against actual predecessor sets, zero scalar entry or vector-rounded resume, the unit next ordinal, next-versus-chunk-count inequality, true backedge and false exit, the producer-independent scratch GEPs/loads, both integer operand orders and ordered FP update, nonidentity chunk seeds, backedge carries and final observable result forwarding. It runs for every emitted scalar consumer regardless of requested scalar/EVL policy, including C=1; vector tails instead certify zero/n.vec resume edges and resumed reductions. Vector control certifies the local count guard, local urem/sub rounding, zero index and exact VF increments/exit; EVL instead certifies local AVL, selected length, VP masks/lengths, merged integer accumulators and no scalar tail. A bounded typed PHI walk follows only real single-predecessor middle/LCSSA bridges before final chunk and original exit results. Existing operation/branch/state/export/provenance checks and the failing total-N mutation remain. The integration certificate now accepts an explicit capacity and checks the cross-edge chunk schedule without skipping original non-latch branches. Exact original IR, independent C formulas, all observable bytes/canaries and per-configuration counters remain the executable oracles. The unchanged branch-only DAG proof removes the latch backedge/exit, admits no other external successors and processes all loop blocks from the header: the latch is the only sink and every entered iteration reaches it exactly once. For an unconditional recurrence, valid original SSA makes the contribution dominate its update. Existing recognition places that update in the latch or in an admitted diamond header; the header dominates the latch. Thus the contribution dominates the new latch scratch store. Exact use-edge closure excludes feedback from every moved accumulator or result into producer conditions, retained state, contributions or memory addresses. Every original producer branch, merge, guarded load/division/helper and original-memory operation stays in its original block/order. Chunking still requires a zero-start unit-step canonical IV with next-IV equality control in the admitted operand order, equality taking the exiting edge, and a finite representable count proof. Other affine/relational/reversed-equality controls retain full-trip-only admission. For an entered chunk, 0<=base<N and K=min(N-base,C)>0. The local ordinal resets to zero on every producer entry; exactly one latch visit increments it per original global iteration. Inductively i=0..K-1, so every scratch index is below K<=C; exit occurs at exactly K completed iterations. The unconditional consumer starts at slot zero and consumes exactly K initialized contributions in original iteration order, seeded by incoming chunk accumulators. Only then does base advance by K, without wrapping, before scratch reuse. Original nonidentity seeds and FP operand order/flags are preserved. Producer-state backedges are snapshotted before mutation and simultaneously forwarded through the dedicated producer exit; current, next, contribution and IV live-outs retain separate forwarding PHIs. All producer blocks remain mapped to the original inner loop and are added to the new chunk parent; existing ancestor membership, dedicated exits, topmost SE invalidation, DT rebuild and recursive LCSSA checks are unchanged. Exact original loop starts stay on stage preheaders and IDs through repeated LV. Strict ordinary FP and explicitly enabled fission FP reordering remain separate test rows; strictfp/constrained intrinsics and unsafe calls remain rejected. No fast-math, errno or additional numerical assumptions are added. The harness must execute actual transformed scalar/vector-tail modules against exact original IR plus an independent C traversal. New probes check actual branch edges and mixed-size scratch addresses/values per iteration, simultaneous incoming/final state, exact counts and actual vector/tail visits across boundaries.",
+  "costs": "No production scheduling, scratch, traffic, rereads, duplication, guards or analysis changes in t000071. The driver adds one bounded scan of the existing chunk-header instructions and one explicit nonidentity check; separate subprocess/SSA names add no analysis machinery. Inherited mixed i32/double streams reserve alignTo(4*C,8)+8*C bytes: C=1/8/9/16/65 uses 16/96/112/192/784 bytes, bounded independently of N. Ceiling15 rejects one slot; ceiling111 selects C=8/B=96; ceiling112 selects C=9/B=112. One shared i32 contribution serves two reductions with one store/load stream. Logical per-completed-iteration traffic is 12 bytes stored plus 12 loaded, with no original-input rereads, duplicated producer instructions or contribution recomputation. Integration cross-edge/chunk C=64 uses256 bytes and4+4 logical bytes per completed iteration; inherited C=65/B=260 cases remain. Three state carries and three reduction carries reuse existing forwarding. Original branch/load/division guards and the existing per-chunk remaining/min/select, producer latch, consumer latch and chunk-continuation branches remain. No alias/versioning guard, unbounded allocation or new production analysis is added. The inherited production change in t000068 removed one admission conjunct and retained the bounded capacity search, DAG/effect/use/export proofs, LoopInfo membership, DT/SE/LCSSA maintenance. Existing fixture certificates and probes add validation-only maps, bounded forwarding walks and reference computations, which are not generated-program traffic. Register pressure, physical stack allocation/traffic, spills, RVV execution and speedup remain unmeasured.",
   "tests": [
     "llvm/test/Other/reduction-fission-acyclic-chunk-checker.test",
     "llvm/test/Other/reduction-fission-chunk-checker.test",
@@ -99,10 +99,9 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stage-metadata.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
   ],
-  "limitations": "No compiler, build, test runner, module verifier, host/RVV code generation, numerical execution or try.sh was invoked by this worker. AST parsing, source/immutable-output inspection and diff/whitespace checks only. All revised certificates, new mutation tests and numerical rows await independent harness execution. The previous t000068 build succeeded but two of 90 mandatory lit tests failed; later unit/execution/corpus checks were not established for that revision. The certificate intentionally recognizes this small fixture vocabulary and the observed LV1/LV2 scalar/tail/EVL layouts; future legal layout changes may require a new certificate case. Host fixed-vscale comparisons are not RVV execution; uninstrumented RVV machine verification/code generation is not measured speedup. No new numerical contract, FP/errno assumption, supported recurrence/CFG/control/effect shape or profitability policy is added. The production legality extension remains the inherited one-conjunct removal. d2 integration is assigned independently to t000069. Fresh primary outcomes, register pressure, physical traffic, spills and speedup remain unmeasured.",
+  "limitations": "No compiler, build, test runner, module verifier, host/RVV code generation, numerical execution or try.sh was invoked by this worker. Only source/immutable-output inspection, JSON/Python syntax parsing and diff/whitespace review are authorized here. Fresh t000071 validation remains pending. Immutable t000070 logs show compile exit0 and89/91 mandatory lit passes with two driver failures; they do not establish VectorizeTests, executable comparisons or primary outcomes for that revision. The repaired drivers and complete inherited numerical matrices need independent harness execution. The certificates cover their small fixture vocabulary and observed LV1/LV2 scalar/fallback/tail/EVL layouts; future legal layouts may require explicit additional cases. Host fixed-vscale comparisons are not RVV target execution; machine verification/code generation is not a speedup measurement. No new numerical contract, FP/errno assumption, supported recurrence/CFG/control/effect shape or profitability policy is introduced. Accepted t000064 remains the historical primary comparison baseline; new primary outcomes and measured performance remain unavailable.",
   "legality_audit": {
     "scheduler_repairs_required": false,
-    "changed_production_condition": "if (!CanonicalCount || !ScratchSize(1))",
     "unchanged_contracts": [
       "CFG/recurrence recognition",
       "closed accumulator uses",
@@ -116,7 +115,9 @@
       "LoopInfo/LCSSA/DT/SE maintenance",
       "source attribution/stage provenance"
     ],
-    "proofs_in_source": "llvm/lib/Transforms/Vectorize/ScalarReductionFission.cpp:643 and :849"
+    "proofs_in_source": "llvm/lib/Transforms/Vectorize/ScalarReductionFission.cpp:643 and :849",
+    "inherited_production_condition": "if (!CanonicalCount || !ScratchSize(1))",
+    "production_files_modified_by_this_revision": []
   },
   "changed_expectations": [
     {
@@ -142,6 +143,10 @@
     {
       "test": "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration.ll",
       "change": "integration_cross_edge at ceiling259 intentionally selects capacity64 and 256 scratch bytes after t000068; assert the local controller, canonical IV, original left-to-right cross edge and merge/helper, latch scratch store and producer branch. integration_affine still rejects at259; ceiling3 still rejects all three because even one i32 slot needs4 bytes. Existing ceiling260 full-trip certificates remain."
+    },
+    {
+      "test": "llvm/test/Other/reduction-fission-acyclic-chunk-checker.test",
+      "change": "The mutation anchor accepts actual sub or sub nuw from emitted IR and preserves whichever is present. Only the base operand changes. Unique-anchor, nonidentity and certificate-rejection checks remain mandatory; semantic expectations do not change."
     }
   ],
   "new_execution_obligations": {
@@ -324,7 +329,8 @@
     "diffs_read": [
       "diffs/t000059.patch (state carries)",
       "diffs/t000064.patch (source preservation and prior expectation repairs)",
-      "diffs/t000068.patch (narrow unconditional multiblock admission and validation additions)"
+      "diffs/t000068.patch (narrow unconditional multiblock admission and validation additions)",
+      "diffs/t000070.patch (consumer certificate, mutation driver and integration capacity repair)"
     ],
     "accepted_task": "t000064",
     "accepted_revision": "2e05c873e082bcdfbdfd8f00f7f5cfaf9b3c903e",
@@ -502,10 +508,10 @@
     ],
     "exact_original_target_scalar_scratch_limit_rejected": 0,
     "rejected_and_no_decision_details": "All234 immutable rows/target_records remain in evaluations/t000064/primary/result.json; other_records must remain separate. Source-located ordinary admission=scratch-limit analysis is not a Rejected decision.",
-    "candidate_results": "unavailable; harness must compare all234 exact target records and stage/storage details, including reason-only changes."
+    "candidate_results": "t000070 compilation passed but mandatory lit failed89/91; no accepted primary evaluation. Fresh t000071 evidence must compare all234 exact target records to accepted t000064 and keep helper/nested activity separate."
   },
   "validation_requested": {
-    "task_id": "t000070",
+    "task_id": "t000071",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
@@ -619,10 +625,8 @@
         "llvm/test/Other/Inputs/reduction-fission-compact-exits.ll",
         "llvm/test/Other/Inputs/reduction-fission-host-adapter.py"
       ],
-      "inherited_runnable_files": 90,
-      "additional_runnable_files": [
-        "llvm/test/Other/reduction-fission-state-consumer-checker.test"
-      ],
+      "inherited_runnable_files": 91,
+      "additional_runnable_files": [],
       "supporting_inputs": [
         {
           "path": "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
@@ -649,8 +653,12 @@
           "modified_by_this_revision": false
         }
       ],
-      "registration_audit": "90 inherited mandatory runnable fission files plus one new consumer-certificate mutation test, 91 explicit runnable files. Preserve every inherited RUN line/check and every inherited executable family. Supporting Inputs remain separate with unchanged owners; no dummy RUN lines.",
-      "preserve_all_inherited": true
+      "registration_audit": "All91 inherited mandatory runnable fission files and every RUN line/check/mutation remain required, including both repaired drivers; include any added runnable tests. This revision adds no new standalone lit file. Unchanged supporting Inputs retain their real owners.",
+      "preserve_all_inherited": true,
+      "changed_runnable_files": [
+        "llvm/test/Other/reduction-fission-acyclic-chunk-checker.test",
+        "llvm/test/Other/reduction-fission-state-consumer-checker.test"
+      ]
     },
     "mandatory_unit_suite": {
       "required": true,
@@ -708,7 +716,7 @@
         "all inherited compact-chunk reset/count/empty-carry/state/export mutation checks",
         "all 304 planned compact-chunk configurations and 4856832 planned exact original/transformed/oracle comparisons",
         "reject every lost stage location, including a later bad visit after a correct first visit",
-        "All 90 inherited mandatory runnable files plus additions; all inherited integration C=65 configurations plus the additional C=64 family; certify every scalar fallback even under requested vector/EVL policy.",
+        "All 91 inherited mandatory runnable files plus additions; all inherited integration C=65 configurations plus the additional C=64 family; certify every scalar fallback even under requested vector/EVL policy.",
         "Verify mixed-stream B=alignTo(4*C,8)+8*C and logical store/load12+12 bytes per completed iteration against actual allocations, bound scratch addresses/loads/updates and source-located remarks; no input rereads or producer duplication."
       ],
       "generation_is_not_execution": true,
@@ -1288,6 +1296,35 @@
         "completion_requirement": "Exact independently computed per-configuration comparisons/vector/tail/bypass/multi/full/partial counters; reject missing or duplicate rows. C requires observed vector execution when widths/counts permit and explicit scalar boundaries.",
         "verification": "Verify every instrumented scalable and renamed fixed integration module; machine-verify every uninstrumented scalar-tail/EVL module. Preserve original IR references, independent C formulas and input/output/alias/canary comparisons.",
         "executed_by_worker": false
+      },
+      "mutation_driver_repair": {
+        "regressions": [
+          "llvm/test/Other/reduction-fission-acyclic-chunk-checker.test",
+          "llvm/test/Other/reduction-fission-state-consumer-checker.test"
+        ],
+        "chunk_remaining_anchor": "Exactly one full actual subtraction in scalar.fission.chunk with optional nuw; preserve its emitted flags and mutate only the base operand; assert nonidentity outside the rejection handler and require certificate rejection.",
+        "subprocess_lifetime": "opt_result owns stdout/stderr through all function and policy iterations; r0_result/r1_result contain only extracted SSA operands.",
+        "retain_mutations": [
+          "wrong scalar initial ordinal",
+          "wrong PHI entry/backedge",
+          "nonunit increment",
+          "global-N bound (retained failure)",
+          "current-versus-next termination operand",
+          "wrong predicate",
+          "reversed branch destinations",
+          "wrong exit destination",
+          "scratch global-IV indexing",
+          "wrong reduction seed/carry/edge",
+          "wrong result bridge/final output edge/store",
+          "tail zero/n.vec resume",
+          "global-N vector guard/rounded-count exit",
+          "global-N EVL AVL",
+          "wrong EVL decrement/branch"
+        ],
+        "retain_fixtures": "Positive and analogous diamond/serial/nested/header fixtures; inherited retained-state cases; guarded operations; zero/one/full/partial chunks, C=1 and non-power-of-two capacities; padded-byte boundaries and original-program rejections.",
+        "retain_integration": "C=64/B=256 cross-edge allocation and original control checks at ceiling259; affine rejection; ceiling3 rejection; inherited C=65/B=260 comparisons.",
+        "completion": "Run both repaired drivers fully, all policies/functions, and every inherited/new executable family against exact original IR plus independent references; report actual stage entries and completed stdout counts separately from generated artifacts.",
+        "worker_executed": false
       }
     },
     "rvv_machine_verification": {
@@ -1337,7 +1374,7 @@
       "compare_to_revision": "2e05c873e082bcdfbdfd8f00f7f5cfaf9b3c903e",
       "compare_to_result": "evaluations/t000064/primary/result.json"
     },
-    "acceptance": "Harness only: fresh LLVM build and fresh executable C harness compilation/link; all inherited and new runnable fission lit tests (91 explicit files: all90 inherited plus the new consumer mutation test), VectorizeTests and the complete inherited checker matrices plus the new unconditional-acyclic chunk family. Require completed per-configuration stdout and original/transformed/independent-reference comparisons, actual vector entries when widths/counts permit, explicit scalar boundaries and unchanged inherited corruption rejection tests. Verify instrumented scalable and new renamed fixed host modules, and machine-verify uninstrumented RVV scalar/tail/EVL output for both FP policies and LV1/LV2. Run tools/try.sh through the harness on all 117 immutable originals under strict/reordered policies: 234 fresh primary compilations. Preserve exact original target source-located Selected/Rejected, independently observed stage VFs, padded scratch capacity/bytes, store/load traffic, rereads, duplication and guards. Compare to immutable accepted t000064. Crashes, miscompiles and mandatory failures block acceptance; preserve current accepted heads until validation. No worker builds/tests, benchmark rewrites, d2 import, target execution or speedup claims. Require both t000068 concrete failures repaired, the shared scalar/fallback/tail/EVL certificate mutations, all C=64 integration comparisons/counters and actual verification of state and integration renamed fixed host instrumented modules. Requested evidence is not observed evidence."
+    "acceptance": "Harness only: fresh LLVM build and fresh C harness compilation/link; all91 inherited mandatory runnable fission tests plus any additions, complete unfiltered VectorizeTests and every inherited/new executable family. Complete both repaired drivers through all functions/policies and all unchanged mutations. Require exact original IR/actual transformed IR/independent-reference full-state comparisons and completed per-configuration stdout counters, actual vector-consumer entries when widths/counts permit, scalar fallbacks and zero/one/full/partial boundary coverage. Verify instrumented scalable and renamed fixed host modules; machine-verify uninstrumented RVV scalar/tail/EVL outputs under strict and explicitly enabled fission FP-reordered policies and LV1/LV2. Preserve C=64/B=256 cross-edge checks/comparisons, affine and ceiling3 rejection, guarded operations and state/export checks. Run all117 immutable originals under both primary policies for234 fresh compilations. Preserve exact original-target Selected/Rejected source locations, independent producer/consumer VFs, bounded padded scratch capacity/bytes, logical stores/loads, rereads, duplication and guards. Compare primary target_records to accepted t000064 separately from helper/nested other_records; ordinary analysis remarks are not Selected/Rejected. Crashes, incorrect transformations and mandatory failures block acceptance. Requested validation is distinct from observed immutable results. No worker builds/tests, benchmark rewrites, d2 import, additional FP assumptions, target execution or speedup claims."
   },
   "supporting_inputs": [
     {
@@ -1366,7 +1403,7 @@
     }
   ],
   "current_validation_status": {
-    "task_id": "t000070",
+    "task_id": "t000071",
     "worker_executed_builds": 0,
     "worker_executed_tests": 0,
     "executed_numerical_comparisons": 0,
@@ -1375,53 +1412,89 @@
     "VectorizeTests_completed": 0,
     "primary_corpus_compilations": 0,
     "static_audits": [
-      "Read task/revise decision, immutable t000068 diff/progress/lit failures, historical t000059/t000064 source changes and relevant emitted scalar/tail/EVL modules.",
-      "Read BENCHMARKS_ANALYSIS.md and accepted t000064 primary/result.json; historical exact-target evidence retained, no new corpus result claimed.",
-      "Audited consumer PHIs/control/scratch/results, inherited integration capacity assumptions, execution matrix/counters, fixture registration and unchanged production legality.",
-      "Python AST parsing and diff/whitespace review only; no checker imported/executed."
+      "Read t000070 revise decision, immutable diff/progress/lit failures, BENCHMARKS_ANALYSIS.md, accepted t000064 primary summary/progress and relevant production/certificate/fixture sources.",
+      "Inspected24 immutable t000064 C=1/9, LV1/LV2, strict/reordered scalar/tail/EVL modules (96 state function definitions) by text only. Scalar ordinals start at0, tails resume n.vec, EVL uses local AVL; scalar/tail result bridges and EVL direct SSA results require distinct operands. No checker imported or executed.",
+      "Compared actual unflagged cfg-tail subtraction in immutable t000070 failure output with inherited flagged state output. Audited remaining producer-state/export/control/scratch anchors against original fixtures and frozen emitted layouts; no semantic predicate, control mutation or rejection removed.",
+      "Preserved the passing t000070 capacity64/256-byte cross-edge expectation, affine/ceiling3 rejections, all execution/counter families and accepted t000064 exact-target comparison contract.",
+      "JSON/Python syntax and diff/whitespace review only; no tests, compilation, module generation, IR verification or execution."
     ],
-    "status": "Ready for harness-only fresh compilation, all91 mandatory runnable tests, complete VectorizeTests/executable families and234 primary compilations; acceptance pending."
+    "status": "Implementation ready for harness-only fresh build, all91 mandatory runnable tests plus additions, complete VectorizeTests/executable families and234 immutable primary compilations; acceptance pending."
   },
   "future_work": [
-    "Harness validation must establish all mandatory results before accepting/maturing this direction; preserve accepted heads if any crash, miscompile or mandatory failure occurs.",
-    "Keep affine chunk control, broader recurrence/call effects, participation generalization, profitability and supplementary FP/errno changes outside this repair.",
-    "d2 integration remains independently assigned to t000069; do not import it here."
+    "Independent harness validation must establish every mandatory result before accepting or maturing this direction; preserve accepted heads on crashes, miscompiles or mandatory failures.",
+    "Keep broader affine chunk control, recurrence/call effects, participation generalization, profitability, FP/errno assumptions and d2 integration outside this repair.",
+    "If a genuinely new legal LV layout appears, add an explicit bounded certificate case and analogous corruption tests while preserving all existing semantic checks."
   ],
   "repair_evidence": {
-    "task": "t000068",
-    "revision": "974f1a1251be1530681a41beef8600c593baf193",
+    "task": "t000070",
+    "revision": "93e07c45af5caa1cd339a8b6865fa9e400b7cea9",
     "decision": "revise",
-    "progress": "builds/t000068/progress.json",
-    "mandatory_failure_log": "builds/t000068/lit.log",
+    "progress": "builds/t000070/progress.json",
+    "mandatory_failure_log": "builds/t000070/lit.log",
     "compile_exit_code": 0,
-    "mandatory_runnable_tests": 90,
-    "passed": 88,
+    "mandatory_runnable_tests": 91,
+    "passed": 89,
     "failed": 2,
     "failures": [
       {
-        "test": "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration.ll",
-        "finding": "BELOW-NOT contradicted the intended C=64/B=256 cross-edge chunk allocation at259."
+        "test": "llvm/test/Other/reduction-fission-acyclic-chunk-checker.test",
+        "finding": "Mutation construction hardcoded sub nuw while the actual tail module emitted sub. Failure was the unique-anchor assertion before certificate rejection.",
+        "repair": "Match one actual subtraction with optional nuw, preserve flags and change only base; assert old!=new and changed candidate outside rejection handler."
       },
       {
-        "test": "llvm/test/Other/reduction-fission-acyclic-chunk-checker.test",
-        "finding": "Accepted mutation of consumer termination bound from local chunk count to global N; induction/termination were absent from scalar certificate."
+        "test": "llvm/test/Other/reduction-fission-state-consumer-checker.test",
+        "finding": "An extracted PHI operand string overwrote result; the next function accessed result.stderr and raised AttributeError.",
+        "repair": "Separate opt_result subprocess object from r0_result/r1_result SSA operands; retain every per-function and per-policy mutation."
       }
     ],
+    "later_validation": "VectorizeTests, executable comparisons, instrumented/RVV verification and primary corpus outcomes were not established for t000070.",
     "frozen_outputs_read": [
-      "immutable t000068 lit scalar/tail/EVL modules for unconditional CFG chunks",
-      "builds/t000064/execution/state_chunks_c1_lv2_strict_tail.rvv.ll",
-      "builds/t000064/execution/state_chunks_c1_lv2_strict_evl.rvv.ll",
-      "builds/t000064/execution/state_chunks_c1_lv2_strict_scalar.rvv.ll",
-      "builds/t000064/execution/state_chunks_c9_lv1_strict_tail.rvv.ll",
-      "builds/t000064/execution/state_chunks_c9_lv1_strict_evl.rvv.ll",
-      "builds/t000064/execution/integration-lv1-strict-tail.rvv.ll"
+      "builds/t000070/lit.log (actual unflagged cfg-tail subtraction and both tracebacks)",
+      "builds/t000064/execution/state_chunks_c{1,9}_lv{1,2}_{strict,reordered}_{scalar,tail,evl}.rvv.ll (24 immutable modules,96 function definitions)"
     ],
-    "audit_findings": [
-      "The old integration checker assumed only integration_chunk could be chunked and hardcoded65 slots. Its chunked branch skipped all original branches, which is insufficient for cross-edge chunk validation.",
-      "The inherited C integration table used Mode==2 and hardcoded65 for schedule accounting. Capacity is now explicit; zero denotes full-trip and positive64/65 denotes chunked. Mode continues to select the independent original semantics and entry bound.",
-      "Immutable C=1 tail-policy output still contains a vector body and guarded scalar fallback; its host vscale widths cannot fit capacity, so runtime vector visits must be zero. Presence of vector IR alone is not an execution claim.",
-      "The same real scalar C=1 modules are re-certified with scalar=False and EVL policy bits to ensure requested policy cannot bypass scalar checks. These classifier checks do not claim transformed EVL execution.",
-      "No inherited numerical rows, corruption tests, source-location checks, guarded operations or original reference origins are removed."
-    ]
+    "anchor_audit": [
+      "Complete chunk-header subtraction selection retains optional nuw; metadata normalization does not normalize semantic flags or operands.",
+      "Scalar entry zero and tail entry bc.resume.val require separate ordinal mutations; both use next versus local chunk count and exact branch destinations.",
+      "Repeated LV may insert u0.consume.lcssa bridges; retained mutation substitutes the u0.consume SSA stem so both direct and bridge spellings are corrupted.",
+      "EVL exports direct numeric SSA reductions while scalar/tail exports use chunk-result PHIs; retain actual extracted r0/r1 operands rather than hardcoding names.",
+      "Producer retained-state/current-next exports, guarded sdiv/load/branch operations and the original-source rejection mutations remain unchanged."
+    ],
+    "inherited_t000068_findings": {
+      "task": "t000068",
+      "revision": "974f1a1251be1530681a41beef8600c593baf193",
+      "decision": "revise",
+      "progress": "builds/t000068/progress.json",
+      "mandatory_failure_log": "builds/t000068/lit.log",
+      "compile_exit_code": 0,
+      "mandatory_runnable_tests": 90,
+      "passed": 88,
+      "failed": 2,
+      "failures": [
+        {
+          "test": "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration.ll",
+          "finding": "BELOW-NOT contradicted the intended C=64/B=256 cross-edge chunk allocation at259."
+        },
+        {
+          "test": "llvm/test/Other/reduction-fission-acyclic-chunk-checker.test",
+          "finding": "Accepted mutation of consumer termination bound from local chunk count to global N; induction/termination were absent from scalar certificate."
+        }
+      ],
+      "frozen_outputs_read": [
+        "immutable t000068 lit scalar/tail/EVL modules for unconditional CFG chunks",
+        "builds/t000064/execution/state_chunks_c1_lv2_strict_tail.rvv.ll",
+        "builds/t000064/execution/state_chunks_c1_lv2_strict_evl.rvv.ll",
+        "builds/t000064/execution/state_chunks_c1_lv2_strict_scalar.rvv.ll",
+        "builds/t000064/execution/state_chunks_c9_lv1_strict_tail.rvv.ll",
+        "builds/t000064/execution/state_chunks_c9_lv1_strict_evl.rvv.ll",
+        "builds/t000064/execution/integration-lv1-strict-tail.rvv.ll"
+      ],
+      "audit_findings": [
+        "The old integration checker assumed only integration_chunk could be chunked and hardcoded65 slots. Its chunked branch skipped all original branches, which is insufficient for cross-edge chunk validation.",
+        "The inherited C integration table used Mode==2 and hardcoded65 for schedule accounting. Capacity is now explicit; zero denotes full-trip and positive64/65 denotes chunked. Mode continues to select the independent original semantics and entry bound.",
+        "Immutable C=1 tail-policy output still contains a vector body and guarded scalar fallback; its host vscale widths cannot fit capacity, so runtime vector visits must be zero. Presence of vector IR alone is not an execution claim.",
+        "The same real scalar C=1 modules are re-certified with scalar=False and EVL policy bits to ensure requested policy cannot bypass scalar checks. These classifier checks do not claim transformed EVL execution.",
+        "No inherited numerical rows, corruption tests, source-location checks, guarded operations or original reference origins are removed."
+      ]
+    }
   }
 }

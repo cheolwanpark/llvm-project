@@ -54,18 +54,18 @@ for fixture, functions in [('state', checker.STATE_CHUNK_FUNCTIONS),
             flags += ['-vplan-reduction-fission-allow-fp-reordering']
         if kind == 'tail':
             flags += ['-tail-folding-policy=dont-fold-tail', '-enable-epilogue-vectorization=false']
-        result = checker.run([opt, *flags], input=source)
-        ir = result.stdout
+        opt_result = checker.run([opt, *flags], input=source)
+        ir = opt_result.stdout
         tag = f'{fixture}-c{capacity}-lv{repeats}-fp{int(reordered)}-{kind}'
         (work / (tag + '.ll')).write_text(ir)
-        (work / (tag + '.remarks')).write_text(result.stderr)
+        (work / (tag + '.remarks')).write_text(opt_result.stderr)
         for name in functions:
             body = checker.function_definition(ir, name)
             blocks = {label: checker.chunk_instructions(code)
                       for label, code in checker.loop_blocks(body).items()}
             vector = 'vector.body' in blocks
             checker.check_state_chunk(ir, source, name, capacity, scalar=scalar, evl=evl)
-            checker.check_state_chunk_remarks(result.stderr, name, capacity,
+            checker.check_state_chunk_remarks(opt_result.stderr, name, capacity,
                                               16 if capacity == 1 else 112, vector)
             policies = [(scalar, evl)]
             if scalar and capacity == 1:
@@ -88,10 +88,10 @@ for fixture, functions in [('state', checker.STATE_CHUNK_FUNCTIONS),
                 exit = 'row.exit' if name == 'chunk_state_nested' else 'producer.exit'
                 output = next(line for line in blocks[exit] if line.startswith('%out.r0 = '))
                 other = next(line for line in blocks[exit] if line.startswith('%out.r1 = '))
-                result = re.fullmatch(r'%out.r0 = phi i32 \[ ([^,]+), %scalar.fission.chunk.latch \]', output)[1]
-                other_result = re.fullmatch(r'%out.r1 = phi i32 \[ ([^,]+), %scalar.fission.chunk.latch \]', other)[1]
-                bad(output, output.replace(result, other_result))
-                bad(carry, carry.replace(result, other_result))
+                r0_result = re.fullmatch(r'%out.r0 = phi i32 \[ ([^,]+), %scalar.fission.chunk.latch \]', output)[1]
+                r1_result = re.fullmatch(r'%out.r1 = phi i32 \[ ([^,]+), %scalar.fission.chunk.latch \]', other)[1]
+                bad(output, output.replace(r0_result, r1_result))
+                bad(carry, carry.replace(r0_result, r1_result))
                 bad(output, output.replace('%scalar.fission.chunk.latch', '%scalar.fission.consumer.ph'))
                 bad('store i32 %out.r0, ptr %o0, align 4',
                     'store i32 %out.r1, ptr %o0, align 4')
