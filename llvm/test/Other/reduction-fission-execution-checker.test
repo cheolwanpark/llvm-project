@@ -88,12 +88,23 @@ forwarded = merged + '.lcssa'
 forwarding_phi = '  ' + forwarded + ' = phi i64 [ ' + merged + ', %latch ]\n'
 
 
+def ssa_token(value):
+    assert re.fullmatch(r'%[-\w.$]+', value), value
+    return re.escape(value) + r'(?![-\w.$])'
+
+
 def change_line(body, value, old, new):
-    lines = [line for line in body.splitlines() if line.startswith('  ' + value + ' = ')]
-    assert len(lines) == 1, (value, body)
-    definition, expression = lines[0].split(' = ', 1)
+    matches = list(re.finditer(r'^  ' + re.escape(value) + r' = ([^\n]*)$', body, re.M))
+    assert len(matches) == 1, (value, body)
+    match = matches[0]
+    expression = match[1]
     assert old in expression, (value, old, expression)
-    return body.replace(lines[0], definition + ' = ' + expression.replace(old, new), 1)
+    if re.fullmatch(r'%[-\w.$]+', old):
+        assert re.search(ssa_token(old), expression), (value, old, expression)
+        changed = re.sub(ssa_token(old), new, expression)
+    else:
+        changed = expression.replace(old, new)
+    return body[:match.start(1)] + changed + body[match.end(1):]
 
 
 def reject_compact(body, evl, reason):
@@ -325,6 +336,149 @@ def match_once(body, pattern):
 def replace_match_once(body, pattern, new):
     match = match_once(body, pattern)
     return body[:match.start()] + new + body[match.end():]
+
+
+def specialize_i64_argument(text, function, argument, value):
+    # Fixture syntax only: define void @unquoted_name, flat named ptr (with
+    # optional readonly), i64/double/float parameters, and unquoted body tokens.
+    # Parameters may span lines and the selected i64 may occupy any position.
+    # Use the existing definition extractor, then retain the signature/parameter
+    # spans. A typed operand such as "i64 %n, " is NOT unique to the signature.
+    assert argument in ('%n', '%rows'), argument
+    assert type(value) is int and 0 <= value < 2**64, value
+    definitions = [m for m in checker.FUNCTION_DEFINITION.finditer(text) if m['name'] == function]
+    assert len(definitions) == 1, ('function definition', function, len(definitions))
+    definition = definitions[0]
+    body = definition[0]
+    signature = match_once(body, r'^define void @' + re.escape(function) +
+                           r'\((?P<parameters>[^(){};]*)\)[^\n{]*\{')
+    parameters = signature['parameters']
+    fields = parameters.split(',') if parameters.strip() else []
+    names = []
+    for field in fields:
+        parameter = re.fullmatch(r'\s*(ptr(?: readonly)?|i64|double|float)\s+(%[-\w.$]+)\s*', field)
+        assert parameter, ('unsupported parameter', field)
+        names.append(parameter[2])
+    assert names.count(argument) == 1, ('formal parameter', function, argument, names.count(argument))
+    index = names.index(argument)
+    assert re.fullmatch(r'\s*i64\s+' + re.escape(argument) + r'\s*', fields[index]), fields[index]
+    start = sum(len(field) + 1 for field in fields[:index])
+    end = start + len(fields[index])
+    if index + 1 < len(fields):
+        end += 1  # Remove the following separator for a first/middle parameter.
+    elif index:
+        start -= 1  # The last parameter owns the preceding separator.
+    start += signature.start('parameters')
+    end += signature.start('parameters')
+    header = body[:start] + body[end:signature.end()]
+
+    # Substitute uses only inside this definition, after its signature. Keep
+    # guards/instructions and comments; never match a longer SSA identifier.
+    token = ssa_token(argument)
+    lines = []
+    for line in body[signature.end():].splitlines(keepends=True):
+        code, separator, comment = line.partition(';')
+        assert '"' not in code, ('unsupported quoted token', code)
+        assert not re.match(r'\s*' + token + r'\s*=', code), ('argument redefinition', code)
+        lines.append(re.sub(token, str(value), code) + separator + comment)
+    return text[:definition.start()] + header + ''.join(lines) + text[definition.end():]
+
+
+# Construction coverage only, independently comparing the complete expected
+# strings. Repeated typed operands in guards/shifts/calls must survive as typed
+# constants, and the other parameters, definitions and comments stay unchanged.
+for argument, other, maximum, values in (
+    ('%n', '%rows', 65, (0, 1, 65, 66, 2**64 - 1)),
+    ('%rows', '%n', 4, (0, 1, 4, 5, 2**64 - 1)),
+):
+    similar = ''.join('  ' + argument + suffix + ' = add i64 9, 1\n'
+                      for suffix in ('.more', 'more', '0', '_more', '$more', '-more'))
+    template = (f'\nentry: ; keep {argument} in comments\n' + similar +
+                f'  %valid = icmp ule i64 OPERAND, {maximum}\n'
+                '  %nonzero = icmp ne i64 OPERAND, 0\n'
+                '  %enter = and i1 %valid, %nonzero\n'
+                '  br i1 %enter, label %work, label %exit\n'
+                'work:\n'
+                '  %span = shl i64 OPERAND, 1\n'
+                '  %half = lshr i64 OPERAND, 1\n'
+                f'  call void @observe(i64 OPERAND, i64 OPERAND, i64 {argument}.more)\n'
+                '  br label %exit\nexit:\n  ret void\n}')
+    original_body = template.replace('OPERAND', argument)
+    before = (f'define void @specialization.before(i64 {argument}) {{\nentry:\n'
+              f'  call void @observe(i64 {argument}, i64 {argument}, i64 {argument})\n'
+              '  ret void\n}\n')
+    after = before.replace('@specialization.before(', '@specialization.after(')
+    for parameters, remaining in (
+        (f'i64 {argument}, i64 {other}, double %start', f' i64 {other}, double %start'),
+        (f'ptr readonly %a, i64 {argument}, i64 {other}', f'ptr readonly %a, i64 {other}'),
+        (f'i64 {argument}.arg, i64 {argument}, i64 {argument}0.arg',
+         f'i64 {argument}.arg, i64 {argument}0.arg'),
+        (f'ptr %a, i64 {other}, i64 {argument}', f'ptr %a, i64 {other}'),
+        (f'i64 {argument}', ''),
+        (f'\n  i64 {argument},\n  i64 {other},\n  double %start\n',
+         f'\n  i64 {other},\n  double %start\n'),
+        (f'\n  ptr readonly %a,\n  i64 {argument},\n  i64 {other}\n',
+         f'\n  ptr readonly %a,\n  i64 {other}\n'),
+        (f'\n  ptr %a,\n  i64 {other},\n  i64 {argument}\n', f'\n  ptr %a,\n  i64 {other}'),
+        (f'\n  i64 {argument}\n', ''),
+    ):
+        original = 'define void @specialization(' + parameters + ') #1 !dbg !39 {' + original_body
+        for value in values:
+            constructed = specialize_i64_argument(before + original + '\n' + after,
+                                                  'specialization', argument, value)
+            expected = (before + 'define void @specialization(' + remaining + ') #1 !dbg !39 {' +
+                        template.replace('OPERAND', str(value)) + '\n' + after)
+            assert constructed == expected, (argument, parameters, value, constructed, expected)
+            assert similar in constructed and constructed.startswith(before) and constructed.endswith(after)
+
+    # Body uses and similarly named parameters cannot stand in for a formal;
+    # duplicate exact formals fail even when separated or of different types.
+    for parameters, count in (('', 0), (f'i64 {other}', 0), (f'i64 {argument}.more', 0),
+                              (f'i64 {argument}, i64 {argument}', 2),
+                              (f'i64 {argument}, double %start, i64 {argument}', 2),
+                              (f'\n  i64 {argument},\n  i64 {argument}\n', 2),
+                              (f'ptr {argument}, i64 {argument}', 2)):
+        malformed = 'define void @specialization(' + parameters + ') {' + original_body
+        try:
+            specialize_i64_argument(malformed, 'specialization', argument, 0)
+        except AssertionError as error:
+            assert error.args == (('formal parameter', 'specialization', argument, count),), error
+        else:
+            raise AssertionError('accepted missing/duplicate formal: ' + parameters)
+
+    valid = 'define void @specialization(i64 ' + argument + ') {' + original_body
+    for malformed, count in ((before + after, 0), (valid + '\n' + valid, 2)):
+        try:
+            specialize_i64_argument(malformed, 'specialization', argument, 0)
+        except AssertionError as error:
+            assert error.args == (('function definition', 'specialization', count),), error
+        else:
+            raise AssertionError('accepted missing/duplicate definition')
+
+    for field in ('i32 ' + argument, 'i64 noundef ' + argument, '...'):
+        try:
+            specialize_i64_argument('define void @specialization(' + field + ') {' + original_body,
+                                    'specialization', argument, 0)
+        except AssertionError as error:
+            assert error.args == (('unsupported parameter', field),), error
+        else:
+            raise AssertionError('accepted unsupported parameter: ' + field)
+
+    comment = f'  ; copied:   %changed = add i64 {argument}, {argument}.more\n'
+    mutation = (comment + f'  %changed = add i64 {argument}, {argument}.more\n'
+                f'  %changed.more = add i64 {argument}, 1\n')
+    assert change_line(mutation, '%changed', argument, '0') == (
+        comment + f'  %changed = add i64 0, {argument}.more\n'
+        f'  %changed.more = add i64 {argument}, 1\n')
+    try:
+        change_line(f'  %changed = add i64 {argument}.more, 1\n', '%changed', argument, '0')
+    except AssertionError as error:
+        assert error.args[0][:2] == ('%changed', argument), error
+    else:
+        raise AssertionError('SSA prefix accepted as a mutation operand')
+
+assert re.sub(ssa_token('%3'), '%renamed', '  %30 = add i64 %3, %30') == (
+    '  %30 = add i64 %renamed, %30')
 
 
 def attach_metadata(body, value, attachments):
@@ -567,8 +721,7 @@ for original in enclosing_sources:
         for argument, values in (('%n', (0, 1, 65, 66, 2**64 - 1)),
                                   ('%rows', (0, 1, 4, 5, 2**64 - 1))):
             for value in values:
-                specialized = [re.sub(re.escape(argument) + r'(?![-\w.$])', str(value),
-                                      replace_once(text, 'i64 ' + argument + ', ', ''))
+                specialized = [specialize_i64_argument(text, enclosing_name, argument, value)
                                for text in (exported, original)]
                 assert checker.check_affine_function(specialized[0], specialized[1],
                                                      enclosing_name, evl=True) == specialized[0]
@@ -706,8 +859,7 @@ for match in retained_affine:
                                '[ %fission.completed.count, %vector.ph ]')
         assert checker.check_affine_function(exported, original, function, evl=True) == exported
         for n in (0, 1, 65, 66, 2**64 - 1):
-            specialized = [re.sub(r'%n(?![-\w.$])', str(n),
-                                  replace_once(text, 'i64 %n, ', ''))
+            specialized = [specialize_i64_argument(text, function, '%n', n)
                            for text in (exported, original)]
             assert checker.check_affine_function(specialized[0], specialized[1],
                                                  function, evl=True) == specialized[0]
@@ -764,9 +916,13 @@ for match in retained_affine:
 for function in ('affine_runtime', 'affine_wrap'):
     original = checker.function_definition(affine_originals, function)
     candidate = checker.function_definition(affine_outputs, function)
-    for old, new in ((function, 'unrelated_name'), ('%3', '%minus.two'),
-                     ('%4', '%half'), ('%5', '%count')):
-        original, candidate = original.replace(old, new), candidate.replace(old, new)
+    original = replace_once(original, '@' + function + '(', '@unrelated_name(')
+    candidate = replace_once(candidate, '@' + function + '(', '@unrelated_name(')
+    for old, new in (('%3', '%minus.two'), ('%4', '%half'), ('%5', '%count')):
+        # These temporaries are generated in the candidate; the hand-written
+        # original may contain no such token. Rename only exact occurrences.
+        assert re.search(ssa_token(old), candidate)
+        original, candidate = re.sub(ssa_token(old), new, original), re.sub(ssa_token(old), new, candidate)
     assert checker.check_affine_function(candidate, original, 'unrelated_name', evl=True) == candidate
 
 # The exactly checked subtraction spelling is analogous to the printed add -2.
@@ -841,19 +997,24 @@ for flag in ('fast', 'reassoc', 'nnan', 'ninf', 'nsz', 'arcp', 'contract', 'afn'
     reject_count(change_line(runtime, '%pd', 'fmul double', 'fmul ' + flag + ' double'),
                  reason='FP relaxation: ' + flag)
 chain = '  %3 = add i64 %span, -2\n  %4 = lshr i64 %3, 1\n  %5 = add nuw i64 %4, 1\n'
-for altered in (runtime.replace(chain, ''.join('  ; ' + line.strip() + '\n' for line in chain.splitlines())),
-                runtime.replace(chain, chain.replace('%4 = lshr i64', '%4 = lshr\n  i64')),
-                runtime.replace(chain, chain + '  %5 = add nuw i64 %4, 1\n'),
-                runtime.replace(chain, '').replace('  %q = ', chain + '  %q = ', 1),
-                runtime.replace(chain, '').replace('vector.ph:', 'vector.ph:\n' + chain, 1)):
+without_chain = replace_once(runtime, chain, '')
+vector_site = match_once(without_chain, r'^vector.ph:[^\n]*\n')
+for altered in (replace_once(runtime, chain, ''.join('  ; ' + line.strip() + '\n' for line in chain.splitlines())),
+                replace_once(runtime, chain, chain.replace('%4 = lshr i64', '%4 = lshr\n  i64')),
+                replace_once(runtime, chain, chain + '  %5 = add nuw i64 %4, 1\n'),
+                replace_match_once(without_chain, r'^  %q = ', chain + '  %q = '),
+                without_chain[:vector_site.end()] + chain + without_chain[vector_site.end():]):
     reject_count(altered, reason='count definition/placement')
-reject_count(runtime.replace('i64 %n, double', 'i32 %n, double'), reason='argument width')
+signature = match_once(runtime, r'^define void @affine_runtime\([^()]*\)[^\n{]*\{')
+wrong_width = (runtime[:signature.start()] +
+               replace_once(signature[0], 'i64 %n, ', 'i32 %n, ') + runtime[signature.end():])
+reject_count(wrong_width, reason='argument width')
 reject_count(runtime[:-1] + 'extra:\n  br label %preheader\n}', reason='guard dominance')
 reject_count(runtime[:-1] + 'extra:\n  br label %loop\n}', reason='producer entry')
 reject_count(runtime[:-1] + 'extra:\n  br label %vector.ph\n}', reason='consumer entry')
-forwarded = runtime.replace('  br label %vector.body\n',
-                            '  %arbitrary = phi i64 [ %fission.completed, %scalar.fission.consumer.ph ]\n'
-                            '  br label %vector.body\n')
+forwarded = replace_once(runtime, '  br label %vector.body\n',
+                         '  %arbitrary = phi i64 [ %fission.completed, %scalar.fission.consumer.ph ]\n'
+                         '  br label %vector.body\n')
 reject_count(change_line(forwarded, '%avl', '[ %5, %vector.ph ]',
                          '[ %arbitrary, %vector.ph ]'), reason='wrong export block')
 
@@ -895,8 +1056,10 @@ for function in ('affine_unsigned', 'affine_signed', 'affine_signed_down',
 # apparent function-name hint; n and every fake arithmetic alias must fail.
 for function in ('affine_unsigned_early', 'affine_signed_early',
                  'affine_down_early', 'affine_signed_down_early'):
-    original = checker.function_definition(affine_originals, function).replace(function, 'ordinary_name')
-    candidate = checker.function_definition(affine_outputs, function).replace(function, 'ordinary_name')
+    original = replace_once(checker.function_definition(affine_originals, function),
+                            '@' + function + '(', '@ordinary_name(')
+    candidate = replace_once(checker.function_definition(affine_outputs, function),
+                             '@' + function + '(', '@ordinary_name(')
     assert checker.check_affine_function(candidate, original, 'ordinary_name', evl=True) == candidate
     for value in ('%n', '%span', '%limit', '%arbitrary', '%fission.completed.other'):
         reject_count(change_line(candidate, '%avl', '[ %fission.completed, %vector.ph ]',
