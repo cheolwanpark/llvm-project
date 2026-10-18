@@ -44,6 +44,7 @@ static constexpr StringLiteral ProducerMD =
     "llvm.loop.reduction_fission.producer";
 static constexpr StringLiteral ConsumerMD =
     "llvm.loop.reduction_fission.consumer";
+static constexpr StringLiteral StageMD = "llvm.loop.reduction_fission.stage";
 
 StringRef llvm::getScalarReductionFissionStage(const Loop &L) {
   if (findOptionMDForLoop(&L, ProducerMD))
@@ -53,8 +54,21 @@ StringRef llvm::getScalarReductionFissionStage(const Loop &L) {
   return {};
 }
 
-// Compact participation needs exactly one update arm and a two-input latch
-// merge. Do not extend this recognition when admitting larger producer CFGs.
+bool llvm::isReductionFissionStage(const Loop &L) {
+  return !getScalarReductionFissionStage(L).empty() ||
+         findOptionMDForLoop(&L, StageMD);
+}
+
+void llvm::preserveReductionFissionStageMetadata(MDNode *OriginalID, Loop &L) {
+  if (!OriginalID)
+    return;
+  for (StringRef Name : {ProducerMD, ConsumerMD, StageMD})
+    if (findOptionMDForLoopID(OriginalID, Name) && !findOptionMDForLoop(&L, Name))
+      L.addStringLoopAttribute(Name);
+}
+
+// Preserve the existing unconditional header-update admission. Conditional
+// recurrences use the acyclic CFG proof and a terminal update edge below.
 static bool hasSingleDiamondProducerCFG(const Loop &L, BasicBlock *Latch) {
   BasicBlock *Header = L.getHeader();
   if (L.getNumBlocks() == 1)
@@ -228,7 +242,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                      ScalarEvolution &SE,
                                      OptimizationRemarkEmitter &ORE) {
   if (!isReductionFissionEnabled() || !EnableScalarReductionFission ||
-      !getScalarReductionFissionStage(L).empty())
+      isReductionFissionStage(L))
     return nullptr;
 
   BasicBlock *Header = L.getHeader();
@@ -286,10 +300,11 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   if (!IV)
     return Reject("scalar-unsupported-exit");
   auto *Next = cast<BinaryOperator>(IV->getIncomingValueForBlock(Latch));
-  // Keep the existing zero/one equality case small: its IV already is the
-  // ordinal and the invariant equality bound is the completed count. All other
-  // controls keep their original arithmetic/flags, predicate and polarity only
-  // in the producer; the consumer never clones a noncanonical induction.
+  // The existing zero/one equality-control path can reuse its IV as an
+  // ordinal and clone the original test, including its polarity. The invariant
+  // operand is the actual N only when equality exits (checked again before
+  // chunking). Other controls stay solely in the producer; their consumer uses
+  // an independent completed or participating count.
   bool CanonicalCount = L.getCanonicalInductionVariable() == IV &&
                         Compare->isEquality() &&
                         Compare->getOperand(0) == Next;
@@ -307,12 +322,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   SmallPtrSet<Instruction *, 8> ReductionInsts;
   BasicBlock *ParticipationArm = nullptr;
   bool SingleDiamond = hasSingleDiamondProducerCFG(L, Latch);
-  // Recognize extractable recurrences independently of producer header state.
-  // A delay, or even a reduction-shaped recurrence used by the producer, can
-  // stay in place. Prove closure using direct uses before selecting anything:
-  // the first edge out of moved state would otherwise reach a predicate,
-  // address, contribution, retained recurrence or another accumulator. No DAG
-  // traversal or dependence on header PHI order is needed.
+  // Classify each recurrence independently, with no mutation on failure.
+  // Reduction-shaped state observed by the producer remains producer-local.
   StringRef FailureReason;
   auto RecognizeReduction = [&](PHINode &Phi) -> std::optional<Reduction> {
     auto Fail = [&](StringRef Reason) -> std::optional<Reduction> {
@@ -324,21 +335,30 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     auto *Merge = dyn_cast<PHINode>(Backedge);
     BinaryOperator *Update = nullptr;
     if (Merge) {
-      if (!SingleDiamond)
-        return Fail("scalar-unsupported-cfg");
-      if (Merge->getParent() != Latch || Merge->getNumIncomingValues() != 2)
+      if (Merge->getParent() != Latch || Merge->getNumIncomingValues() < 2)
         return Fail("scalar-unsupported-recurrence");
-      int Bypass = Merge->getIncomingValue(0) == &Phi ? 0 : 1;
-      BasicBlock *Arm = Merge->getIncomingBlock(1 - Bypass);
-      Update = dyn_cast<BinaryOperator>(Merge->getIncomingValue(1 - Bypass));
-      if (Merge->getIncomingValue(Bypass) != &Phi || !Update ||
-          Update->getParent() != Arm || Arm == Header || Arm == Latch ||
-          !L.contains(Arm) || !Update->hasOneUse() ||
-          *Update->user_begin() != Merge || Phi.getNumUses() != 2)
+      // Exactly one incoming edge updates this accumulator. Every other edge
+      // preserves the original header PHI, regardless of operand order or how
+      // many upstream branches can bypass participation. Do not propagate SSA
+      // through intermediate merges or recognize multiple update sites.
+      std::optional<unsigned> UpdateEdge;
+      for (unsigned I = 0; I != Merge->getNumIncomingValues(); ++I) {
+        if (Merge->getIncomingValue(I) == &Phi)
+          continue;
+        if (UpdateEdge)
+          return Fail("scalar-unsupported-recurrence");
+        UpdateEdge = I;
+      }
+      if (!UpdateEdge)
         return Fail("scalar-unsupported-recurrence");
-      for (User *U : Phi.users())
-        if (U != Update && U != Merge)
-          return Fail("scalar-reduction-feedback");
+      BasicBlock *Arm = Merge->getIncomingBlock(*UpdateEdge);
+      auto *ArmBranch = dyn_cast<BranchInst>(Arm->getTerminator());
+      Update = dyn_cast<BinaryOperator>(Merge->getIncomingValue(*UpdateEdge));
+      if (!Update || Update->getParent() != Arm || Arm == Header || Arm == Latch ||
+          !L.contains(Arm) || !ArmBranch || !ArmBranch->isUnconditional() ||
+          ArmBranch->getSuccessor(0) != Latch || !Update->hasOneUse() ||
+          *Update->user_begin() != Merge)
+        return Fail("scalar-unsupported-recurrence");
     } else {
       Update = dyn_cast<BinaryOperator>(Backedge);
       if (!Update ||
@@ -355,16 +375,35 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       return Fail("scalar-unsupported-recurrence");
     unsigned ContributionOperand = Update->getOperand(0) == &Phi ? 1 : 0;
     Value *Contribution = Update->getOperand(ContributionOperand);
+    if (Merge) {
+      // Check uses, not users or a fixed use count: several bypass operands
+      // may reference Phi in this same merge. Only the accumulator operand of
+      // its own update and the unchanged values on bypass edges are allowed.
+      for (Use &U : Phi.uses()) {
+        if (U.getUser() == Update &&
+            U.getOperandNo() == 1 - ContributionOperand)
+          continue;
+        if (U.getUser() == Merge &&
+            Merge->getIncomingBlock(U.getOperandNo()) != Update->getParent())
+          continue;
+        return Fail("scalar-reduction-feedback");
+      }
+      if (!DT.dominates(Contribution, Update->getParent()->getTerminator()))
+        return Fail("scalar-unsupported-recurrence");
+    }
     Instruction *Result = Merge ? cast<Instruction>(Merge) : Update;
-    for (User *U : Result->users()) {
-      if (U == &Phi)
+    for (Use &U : Result->uses()) {
+      if (U.getUser() == &Phi &&
+          Phi.getIncomingBlock(U.getOperandNo()) == Latch)
         continue;
-      auto *Export = dyn_cast<PHINode>(U);
-      if (!Export || Export->getParent() != Exit)
+      auto *Export = dyn_cast<PHINode>(U.getUser());
+      if (!Export || Export->getParent() != Exit ||
+          Export->getIncomingBlock(U.getOperandNo()) != Latch)
         return Fail("scalar-reduction-feedback");
     }
     return Reduction{&Phi, Update, Merge, Contribution, ContributionOperand};
   };
+  bool RetainedState = false;
   for (PHINode &Phi : Header->phis()) {
     if (&Phi == IV)
       continue;
@@ -372,6 +411,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     if (!R) {
       if (!Phi.getType()->isSingleValueType() || Phi.getType()->isVectorTy())
         return Reject("scalar-unsupported-recurrence");
+      RetainedState = true;
       continue;
     }
     if (R->Merge) {
@@ -388,14 +428,10 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   }
   if (Reductions.empty())
     return Reject(FailureReason.empty() ? "scalar-no-reduction" : FailureReason);
-  // Extracted state only flows around its update/bypass recurrence and final
-  // LCSSA exports. In particular no predicate, contribution, other reduction or
-  // partial-state export can observe it. This needs no recursive DAG walk.
-  // Retained state can therefore determine compact participation, addresses or
-  // contributions, including through a latch merge of its own. Its PHIs,
-  // operations and branches stay in the producer on their original paths;
-  // only the closed accumulators below move. The existing common arm and
-  // participating counter preserve the exact sequence of contributions.
+  // The complete operand/edge closure above proves that no moved state can
+  // reach retained state, predicates, addresses or contributions. Retained
+  // recurrences keep their original instructions, paths and iteration order.
+  // Commit participation only after that proof; failed candidates are inert.
   for (const Reduction &R : Reductions) {
     if (bool(R.Merge) != bool(ParticipationArm))
       return Reject("scalar-incompatible-participation");
@@ -404,12 +440,36 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       return Reject("scalar-reduction-feedback");
   }
 
+  struct ProducerExport {
+    PHINode *ExitPhi;
+    unsigned IncomingIndex;
+    Instruction *Value;
+  };
+  SmallVector<ProducerExport, 4> ProducerExportEdges;
+  // One forwarding PHI per distinct value, even for multiple exit PHIs. Build
+  // the complete mapping before changing any uses or predecessor edges.
+  MapVector<Instruction *, PHINode *> ProducerExports;
   for (BasicBlock *BB : L.blocks()) {
     for (Instruction &I : *BB) {
-      for (User *U : I.users()) {
-        auto *UI = dyn_cast<Instruction>(U);
-        if ((!UI || !L.contains(UI)) && !ReductionInsts.contains(&I))
+      for (Use &U : I.uses()) {
+        auto *UI = dyn_cast<Instruction>(U.getUser());
+        if ((UI && L.contains(UI)) || ReductionInsts.contains(&I))
+          continue;
+        auto *Phi = dyn_cast_or_null<PHINode>(UI);
+        // Only final values available on the original exiting edge can be
+        // forwarded. An arm-local value needs its original latch merge; do
+        // not synthesize a last-participant recurrence or speculate a value.
+        // This depends on availability, not on the IV's start/step/test or
+        // the number of diamonds. The admitted producer retains its original
+        // full-trip control and instructions. Forward the original SSA value,
+        // including current/next IVs and latch merges, without evaluating it.
+        // Keep chunk scheduling's separate canonical-control admission below.
+        if (!Phi || Phi->getParent() != Exit ||
+            Phi->getIncomingBlock(U.getOperandNo()) != Latch ||
+            !DT.dominates(&I, Branch))
           return Reject("scalar-unsupported-live-out");
+        ProducerExportEdges.push_back({Phi, U.getOperandNo(), &I});
+        ProducerExports.insert({&I, nullptr});
       }
       if (isa<ConstrainedFPIntrinsic>(I))
         return Reject("scalar-strict-fp");
@@ -529,27 +589,128 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   if (!MaxTrip)
     return Reject(StandardFailure);
   uint64_t MaxTripCount = *MaxTrip;
-  auto ScratchSize = getScalarFissionScratchBytes(MaxTripCount, Scratch, DL);
-  if (!ScratchSize)
-    return Reject("scalar-scratch-limit");
-  uint64_t ScratchBytes = *ScratchSize;
+  auto ScratchSize = [&](uint64_t Capacity) {
+    return getScalarFissionScratchBytes(Capacity, Scratch, DL);
+  };
+  uint64_t Capacity = MaxTripCount;
+  auto ScratchBytes = ScratchSize(Capacity);
+  bool Chunked = !ScratchBytes;
+  if (Chunked) {
+    // Only a single-block unconditional zero-start/unit-step loop whose next
+    // IV exits on equality may use the invariant operand as the actual N.
+    // An affine endpoint or relational termination witness only bounds storage:
+    // it must never reach the N-base arithmetic or replace original control.
+    if (L.getNumBlocks() != 1 || ParticipationArm || RetainedState ||
+        !CanonicalCount || !ScratchSize(1))
+      return Reject("scalar-scratch-limit");
+    if ((Compare->getPredicate() == ICmpInst::ICMP_EQ) !=
+        (Branch->getSuccessor(0) == Exit))
+      return Reject("scalar-unsupported-exit");
+    // Size is monotone, including padding; all index limits are checked too.
+    // The search takes at most 64 iterations over the unique streams.
+    uint64_t Low = 1, High = Capacity;
+    while (Low < High) {
+      uint64_t Mid = Low + (High - Low) / 2 + 1;
+      if (ScratchSize(Mid))
+        Low = Mid;
+      else
+        High = Mid - 1;
+    }
+    Capacity = Low;
+    ScratchBytes = ScratchSize(Capacity);
+  }
+  uint64_t ScratchTrafficBytes = 0;
+  for (auto [Contribution, Slot] : Scratch) {
+    auto Total = checkedAddUnsigned(
+        ScratchTrafficBytes,
+        DL.getTypeStoreSize(Contribution->getType()).getFixedValue());
+    if (!Total)
+      return Reject("scalar-scratch-limit");
+    ScratchTrafficBytes = *Total;
+  }
 
   ORE.emit([&]() {
-    return OptimizationRemark("vplan-reduction-fission", "Selected",
-                              L.getStartLoc(), Header)
-           << "split " << ore::NV("Path", "scalar-IR")
+    OptimizationRemark Remark("vplan-reduction-fission", "Selected",
+                              L.getStartLoc(), Header);
+    Remark << "split " << ore::NV("Path", "scalar-IR")
            << " reduction loop; stage VFs selected independently "
-              "by normal vectorization; scratch capacity "
-           << ore::NV("MaxTripCount", MaxTripCount) << ", scratch bytes "
-           << ore::NV("ScratchBytes", ScratchBytes);
+              "by normal vectorization; scratch capacity ";
+    if (Chunked)
+      Remark << ore::NV("ChunkCapacity", Capacity);
+    else
+      Remark << ore::NV("MaxTripCount", MaxTripCount);
+    Remark << ", scratch bytes " << ore::NV("ScratchBytes", *ScratchBytes)
+           << ", producer live-outs "
+           << ore::NV("ProducerLiveOuts", ProducerExports.size());
+    if (Chunked)
+      Remark << ", chunked schedule, trip bound "
+             << ore::NV("MaxTripCount", MaxTripCount)
+             << ", scratch store bytes/iteration "
+             << ore::NV("ScratchStoreBytesPerIteration", ScratchTrafficBytes)
+             << ", scratch load bytes/iteration "
+             << ore::NV("ScratchLoadBytesPerIteration", ScratchTrafficBytes)
+             << ", producer reread bytes/iteration "
+             << ore::NV("ProducerRereadBytesPerIteration", 0)
+             << ", duplicated producer instructions "
+             << ore::NV("DuplicatedProducerInstructions", 0);
+    return Remark;
   });
 
-  // All rejection points precede mutation. The original guarded preheader and
-  // producer control remain intact. A compact stream can be empty even when
-  // the producer runs: its guard exports the original starts without an add.
+  // All rejection points precede mutation. Retain the original entry guard.
+  // Chunked producers keep global IVs/operations and use a local chunk latch
+  // test. A compact full-trip stream may be empty even when its producer runs:
+  // its guard exports the original starts without an add.
   SE.forgetTopmostLoop(&L);
   MDNode *OriginalID = L.getLoopID();
   LLVMContext &Ctx = F->getContext();
+  BasicBlock *ProducerPH = Preheader;
+  BasicBlock *ChunkHeader = nullptr;
+  BasicBlock *ChunkLatch = nullptr;
+  Value *ChunkCount = nullptr;
+  PHINode *ChunkBase = nullptr;
+  DenseMap<PHINode *, PHINode *> ChunkCarries;
+  if (Chunked) {
+    ChunkHeader = BasicBlock::Create(Ctx, "scalar.fission.chunk", F, Header);
+    ProducerPH = BasicBlock::Create(Ctx, "scalar.fission.producer.ph", F, Header);
+    ChunkLatch = BasicBlock::Create(Ctx, "scalar.fission.chunk.latch", F, Exit);
+    Loop *Chunk = LI.AllocateLoop();
+    if (Loop *Parent = L.getParentLoop())
+      Parent->replaceChildLoopWith(&L, Chunk);
+    else {
+      LI.removeLoop(llvm::find(LI, &L));
+      LI.addTopLevelLoop(Chunk);
+    }
+    Chunk->addChildLoop(&L);
+    Chunk->addBasicBlockToLoop(ChunkHeader, LI);
+    Chunk->addBasicBlockToLoop(ProducerPH, LI);
+    Chunk->addBasicBlockToLoop(ChunkLatch, LI);
+    // Header is already in every old ancestor and stays mapped to L.
+    Chunk->addBlockEntry(Header);
+
+    IRBuilder<> CB(ChunkHeader);
+    CB.SetCurrentDebugLocation(Branch->getDebugLoc());
+    ChunkBase = CB.CreatePHI(IV->getType(), 2, "fission.chunk.base");
+    ChunkBase->addIncoming(ConstantInt::get(IV->getType(), 0), Preheader);
+    for (Reduction &R : Reductions) {
+      PHINode *Carry = CB.CreatePHI(R.Phi->getType(), 2,
+                                   R.Phi->getName() + ".chunk.carry");
+      Carry->addIncoming(R.Phi->getIncomingValueForBlock(Preheader), Preheader);
+      ChunkCarries[R.Phi] = Carry;
+    }
+    // The original exiting equality and finite, representable trip proof imply
+    // N > 0 on the entering edge. On chunk entry 0 <= base < N, so
+    // count = min(N-base, C) > 0 and base+count <= N cannot overflow.
+    Value *Remaining = CB.CreateSub(Compare->getOperand(1), ChunkBase,
+                                   "fission.chunk.remaining", /*HasNUW=*/true);
+    Value *Limit = ConstantInt::get(IV->getType(), Capacity);
+    Value *Partial = CB.CreateICmpULT(Remaining, Limit, "fission.chunk.partial");
+    ChunkCount = CB.CreateSelect(Partial, Remaining, Limit, "fission.chunk.count");
+    CB.CreateBr(ProducerPH);
+    BranchInst::Create(Header, ProducerPH);
+    Preheader->getTerminator()->replaceSuccessorWith(Header, ChunkHeader);
+    IV->replaceIncomingBlockWith(Preheader, ProducerPH);
+    IV->setIncomingValueForBlock(ProducerPH, ChunkBase);
+  }
   BasicBlock *ConsumerGuard =
       ParticipationArm
           ? BasicBlock::Create(Ctx, "scalar.fission.consumer.guard", F, Exit)
@@ -558,6 +719,10 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       BasicBlock::Create(Ctx, "scalar.fission.consumer.ph", F, Exit);
   BasicBlock *ConsumerBody =
       BasicBlock::Create(Ctx, "scalar.fission.consumer.body", F, Exit);
+  // Keep the inner stages before their shared chunk exit. Ordinary LV inserts
+  // its vector/middle blocks before that exit as well.
+  if (Chunked)
+    ChunkLatch->moveAfter(ConsumerBody);
   // Keep the consumer's exit dedicated, before joining the zero-count bypass.
   BasicBlock *ConsumerLoopExit =
       ParticipationArm
@@ -566,7 +731,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   BasicBlock *ConsumerExit =
       ParticipationArm
           ? BasicBlock::Create(Ctx, "scalar.fission.consumer.exit", F, Exit)
-          : Exit;
+          : (Chunked ? ChunkLatch : Exit);
   BranchInst::Create(ConsumerBody, ConsumerPH);
   Loop *Consumer = LI.AllocateLoop();
   if (Loop *Parent = L.getParentLoop()) {
@@ -582,12 +747,44 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   }
   Consumer->addBasicBlockToLoop(ConsumerBody, LI);
 
+  // The consumer preheader (or compact guard) is the producer's dedicated
+  // exit, inside the same enclosing/chunk loop. Export actual final producer
+  // SSA values here to retain LCSSA. They dominate the entire consumer AND its
+  // P=0 bypass, without consumer PHIs, scratch, recomputation or input rereads.
+  // In particular P=0 with N>0 still exports the last producer iteration, not
+  // an initial value or the last participating contribution. No operation
+  // consumes possible poison merely to forward it.
+  BasicBlock *ProducerExit = ConsumerGuard ? ConsumerGuard : ConsumerPH;
+  for (auto &[Value, Forward] : ProducerExports) {
+    Forward = PHINode::Create(Value->getType(), 1,
+                             Value->getName() + ".fission.export",
+                             ProducerExit->getFirstNonPHIIt());
+    Forward->addIncoming(Value, Latch);
+  }
+  for (const ProducerExport &E : ProducerExportEdges)
+    E.ExitPhi->setIncomingValue(E.IncomingIndex,
+                               ProducerExports.lookup(E.Value));
+
   IRBuilder<> EntryBuilder(&*F->getEntryBlock().getFirstInsertionPt());
   Value *ProducerIndex = IV;
-  Value *ConsumerCount = Compare->getOperand(1);
+  Value *ConsumerCount = Chunked ? ChunkCount : Compare->getOperand(1);
+  Value *ProducerNext = nullptr;
+  if (Chunked) {
+    auto *Ordinal = PHINode::Create(IV->getType(), 2, "fission.producer.ordinal",
+                                   &*Header->begin());
+    Ordinal->addIncoming(ConstantInt::get(IV->getType(), 0), ProducerPH);
+    IRBuilder<> PB(Branch);
+    ProducerNext = PB.CreateAdd(Ordinal, ConstantInt::get(IV->getType(), 1),
+                               "fission.producer.next", /*HasNUW=*/true);
+    Ordinal->addIncoming(ProducerNext, Latch);
+    ProducerIndex = Ordinal;
+  }
   if (ParticipationArm) {
     // Before original iteration i, 0 <= count <= i. An update stores at count
-    // then increments once; a bypass retains count. Thus every store index is
+    // then increments once; a bypass retains count. The acyclic producer visits
+    // the terminal participation block at most once, and its unconditional
+    // branch reaches the latch directly. Only that one edge carries CountNext;
+    // all other latch edges carry Count. Thus every store index is
     // < N <= MaxTripCount and the final count P <= N fits the original IV type
     // (getScalarFissionMaxTripCount checks representability). Full-trip
     // allocation and the checked byte/index ceiling bound every compact GEP.
@@ -599,7 +796,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
         Count, ConstantInt::get(IV->getType(), 1), "fission.participating.next",
         /*HasNUW=*/true);
     auto *CountMerge = PHINode::Create(
-        IV->getType(), 2, "fission.participating.merge", &*Latch->begin());
+        IV->getType(), pred_size(Latch), "fission.participating.merge",
+        &*Latch->begin());
     for (BasicBlock *Pred : predecessors(Latch))
       CountMerge->addIncoming(Pred == ParticipationArm ? CountNext : Count, Pred);
     Count->addIncoming(CountMerge, Latch);
@@ -613,6 +811,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
         CountExport, ConstantInt::get(IV->getType(), 0), "fission.empty");
     GuardBuilder.CreateCondBr(Empty, ConsumerExit, ConsumerPH);
   } else if (!CanonicalCount) {
+    assert(!Chunked && "noncanonical producers must keep original control");
     // Before iteration i, ordinal == i. The DAG proof gives exactly one
     // increment per completed iteration, including the exiting iteration.
     // 1 <= N <= MaxTripCount fits CountTy, so ordinal+1 is nuw, and every store
@@ -640,7 +839,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                   ? ParticipationArm->getTerminator()
                                   : Branch);
   for (auto &[Contribution, Slot] : Scratch) {
-    auto *Array = ArrayType::get(Contribution->getType(), MaxTripCount);
+    auto *Array = ArrayType::get(Contribution->getType(), Capacity);
     Slot = EntryBuilder.CreateAlloca(Array, DL.getAllocaAddrSpace(), nullptr,
                                     "scalar.fission.scratch");
     Value *Index = ProducerBuilder.CreateZExtOrTrunc(
@@ -657,8 +856,10 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   DenseMap<Value *, Value *> ConsumerUpdates;
   for (Reduction &R : Reductions) {
     R.ConsumerPhi = B.CreatePHI(R.Phi->getType(), 2, R.Phi->getName() + ".consume");
-    R.ConsumerPhi->addIncoming(R.Phi->getIncomingValueForBlock(Preheader),
-                               ConsumerPH);
+    R.ConsumerPhi->addIncoming(
+        Chunked ? ChunkCarries.lookup(R.Phi)
+                : R.Phi->getIncomingValueForBlock(Preheader),
+        ConsumerPH);
   }
   DenseMap<Value *, Value *> Contributions;
   for (auto [Contribution, Slot] : Scratch) {
@@ -687,6 +888,12 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                           ConsumerGuard);
       Result->addIncoming(LoopResult, ConsumerLoopExit);
       ConsumerUpdates[R.Merge] = Result;
+    } else if (Chunked) {
+      auto *Result = PHINode::Create(
+          R.Phi->getType(), 1, R.Phi->getName() + ".chunk.result", ChunkLatch);
+      Result->addIncoming(Update, ConsumerBody);
+      ChunkCarries.lookup(R.Phi)->addIncoming(Result, ChunkLatch);
+      ConsumerUpdates[R.Update] = Result;
     } else {
       ConsumerUpdates[R.Update] = Update;
     }
@@ -711,12 +918,14 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                "fission.consumer.next", /*HasNUW=*/true);
   }
   ConsumerIV->addIncoming(ConsumerNext, ConsumerBody);
-  if (ParticipationArm) {
+  if (Chunked || ParticipationArm) {
     Value *More = B.CreateICmpNE(ConsumerNext, ConsumerCount,
                                "fission.consumer.more");
-    B.CreateCondBr(More, ConsumerBody, ConsumerLoopExit);
-    BranchInst::Create(ConsumerExit, ConsumerLoopExit);
-    BranchInst::Create(Exit, ConsumerExit);
+    B.CreateCondBr(More, ConsumerBody, Chunked ? ChunkLatch : ConsumerLoopExit);
+    if (!Chunked) {
+      BranchInst::Create(ConsumerExit, ConsumerLoopExit);
+      BranchInst::Create(Exit, ConsumerExit);
+    }
   } else if (!CanonicalCount) {
     Value *More = B.CreateICmpNE(ConsumerNext, ConsumerCount,
                                "fission.consumer.more");
@@ -729,11 +938,34 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                    Branch->getSuccessor(0) == Header ? ConsumerBody : Exit,
                    Branch->getSuccessor(1) == Header ? ConsumerBody : Exit);
   }
-  Branch->setSuccessor(Branch->getSuccessor(0) == Exit ? 0 : 1,
-                       ConsumerGuard ? ConsumerGuard : ConsumerPH);
+  if (Chunked) {
+    IRBuilder<> PB(Branch);
+    Value *More = PB.CreateICmpNE(ProducerNext, ChunkCount,
+                                 "fission.producer.more");
+    Branch->setCondition(More);
+    Branch->setSuccessor(0, Header);
+    Branch->setSuccessor(1, ConsumerPH);
+    // Original exit weights describe N iterations, not a C-iteration chunk.
+    Branch->setMetadata(LLVMContext::MD_prof, nullptr);
+    IRBuilder<> CB(ChunkLatch);
+    CB.SetCurrentDebugLocation(Branch->getDebugLoc());
+    Value *BaseNext = CB.CreateAdd(ChunkBase, ChunkCount, "fission.chunk.next",
+                                  /*HasNUW=*/true);
+    ChunkBase->addIncoming(BaseNext, ChunkLatch);
+    Value *MoreChunks = CB.CreateICmpNE(BaseNext, Compare->getOperand(1),
+                                       "fission.chunk.more");
+    CB.CreateCondBr(MoreChunks, ChunkHeader, Exit);
+    // The controller is scheduling machinery, never a new candidate.
+    // Stage loops retain the original metadata and independent LV selection.
+    L.getParentLoop()->addStringLoopAttribute(StageMD);
+  } else {
+    Branch->setSuccessor(Branch->getSuccessor(0) == Exit ? 0 : 1,
+                         ConsumerGuard ? ConsumerGuard : ConsumerPH);
+  }
   for (PHINode &Export : Exit->phis())
     Export.replaceIncomingBlockWith(
-        Latch, ParticipationArm ? ConsumerExit : ConsumerBody);
+        Latch, Chunked ? ChunkLatch
+                      : (ParticipationArm ? ConsumerExit : ConsumerBody));
   for (Reduction &R : Reductions) {
     R.Update->dropAllReferences();
     R.Phi->dropAllReferences();
@@ -752,5 +984,9 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   Consumer->addStringLoopAttribute(ConsumerMD);
   SE.forgetBlockAndLoopDispositions();
   DT.recalculate(*F);
+  assert(L.isLCSSAForm(DT) && Consumer->isLCSSAForm(DT) &&
+         "both scalar fission stages must remain in LCSSA");
+  assert((!Chunked || L.getParentLoop()->isRecursivelyLCSSAForm(DT, LI)) &&
+         "chunk scheduler and stages must remain in LCSSA");
   return Consumer;
 }

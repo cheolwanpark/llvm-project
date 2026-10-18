@@ -1,14 +1,14 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission \
-; RUN:   -S %s | FileCheck %s --implicit-check-not=scalar.fission
+; RUN:   -S %s | FileCheck %s
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission \
 ; RUN:   -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -S %s | FileCheck %s --implicit-check-not=scalar.fission
+; RUN:   -S %s | FileCheck %s
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
 ; RUN:   -pass-remarks-missed=vplan-reduction-fission -disable-output %s 2>&1 | FileCheck %s --check-prefix=REASON
 ;
-; REASON: scalar-diamond-reject.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
+; REASON: scalar-diamond-reject.c:12:3: scalar-IR reduction fission rejected: scalar-reduction-feedback
 ;
 ; These are independent semantic/CFG rejections, not profitability decisions.
 ; Incompatible participation, early exits, cycles and partial-state live-outs
@@ -20,7 +20,11 @@ declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata,
 
 ; Conditional updates are now covered by scalar-compact.ll. Exporting the
 ; old accumulator as well as the final value remains unsupported.
+; The former fixed-use-count gate diagnosed this as unsupported recurrence.
+; The operand/edge closure proof now diagnoses the forbidden old-accumulator
+; export in %partial as reduction feedback.
 ; CHECK-LABEL: define i32 @reject_conditional_update(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_conditional_update(ptr %a, i64 %n) !dbg !4 {
 entry:
@@ -58,6 +62,7 @@ bypass:
 
 ; Accumulator-dependent branch predicates remain feedback.
 ; CHECK-LABEL: define i32 @reject_accumulator_predicate(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_accumulator_predicate(ptr %a, i64 %n) {
 entry:
@@ -95,6 +100,7 @@ bypass:
 
 ; A contribution PHI must not capture accumulator state.
 ; CHECK-LABEL: define i32 @reject_accumulator_merge(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_accumulator_merge(ptr %a, i64 %n) {
 entry:
@@ -132,6 +138,7 @@ bypass:
 
 ; Even a dead producer operation must not use the update.
 ; CHECK-LABEL: define i32 @reject_updated_accumulator_use(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_updated_accumulator_use(ptr %a, i64 %n) {
 entry:
@@ -170,6 +177,7 @@ bypass:
 
 ; An arm may not exit before the common latch.
 ; CHECK-LABEL: define i32 @reject_extra_exit(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_extra_exit(ptr %a, i64 %n) {
 entry:
@@ -210,6 +218,7 @@ bypass:
 
 ; An internal cycle is not an independent producer diamond.
 ; CHECK-LABEL: define i32 @reject_internal_cycle(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_internal_cycle(ptr %a, i64 %n) {
 entry:
@@ -247,9 +256,48 @@ bypass:
 
 
 ; The former arm-cross-edge case is positive in scalar-acyclic.ll.
+; Acyclic cross edges are covered by integration_cross_edge execution. An arm
+; self-cycle is still unsupported and cannot be turned into one iteration.
+; CHECK-LABEL: define i32 @reject_arm_cycle(
+; CHECK-NOT: scalar.fission
+; CHECK: ret i32
+define i32 @reject_arm_cycle(ptr %a, i64 %n) {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %enter = and i1 %valid, %nonzero
+  br i1 %enter, label %preheader, label %bypass
+preheader:
+  br label %loop
+loop:
+  %iv = phi i64 [0, %preheader], [%next, %latch]
+  %sum = phi i32 [19, %preheader], [%update, %latch]
+  %p = getelementptr i32, ptr %a, i64 %iv
+  %x = load i32, ptr %p, align 4
+  %choose = icmp ne i32 %x, 0
+  br i1 %choose, label %left, label %right
+left:
+  %lc = mul i32 %x, 3
+  br i1 %choose, label %left, label %right
+right:
+  %rc = xor i32 %x, 7
+  br label %latch
+latch:
+  %c = phi i32 [%rc, %right]
+  %update = add i32 %sum, %c
+  %next = add nuw i64 %iv, 1
+  %done = icmp eq i64 %next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i32 %update
+bypass:
+  ret i32 19
+}
+
 
 ; Writes in either arm are observable effects.
 ; CHECK-LABEL: define i32 @reject_arm_store(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_arm_store(ptr %a, i64 %n) {
 entry:
@@ -288,6 +336,7 @@ bypass:
 
 ; Simple loads are required in both arms.
 ; CHECK-LABEL: define i32 @reject_arm_volatile(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_arm_volatile(ptr %a, i64 %n) {
 entry:
@@ -325,6 +374,7 @@ bypass:
 
 ; Atomic loads cannot move relative to reductions.
 ; CHECK-LABEL: define i32 @reject_arm_atomic(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_arm_atomic(ptr %a, i64 %n) {
 entry:
@@ -362,6 +412,7 @@ bypass:
 
 ; Readonly calls are not covered by the memory(none) contract.
 ; CHECK-LABEL: define i32 @reject_arm_readonly_call(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_arm_readonly_call(ptr %a, i64 %n) {
 entry:
@@ -399,6 +450,7 @@ bypass:
 
 ; No assumed libm or errno contract is introduced.
 ; CHECK-LABEL: define i32 @reject_arm_errno_call(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_arm_errno_call(ptr %a, i64 %n) {
 entry:
@@ -436,6 +488,7 @@ bypass:
 
 ; Strict FP in an arm must still reject the whole transform.
 ; CHECK-LABEL: define i32 @reject_arm_constrained(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 define i32 @reject_arm_constrained(ptr %a, i64 %n) {
 entry:
@@ -472,8 +525,11 @@ bypass:
 }
 
 
-; Only final reduction updates can escape, not the merged input.
+; Final latch-merged producer values now escape through forwarding LCSSA.
+; Keep the historical function name and its original return behavior.
 ; CHECK-LABEL: define i32 @reject_merged_liveout(
+; CHECK: alloca [65 x i32]
+; CHECK: scalar.fission.consumer.ph:
 ; CHECK: ret i32
 define i32 @reject_merged_liveout(ptr %a, i64 %n) {
 entry:
@@ -509,8 +565,11 @@ bypass:
 }
 
 
-; The original induction live-out remains unsupported.
+; The actual final next-IV is now forwarded, without reconstructing N.
+; Keep the historical function name and its original return behavior.
 ; CHECK-LABEL: define i32 @reject_induction_liveout(
+; CHECK: alloca [65 x i32]
+; CHECK: scalar.fission.consumer.ph:
 ; CHECK: ret i32
 define i32 @reject_induction_liveout(ptr %a, i64 %n) {
 entry:
@@ -549,6 +608,7 @@ bypass:
 ; A header update executes unconditionally, but its result must not control
 ; which producer arm participates.
 ; CHECK-LABEL: define i32 @reject_header_update_predicate(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret i32
 
 define i32 @reject_header_update_predicate(ptr %a, i64 %n) {

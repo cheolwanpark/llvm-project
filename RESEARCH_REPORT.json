@@ -1,13 +1,22 @@
 {
-  "task_id": "t000045",
-  "base_revision": "2e5656bd2038eaa541c5a25f1df1759f366b34c7",
-  "hypothesis": "Repairing the compact scalar-tail certificate restores validation of the inherited mixed integer/double/float, i64-only, nested and new retained-recurrence output interfaces. The output-interface boolean must survive per-reduction SSA tracing, and the bounded unit increment must accept both demonstrated add nuw and add nuw nsw spellings. This task preserves the inherited production legality extension: Bounded single-diamond compact add/fadd reductions can be extracted while arbitrary supported scalar state remains in the original producer. The inherited direct-use closure proof already isolates each moved accumulator from predicates, addresses, contributions and retained state. Removing the blanket ParticipationArm && RetainedState veto therefore admits state-dependent participating streams without requiring original-loop vectorizability, pressure/depth/reduction-count heuristics, a profitability model, benchmark identities or source rewrites.",
-  "semantics": "Only the unused retained-state bit and blanket veto are removed in production; the existing recognizer, common participation arm, full-trip finite storage bound, byte/index ceilings, effect/load/call whitelist, strictfp/constrained-FP rejection, live-out rules and emitter remain. Each moved conditional PHI has exactly its update and bypass-merge uses; the update has only the merge use; the merge feeds its own backedge and final Exit LCSSA PHIs. Thus no first edge from extracted state can reach producer state, a predicate, address, contribution or another accumulator. Retained PHIs, starts, backedges, latch merges, operations, flags, branches and execution order stay on the original producer paths. Updates on skipped iterations remain updates; conditional state updates remain conditional. Every participating iteration stores its contributions at old P then increments P once, while bypass iterations retain P. With 0 <= P <= completed <= N <= M, all scratch indices are below finite full-trip capacity. The consumer reads 0..P-1 in original participation order and clones each reduction's operand order/flags; an empty stream returns its exact start without an addition. Ordinary unconstrained ordered FP and explicitly enabled fission FP reordering are checked in separate matrices; neither strictfp nor constrained FP is admitted and no fast-math/errno assumptions are added. Execution verification is requested for the exact unchanged historical recurrence_compact plus nine analogous integer/double-state fixtures: original IR, actual transformed scalar consumers and vector consumers/scalar tails, and independent C formulas. Retained fsub and fadd state, state-driven predicates/addresses/contributions, every-iteration updates, conditional latch merges, reversed PHIs, canonical +1, bounded +3 relational and masked-origin +2 controls, and enclosing-loop reuse are covered. New certificates reuse the existing retained-instruction, compact-count and scalar-tail/result proofs; typed producer/consumer scratch provenance, integer stream sharing and scalar FP operand linkage are also checked. Original-loop Selected/Rejected source locations and independent producer/consumer VF remarks are required before host specialization/instrumentation. Probes are inserted only after checking actual opt output; uninstrumented target IR is separately machine-verified by the harness. This repair changes no production LLVM code, emitter, semantic contract, corpus input or C reference. check_compact_scalar_results now uses recurrence_value for the per-reduction SSA value and leaves recurrence as the explicit interface-mode boolean through final PHI/store validation. The tail increment matcher still requires nuw, i64, the exact unit value and checked induction PHI/backedge/resume; only an optional nsw after nuw is added. All existing bound, predecessor, forwarding, ordered operand, typed reduction, result-PHI and observable-store obligations remain. Positive checker regressions exercise both flag spellings in actual generated inherited triangle/diamond/i64/nested outputs, six new recurrence vector/tail outputs and the historical delay output, plus retained LV1/LV2 four-stream float outputs. New mutations require assertion rejection for steps 0/2/-1, wrong induction inputs/backedges, original-N/vector-rounded/constant bounds, missing nuw or a different flag order, and changed FP output starts/values/types/store sources/pointers. The new recurrence mutations check the relevant certificate diagnostic; every inherited negative mutation is retained.",
-  "costs": "Production adds no allocation, traffic, recomputation, reread, duplication, runtime guard, traversal or scheduling machinery. Entry scratch reserves M times each insertion-ordered unique contribution stream, with ABI alignment before each stream and no final-stream padding, still capped at 65536 bytes and the signed pointer-index limit. For i32[65] then double[65], reserved bytes are 260+4+520=784; reversed double[65] then i32[65] reserves 520+260=780. Integer-first M=1/255/5461 reserves 4+4+8=16 / 1020+4+2040=3064 / 21844+4+43688=65536 bytes. Two integer accumulators share the one i32 stream. Logical stores are 12*P bytes, logical reads 12*P bytes, total 24*P, independent of full-trip M and N. Scratch is reserved in the entry block, including entry-bypass executions in the emitted IR. P=0 performs no scratch store/load or consumer update. Enclosing rows reuse the same entry allocations with 24*sum(row P) logical traffic; capacity does not grow with rows. The preserved historical i32-only fixture reserves 260 bytes and transfers 8*P bytes. No recurrence arrays, mask arrays, chunk buffers or unbounded storage are added. Original input loads and helper calls execute once at their original sites/paths, including the original state-dependent rereads of input arrays; fission introduces zero additional input rereads, contribution recomputation or producer duplication. Existing entry and P=0 guards and normal LV minimum/vector/tail checks remain; no new alias/SCEV/FP guards. Production analysis remains direct PHI/update/merge use scans plus the inherited scalar-type/effects/live-out and CFG-edge scans, linear in visited instructions/uses/edges apart from unchanged SCEV queries; one state bit and a rejection disappear. Validation extends the existing focused certificates and shared transformation matrix, adds one small historical-delay certificate and bounded independent C formula families; it is not a general IR parser/equivalence solver or a target cost model. Physical stack traffic, register pressure/spills, RVV execution and speedup are unmeasured. The t000045 repair adds no production cost or semantic analysis. Its implementation is a local SSA-variable rename and a single optional regex group. Two existing lit scripts gain bounded positive/mutation cases; one additional opt RUN produces the inherited LV2 scalar-tail interfaces. No general parser, equivalence solver, profitability model, allocation, traffic, recomputation, input reread, duplication or runtime guard is introduced.",
+  "task_id": "t000047",
+  "direction_id": "d1",
+  "base_revision": "f4fbdaaac4960585e4d300705aa15ef1878dc124",
+  "merge_revision": "0746fd4cb01a5bdd1562d493d2969743eb4268c5",
+  "hypothesis": "Bounded acyclic scalar producers can retain scalar recurrences while extracting closed add/fadd reductions from one common terminal update edge, including serial/nested upstream diamonds and multiple identity latch bypasses. Final producer values, including conditionally updated state, can be forwarded independently of the participating stream. This integrates the independently accepted d1 retained-state and d2 CFG/export/chunk contracts. It adds no profitability model, pressure/depth/reduction-count prerequisite, original-loop vectorizability requirement, benchmark identity, source rewrite or supplementary math assumption.",
+  "semantics": "Reduction recognition is a transactional optional result: a failed scalar candidate can remain in the producer but never changes ParticipationArm or ReductionInsts. Conditional candidates require exactly one nonidentity latch input, an add/fadd defined in that predecessor, an unconditional direct edge to the latch, identity header-PHI values on every bypass, and contribution dominance at the original terminal store point. Every header-PHI use is checked by operand number and incoming edge: only its own accumulator operand and identity bypass operands are allowed. Its update has only its own merge use. Before committing a candidate, every result use must be its own header backedge from the latch or the exact original latch edge of an Exit LCSSA PHI. Thus the first edge from any moved state cannot reach a retained recurrence, predicate, address, contribution or other reduction; no recursive dependence walk or PHI-order assumption is needed. Successful reductions still share one participation arm and are all conditional or all unconditional. Retained PHIs/starts/backedges, merges, arithmetic, flags and branches stay at their original sites and iteration order. Final producer exports retain d2 exact value/edge forwarding and dominance checks, including P=0 and a final inactive iteration. No last-participant substitute, speculative arithmetic, freeze or input reread is introduced. Acyclic branch-only CFG and finite/representable full-trip storage proofs, effect/call/load whitelist, strictfp/constrained-FP rejection, pointer-index ceilings, LCSSA and metadata contracts remain. The counter stores at old P and increments exactly once on the common terminal edge, retaining old P on every bypass; 0<=P<=N<=M bounds all stores and consumer reads. Ordered unconstrained FP clones original update operands/flags and executes exactly the original participating additions; P=0 returns the exact start without adding an identity. Explicit fission FP reordering is tested separately and adds no fast-math/errno assumptions. Chunk scheduling retains d2 canonical single-block, unconditional, zero-start/unit-step, equality-exit restrictions and now explicitly also excludes retained state. All compiler IR mutation still follows every rejection point. Executable verification requests actual original/transformed IR and independent C formulas for three new state/CFG/export interactions, eleven exact historical feedback/export fixtures whose whole-loop outcomes change, and the historical cross-reduction fixture, alongside every inherited matrix. Probes check N/P, all bypasses, vector/tail/empty/zero-entry/final-inactive paths before fixed-vscale host execution; uninstrumented original scalable output is separately RVV machine-verified.",
+  "costs": "No new scratch stream, retained-state array, mask array, runtime alias/SCEV/FP guard, input reread, duplicated producer operation or contribution recomputation is added. Full-trip entry allocations remain capped by the existing 65536-byte option and signed alloca pointer-index ceiling. New mixed interactions reserve [65 x i32], [65 x double], [65 x float]: 260+4 ABI padding+520+260=1044 bytes. Four reductions share three contributions. Logical stores are 16*P bytes and loads 16*P bytes (32*P total); P=0 has no scratch accesses despite full capacity reservation. 1043 rejects and 1044 admits, without compact/retained-state chunking. Seven distinct final producer values use seven scalar forwarding PHIs, including the final conditional state, with no scratch traffic. Historical retained-export cases reserve i32/double streams: 260+4+520=784 bytes; logical stores/loads are each 12*N for unconditional or 12*P for compact cases. Observed accumulators stay scalar and can supply a contribution to a moved independent accumulator without duplication. The dead cross-consumer uses one i32 stream with 260-byte full capacity. Enclosing inherited producers reuse their entry scratch per row. Chunk capacity, carried reductions, global input/local scratch indices, partial chunks and source/VF/traffic remarks remain as in d2; no state carry across chunks is implemented. Production analysis remains direct per-PHI incoming/use scans plus O(B+E) acyclic CFG and existing instruction/effect/export scans, SCEV bounds and dominance queries; one retained-state bit restricts chunking. No general SSA reconstruction, path enumeration, target cost model or new analysis framework is introduced. Validation adds small fixture-scoped retention/order/export certificates and independent formulas, reusing inherited typed compact-count, scalar/vector-result and export proofs. Physical stack layout/traffic, spills, RVV execution and speedup remain unmeasured.",
   "tests": [
-    "llvm/test/Other/reduction-fission-execution-checker.test",
+    "llvm/test/Other/reduction-fission-chunk-checker.test",
+    "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
+    "llvm/test/Other/reduction-fission-compact-recurrence-checker.test",
     "llvm/test/Other/reduction-fission-compact-tail-checker.test",
+    "llvm/test/Other/reduction-fission-execution-checker.test",
     "llvm/test/Other/reduction-fission-execution-symbols.test",
+    "llvm/test/Other/reduction-fission-export-checker.test",
+    "llvm/test/Other/reduction-fission-host-adapter.test",
+    "llvm/test/Other/reduction-fission-recurrence-checker.test",
+    "llvm/test/Other/reduction-fission-state-cfg-checker.test",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-trip-count.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-call-tail.ll",
@@ -15,13 +24,22 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combined.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-disabled.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-dispatch.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-duplication.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fabs.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-forced-pair.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering-isolation.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-general.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-independent-vfs.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-induction.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-duplication.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-plan.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-ordered.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-reread.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-invariant-frontier.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-legality.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-live-out.ll",
@@ -33,98 +51,918 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-bounds.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-bounds.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-controls.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-poison.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-exports.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-nested.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recipes.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder-nested.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-fma8.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-same-vf.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-select.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-short-producers.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-signed-zero.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-speculation.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
-    "llvm/test/Other/reduction-fission-recurrence-checker.test",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
-    "llvm/test/Other/reduction-fission-compact-recurrence-checker.test"
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stage-metadata.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
   ],
-  "limitations": "The worker did not compile, run tests, invoke the execution checker or operate any toolchain. The immutable t000042 record reports successful harness compilation followed by 50/53 lit passes and three checker failures; it stopped before VectorizeTests, linked executable comparisons, RVV matrix verification or primary evaluation. This repair has not been built or executed, and all mandatory validation remains pending for t000045. No subsequent failure artifacts exist in that recorded job, so further failures cannot be diagnosed or declared resolved before the harness runs this snapshot. Retained producer live-outs, partial accumulator exports, incompatible participation, arbitrary compact CFGs beyond the existing single diamond, early exits, non-affine termination controls, unavailable or excessive full-trip bounds, unsafe calls/stores/volatile/atomic effects, strictfp and constrained FP remain unsupported. Pointer-valued recurrences and all possible supported acyclic producer shapes are not separately exercised by this compact matrix. No d2 export/chunk work, aggregate stack-budget policy or profitability model is imported. EVL/VP paths receive IR/machine checks only; host execution specializes the actual scalable vector/remainder paths at fixed vscales and executes actual scalar paths. Host fixed-vscale execution is not RVV target execution; machine verification is not speedup measurement. No new corpus selections, measured speedup, maturity or merge outcome is claimed.",
-  "test_expectations": [
-    "Intentional conversion: recurrence_compact is removed from the rejection fixture and appears verbatim, including its original interface and scalar-recurrence.c:12:3 location, in reduction-fission-scalar-recurrence-compact-legacy.ll. Its sole rejection was the removed blanket veto; %prev is isolated producer state, and the %sum/update/merge closure remains sufficient. Expected Selected capacity 65 / bytes 260 replaces the old scalar-unsupported-recurrence expectation. It is executed through original IR / transformed scalar and vector/tail / an independent formula, including skipped iterations changing %prev.",
-    "All other inherited rejection functions, correctness checks and checker mutations remain. New compact negatives retain feedback from accumulator PHIs/merge results into predicates, state and addresses; retaining those accumulators subsequently fails the unchanged export/live-out rule even with independent compact reductions. New independent cases reject retained-state exports, incompatible arms, stores, strictfp, constrained FP, unavailable bounds and capacity 5462. Existing compact partial-state/producer exports, unsafe calls, volatile/atomics and full-stream rejection suites remain mandatory.",
-    "Nine analogous positive functions use two shared integer accumulators plus an ordered double accumulator. They combine integer delay state with ordinary ordered FP fsub state; the reversed canonical sibling also retains reduction-shaped fadd state feeding its predicate and contributions. The merge/affine/enclosing/one/limit siblings update state through active/bypass latch PHIs; the other siblings update state every original iteration, including skipped iterations. Header PHI order does not determine legality.",
-    "The new focused checker regression checks actual scalar, LV2 reordered scalar-tail and LV1 strict EVL output, precise source/capacity/ABI-order byte/stage-VF remarks, all six core shapes and three scalar capacity boundaries. It also checks actual scalar/LV2 tail output for the exact historical function. New mutations reject changed state starts/backedges/operations/order/operand order, changed predicates/addresses, moved/duplicated work, scratch capacity/index/store errors, count increment/bypass errors, wrong P/N bounds and empty guards/starts, skipped zero additions and reassociation. Positive SSA renaming and removal of retained integer poison flags remain allowed. Existing focused checker obligations are preserved.",
-    "The extended executable matrix retains every inherited comparison. New compact core functions run scalar consumers plus actual scalable vector consumers with scalar tails specialized at vscales 1/2/4/8/32; capacities 1/255/5461 run scalar consumers. Each runs separate strict and FP-reordering-option policies and one/two LV invocations. EVL core outputs are checked and uninstrumented RVV machine-verified but not executed on the host.",
-    "The independent compact formula computes exact N, P, floor(P/VF) and P%VF separately per row, including alias writes between rows. Modes cover nonempty producers with P=0, all-active, integer-state sparse, FP-state sparse, first-only and last-only streams. N sweeps 0..66 and UINT64_MAX for capacity 65, and targeted 0/1/small/half/capacity-1/capacity/capacity+1/UINT64_MAX for boundaries. Rows cover 0/1/2/4/5/UINT64_MAX; runtime origins include signed extremes. Integer bits, non-NaN FP bits and signed zero, NaN classification, exact producer/latch/participant/vector/tail probe counts, input/output canaries, aliases and entry scratch reuse are required. Per compiled variant coverage requires zero trips, entered empty streams, active/sparse where possible, first/last-only, capacity, scalar tails and exact/mixed vector paths when VF fits. At VF128 > capacity65, scalar-only execution is expected.",
-    "t000045 repairs checker acceptance only: recurrence_value cannot overwrite the recurrence-mode boolean. All inherited output certificates, including the float stream and i64/nested interfaces, the new three-reduction recurrence interface and the historical delay interface must remain reachable and checked.",
-    "Both add nuw and add nuw nsw scalar-tail spellings are positive cases. The exact +1, induction PHI/backedge/resume, compact P bound, predecessor, forwarding and result provenance checks remain mandatory; steps 0/2/-1, wrong induction inputs/backedges and N/n.vec/65 bounds are rejected. Missing nuw, nsw alone and reversed nsw nuw remain outside this narrowly demonstrated tail certificate.",
-    "The two existing checker lit files are extended; no new test file is added in this repair. The inherited suite is still 53 mandatory files, with all RUN lines and mutations preserved. Additional actual inherited LV2 output covers mixed integer/double/float, i64 and enclosing-row interfaces under both increment spellings. Explicit float start/source/store mutations must still reach the inherited output proof.",
-    "No intentional production or rejection-test expectation changes in t000045. The earlier recurrence_compact conversion, restrictions, executable matrices and ABI-sensitive scratch evidence remain as documented above; acceptance still requires the harness to complete every mandatory stage."
+  "limitations": "This integration has not been compiled or executed by the worker; all mandatory validation is pending harness-only. Only source/diff/immutable-evidence review, Python AST/JSON parsing and text/registration audits were performed. Accepted-head evidence below does not validate the merged snapshot. Nonterminal/conditionally exiting update sites, several update sites, nonidentity extraction bypasses, incompatible extracted participation streams, mixed conditional/unconditional consumers, cycles/early exits, unsafe effects, strictfp/constrained FP and unavailable finite bounds remain unsupported. Safe retained producer state is distinct from illegal extracted-state feedback; feedback is checked as nonextraction, while a different closed accumulator may move. Compact and retained-state chunking remain explicitly unsupported. The exact historical unbounded-R0-address fixture is executed only for N=0/1 and entry bypasses, without inventing an address bound; bounded analogous state-dependent addresses retain inherited full-domain execution. Host specialization executes actual scalar-remainder vectors at fixed vscales 1/2/4/8/32; it is neither EVL/VP host emulation nor RVV target execution. EVL/VP paths receive uninstrumented IR/machine checks only. No whole-function aggregate stack budget, physical traffic, code-size measurement or performance claim is provided. The 117 immutable primary inputs are unchanged. Existing accepted heads and refs remain harness-owned and intact if this combination fails.",
+  "changed_expectations": [
+    "Preserve all 78 inherited runnable lit files and every inherited checker mutation; add two runnable interaction files for a mandatory union of 80. Duplicate affine-evl split-file sections from the textual merge are consolidated without changing their contents or obligations.",
+    "Keep d2 source-located diagnostic changes and positive final-export/compact-CFG/chunk expectations. The exact reject_conditional_update old-accumulator export remains scalar-reduction-feedback; its only accumulator is not extractable.",
+    "The first seven scalar-recurrence-reject fixtures and first four compact-recurrence-reject fixtures become safe retention/export cases. Preserve their original IR, partial-result/output checks and source locations. Require the observed r0 to remain and only closed r1/rd to move, with r0 also moving in independent state-export siblings. All other functions retain per-function no-fission checks and original rejection reasons. Register these exact original functions for independent executable comparison rather than deleting them or weakening their feedback contract.",
+    "reject_compact_cross_reduction can retain sum and extract the closed dead sum2. Preserve the original function and require the observed sum update and its compact store to remain on their original paths. Register exact original/transformed/formula return/input comparisons; no vector speedup or observable dead-sum benefit is asserted.",
+    "At scalar-affine-reject.c:32:3 and 42:3 retained observed state can now export, but the existing 1043-byte runs still reject because the three streams need 1044 bytes. Change only these reason expectations to scalar-scratch-limit and explain the capacity. The inherited 1044-byte positive export run remains.",
+    "Merge the count-checker interfaces explicitly: retain d1 starts/vectorized/recurrence/delay modes and d2 exact CFG/predecessor/bypass checks. Preserve d1 recurrence_value mode-shadow repair and both nuw/nuw nsw unit increments. Adapt compact-tail mutation diagnostics to the earlier precise CFG certificate without removing mutations. Isolate recurrence option lists from d2 VPlan-only/interleave options; preserve the full union of C tables and substitutions."
   ],
-  "frozen_corpus_evidence": {
-    "analysis": "Read harness/BENCHMARKS_ANALYSIS.md: 117 immutable original inputs; original ordinary-vectorization classification and supplementary normalization/FP/errno experiments are distinct.",
-    "earlier_findings": "Read the current inherited report, accepted t000040 task/build/review record and primary/result.json; inspected the immutable t000037 production recognizer diff, t000040 scratch-accounting repair diff and accepted t000040 uninstrumented recurrence EVL / compact scalar-tail output. Acceptance and older measurements are historical only. For t000045, read the immutable t000042 production/checker/test diff, task revision review, builds/t000042/lit.log, compile.log and job result/progress records. The review and tracebacks identify the rf KeyError caused by recurrence boolean shadowing in two inherited checker tests and rejection of the actual add nuw nsw scalar-tail increment in the new checker test. Read the frozen t000040 primary result and the campaign BENCHMARKS_ANALYSIS.md; historical primary counts are retained without treating them as results for either t000042 or t000045.",
-    "accepted_base_revision": "ddcefe9682094295ad1d4e441e0bc5f1da978b76",
-    "accepted_base_checks": "t000040 records compilation, 49 mandatory lit files, 99 VectorizeTests, complete executable matrices and 234 immutable primary compilations passing. Its review records 156672 recurrence vector runs and 227840 recurrence tail runs. This does not validate t000042.",
-    "source": "evaluations/t000040/primary/result.json",
-    "per_policy": {
-      "strict": {
-        "inputs": 117,
-        "rejected": 91,
-        "no_decision": 26,
-        "selected": 0,
-        "vectorized": 12,
-        "unresolved": 0
+  "new_execution_obligations": {
+    "state_cfg_functions": [
+      "state_cfg_serial",
+      "state_cfg_nested",
+      "state_cfg_affine"
+    ],
+    "registration": "STATE_CFG_FUNCTIONS plus export matrix modes 16/17/18; RetainedExports and CrossRetention additional matrices; all original references are separately renamed definitions and compiled by the harness.",
+    "state_cfg_checks": [
+      "conditional retained update on a bypass distinct from reduction participation",
+      "state affects predicate and contribution",
+      "state PHI before/after selected PHIs",
+      "serial/nested upstream diamonds",
+      "three distinct affine latch bypasses",
+      "exact final state/value exports even when P=0 or the last iteration is inactive",
+      "N=0/1/65 and all P=0..65 under input-controlled mode; state-dependent mode independently checked",
+      "every bypass and actual vector/tail/empty/entry path",
+      "strict signed-zero bits and input/output alias behavior",
+      "1043/1044 exact padded capacity",
+      "no compact or retained-state chunking"
+    ],
+    "new_mutations": [
+      "state start/backedge/update operand changes",
+      "state reads moved accumulator",
+      "predicate drops state",
+      "contribution drops state",
+      "conditional state delta/update reordering",
+      "state export substituted by current/participating value",
+      "any latch bypass increments P",
+      "wrong empty-stream start",
+      "consumer bound changed from P to N"
+    ],
+    "default_vscales_planned_state_cfg_comparisons": 417312,
+    "default_vscales_planned_retained_export_comparisons": 784896,
+    "default_vscales_planned_cross_return_comparisons": 10880,
+    "status": "planned comparisons only; stdout per-configuration counters and linked execution are required before reporting observed results"
+  },
+  "prior_immutable_evidence": {
+    "read": [
+      "harness/BENCHMARKS_ANALYSIS.md",
+      "tasks/t000045.json",
+      "tasks/t000046.json",
+      "both immutable head diffs and reports",
+      "builds/t000045/lit.log",
+      "builds/t000046/lit.log",
+      "builds/t000045/unit.log",
+      "builds/t000046/unit.log",
+      "builds/t000045/execution.log",
+      "builds/t000046/execution.log",
+      "evaluations/t000045/primary/result.json",
+      "evaluations/t000046/primary/result.json"
+    ],
+    "heads": {
+      "t000045": {
+        "revision": "f4fbdaaac4960585e4d300705aa15ef1878dc124",
+        "lit_passed": 53,
+        "vectorize_tests_passed": 99,
+        "primary_rows": 234,
+        "primary_nonzero_exits": 0,
+        "primary_summary": {
+          "reordered": {
+            "rejected": 91,
+            "no_decision": 26,
+            "total": 117,
+            "vectorized": 12,
+            "unresolved": 0
+          },
+          "strict": {
+            "rejected": 91,
+            "no_decision": 26,
+            "total": 117,
+            "vectorized": 12,
+            "unresolved": 0
+          }
+        },
+        "validation": {
+          "rvv": "codegen_only",
+          "performance": "not_measured"
+        },
+        "manifest_sha256": "b60b4ce8c4f3f69b6dcd56e5cb0a8c2f2bfddaf30c5d0682c6f2213f4f1a2c3d",
+        "original_target_selections": []
       },
-      "reordered": {
-        "inputs": 117,
-        "rejected": 91,
-        "no_decision": 26,
-        "selected": 0,
-        "vectorized": 12,
-        "unresolved": 0
+      "t000046": {
+        "revision": "0746fd4cb01a5bdd1562d493d2969743eb4268c5",
+        "lit_passed": 71,
+        "vectorize_tests_passed": 106,
+        "primary_rows": 234,
+        "primary_nonzero_exits": 0,
+        "primary_summary": {
+          "reordered": {
+            "rejected": 88,
+            "no_decision": 26,
+            "selected": 3,
+            "total": 117,
+            "vectorized": 12,
+            "unresolved": 0
+          },
+          "strict": {
+            "rejected": 88,
+            "no_decision": 26,
+            "selected": 3,
+            "total": 117,
+            "vectorized": 12,
+            "unresolved": 0
+          }
+        },
+        "validation": {
+          "rvv": "codegen_only",
+          "performance": "not_measured"
+        },
+        "manifest_sha256": "b60b4ce8c4f3f69b6dcd56e5cb0a8c2f2bfddaf30c5d0682c6f2213f4f1a2c3d",
+        "original_target_selections": [
+          {
+            "id": "t000104-dlib-lm-numerical",
+            "policy": "strict",
+            "attribution": "exact",
+            "target_records": [
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Selected",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/dlib/lm-numerical-observation-sweep.cpp",
+                  "Line": 1136,
+                  "Column": 5
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "split "
+                  },
+                  {
+                    "Path": "scalar-IR"
+                  },
+                  {
+                    "String": " reduction loop; stage VFs selected independently by normal vectorization; scratch capacity "
+                  },
+                  {
+                    "ChunkCapacity": "910"
+                  },
+                  {
+                    "String": ", scratch bytes "
+                  },
+                  {
+                    "ScratchBytes": "65520"
+                  },
+                  {
+                    "String": ", producer live-outs "
+                  },
+                  {
+                    "ProducerLiveOuts": "3"
+                  },
+                  {
+                    "String": ", chunked schedule, trip bound "
+                  },
+                  {
+                    "MaxTripCount": "1000"
+                  },
+                  {
+                    "String": ", scratch store bytes/iteration "
+                  },
+                  {
+                    "ScratchStoreBytesPerIteration": "72"
+                  },
+                  {
+                    "String": ", scratch load bytes/iteration "
+                  },
+                  {
+                    "ScratchLoadBytesPerIteration": "72"
+                  },
+                  {
+                    "String": ", producer reread bytes/iteration "
+                  },
+                  {
+                    "ProducerRereadBytesPerIteration": "0"
+                  },
+                  {
+                    "String": ", duplicated producer instructions "
+                  },
+                  {
+                    "DuplicatedProducerInstructions": "0"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/dlib/lm-numerical-observation-sweep.cpp",
+                  "Line": 1136,
+                  "Column": 5
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "producer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "ProducerVF": "vscale x 2"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/dlib/lm-numerical-observation-sweep.cpp",
+                  "Line": 1136,
+                  "Column": 5
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "consumer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "AccumulatorVF": "vscale x 2"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "t000104-dlib-lm-numerical",
+            "policy": "reordered",
+            "attribution": "exact",
+            "target_records": [
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Selected",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/dlib/lm-numerical-observation-sweep.cpp",
+                  "Line": 1136,
+                  "Column": 5
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "split "
+                  },
+                  {
+                    "Path": "scalar-IR"
+                  },
+                  {
+                    "String": " reduction loop; stage VFs selected independently by normal vectorization; scratch capacity "
+                  },
+                  {
+                    "ChunkCapacity": "910"
+                  },
+                  {
+                    "String": ", scratch bytes "
+                  },
+                  {
+                    "ScratchBytes": "65520"
+                  },
+                  {
+                    "String": ", producer live-outs "
+                  },
+                  {
+                    "ProducerLiveOuts": "3"
+                  },
+                  {
+                    "String": ", chunked schedule, trip bound "
+                  },
+                  {
+                    "MaxTripCount": "1000"
+                  },
+                  {
+                    "String": ", scratch store bytes/iteration "
+                  },
+                  {
+                    "ScratchStoreBytesPerIteration": "72"
+                  },
+                  {
+                    "String": ", scratch load bytes/iteration "
+                  },
+                  {
+                    "ScratchLoadBytesPerIteration": "72"
+                  },
+                  {
+                    "String": ", producer reread bytes/iteration "
+                  },
+                  {
+                    "ProducerRereadBytesPerIteration": "0"
+                  },
+                  {
+                    "String": ", duplicated producer instructions "
+                  },
+                  {
+                    "DuplicatedProducerInstructions": "0"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/dlib/lm-numerical-observation-sweep.cpp",
+                  "Line": 1136,
+                  "Column": 5
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "producer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "ProducerVF": "vscale x 2"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/dlib/lm-numerical-observation-sweep.cpp",
+                  "Line": 1136,
+                  "Column": 5
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "consumer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "AccumulatorVF": "vscale x 2"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "t000159-vv10-hessian-ft-six-trial-grid",
+            "policy": "strict",
+            "attribution": "exact",
+            "target_records": [
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Selected",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-ft-six-trial-grid.c",
+                  "Line": 22289,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "split "
+                  },
+                  {
+                    "Path": "scalar-IR"
+                  },
+                  {
+                    "String": " reduction loop; stage VFs selected independently by normal vectorization; scratch capacity "
+                  },
+                  {
+                    "ChunkCapacity": "682"
+                  },
+                  {
+                    "String": ", scratch bytes "
+                  },
+                  {
+                    "ScratchBytes": "65472"
+                  },
+                  {
+                    "String": ", producer live-outs "
+                  },
+                  {
+                    "ProducerLiveOuts": "0"
+                  },
+                  {
+                    "String": ", chunked schedule, trip bound "
+                  },
+                  {
+                    "MaxTripCount": "2147483647"
+                  },
+                  {
+                    "String": ", scratch store bytes/iteration "
+                  },
+                  {
+                    "ScratchStoreBytesPerIteration": "96"
+                  },
+                  {
+                    "String": ", scratch load bytes/iteration "
+                  },
+                  {
+                    "ScratchLoadBytesPerIteration": "96"
+                  },
+                  {
+                    "String": ", producer reread bytes/iteration "
+                  },
+                  {
+                    "ProducerRereadBytesPerIteration": "0"
+                  },
+                  {
+                    "String": ", duplicated producer instructions "
+                  },
+                  {
+                    "DuplicatedProducerInstructions": "0"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-ft-six-trial-grid.c",
+                  "Line": 22289,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "producer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "ProducerVF": "vscale x 2"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-ft-six-trial-grid.c",
+                  "Line": 22289,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "consumer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "AccumulatorVF": "vscale x 2"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "t000159-vv10-hessian-ft-six-trial-grid",
+            "policy": "reordered",
+            "attribution": "exact",
+            "target_records": [
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Selected",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-ft-six-trial-grid.c",
+                  "Line": 22289,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "split "
+                  },
+                  {
+                    "Path": "scalar-IR"
+                  },
+                  {
+                    "String": " reduction loop; stage VFs selected independently by normal vectorization; scratch capacity "
+                  },
+                  {
+                    "ChunkCapacity": "682"
+                  },
+                  {
+                    "String": ", scratch bytes "
+                  },
+                  {
+                    "ScratchBytes": "65472"
+                  },
+                  {
+                    "String": ", producer live-outs "
+                  },
+                  {
+                    "ProducerLiveOuts": "0"
+                  },
+                  {
+                    "String": ", chunked schedule, trip bound "
+                  },
+                  {
+                    "MaxTripCount": "2147483647"
+                  },
+                  {
+                    "String": ", scratch store bytes/iteration "
+                  },
+                  {
+                    "ScratchStoreBytesPerIteration": "96"
+                  },
+                  {
+                    "String": ", scratch load bytes/iteration "
+                  },
+                  {
+                    "ScratchLoadBytesPerIteration": "96"
+                  },
+                  {
+                    "String": ", producer reread bytes/iteration "
+                  },
+                  {
+                    "ProducerRereadBytesPerIteration": "0"
+                  },
+                  {
+                    "String": ", duplicated producer instructions "
+                  },
+                  {
+                    "DuplicatedProducerInstructions": "0"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-ft-six-trial-grid.c",
+                  "Line": 22289,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "producer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "ProducerVF": "vscale x 2"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-ft-six-trial-grid.c",
+                  "Line": 22289,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "consumer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "AccumulatorVF": "vscale x 2"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "t000159-vv10-hessian-uwabce-grid",
+            "policy": "strict",
+            "attribution": "exact",
+            "target_records": [
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Selected",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-uwabce-grid.c",
+                  "Line": 3856,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "split "
+                  },
+                  {
+                    "Path": "scalar-IR"
+                  },
+                  {
+                    "String": " reduction loop; stage VFs selected independently by normal vectorization; scratch capacity "
+                  },
+                  {
+                    "ChunkCapacity": "1365"
+                  },
+                  {
+                    "String": ", scratch bytes "
+                  },
+                  {
+                    "ScratchBytes": "65520"
+                  },
+                  {
+                    "String": ", producer live-outs "
+                  },
+                  {
+                    "ProducerLiveOuts": "0"
+                  },
+                  {
+                    "String": ", chunked schedule, trip bound "
+                  },
+                  {
+                    "MaxTripCount": "2147483647"
+                  },
+                  {
+                    "String": ", scratch store bytes/iteration "
+                  },
+                  {
+                    "ScratchStoreBytesPerIteration": "48"
+                  },
+                  {
+                    "String": ", scratch load bytes/iteration "
+                  },
+                  {
+                    "ScratchLoadBytesPerIteration": "48"
+                  },
+                  {
+                    "String": ", producer reread bytes/iteration "
+                  },
+                  {
+                    "ProducerRereadBytesPerIteration": "0"
+                  },
+                  {
+                    "String": ", duplicated producer instructions "
+                  },
+                  {
+                    "DuplicatedProducerInstructions": "0"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-uwabce-grid.c",
+                  "Line": 3856,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "producer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "ProducerVF": "vscale x 2"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-uwabce-grid.c",
+                  "Line": 3856,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "consumer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "AccumulatorVF": "vscale x 2"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "t000159-vv10-hessian-uwabce-grid",
+            "policy": "reordered",
+            "attribution": "exact",
+            "target_records": [
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Selected",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-uwabce-grid.c",
+                  "Line": 3856,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "split "
+                  },
+                  {
+                    "Path": "scalar-IR"
+                  },
+                  {
+                    "String": " reduction loop; stage VFs selected independently by normal vectorization; scratch capacity "
+                  },
+                  {
+                    "ChunkCapacity": "1365"
+                  },
+                  {
+                    "String": ", scratch bytes "
+                  },
+                  {
+                    "ScratchBytes": "65520"
+                  },
+                  {
+                    "String": ", producer live-outs "
+                  },
+                  {
+                    "ProducerLiveOuts": "0"
+                  },
+                  {
+                    "String": ", chunked schedule, trip bound "
+                  },
+                  {
+                    "MaxTripCount": "2147483647"
+                  },
+                  {
+                    "String": ", scratch store bytes/iteration "
+                  },
+                  {
+                    "ScratchStoreBytesPerIteration": "48"
+                  },
+                  {
+                    "String": ", scratch load bytes/iteration "
+                  },
+                  {
+                    "ScratchLoadBytesPerIteration": "48"
+                  },
+                  {
+                    "String": ", producer reread bytes/iteration "
+                  },
+                  {
+                    "ProducerRereadBytesPerIteration": "0"
+                  },
+                  {
+                    "String": ", duplicated producer instructions "
+                  },
+                  {
+                    "DuplicatedProducerInstructions": "0"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-uwabce-grid.c",
+                  "Line": 3856,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "producer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "ProducerVF": "vscale x 2"
+                  }
+                ]
+              },
+              {
+                "Pass": "vplan-reduction-fission",
+                "Name": "Stage",
+                "DebugLoc": {
+                  "File": "harness/benchmarks/pyscf/vv10-hessian-uwabce-grid.c",
+                  "Line": 3856,
+                  "Column": 9
+                },
+                "Function": "bench_kernel",
+                "Args": [
+                  {
+                    "String": "scalar-IR fission "
+                  },
+                  {
+                    "Stage": "consumer"
+                  },
+                  {
+                    "String": " VF "
+                  },
+                  {
+                    "AccumulatorVF": "vscale x 2"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       }
     },
-    "changes_from_parent": [],
-    "interpretation": "No original target-loop selections were established by the accepted base. New legality is general retained-state/compact composition; no benchmark-specific transformation or predicted target-count gain is used.",
-    "preserved_integration_pins": {
-      "task": "t000036",
-      "direction": "d2",
-      "base_revision": "e1dd9998051324d4484d254a2a16ead09dfd2a50",
-      "merge_revision": "6108751ee4350f697bdc673f770c70d157860ab6",
-      "changed_by_this_task": false
-    }
+    "interpretation": "Both accepted heads independently passed their harness checks and all 234 frozen compilations. d1 has no exact-target fission selection; d2 has three per policy, at original dlib and two PySCF target locations, with stage/scratch records below. These are historical codegen observations, not merged results, RVV target execution or speedups. Preserve exact original-loop attribution, not nested/helper activity."
   },
   "validation_requested": {
-    "task_id": "t000045",
+    "task_id": "t000047",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
       "required": true,
       "harness_only": true,
-      "base_revision": "2e5656bd2038eaa541c5a25f1df1759f366b34c7",
-      "agent_compilation": false,
       "fresh_c_harness_compilation_and_link_required": true,
-      "snapshot": "freeze this repaired d1 worktree from failed t000042 revision; preserve other heads and d2 integration pins"
+      "preserve_accepted_heads_if_failed": true
     },
-    "lit": {
-      "mandatory_fission_suite": true,
-      "all_inherited_run_lines": true,
-      "changed_and_explicit_paths": [
-        "llvm/test/Other/reduction-fission-execution-checker.test",
+    "mandatory_lit": {
+      "required": true,
+      "expected_files": 80,
+      "explicit_paths": [
+        "llvm/test/Other/reduction-fission-chunk-checker.test",
+        "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
+        "llvm/test/Other/reduction-fission-compact-recurrence-checker.test",
         "llvm/test/Other/reduction-fission-compact-tail-checker.test",
+        "llvm/test/Other/reduction-fission-execution-checker.test",
         "llvm/test/Other/reduction-fission-execution-symbols.test",
+        "llvm/test/Other/reduction-fission-export-checker.test",
+        "llvm/test/Other/reduction-fission-host-adapter.test",
+        "llvm/test/Other/reduction-fission-recurrence-checker.test",
+        "llvm/test/Other/reduction-fission-state-cfg-checker.test",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-analysis.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-bounded-trip-count.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-call-tail.ll",
@@ -132,13 +970,22 @@
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combine-add.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-combined.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-disabled.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-dispatch.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-duplication.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fabs.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-forced-pair.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering-isolation.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-fp-reordering.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-general.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-independent-vfs.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-induction.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-duplication.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-plan.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-ordered.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide-reread.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave-wide.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-interleave.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-invariant-frontier.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-legality.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-live-out.ll",
@@ -150,59 +997,62 @@
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-bounds.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-chunks.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-bounds.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-cfg.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-reject.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond-reject.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-controls.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-poison.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-exports.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-integration.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-nested.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-reject.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recipes.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder-nested.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-remainder.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-fma8.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scipy-same-vf.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-select.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-short-producers.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-signed-zero.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-speculation.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
-        "llvm/test/Other/reduction-fission-recurrence-checker.test",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
-        "llvm/test/Other/reduction-fission-compact-recurrence-checker.test"
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stage-metadata.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
       ],
-      "total_requested_file_count": 53,
-      "new_files": [],
+      "all_inherited_run_lines": true,
       "preserve_every_inherited_checker_mutation": true,
-      "extended_files": [
-        "llvm/test/Other/reduction-fission-compact-tail-checker.test",
-        "llvm/test/Other/reduction-fission-compact-recurrence-checker.test"
-      ],
-      "new_files_from_inherited_t000042": [
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
-        "llvm/test/Other/reduction-fission-compact-recurrence-checker.test"
-      ],
       "include_all_added_tests": true,
-      "mandatory_file_count": 53,
-      "do_not_stop_after_focused_repairs_pass": true
+      "standalone_input_exclusions": [
+        "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
+        "llvm/test/Other/Inputs/reduction-fission-compact-exits.ll"
+      ]
     },
-    "unit": {
+    "mandatory_unit_suite": {
       "required": true,
-      "suite": "VectorizeTests",
+      "executable": "VectorizeTests",
+      "filter": null,
       "all_tests": true
     },
-    "execution": {
+    "mandatory_execution": {
       "required": true,
-      "checker": "llvm/utils/check-reduction-fission.py",
-      "harness": "llvm/utils/reduction-fission-execution.c.in",
       "harness_only": true,
+      "driver": "llvm/utils/check-reduction-fission.py",
+      "harness": "llvm/utils/reduction-fission-execution.c.in",
       "complete_inherited_matrices": true,
       "complete_new_matrices": true,
       "comparison": [
@@ -213,7 +1063,7 @@
       ],
       "fp_policies": [
         "strict",
-        "explicit fission FP reordering option only"
+        "explicit fission FP reordering only"
       ],
       "loop_vectorize_invocations": [
         1,
@@ -226,38 +1076,15 @@
         8,
         32
       ],
-      "compact_recurrence_functions": 9,
-      "historical_exact_function": "recurrence_compact",
-      "capacities": [
-        1,
-        65,
-        255,
-        5461
+      "preserve": [
+        "all C tables and reference origins",
+        "all inherited N/P/capacity/alias/guarded-input/canary matrices",
+        "original/transformed IR and commands",
+        "exact per-function/configuration N/P/vector/tail/empty/bypass counters",
+        "signed-zero/ordered-FP contracts",
+        "source-location Selected/Rejected and independent stage VF/scratch evidence"
       ],
-      "require_exact_counts": [
-        "producer iterations N",
-        "producer latches N",
-        "participating arm P",
-        "per-row floor(P/VF) vector visits",
-        "per-row P%VF scalar tail visits"
-      ],
-      "require": [
-        "zero producer trips",
-        "nonempty P=0 with unchanged starts and no skipped additions",
-        "all-active and sparse participation",
-        "first-only and last-only participation",
-        "state changes on skipped iterations",
-        "conditional state merges",
-        "capacity edges",
-        "aliases including changed following rows",
-        "repeated enclosing allocation reuse",
-        "ordered FP starts/operands",
-        "bitwise non-NaN/signed-zero and NaN-class comparison",
-        "all inherited output interfaces including the float stream",
-        "new retained-state compact and exact historical delay interfaces",
-        "exact ABI stream-order reserved-byte accounting without final-stream padding"
-      ],
-      "comparison_status": "pending t000045 harness-only fresh compilation, link and complete original/transformed/independent-formula execution; t000042 stopped at mandatory lit and did not complete this stage; host object generation alone is not an executable comparison"
+      "generation_is_not_execution": true
     },
     "rvv_machine_verification": {
       "required": true,
@@ -266,10 +1093,10 @@
       "verify_machineinstrs": true,
       "uninstrumented": true,
       "include": [
-        "inherited paths",
-        "new scalar paths",
-        "new LV1/LV2 EVL paths",
-        "new LV1/LV2 vector/scalar-tail paths",
+        "full inherited union",
+        "new scalar consumer paths",
+        "new once/twice-LV EVL paths",
+        "new once/twice-LV vector/scalar-tail paths",
         "both FP policies"
       ],
       "target_execution": false,
@@ -285,54 +1112,22 @@
       ],
       "compilations": 234,
       "rewrite_inputs": false,
+      "supplementary_math_flags": [],
       "exact_original_loop_attribution": true,
       "preserve_evidence": [
-        "source-location Selected/Rejected remarks",
+        "source hashes and commands",
+        "source-located Selected/Rejected",
         "producer VF and consumer VF independently",
-        "scratch capacity and exact reserved bytes",
-        "commands, input hashes and per-input results",
-        "IR verification and uninstrumented RVV machine-verified assembly"
+        "scratch capacity and reserved bytes/traffic",
+        "IR and RVV codegen/machine verification"
       ],
       "nested_or_helper_success_is_not_original_target_success": true
     },
-    "acceptance": "Fresh harness-only LLVM build and C harness compilation/link; all 53 inherited/new mandatory lit files with every RUN and added case; all VectorizeTests; complete inherited and new original IR / actual transformed scalar/vector/tail / independent formula comparisons under separate strict and explicitly reordered policies, repeated LV1/LV2 and vscales 1/2/4/8/32; uninstrumented RVV machine verification; and all 234 compilations of the 117 immutable primary inputs must pass. Preserve exact original-loop Selected/Rejected locations, independent producer/consumer VFs, P and empty-stream starts, ordered FP, aliases and ABI-sensitive scratch evidence. Retain every correctness assertion and negative mutation. Diagnose subsequent failures from actual harness artifacts without broadening semantic assumptions. Compiler crashes, incorrect transformations and mandatory failures block acceptance. Historical t000042 compilation and 50 passing lit files do not validate t000045. Host fixed-vscale comparisons are not RVV target execution, and code generation/machine verification is not speedup measurement; lack of measured speedup is not a veto. No current validation result, maturity or merge is claimed."
+    "acceptance": "Fresh harness-only build; all 80 union lit paths and every RUN/mutation; all VectorizeTests; complete inherited/new linked original/transformed/independent-formula comparisons; uninstrumented RVV machine verification; all 234 immutable primary compilations. A crash, wrong transformation or failed mandatory check blocks acceptance. No measured speedup is required."
   },
-  "future_work": "Consume fresh immutable harness results for t000045 and repair any concrete subsequent failures while preserving every correctness check and both FP contracts. The worker has no later artifacts to inspect and does not claim that mandatory validation completed. After acceptance of the retained-state/compact objective, broader CFGs, producer exports, d2 integration, aggregate scratch budgets and actual RVV execution/performance remain future work; no implementation in those directions is dispatched here.",
-  "revision_feedback": {
-    "task": "t000042",
-    "revision": "2e5656bd2038eaa541c5a25f1df1759f366b34c7",
-    "decision": "revise",
-    "sources": [
-      "tasks/t000042.json",
-      "diffs/t000042.patch",
-      "builds/t000042/lit.log",
-      "builds/t000042/compile.log",
-      "jobs/t000042/000002-build/result.json",
-      "builds/t000042/progress.json"
-    ],
-    "historical_harness_result": {
-      "compilation": "passed",
-      "mandatory_lit_passed": 50,
-      "mandatory_lit_total": 53,
-      "failed_files": [
-        "llvm/test/Other/reduction-fission-execution-checker.test",
-        "llvm/test/Other/reduction-fission-compact-tail-checker.test",
-        "llvm/test/Other/reduction-fission-compact-recurrence-checker.test"
-      ],
-      "first_two": "KeyError rf: per-reduction SSA string shadows the recurrence interface boolean",
-      "third": "Actual scalar-tail add nuw nsw rejected by add nuw-only matcher",
-      "later_stages": "not reached; no acceptance or head advancement"
-    },
-    "repair": [
-      "Rename the local SSA string to recurrence_value; preserve the explicit recurrence-mode flag.",
-      "Require add nuw with optional nsw on the exact checked i64 +1 tail increment.",
-      "Retain every existing certificate/mutation and add both-spelling positives plus changed-step/bound/output negatives across inherited and new interfaces."
-    ],
-    "production_legality_changed_by_repair": false,
-    "semantic_assumptions_added": false,
-    "benchmark_inputs_changed": false,
-    "d2_changes_imported": false,
-    "repair_validation": "pending harness only; worker ran no compilation or tests",
-    "unresolved": "Fresh 53-file lit suite, all VectorizeTests, all linked executable matrices, uninstrumented RVV machine verification and all 234 immutable primary compilations remain unexecuted for this repair."
-  }
+  "future_work": [
+    "Review harness artifacts before accepting the integration; existing heads must survive any failure.",
+    "Consider compact/retained-state chunk carries only as a separate semantic task with executable path/carry verification.",
+    "Keep whole-function stack aggregation, target execution and performance measurement separate from this legality integration."
+  ]
 }

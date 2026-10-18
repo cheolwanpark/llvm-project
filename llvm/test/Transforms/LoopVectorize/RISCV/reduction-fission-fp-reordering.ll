@@ -30,7 +30,7 @@
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
 ; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -vplan-reduction-fission-allow-fp-reordering \
 ; RUN:   -S %s -o %t.disabled
-; RUN: diff %t.default %t.disabled
+; RUN: diff %t.reject %t.disabled
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
 ; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
 ; RUN:   -vplan-reduction-fission-allow-fp-reordering -vplan-reduction-fission-min-chain-depth=4 \
@@ -61,8 +61,16 @@
 ; RELAXED: call reassoc double @llvm.vector.reduce.fadd.{{.*}}(double -0.000000e+00,
 ; RELAXED: scalar.fission.accumulator.body:
 ; RELAXED: fadd reassoc double
+; Removing the FP profitability veto also admits ordered fission by default.
+; Default and explicit-false remain identical; scratch-rejected and disabled
+; lowering remain identical. Ordered reductions must still lack reassoc.
+; DEFAULT-LABEL: define void @fp_reordering(
 ; DEFAULT-NOT: fadd reassoc
-; DEFAULT: @llvm.vp.reduce.fadd
+; DEFAULT: vector.fission.producer.body:
+; DEFAULT: vector.fission.accumulator.body:
+; DEFAULT: call double @llvm.vector.reduce.fadd.
+; DEFAULT: scalar.fission.accumulator.body:
+; DEFAULT: fadd double
 ; DEFAULT-NOT: fadd reassoc
 ; ASM: vfredusum.vs
 

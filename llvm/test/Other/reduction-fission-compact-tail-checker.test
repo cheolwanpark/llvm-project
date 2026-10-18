@@ -14,6 +14,8 @@ import sys
 
 spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
 checker = importlib.util.module_from_spec(spec)
+sys.dont_write_bytecode = True
+sys.modules[spec.name] = checker
 spec.loader.exec_module(checker)
 original = Path(sys.argv[2]).read_text()
 name = 'affine_compact'
@@ -162,17 +164,22 @@ for lv, path in enumerate(sys.argv[3:], 1):
     rejected(edit_block(body, tail, 'label %' + tail + ', label %' + (hop if lv == 2 else join),
                         'label %' + (hop if lv == 2 else join) + ', label %' + tail), 'instruction')
     rejected(edit_block(body, 'middle.block', 'label %' + join + ', label %scalar.ph',
-                        'label %scalar.ph, label %' + join), 'compact count provenance',
-             prefix='compact count provenance')
+                        'label %scalar.ph, label %' + join),
+             'middle.block: branch br i1 %cmp.n, label %' + join + ', label %scalar.ph',
+             prefix='compact count provenance:')
     rejected(edit_block(body, 'scalar.fission.consumer.ph',
                         'label %scalar.ph, label %vector.ph',
-                        'label %vector.ph, label %scalar.ph'), 'compact count provenance',
-             prefix='compact count provenance')
+                        'label %vector.ph, label %scalar.ph'),
+             'scalar.fission.consumer.ph: branch br i1 %min.iters.check, label %scalar.ph, label %vector.ph',
+             prefix='compact count provenance:')
     for target, obligation in [('middle.block', 'middle predecessors'),
-                               (join, 'join predecessors'), (end, 'result predecessors')]:
+                               (join, 'join predecessors')]:
         at = block(body, join).start()
         extra = 'unexpected:\n  br label %' + target + '\n'
         rejected(body[:at] + extra + body[at:], obligation)
+    at = block(body, join).start()
+    rejected(body[:at] + 'unexpected:\n  br label %' + end + '\n' + body[at:],
+             end + ': predecessors', prefix='compact count provenance:')
 
     if lv == 2:
         # The exact actual tail-hop PHIs must be the only work in that block.
@@ -212,7 +219,8 @@ for lv, path in enumerate(sys.argv[3:], 1):
         rejected(body[:at] + 'unexpected:\n  br label %' + hop + '\n' + body[at:],
                  'tail forwarding edge/predecessors')
         rejected(body[:at] + 'unexpected:\n  switch i64 %n, label %' + hop +
-                 ' [ i64 0, label %exit ]\n' + body[at:], 'tail forwarding edge/predecessors')
+                 ' [ i64 0, label %exit ]\n' + body[at:],
+                 'unexpected: terminator switch', prefix='compact count provenance:')
         longer = edit_block(body, hop, 'br label %' + join, 'br label %longer')
         at = block(longer, join).start()
         rejected(longer[:at] + 'longer:\n  br label %' + join + '\n' + longer[at:],

@@ -236,8 +236,18 @@ void saveReductionFissionPlan(VPlan &Plan, SmallVectorImpl<VPlanPtr> &Plans);
 /// Whether the optional reduction-fission pipeline is enabled.
 bool isReductionFissionEnabled();
 
+/// Whether this loop was emitted by either fission path. Ordinary LV may still
+/// vectorize it, but it must not become a new fission candidate, including when
+/// explicit follow-up metadata re-enables vectorization on a later LV run.
+bool isReductionFissionStage(const Loop &L);
+
+/// Retain stage provenance when ordinary LV applies explicit follow-up hints.
+/// Those hints replace the loop ID and can otherwise drop the fission tags.
+void preserveReductionFissionStageMetadata(MDNode *OriginalID, Loop &L);
+
 /// Split a bounded scalar loop before querying whole-loop vectorizability.
 /// On success L remains the producer; the returned sibling is the consumer.
+/// Oversized single-block loops become siblings inside a bounded chunk loop.
 /// Neither stage has been vectorized. Both must go through normal LV planning.
 Loop *tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                ScalarEvolution &SE,
@@ -325,6 +335,8 @@ struct VPReductionProducerInput {
   VPValue *Value = nullptr;
   SmallPtrSet<const VPRecipeBase *, 16> Recipes;
   VPDependencyMetrics Dependency;
+  bool IsVarying = false;
+  /// Preferred long cut, or a nonempty varying fallback when none is long.
   bool IsLong = false;
 };
 
@@ -343,7 +355,9 @@ struct VPReductionFissionPartition {
 };
 
 struct VPReductionFissionConfig {
+  /// Retained for callers of the experimental API; no longer a veto.
   unsigned MinimumReductionCount = 4;
+  /// Cut preference only; short producers are also eligible.
   unsigned MinimumLongProducerDepth = 8;
 };
 
@@ -422,13 +436,6 @@ struct VPReductionFissionCandidate {
 bool verifyFissionMemorySchedule(const VPReductionFissionCandidate &Candidate,
                                  VPReductionFissionContext &Context);
 
-/// Additional traffic/reduction cost gate for the new FP paths. Existing
-/// unordered candidates keep their pressure-based selection policy.
-std::optional<VPReductionFissionRejectReason>
-checkFissionFPCost(VPlan &Baseline,
-                   const VPReductionFissionCandidate &Candidate,
-                   const TargetTransformInfo &TTI);
-
 struct VPFissionVFPressure {
   ElementCount VF;
   VPRegisterPressureBreakdown Pressure;
@@ -443,8 +450,13 @@ struct VPReductionFissionDecision {
 
 VPReductionFissionAnalysis
 analyzeVPReductionFission(VPlan &Plan,
+                          // Retained for experimental callers, not a veto.
                           const VPRegisterPressureBreakdown &Pressure,
                           const VPReductionFissionConfig &Config = {});
+
+/// Check the VF-independent supported recipe subset before stage construction.
+bool isSupportedReductionFissionPlan(VPlan &Plan,
+                                    const TargetTransformInfo &TTI);
 
 /// Check the supported, VF-independent recipe subset and target memory/type
 /// legality. In particular, a vector-call variant is legal only at its own VF.
@@ -474,14 +486,14 @@ Expected<VPReductionFissionCandidate> buildReductionFissionStagePlans(
     const VPScratchPlan &Scratch, ArrayRef<ElementCount> CandidateVFs,
     bool CombineAddContributions = false);
 
-/// Select legal stage VFs relative to the baseline VF and pressure.
-/// AllowPressureOverflow is used only by explicit stage-VF experiments.
+/// Select stage VFs independently from their legal sets, preferring the largest
+/// with register headroom, otherwise the smallest legal VF. The baseline VF is
+/// recorded for diagnostics only; pressure improvement is not required.
 VPReductionFissionDecision selectReductionFissionConfiguration(
-    ElementCount ActualBaselineVF, ArrayRef<VPFissionVFPressure> Baseline,
-    ArrayRef<VPFissionVFPressure> Producer,
+    ElementCount ActualBaselineVF, ArrayRef<VPFissionVFPressure> Producer,
     ArrayRef<VPFissionVFPressure> Accumulator, uint64_t ScratchBytes,
     uint64_t MaximumScratchBytes, unsigned DuplicatedRecipeCount,
-    unsigned MaximumDuplicatedRecipes, bool AllowPressureOverflow = false);
+    unsigned MaximumDuplicatedRecipes);
 
 } // namespace llvm
 

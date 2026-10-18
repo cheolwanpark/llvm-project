@@ -1,23 +1,32 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
 ; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --implicit-check-not=scalar.fission < %t
+; RUN:   -enable-vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -pass-remarks=vplan-reduction-fission -S %s -o %t 2> %t.remarks
+; RUN: FileCheck %s  < %t
 ; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
 ; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
 ; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
 ; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering -S %s \
-; RUN:   | FileCheck %s --implicit-check-not=scalar.fission
+; RUN:   | FileCheck %s
 ;
-; Feedback retains that accumulator, then its export fails the unchanged
-; live-out rule. An independent compact accumulator cannot hide it. Keep all
-; inherited unconditional/compact/export/effects/bounds rejection fixtures too.
+; Integration: producer exports make the first feedback/export fixtures
+; safely splittable. Their original IR is preserved. Only closed r1/rd (and
+; r0 in the state-export sibling) move; every observed r0 remains in place.
+; These are negative checks for illegal extraction, not whole-loop rejection.
+; Original/transformed/independent comparisons also cover these exact functions.
+; Effects, strictfp, constrained FP, incompatible streams and bounds still reject.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare double @llvm.experimental.constrained.fsub.f64(double, double, metadata, metadata)
 
-; REASON: scalar-compact-recurrence.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
+; REASON: scalar-compact-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
 ; CHECK-LABEL: define void @compact_recurrence_reject_predicate(
+; CHECK: %prev = phi i32
+; CHECK: %r0 = phi i32
+; CHECK: scalar.fission.consumer.body:
+; CHECK-NOT: %r0.consume =
+; CHECK: %r1.consume = phi i32
+; CHECK: %rd.consume = phi double
 ; CHECK: ret void
 define void @compact_recurrence_reject_predicate(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !12 {
@@ -96,8 +105,14 @@ exit:
   ret void
 }
 
-; REASON: scalar-compact-recurrence.c:22:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
+; REASON: scalar-compact-recurrence.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
 ; CHECK-LABEL: define void @compact_recurrence_reject_state(
+; CHECK: %prev = phi i32
+; CHECK: %r0 = phi i32
+; CHECK: scalar.fission.consumer.body:
+; CHECK-NOT: %r0.consume =
+; CHECK: %r1.consume = phi i32
+; CHECK: %rd.consume = phi double
 ; CHECK: ret void
 define void @compact_recurrence_reject_state(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !14 {
@@ -176,8 +191,14 @@ exit:
   ret void
 }
 
-; REASON: scalar-compact-recurrence.c:32:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
+; REASON: scalar-compact-recurrence.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
 ; CHECK-LABEL: define void @compact_recurrence_reject_address(
+; CHECK: %prev = phi i32
+; CHECK: %r0 = phi i32
+; CHECK: scalar.fission.consumer.body:
+; CHECK-NOT: %r0.consume =
+; CHECK: %r1.consume = phi i32
+; CHECK: %rd.consume = phi double
 ; CHECK: ret void
 define void @compact_recurrence_reject_address(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !16 {
@@ -256,8 +277,12 @@ exit:
   ret void
 }
 
-; REASON: scalar-compact-recurrence.c:42:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
+; REASON: scalar-compact-recurrence.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
 ; CHECK-LABEL: define void @compact_recurrence_reject_state_export(
+; CHECK: %prev = phi i32
+; CHECK: scalar.fission.consumer.body:
+; CHECK: %r1.consume = phi i32
+; CHECK: %rd.consume = phi double
 ; CHECK: ret void
 define void @compact_recurrence_reject_state_export(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !18 {
@@ -340,6 +365,7 @@ exit:
 
 ; REASON: scalar-compact-recurrence.c:52:3: scalar-IR reduction fission rejected: scalar-incompatible-participation
 ; CHECK-LABEL: define void @compact_recurrence_reject_incompatible(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_recurrence_reject_incompatible(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !20 {
@@ -420,6 +446,7 @@ exit:
 
 ; REASON: scalar-compact-recurrence.c:62:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
 ; CHECK-LABEL: define void @compact_recurrence_reject_store(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_recurrence_reject_store(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !22 {
@@ -501,6 +528,7 @@ exit:
 
 ; REASON: scalar-compact-recurrence.c:72:3: scalar-IR reduction fission rejected: scalar-strict-fp
 ; CHECK-LABEL: define void @compact_recurrence_reject_strict(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_recurrence_reject_strict(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) strictfp !dbg !24 {
@@ -581,6 +609,7 @@ exit:
 
 ; REASON: scalar-compact-recurrence.c:82:3: scalar-IR reduction fission rejected: scalar-strict-fp
 ; CHECK-LABEL: define void @compact_recurrence_reject_constrained(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_recurrence_reject_constrained(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !26 {
@@ -661,6 +690,7 @@ exit:
 
 ; REASON: scalar-compact-recurrence.c:92:3: scalar-IR reduction fission rejected: {{non-constant-trip-count|scalar-scratch-limit}}
 ; CHECK-LABEL: define void @compact_recurrence_reject_unbounded(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_recurrence_reject_unbounded(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !28 {
@@ -741,6 +771,7 @@ exit:
 
 ; REASON: scalar-compact-recurrence.c:102:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 ; CHECK-LABEL: define void @compact_recurrence_reject_over_capacity(
+; CHECK-NOT: scalar.fission
 ; CHECK: ret void
 define void @compact_recurrence_reject_over_capacity(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !30 {

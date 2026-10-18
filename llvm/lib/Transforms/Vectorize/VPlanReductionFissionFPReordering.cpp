@@ -32,7 +32,7 @@ bool FissionFPReorderingPolicy::isEnabled() {
 bool FissionFPReorderingPolicy::shouldAttempt(const Loop &L,
                                               const LoopVectorizeHints &Hints,
                                               bool OptForSize) {
-  return isEnabled() && getScalarReductionFissionStage(L).empty() &&
+  return isEnabled() && !isReductionFissionStage(L) &&
          L.isInnermost() && !Hints.getWidth() &&
          Hints.getInterleave() <= 1 && !OptForSize && L.getNumBlocks() == 1 &&
          !L.getHeader()->getParent()->hasFnAttribute(Attribute::StrictFP);

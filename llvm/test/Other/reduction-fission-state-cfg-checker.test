@@ -1,0 +1,105 @@
+# REQUIRES: riscv-registered-target
+# RUN: split-file %s %t
+# RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+# RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
+# RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
+# RUN:   -enable-vplan-reduction-fission -tail-folding-policy=dont-fold-tail \
+# RUN:   -enable-epilogue-vectorization=false -S %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll -o %t.once.ll
+# RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+# RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
+# RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
+# RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
+# RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
+# RUN:   -S %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll -o %t.twice.ll
+# RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+# RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
+# RUN:   -scalable-vectorization=always -hints-allow-reordering=false -enable-vplan-reduction-fission \
+# RUN:   -S %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll -o %t.once.evl.ll
+# RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+# RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
+# RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission \
+# RUN:   -S %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll -o %t.twice.scalar.ll
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-state-cfg.ll \
+# RUN:   %t.once.ll %t.twice.ll %t.once.evl.ll %t.twice.scalar.ll
+
+# This adds interaction mutations; all inherited recurrence, CFG, count,
+# result, export, chunk and host-adapter mutation fixtures remain mandatory.
+# The host comparison matrix separately executes actual original/transformed
+# IR and independent C under both policies and once/twice LV.
+
+#--- check.py
+import importlib.util
+from pathlib import Path
+import re
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = checker
+spec.loader.exec_module(checker)
+source = Path(sys.argv[2]).read_text()
+
+
+def definition(text, value, old, new):
+    pattern = r'^  %' + re.escape(value) + r' = [^\n]*$'
+    matches = list(re.finditer(pattern, text, re.M))
+    assert len(matches) == 1, value
+    line = matches[0]
+    assert line[0].count(old) == 1, (value, old, line[0])
+    return text[:line.start()] + line[0].replace(old, new, 1) + text[line.end():]
+
+
+for path in sys.argv[3:]:
+    module = Path(path).read_text()
+    evl, scalar = '.evl.' in path, '.scalar.' in path
+    for name in checker.STATE_CFG_FUNCTIONS:
+        body = checker.function_definition(module, name)
+        assert checker.check_producer_exports(module, name, evl, source=source, scalar=scalar) == body
+        if not evl:
+            probed = checker.check_producer_exports(module, name, evl, source=source,
+                                                     scalar=scalar, probe=True)
+            assert probed.count('call void @record_compact_participant()') == 1
+            assert probed.count('call void @record_scalar_consumer_tail()') == 1
+
+        def reject(candidate, obligation):
+            try:
+                checker.check_producer_exports(module.replace(body, candidate, 1), name,
+                                               evl, source=source, scalar=scalar)
+            except AssertionError as error:
+                assert obligation in str(error), (name, obligation, error)
+            else:
+                raise AssertionError(name + ': accepted ' + obligation)
+
+        # Retained state is observable in the predicate/contribution/export.
+        # It cannot be deleted, reseeded, moved to a different path, changed
+        # to read moved state, or reordered ahead of its conditional delta.
+        reject(definition(body, 'state', '[ 23,', '[ 0,'), 'export control:')
+        reject(definition(body, 'state.next', '%state,', '%fission.participating,'), 'export control:')
+        reject(definition(body, 'state.next', '%state.delta', '%r0.consume'), 'export control:')
+        reject(definition(body, 'state.merge', '%state.next,', '%state,'), 'export control:')
+        reject(definition(body, 'choose', '%state.choose,', '%nonzero.x,'), 'export control:')
+        reject(definition(body, 'state.arg', ', %state', ', %x'), 'export control:')
+        delta = re.search(r'^  %state.delta = [^\n]*\n', body, re.M)[0]
+        update = re.search(r'^  %state.next = [^\n]*\n', body, re.M)[0]
+        assert delta + update in body
+        reject(body.replace(delta + update, update + delta, 1), 'retained state order/path:')
+        reject(definition(body, 'state.merge.fission.export', '%state.merge,', '%state,'), 'producer export c.copy:')
+        reject(definition(body, 'out.c.copy', '%state.merge.fission.export', '%c.fission.export'), 'producer export c.copy:')
+        # Every bypass carries old P, including the edge that updates state.
+        producer, _ = checker.scalar_consumer(body, name)
+        for edge in checker.check_compact_cfg_producer(producer, name):
+            reject(definition(body, 'fission.participating.merge',
+                              '[ %fission.participating, %' + edge + ' ]',
+                              '[ %fission.participating.next, %' + edge + ' ]'),
+                   'latch participation value/edge')
+        reject(definition(body, 'r0.result', '[ 17,', '[ 0,'), 'empty-stream start value/edge')
+        if not evl:
+            for step in ('0', '2', '-1'):
+                reject(definition(body, 'fission.consumer.next', ', 1', ', ' + step),
+                       'producer export:')
+            bound = re.search(r'%fission.consumer.more = icmp ne i64 %fission.consumer.next, (%[-\w.$]+)', body)[1]
+            reject(definition(body, 'fission.consumer.more', ', ' + bound, ', %n'), 'compact count provenance:')
+
+print('PASS: retained state / compact CFG / final export interaction certificates')

@@ -26,11 +26,19 @@
 ; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 \
 ; RUN:   -pass-remarks=vplan-reduction-fission -disable-output %s 2>&1 | FileCheck %s --check-prefix=LIMIT
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=259 \
+; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=3 \
 ; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s 2>&1 | FileCheck %s --check-prefix=TOOSMALL
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
 ; RUN:   -S %s | FileCheck %s --check-prefix=DISABLED --implicit-check-not=scalar.fission
 ;
+; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission \
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=259 -pass-remarks=vplan-reduction-fission \
+; RUN:   -disable-output %s 2>&1 | FileCheck %s --check-prefix=CHUNK
+;
+; The former 259-byte full-trip rejection now uses 64 reusable i32 slots.
+; Three bytes still cannot hold one contribution and must reject before mutation.
+; CHUNK: scalar-ir.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256, producer live-outs 0, chunked schedule, trip bound 65
 ; The helper has no vector-function mapping, and its body is not available to
 ; opt. Its explicit contract, not its name, permits fission. No chain-depth,
 ; pressure, minimum-reduction-count or whole-loop vectorizability gate applies.

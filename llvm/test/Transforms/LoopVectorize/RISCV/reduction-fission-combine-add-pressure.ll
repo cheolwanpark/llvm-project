@@ -1,19 +1,24 @@
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 -S %s -o %t
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 -vplan-reduction-fission-combine-add-contributions=false -S %s -o %t.old
-; RUN: diff %t %t.old
+; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 -S %s -o %t
+; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 -vplan-reduction-fission-combine-add-contributions=false -S %s -o %t.old
+; RUN: FileCheck %s --check-prefix=ORIGINAL < %t.old
 ; RUN: FileCheck %s < %t
 ; RUN: llc -mtriple=riscv64 -mattr=+v,+m -verify-machineinstrs %t -o /dev/null
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 -vplan-reduction-fission-force-producer-vf=8 -vplan-reduction-fission-force-accumulator-vf=8 -S %s | FileCheck %s --check-prefix=FORCED
 ;
-; Combining six private terms keeps too many producer values live at the
-; original producer VF. Reject that candidate and retain the original cut/VFs.
+; Combining six private terms increases estimated producer pressure. Explicit
+; fission now accepts that legal cut, saving five scratch arrays at the selected
+; pair. The uncombined option still exposes all nine original scratch values.
 ; CHECK-LABEL: define void @pressure_fallback(
-; CHECK-COUNT-9: alloca [257 x i32]
+; CHECK-COUNT-4: alloca [257 x i32]
 ; CHECK-NOT: alloca [257 x i32]
 ; CHECK: vector.fission.producer.body:
 ; CHECK: vector.fission.accumulator.body:
-; The explicit experimental pressure override proves a merged cut exists;
-; ordinary selection above must still reject it and preserve the original.
+; ORIGINAL-LABEL: define void @pressure_fallback(
+; ORIGINAL-COUNT-9: alloca [257 x i32]
+; ORIGINAL-NOT: alloca [257 x i32]
+; ORIGINAL: vector.fission.producer.body:
+; ORIGINAL: vector.fission.accumulator.body:
+; Explicit VFs retain the same scratch saving and all stage legality checks.
 ; FORCED-COUNT-4: alloca [257 x i32]
 ; FORCED-NOT: alloca [257 x i32]
 ; FORCED: vector.fission.producer.body:

@@ -1,11 +1,18 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 \
 ; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2>%t.remarks
 ; RUN: FileCheck %s --implicit-check-not=scalar.fission < %t
 ; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
 ; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
 ; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 \
 ; RUN:   -S %s | FileCheck %s --implicit-check-not=scalar.fission
+; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
+; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
+; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=1044 \
+; RUN:   -S %s | FileCheck %s --check-prefix=EXPORT
 ;
 ; A supported affine IV is insufficient to override any semantic restriction.
 ; Existing early-exit, internal-cycle, call/effect, ordered-FP and unsupported
@@ -160,9 +167,9 @@ exit:
   ret void
 }
 
-; The feedback recurrence must stay in the producer, where its final export
-; still fails the producer live-out rule. Other reductions cannot hide it.
-; REASON: scalar-affine-reject.c:32:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
+; The feedback recurrence stays in the producer. Its final export is now
+; legal, but all three unique streams still need 1044 bytes: 1043 rejects.
+; REASON: scalar-affine-reject.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 ; CHECK-LABEL: define void @reject_affine_feedback(
 ; CHECK: ret void
 define void @reject_affine_feedback(ptr readonly %a, ptr readonly %fp, ptr %out,
@@ -235,7 +242,7 @@ exit:
   ret void
 }
 
-; REASON: scalar-affine-reject.c:42:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
+; REASON: scalar-affine-reject.c:42:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 ; CHECK-LABEL: define void @reject_affine_contribution_feedback(
 ; CHECK: ret void
 define void @reject_affine_contribution_feedback(ptr readonly %a, ptr readonly %fp, ptr %out,
@@ -455,9 +462,26 @@ exit:
   ret void
 }
 
-; REASON: scalar-affine-reject.c:72:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
+; The formerly unsupported final IV export is legal. Retain the rejection at
+; 1043 bytes, and require the same source function to split at exactly 1044.
+; Mixed-type final exports are executed by scalar-export-controls.ll.
+; PHI operand ordering is semantically irrelevant; the incoming edges are
+; essential: zero comes from entry, and the final IV comes from the consumer's
+; dedicated exit. Capture that forwarding block to check both associations.
+; REASON: scalar-affine-reject.c:72:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 ; CHECK-LABEL: define void @reject_affine_liveout(
 ; CHECK: ret void
+; EXPORT-LABEL: define void @reject_affine_liveout(
+; EXPORT: alloca [65 x i32]
+; EXPORT: alloca [65 x double]
+; EXPORT: alloca [65 x float]
+; EXPORT: %iv.fission.export = phi i64 [ %iv, %latch ]
+; EXPORT: [[FORWARD:exit\.loopexit]]:
+; EXPORT: %[[FINAL:.*]] = phi i64 [ %iv.fission.export, %scalar.fission.consumer.body ]
+; EXPORT: br label %exit
+; EXPORT: exit:
+; EXPORT: %observed = phi i64 [ 0, %entry ], [ %[[FINAL]], %[[FORWARD]] ]
+; EXPORT: ret void
 define void @reject_affine_liveout(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !18 {
 entry:

@@ -1,5 +1,5 @@
 # RUN: split-file %s %t
-# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py %t/functions.ll %t/compact-evl.ll \
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py %t/functions.ll %t/compact-evl.ll %t/dispatch-once.ll %t/dispatch-evl.ll %S/Inputs/reduction-fission-compact-exits.ll \
 # RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll %t/affine-evl.ll \
 # RUN:   %S/Inputs/reduction-fission-affine-counts.ll
 
@@ -14,6 +14,8 @@ import sys
 
 spec = importlib.util.spec_from_file_location('fission_checker', sys.argv[1])
 checker = importlib.util.module_from_spec(spec)
+sys.dont_write_bytecode = True
+sys.modules[spec.name] = checker
 spec.loader.exec_module(checker)
 source = Path(sys.argv[2]).read_text()
 
@@ -81,7 +83,21 @@ assert ('%pi = phi i64 [ 0, %preheader ], [ %next, %latch ]\n'
 # control operands, even if a dead use of the original export remains.
 compact_tail = checker.function_definition(source, 'compact_triangle')
 producer, _ = checker.scalar_consumer(compact_tail, 'compact_triangle')
-compact_evl = producer + Path(sys.argv[3]).read_text().rstrip()
+# Replace only the consumer, retaining the original entry bypass, result
+# forwarding and observable output blocks. Both certificates inspect real CFG
+# edges across the entire function; a consumer-only fragment is insufficient.
+output_parts = re.split(r'^output\.bridge:', compact_tail, flags=re.M)
+assert len(output_parts) == 2
+output_tail = 'output.bridge:' + output_parts[1]
+compact_evl = producer + Path(sys.argv[3]).read_text().rstrip() + '\n' + output_tail
+for fixture in (compact_tail, compact_evl):
+    assert fixture.endswith(output_tail)
+    blocks = checker.loop_blocks(fixture)
+    assert {'entry', 'output.bridge', 'exit'} <= blocks.keys()
+    for label, code in blocks.items():
+        targets = [target for line in code.splitlines()
+                   for target in re.findall(r'\blabel %([-\w.$]+)', line.split(';', 1)[0])]
+        assert set(targets) <= blocks.keys(), (label, targets)
 exported = '%fission.participating.count'
 merged = '%fission.participating.merge'
 forwarded = merged + '.lcssa'
@@ -107,16 +123,25 @@ def change_line(body, value, old, new):
     return body[:match.start(1)] + changed + body[match.end(1):]
 
 
-def reject_compact(body, evl, reason):
+def reject_compact(body, evl, reason, name='compact_triangle', count_obligation=None):
     try:
-        checker.check_scalar_function(body, 'compact_triangle', evl=evl)
-    except AssertionError:
-        pass
+        checker.check_scalar_function(body, name, evl=evl)
+    except AssertionError as error:
+        if count_obligation is not None:
+            assert 'compact count provenance:' in str(error) and count_obligation in str(error), error
     else:
         raise AssertionError('accepted compact ' + reason)
 
 
 for evl, original in ((False, compact_tail), (True, compact_evl)):
+    # Losing an output suffix must fail the whole-CFG proof, never silently
+    # shrink it to the consumer. Keep this boundary check under both policies.
+    for label, predecessor in (('exit', 'entry'), ('output.bridge', 'scalar.fission.consumer.exit')):
+        missing, count = re.subn(r'^' + re.escape(label) + r':[^\n]*\n.*?(?=^[-\w.$]+:|^})',
+                                '', original, flags=re.M | re.S)
+        assert count == 1, label
+        reject_compact(missing, evl, 'missing output block ' + label,
+                       count_obligation=predecessor + ': missing successor ' + label)
     for bound in (exported, merged, forwarded):
         producer, consumer = checker.scalar_consumer(original, 'compact_triangle')
         if bound == forwarded:
@@ -159,6 +184,21 @@ for evl, original in ((False, compact_tail), (True, compact_evl)):
         for condition in conditions:
             reject_compact(candidate.replace('  br i1 ' + condition + ',', '  br i1 %choose,'),
                            evl, 'unused count-controlled predicate ' + condition)
+        # Operand identity alone does not prove the predicate's polarity.
+        # Diagnose the actual controlling block and ordered successors under
+        # both policies and every demonstrated count-forwarding spelling.
+        branches = [('vector.body', '%done.evl' if evl else '%vector.done',
+                     'middle.block', 'vector.body')]
+        if not evl:
+            branches += [('scalar.fission.consumer.ph', '%min.iters.check', 'scalar.ph', 'vector.ph'),
+                         ('middle.block', '%cmp.n', 'scalar.fission.consumer.loopexit', 'scalar.ph')]
+        for label, condition, on_true, on_false in branches:
+            branch = f'br i1 {condition}, label %{on_true}, label %{on_false}'
+            assert candidate.count(branch) == 1, (label, branch)
+            reject_compact(candidate.replace(branch,
+                                             f'br i1 {condition}, label %{on_false}, label %{on_true}'),
+                           evl, 'swapped control successors at ' + label,
+                           count_obligation=label + ': branch ' + branch)
         if evl:
             for value, old, new in [
                 ('%evl', 'i64 %avl', 'i64 %n'),
@@ -312,13 +352,182 @@ for evl, original in ((False, compact_tail), (True, compact_evl)):
                                              '  br label %middle.block\nvector.ph:'),
                            True, 'extra vector exit predecessor')
 
+def edit_block(body, label, edit):
+    pattern = (r'(^' + re.escape(label) + r':[^\n]*\n)'
+               r'((?s:.*?))(?=^[\w.$-]+:|^}|\Z)')
+    result, count = re.subn(pattern, lambda m: m[1] + edit(m[2]), body, flags=re.M)
+    assert count == 1, label
+    return result
+
+
+# Frozen t000016 compact_nested failed because repeated LV added exactly one
+# scalar-exit LCSSA block. Test that snapshot, its direct form, and analogous
+# two-i64 and i32/double/float cases. Names alone never establish provenance.
+snapshots = Path(sys.argv[6]).read_text()
+tail_label = 'scalar.fission.consumer.body'
+join_label = 'scalar.fission.consumer.loopexit'
+forward_label = 'verified.scalar.exit'
+samples = [
+    ('compact_triangle', compact_tail,
+     [('r0', 'i32', '%u0.consume', '%ir'),
+      ('r1', 'i32', '%u1.consume', '%ir2'),
+      ('rd', 'double', '%ud.consume', '%dr'),
+      ('rf', 'float', '%uf.consume', '%fr')]),
+    ('compact_integer', checker.function_definition(snapshots, 'compact_integer'),
+     [('sum', 'i64', '%u.consume', '%9'),
+      ('sum2', 'i64', '%u2.consume', '%10')]),
+    ('compact_nested', checker.function_definition(snapshots, 'compact_nested'),
+     [('sum', 'i32', '%update.consume', '%11'),
+      ('dsum', 'double', '%dupdate.consume', '%.lcssa')]),
+]
+for name, original, reductions in samples:
+    checker.check_scalar_function(original, name, evl=False)
+    direct = original
+    if name == 'compact_nested':
+        old_forward = join_label + '.loopexit'
+        code = checker.loop_blocks(direct)[old_forward]
+        direct = direct.replace(old_forward + ':\n' + code, '')
+        direct = edit_block(direct, tail_label,
+                            lambda code: code.replace('%' + old_forward, '%' + join_label))
+        for _, _, update, _ in reductions:
+            direct = edit_block(direct, join_label, lambda code: code.replace(
+                '[ ' + update + '.lcssa, %' + old_forward + ' ]',
+                '[ ' + update + ', %' + tail_label + ' ]'))
+    checker.check_scalar_function(direct, name, evl=False)
+    direct_probed = checker.check_scalar_function(direct, name, evl=False, probe=True)
+    assert direct_probed.count('call void @record_scalar_consumer_tail()') == 1
+    assert '@record_' not in checker.loop_blocks(direct_probed)[join_label]
+
+    phis = ''.join(f'  %verified.update.{i} = phi {ty} [ {update}, %{tail_label} ]\n'
+                   for i, (_, ty, update, _) in enumerate(reductions))
+    forwarded_exit = edit_block(direct, tail_label,
+                               lambda code: code.replace('%' + join_label, '%' + forward_label))
+    for i, (_, _, update, _) in enumerate(reductions):
+        forwarded_exit = edit_block(forwarded_exit, join_label, lambda code: code.replace(
+            '[ ' + update + ', %' + tail_label + ' ]',
+            f'[ %verified.update.{i}, %{forward_label} ]'))
+    forwarded_exit = forwarded_exit.replace(
+        join_label + ':\n', forward_label + ':\n' + phis +
+        '  br label %' + join_label + '\n\n' + join_label + ':\n')
+    checker.check_scalar_function(forwarded_exit, name, evl=False)
+    # A different label, reversed PHI order and misleading printed predecessor
+    # comment do not change the real edges or values.
+    renamed = forwarded_exit.replace(forward_label, join_label + '.loopexit')
+    checker.check_scalar_function(renamed, name, evl=False)
+    reordered = forwarded_exit.replace(phis, ''.join(reversed(phis.splitlines(True))))
+    reordered = reordered.replace(forward_label + ':\n', forward_label + ': ; preds = %entry\n')
+    checker.check_scalar_function(reordered, name, evl=False)
+    probed = checker.check_scalar_function(forwarded_exit, name, evl=False, probe=True)
+    assert probed.count('call void @record_scalar_consumer_tail()') == 1
+    assert '@record_' not in checker.loop_blocks(probed)[forward_label]
+
+    for candidate, scalar_edge in ((direct, tail_label), (forwarded_exit, forward_label)):
+        for i, (value, ty, update, vector_result) in enumerate(reductions):
+            scalar_result = update if scalar_edge == tail_label else f'%verified.update.{i}'
+            for wrong in ('%unrelated', '%' + value + '.consume', vector_result,
+                          update + '.lcssa.unrelated'):
+                reject_compact(change_line(candidate, '%' + value + '.lcssa',
+                                           scalar_result + ',', wrong + ','), False,
+                               'wrong scalar join value ' + value, name)
+            reject_compact(change_line(candidate, '%' + value + '.lcssa',
+                                       vector_result + ',', '%unrelated,'), False,
+                           'wrong vector join value ' + value, name)
+            reject_compact(change_line(candidate, '%' + value + '.lcssa',
+                                       '%' + scalar_edge, '%scalar.ph'), False,
+                           'wrong scalar join edge ' + value, name)
+            # The branch destination is never its own PHI predecessor. A
+            # forwarded exit must also reject the pre-forwarding tail edge.
+            for wrong_edge in (join_label, forward_label if scalar_edge == tail_label else tail_label):
+                reject_compact(change_line(candidate, '%' + value + '.lcssa',
+                                           '%' + scalar_edge, '%' + wrong_edge), False,
+                               'destination or wrong exit shape on scalar join edge ' + value, name)
+            reject_compact(change_line(candidate, '%' + value + '.result',
+                                       '%' + value + '.lcssa,', '%unrelated,'), False,
+                           'wrong final nonempty result ' + value, name)
+            for result in ('%' + value + '.lcssa', '%' + value + '.result'):
+                reject_compact(change_line(candidate, result, 'phi ' + ty, 'phi i16'),
+                               False, 'wrong join/final result type ' + value, name)
+            reject_compact(change_line(candidate, '%' + value + '.consume',
+                                       update + ',', '%unrelated,'), False,
+                           'wrong recurrence update ' + value, name)
+            if not ty.startswith('i'):
+                reject_compact(change_line(candidate, update, 'fadd ', 'fadd fast '),
+                               False, 'unordered scalar FP update ' + value, name)
+                operands = re.search(re.escape(update) + r' = fadd ' + ty +
+                                     r' (%[-\w.$]+), (%[-\w.$]+)', candidate)
+                assert operands
+                reject_compact(change_line(candidate, update,
+                                           operands[1] + ', ' + operands[2],
+                                           operands[2] + ', ' + operands[1]), False,
+                               'changed ordered FP operand order ' + value, name)
+                if name == 'compact_nested':
+                    for old, new in [('[ %9,', '[ %unrelated,'),
+                                     ('%vector.body', '%vector.ph'),
+                                     ('phi double', 'phi float'),
+                                     (' ]', ' ], [ %9, %vector.ph ]')]:
+                        reject_compact(change_line(candidate, vector_result, old, new),
+                                       False, 'wrong vector LCSSA provenance', name)
+
+        # Printed predecessor comments cannot conceal an actual extra edge to
+        # either the scalar/vector join or the final empty/nonempty join.
+        for target in (join_label, 'scalar.fission.consumer.exit'):
+            extra = candidate[:-1] + 'extra.predecessor:\n  br label %' + target + '\n}'
+            reject_compact(extra, False, 'extra join predecessor ' + target, name)
+
+    for i, (value, ty, update, _) in enumerate(reductions):
+        exported_update = f'%verified.update.{i}'
+        for wrong in ('%unrelated', '%' + value + '.consume', update + '.unrelated',
+                      reductions[(i + 1) % len(reductions)][2]):
+            reject_compact(change_line(forwarded_exit, exported_update, update + ',', wrong + ','),
+                           False, 'wrong forwarded update ' + value, name)
+        for old, new in [
+            ('phi ' + ty, 'phi ' + ('float' if ty == 'double' else 'i16')),
+            ('%' + tail_label, '%scalar.ph'),
+            (' ]', ' ], [ ' + update + ', %entry ]'),
+        ]:
+            reject_compact(change_line(forwarded_exit, exported_update, old, new),
+                           False, 'wrong forwarding type/edge/cardinality ' + value, name)
+        line = f'  {exported_update} = phi {ty} [ {update}, %{tail_label} ]\n'
+        reject_compact(forwarded_exit.replace(line, ''), False,
+                       'missing forwarding PHI ' + value, name)
+
+    # No computations, memory operations, calls or extra PHIs are allowed in
+    # this one bounded forwarding block, even when all result PHIs still match.
+    for extra in ('  %unused = add i32 0, 0\n',
+                  '  %unused = load i32, ptr %out\n',
+                  '  store i32 0, ptr %out\n',
+                  '  call void @effect()\n',
+                  '  fence seq_cst\n',
+                  '  %unused = phi i64 [ 0, %' + tail_label + ' ]\n'):
+        reject_compact(edit_block(forwarded_exit, forward_label,
+                                  lambda code: code.replace('  br label', extra + '  br label')),
+                       False, 'intervening computation/effect/extra PHI', name)
+    extra_edge = forwarded_exit[:-1] + (
+        'extra.predecessor:\n  br label %' + forward_label + '\n}')
+    extra_edge = extra_edge.replace(forward_label + ':\n',
+                                   forward_label + ': ; preds = %' + tail_label + '\n')
+    reject_compact(extra_edge, False, 'extra real forwarding predecessor', name)
+    reject_compact(forwarded_exit.replace(forward_label + ':\n',
+                                          forward_label + '.unrelated:\n'),
+                   False, 'undefined same-prefix forwarding label', name)
+    for replacement in ('  br label %scalar.fission.consumer.exit',
+                        '  br i1 %choose, label %' + join_label + ', label %' + join_label):
+        reject_compact(edit_block(forwarded_exit, forward_label, lambda code: code.replace(
+            '  br label %' + join_label, replacement)), False,
+            'wrong/conditional forwarding terminator', name)
+    chain = edit_block(forwarded_exit, forward_label, lambda code: code.replace(
+        '  br label %' + join_label, '  br label %another.exit'))
+    chain = chain.replace(join_label + ':\n',
+                          'another.exit:\n  br label %' + join_label + '\n' + join_label + ':\n')
+    reject_compact(chain, False, 'unsupported forwarding chain', name)
+
 # Retained output from the affine execution fixture that exposed whole-block
 # metadata truncation. Use the real original and production checker, including
 # every control, scratch and actual-count assertion, rather than a normalization
 # helper or an independent approximation of the preservation check.
 affine_name = 'affine_const'
-affine_source = checker.function_definition(Path(sys.argv[4]).read_text(), affine_name)
-affine = checker.function_definition(Path(sys.argv[5]).read_text(), affine_name)
+affine_source = checker.function_definition(Path(sys.argv[7]).read_text(), affine_name)
+affine = checker.function_definition(Path(sys.argv[8]).read_text(), affine_name)
 assert checker.check_affine_function(affine, affine_source, affine_name, evl=True) == affine
 
 
@@ -600,8 +809,8 @@ for candidate in (affine, many_metadata):
 # termination, modular wrap, enclosing reuse, and the four early-exit siblings.
 # These are checker fixtures; real opt transformations are still mandatory in
 # the executable comparisons, at every N=0..66 and UINT64_MAX, and P=0..65.
-affine_originals = Path(sys.argv[4]).read_text()
-affine_outputs = Path(sys.argv[6]).read_text()
+affine_originals = Path(sys.argv[7]).read_text()
+affine_outputs = Path(sys.argv[9]).read_text()
 retained_affine = list(checker.FUNCTION_DEFINITION.finditer(affine_outputs))
 assert len(retained_affine) == 14
 for match in retained_affine:
@@ -1088,6 +1297,98 @@ for intrinsic in ('llvm.experimental.get.vector.length.i64',
     else:
         raise AssertionError('unsupported intrinsic silently specialized')
 
+# The dispatch snapshots reduce the frozen t000014 single/repeated-LV output
+# to one function (debug metadata omitted). These are parser boundaries only;
+# the driver must still generate, verify and execute the actual transformation.
+once = Path(sys.argv[4]).read_text()
+evl = Path(sys.argv[5]).read_text()
+for repeated, use_evl in ((False, False), (False, True), (True, False)):
+    tails = checker.check_dispatch_interleave(once, 'interleave2', 2, repeated, use_evl)
+    assert [tail['vf'] for tail in tails] == [0, 0]
+    instrumented = checker.instrument_interleave_stages(once, ['interleave2'])
+    assert instrumented.count('call void @fission_interleave_probe(') == 4
+    assert 'call void @fission_interleave_tail_probe(' not in instrumented
+
+tails = checker.check_dispatch_interleave(evl, 'interleave2', 2, True, True)
+assert [tail['vf'] for tail in tails] == [4, 4]
+assert [tail['label'] for tail in tails] == ['vector.body23', 'vector.body']
+assert all(tail['mode'] == 'evl' and tail['scalar_entries'] == '0' for tail in tails)
+assert tails[0]['vector_lanes'] == 'N % (2*vscale)'
+assert tails[1]['vector_lanes'] == 'N % (4*vscale)'
+
+
+def reject_dispatch(candidate, repeated=True, evl=True):
+    try:
+        checker.check_dispatch_interleave(candidate, 'interleave2', 2, repeated, evl)
+    except (AssertionError, KeyError):
+        pass
+    else:
+        raise AssertionError('unaccounted/misattributed dispatch loop accepted')
+
+
+# A second vector loop is never a single-LV scalar stage. Same-prefix labels,
+# stale or unattached provenance, wrong AVL/step/width/mask and forwarding
+# blocks with arithmetic must not make structural checks silently succeed.
+reject_dispatch(evl, repeated=False)
+reject_dispatch(once.replace(', !llvm.loop !13', ''), repeated=False, evl=False)
+reject_dispatch(evl.replace('vector.body23:', 'vector.body23.unrelated:'))
+reject_dispatch(evl.replace('!llvm.loop !13', '!llvm.loop !99999'))
+reject_dispatch(evl.replace('!13 = distinct !{!13, !100000}',
+                            '!13 = distinct !{!13}'))
+reject_dispatch(evl.replace('%avl25 = phi i64 [ %2,', '%avl25 = phi i64 [ %n,'))
+reject_dispatch(evl.replace('%15 = icmp eq i64 %fission.vector.trip.count, %n',
+                            '%15 = icmp eq i64 %fission.vector.trip.count, 0'))
+reject_dispatch(evl.replace('%avl.next28 = sub nuw i64 %avl25, %27',
+                            '%avl.next28 = sub nuw i64 %avl25, 1'))
+reject_dispatch(evl.replace('%current.iteration.next27 = add i64 %27, %index24',
+                            '%current.iteration.next27 = add i64 1, %index24'))
+reject_dispatch(evl.replace('%17 = add i64 %fission.vector.trip.count, %index24',
+                            '%17 = add i64 0, %index24'))
+reject_dispatch(evl.replace('ptr align 4 %26, <vscale x 4 x i1>',
+                            'ptr align 4 %a, <vscale x 4 x i1>'))
+reject_dispatch(evl.replace('@llvm.vp.store.nxv4i32.', '@llvm.vp.store.nxv8i32.'))
+reject_dispatch(evl.replace('<vscale x 4 x i1> splat (i1 true)',
+                            '<vscale x 4 x i1> splat (i1 false)'))
+reject_dispatch(evl.replace('scalar.fission.producer.body.middle:',
+                            'scalar.fission.producer.body.middle:\n  %extra = add i32 1, 2'))
+reject_dispatch(evl.replace('scalar.fission.producer.body.middle:',
+                            'unaccounted:\n  br i1 %enter, label %unaccounted, '
+                            'label %scalar.fission.producer.body.middle\n'
+                            'scalar.fission.producer.body.middle:'))
+
+# Exercise host probe insertion for emitted full-chunk ordinary tails, with
+# residual scalar bodies still present. The bounded parser fixture only adds
+# the loop shapes; actual code and comparisons are always generated by opt.
+full_chunks = once
+for role, operation in (('producer', 'store <vscale x 4 x i32> zeroinitializer, ptr %a'),
+                        ('accumulator', '%extra.load = load <vscale x 4 x i32>, ptr %a')):
+    label = 'vector.body.' + role
+    scalar = 'scalar.fission.' + role + '.body'
+    extra = (label + ':\n'
+             '  %extra.i.' + role + ' = phi i64 [ 0, %scalar.fission.' + role + '.ph ]\n'
+             '  ' + operation + '\n'
+             '  br i1 %enter, label %' + scalar + ', label %' + label + ', !llvm.loop !99998\n')
+    full_chunks = re.sub(r'^' + re.escape(scalar) + ':', extra + scalar + ':',
+                         full_chunks, count=1, flags=re.M)
+full_chunks += '\n!99998 = distinct !{!99998, !100000}\n'
+tails = checker.check_dispatch_interleave(full_chunks, 'interleave2', 2, True, False)
+assert [tail['vf'] for tail in tails] == [4, 4]
+assert all(tail['mode'] == 'full-chunks' for tail in tails)
+instrumented = checker.instrument_interleave_stages(
+    full_chunks, ['interleave2'], {'interleave2': tails})
+assert instrumented.count('call void @fission_interleave_probe(') == 4
+assert instrumented.count('call void @fission_interleave_tail_probe(') == 2
+for role in ('producer', 'accumulator'):
+    assert ('%extra.i.' + role + ' = phi i64 [ 0, %scalar.fission.' + role + '.ph ]\n'
+            '  %fission.tail.probe.scale.') in instrumented
+fixed = checker.specialize(instrumented, 8)
+assert 'mul i64 %fission.tail.probe.scale.0, 4' in fixed
+assert '%fission.tail.probe.scale.0 = add i64 0, 8' in fixed
+assert 'load <32 x i32>' in fixed
+reject_dispatch(full_chunks, repeated=False, evl=False)
+reject_dispatch(full_chunks.replace('store <vscale x 4 x i32> zeroinitializer',
+                                    'store <vscale x 8 x i32> zeroinitializer'), evl=False)
+
 #--- functions.ll
 define i64 @multiline(ptr %a,
                       i64 %n) {
@@ -1302,8 +1603,363 @@ scalar.fission.consumer.exit:
   %r1.result = phi i32 [ -7, %scalar.fission.consumer.guard ], [ %ir2, %scalar.fission.consumer.loopexit ]
   %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ %dr, %scalar.fission.consumer.loopexit ]
   %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ %fr, %scalar.fission.consumer.loopexit ]
+  br label %output.bridge
+
+#--- dispatch-once.ll
+define void @interleave2(ptr readonly %a, ptr %out, i64 %n) {
+entry:
+  %fission.scratch = alloca [65 x i32], align 4
+  %bounded = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %enter = and i1 %bounded, %nonzero
+  br i1 %enter, label %preheader, label %bypass
+
+preheader:                                        ; preds = %entry
+  %0 = call i64 @llvm.vscale.i64()
+  %1 = mul nuw i64 %0, 2
+  %2 = urem i64 %n, %1
+  %fission.vector.trip.count = sub i64 %n, %2
+  %3 = icmp eq i64 %fission.vector.trip.count, 0
+  br i1 %3, label %scalar.fission.producer.check, label %vector.fission.producer.ph
+
+vector.fission.producer.ph:                       ; preds = %preheader
+  %4 = call i64 @llvm.vscale.i64()
+  %5 = shl nuw i64 %4, 1
+  br label %vector.fission.producer.body
+
+vector.fission.producer.body:                     ; preds = %vector.fission.producer.body, %vector.fission.producer.ph
+  %index = phi i64 [ 0, %vector.fission.producer.ph ], [ %index.next, %vector.fission.producer.body ]
+  %6 = shl nuw i64 %index, 1
+  %7 = getelementptr i32, ptr %a, i64 %6
+  %wide.vec = load <vscale x 4 x i32>, ptr %7, align 4
+  %strided.vec = call { <vscale x 2 x i32>, <vscale x 2 x i32> } @llvm.vector.deinterleave2.nxv4i32(<vscale x 4 x i32> %wide.vec)
+  %8 = extractvalue { <vscale x 2 x i32>, <vscale x 2 x i32> } %strided.vec, 0
+  %9 = extractvalue { <vscale x 2 x i32>, <vscale x 2 x i32> } %strided.vec, 1
+  %10 = mul <vscale x 2 x i32> %8, splat (i32 3)
+  %11 = xor <vscale x 2 x i32> %10, %8
+  %12 = sub <vscale x 2 x i32> %11, %9
+  %13 = mul <vscale x 2 x i32> %12, splat (i32 7)
+  %fission.scratch.address = getelementptr i32, ptr %fission.scratch, i64 %index
+  store <vscale x 2 x i32> %13, ptr %fission.scratch.address, align 4
+  %index.next = add nuw i64 %index, %5
+  %14 = icmp eq i64 %index.next, %fission.vector.trip.count
+  br i1 %14, label %vector.fission.producer.body.middle, label %vector.fission.producer.body, !llvm.loop !8
+
+vector.fission.producer.body.middle:              ; preds = %vector.fission.producer.body
+  br label %vector.fission.producer.exit.ph
+
+vector.fission.producer.exit.ph:                  ; preds = %vector.fission.producer.body.middle
+  br label %scalar.fission.producer.check
+
+scalar.fission.producer.check:                    ; preds = %preheader, %vector.fission.producer.exit.ph
+  %15 = icmp eq i64 %fission.vector.trip.count, %n
+  br i1 %15, label %vector.fission.accumulator.ph, label %scalar.fission.producer.ph
+
+scalar.fission.producer.ph:                       ; preds = %scalar.fission.producer.check
+  br label %scalar.fission.producer.body
+
+scalar.fission.producer.body:                     ; preds = %scalar.fission.producer.body, %scalar.fission.producer.ph
+  %index1 = phi i64 [ %fission.vector.trip.count, %scalar.fission.producer.ph ], [ %index.next3, %scalar.fission.producer.body ]
+  %16 = shl nuw i64 %index1, 1
+  %17 = getelementptr i32, ptr %a, i64 %16
+  %18 = load i32, ptr %17, align 4
+  %19 = getelementptr i8, ptr %17, i64 4
+  %20 = load i32, ptr %19, align 4
+  %21 = mul i32 %18, 3
+  %22 = xor i32 %21, %18
+  %23 = sub i32 %22, %20
+  %24 = mul i32 %23, 7
+  %fission.scratch.address2 = getelementptr i32, ptr %fission.scratch, i64 %index1
+  store i32 %24, ptr %fission.scratch.address2, align 4
+  %index.next3 = add nuw i64 %index1, 1
+  %25 = icmp eq i64 %index.next3, %n
+  br i1 %25, label %scalar.fission.producer.body.middle, label %scalar.fission.producer.body, !llvm.loop !13
+
+scalar.fission.producer.body.middle:              ; preds = %scalar.fission.producer.body
+  br label %scalar.fission.producer.exit
+
+scalar.fission.producer.exit:                     ; preds = %scalar.fission.producer.body.middle
+  br label %vector.fission.accumulator.ph
+
+vector.fission.accumulator.ph:                    ; preds = %scalar.fission.producer.check, %scalar.fission.producer.exit
+  %26 = call i64 @llvm.vscale.i64()
+  %27 = mul nuw i64 %26, 4
+  %28 = urem i64 %n, %27
+  %fission.vector.trip.count4 = sub i64 %n, %28
+  %29 = icmp eq i64 %fission.vector.trip.count4, 0
+  br i1 %29, label %scalar.fission.accumulator.check, label %vector.fission.accumulator.vector.ph
+
+vector.fission.accumulator.vector.ph:             ; preds = %vector.fission.accumulator.ph
+  %30 = call i64 @llvm.vscale.i64()
+  %31 = shl nuw i64 %30, 2
+  br label %vector.fission.accumulator.body
+
+vector.fission.accumulator.body:                  ; preds = %vector.fission.accumulator.body, %vector.fission.accumulator.vector.ph
+  %index5 = phi i64 [ 0, %vector.fission.accumulator.vector.ph ], [ %index.next8, %vector.fission.accumulator.body ]
+  %vec.phi = phi <vscale x 4 x i32> [ insertelement (<vscale x 4 x i32> zeroinitializer, i32 17, i32 0), %vector.fission.accumulator.vector.ph ], [ %32, %vector.fission.accumulator.body ]
+  %vec.phi6 = phi <vscale x 4 x i32> [ insertelement (<vscale x 4 x i32> zeroinitializer, i32 23, i32 0), %vector.fission.accumulator.vector.ph ], [ %33, %vector.fission.accumulator.body ]
+  %fission.scratch.address7 = getelementptr i32, ptr %fission.scratch, i64 %index5
+  %fission.scratch.load = load <vscale x 4 x i32>, ptr %fission.scratch.address7, align 4
+  %32 = add <vscale x 4 x i32> %vec.phi, %fission.scratch.load
+  %33 = xor <vscale x 4 x i32> %vec.phi6, %fission.scratch.load
+  %index.next8 = add nuw i64 %index5, %31
+  %34 = icmp eq i64 %index.next8, %fission.vector.trip.count4
+  br i1 %34, label %vector.fission.accumulator.body.middle, label %vector.fission.accumulator.body, !llvm.loop !15
+
+vector.fission.accumulator.body.middle:           ; preds = %vector.fission.accumulator.body
+  %35 = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %32)
+  %36 = call i32 @llvm.vector.reduce.xor.nxv4i32(<vscale x 4 x i32> %33)
+  br label %vector.fission.accumulator.exit.ph
+
+vector.fission.accumulator.exit.ph:               ; preds = %vector.fission.accumulator.body.middle
+  br label %scalar.fission.accumulator.check
+
+scalar.fission.accumulator.check:                 ; preds = %vector.fission.accumulator.ph, %vector.fission.accumulator.exit.ph
+  %fission.resume.rdx = phi i32 [ 17, %vector.fission.accumulator.ph ], [ %35, %vector.fission.accumulator.exit.ph ]
+  %fission.resume.rdx9 = phi i32 [ 23, %vector.fission.accumulator.ph ], [ %36, %vector.fission.accumulator.exit.ph ]
+  %37 = icmp eq i64 %fission.vector.trip.count4, %n
+  br i1 %37, label %vector.fission.done, label %scalar.fission.accumulator.ph
+
+scalar.fission.accumulator.ph:                    ; preds = %scalar.fission.accumulator.check
+  br label %scalar.fission.accumulator.body
+
+scalar.fission.accumulator.body:                  ; preds = %scalar.fission.accumulator.body, %scalar.fission.accumulator.ph
+  %index10 = phi i64 [ %fission.vector.trip.count4, %scalar.fission.accumulator.ph ], [ %index.next15, %scalar.fission.accumulator.body ]
+  %vec.phi11 = phi i32 [ %fission.resume.rdx, %scalar.fission.accumulator.ph ], [ %38, %scalar.fission.accumulator.body ]
+  %vec.phi12 = phi i32 [ %fission.resume.rdx9, %scalar.fission.accumulator.ph ], [ %39, %scalar.fission.accumulator.body ]
+  %fission.scratch.address13 = getelementptr i32, ptr %fission.scratch, i64 %index10
+  %fission.scratch.load14 = load i32, ptr %fission.scratch.address13, align 4
+  %38 = add i32 %vec.phi11, %fission.scratch.load14
+  %39 = xor i32 %vec.phi12, %fission.scratch.load14
+  %index.next15 = add nuw i64 %index10, 1
+  %40 = icmp eq i64 %index.next15, %n
+  br i1 %40, label %scalar.fission.accumulator.body.middle, label %scalar.fission.accumulator.body, !llvm.loop !16
+
+scalar.fission.accumulator.body.middle:           ; preds = %scalar.fission.accumulator.body
+  br label %scalar.fission.accumulator.exit
+
+scalar.fission.accumulator.exit:                  ; preds = %scalar.fission.accumulator.body.middle
+  br label %vector.fission.done
+
+vector.fission.done:                              ; preds = %scalar.fission.accumulator.check, %scalar.fission.accumulator.exit
+  %fission.result = phi i32 [ %fission.resume.rdx, %scalar.fission.accumulator.check ], [ %38, %scalar.fission.accumulator.exit ]
+  %fission.result16 = phi i32 [ %fission.resume.rdx9, %scalar.fission.accumulator.check ], [ %39, %scalar.fission.accumulator.exit ]
+  br label %exit
+
+exit:                                             ; preds = %vector.fission.done
+  %update.lcssa = phi i32 [ %fission.result, %vector.fission.done ]
+  %updated.bits.lcssa = phi i32 [ %fission.result16, %vector.fission.done ]
+  store i32 %update.lcssa, ptr %out, align 4
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %updated.bits.lcssa, ptr %o1, align 4
+  ret void
+
+bypass:                                           ; preds = %entry
+  store i32 17, ptr %out, align 4
+  %b1 = getelementptr i32, ptr %out, i64 1
+  store i32 23, ptr %b1, align 4
   ret void
 }
+
+!8 = distinct !{!8, !100000}
+!13 = distinct !{!13, !100000}
+!15 = distinct !{!15, !100000}
+!16 = distinct !{!16, !100000}
+!100000 = !{!"llvm.loop.reduction_fission.stage"}
+
+#--- dispatch-evl.ll
+define void @interleave2(ptr readonly %a, ptr %out, i64 %n) {
+entry:
+  %fission.scratch = alloca [65 x i32], align 4
+  %bounded = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %enter = and i1 %bounded, %nonzero
+  br i1 %enter, label %preheader, label %bypass
+
+preheader:                                        ; preds = %entry
+  %0 = call i64 @llvm.vscale.i64()
+  %1 = mul nuw i64 %0, 2
+  %2 = urem i64 %n, %1
+  %fission.vector.trip.count = sub i64 %n, %2
+  %3 = icmp eq i64 %fission.vector.trip.count, 0
+  br i1 %3, label %scalar.fission.producer.check, label %vector.fission.producer.ph
+
+vector.fission.producer.ph:                       ; preds = %preheader
+  %4 = call i64 @llvm.vscale.i64()
+  %5 = shl nuw i64 %4, 1
+  br label %vector.fission.producer.body
+
+vector.fission.producer.body:                     ; preds = %vector.fission.producer.body, %vector.fission.producer.ph
+  %index = phi i64 [ 0, %vector.fission.producer.ph ], [ %index.next, %vector.fission.producer.body ]
+  %6 = shl nuw i64 %index, 1
+  %7 = getelementptr i32, ptr %a, i64 %6
+  %wide.vec = load <vscale x 4 x i32>, ptr %7, align 4
+  %strided.vec = call { <vscale x 2 x i32>, <vscale x 2 x i32> } @llvm.vector.deinterleave2.nxv4i32(<vscale x 4 x i32> %wide.vec)
+  %8 = extractvalue { <vscale x 2 x i32>, <vscale x 2 x i32> } %strided.vec, 0
+  %9 = extractvalue { <vscale x 2 x i32>, <vscale x 2 x i32> } %strided.vec, 1
+  %10 = mul <vscale x 2 x i32> %8, splat (i32 3)
+  %11 = xor <vscale x 2 x i32> %10, %8
+  %12 = sub <vscale x 2 x i32> %11, %9
+  %13 = mul <vscale x 2 x i32> %12, splat (i32 7)
+  %fission.scratch.address = getelementptr i32, ptr %fission.scratch, i64 %index
+  store <vscale x 2 x i32> %13, ptr %fission.scratch.address, align 4
+  %index.next = add nuw i64 %index, %5
+  %14 = icmp eq i64 %index.next, %fission.vector.trip.count
+  br i1 %14, label %vector.fission.producer.body.middle, label %vector.fission.producer.body, !llvm.loop !8
+
+vector.fission.producer.body.middle:              ; preds = %vector.fission.producer.body
+  br label %vector.fission.producer.exit.ph
+
+vector.fission.producer.exit.ph:                  ; preds = %vector.fission.producer.body.middle
+  br label %scalar.fission.producer.check
+
+scalar.fission.producer.check:                    ; preds = %preheader, %vector.fission.producer.exit.ph
+  %15 = icmp eq i64 %fission.vector.trip.count, %n
+  br i1 %15, label %vector.fission.accumulator.ph, label %scalar.fission.producer.ph
+
+scalar.fission.producer.ph:                       ; preds = %scalar.fission.producer.check
+  br label %vector.ph22
+
+vector.ph22:                                      ; preds = %scalar.fission.producer.ph
+  br label %vector.body23
+
+vector.body23:                                    ; preds = %vector.body23, %vector.ph22
+  %index24 = phi i64 [ 0, %vector.ph22 ], [ %current.iteration.next27, %vector.body23 ]
+  %avl25 = phi i64 [ %2, %vector.ph22 ], [ %avl.next28, %vector.body23 ]
+  %16 = call i32 @llvm.experimental.get.vector.length.i64(i64 %avl25, i32 4, i1 true)
+  %17 = add i64 %fission.vector.trip.count, %index24
+  %18 = shl nuw i64 %17, 1
+  %19 = getelementptr i32, ptr %a, i64 %18
+  %interleave.evl = mul nuw nsw i32 %16, 2
+  %wide.vp.load = call <vscale x 8 x i32> @llvm.vp.load.nxv8i32.p0(ptr align 4 %19, <vscale x 8 x i1> splat (i1 true), i32 %interleave.evl)
+  %strided.vec26 = call { <vscale x 4 x i32>, <vscale x 4 x i32> } @llvm.vector.deinterleave2.nxv8i32(<vscale x 8 x i32> %wide.vp.load)
+  %20 = extractvalue { <vscale x 4 x i32>, <vscale x 4 x i32> } %strided.vec26, 0
+  %21 = extractvalue { <vscale x 4 x i32>, <vscale x 4 x i32> } %strided.vec26, 1
+  %22 = mul <vscale x 4 x i32> %20, splat (i32 3)
+  %23 = xor <vscale x 4 x i32> %22, %20
+  %24 = sub <vscale x 4 x i32> %23, %21
+  %25 = mul <vscale x 4 x i32> %24, splat (i32 7)
+  %26 = getelementptr i32, ptr %fission.scratch, i64 %17
+  call void @llvm.vp.store.nxv4i32.p0(<vscale x 4 x i32> %25, ptr align 4 %26, <vscale x 4 x i1> splat (i1 true), i32 %16)
+  %27 = zext i32 %16 to i64
+  %current.iteration.next27 = add i64 %27, %index24
+  %avl.next28 = sub nuw i64 %avl25, %27
+  %28 = icmp eq i64 %avl.next28, 0
+  br i1 %28, label %middle.block29, label %vector.body23, !llvm.loop !13
+
+middle.block29:                                   ; preds = %vector.body23
+  br label %scalar.fission.producer.body.middle
+
+scalar.fission.producer.body.middle:              ; preds = %middle.block29
+  br label %scalar.fission.producer.exit
+
+scalar.fission.producer.exit:                     ; preds = %scalar.fission.producer.body.middle
+  br label %vector.fission.accumulator.ph
+
+vector.fission.accumulator.ph:                    ; preds = %scalar.fission.producer.check, %scalar.fission.producer.exit
+  %29 = call i64 @llvm.vscale.i64()
+  %30 = mul nuw i64 %29, 4
+  %31 = urem i64 %n, %30
+  %fission.vector.trip.count4 = sub i64 %n, %31
+  %32 = icmp eq i64 %fission.vector.trip.count4, 0
+  br i1 %32, label %scalar.fission.accumulator.check, label %vector.fission.accumulator.vector.ph
+
+vector.fission.accumulator.vector.ph:             ; preds = %vector.fission.accumulator.ph
+  %33 = call i64 @llvm.vscale.i64()
+  %34 = shl nuw i64 %33, 2
+  br label %vector.fission.accumulator.body
+
+vector.fission.accumulator.body:                  ; preds = %vector.fission.accumulator.body, %vector.fission.accumulator.vector.ph
+  %index5 = phi i64 [ 0, %vector.fission.accumulator.vector.ph ], [ %index.next8, %vector.fission.accumulator.body ]
+  %vec.phi = phi <vscale x 4 x i32> [ insertelement (<vscale x 4 x i32> zeroinitializer, i32 17, i32 0), %vector.fission.accumulator.vector.ph ], [ %35, %vector.fission.accumulator.body ]
+  %vec.phi6 = phi <vscale x 4 x i32> [ insertelement (<vscale x 4 x i32> zeroinitializer, i32 23, i32 0), %vector.fission.accumulator.vector.ph ], [ %36, %vector.fission.accumulator.body ]
+  %fission.scratch.address7 = getelementptr i32, ptr %fission.scratch, i64 %index5
+  %fission.scratch.load = load <vscale x 4 x i32>, ptr %fission.scratch.address7, align 4
+  %35 = add <vscale x 4 x i32> %vec.phi, %fission.scratch.load
+  %36 = xor <vscale x 4 x i32> %vec.phi6, %fission.scratch.load
+  %index.next8 = add nuw i64 %index5, %34
+  %37 = icmp eq i64 %index.next8, %fission.vector.trip.count4
+  br i1 %37, label %vector.fission.accumulator.body.middle, label %vector.fission.accumulator.body, !llvm.loop !17
+
+vector.fission.accumulator.body.middle:           ; preds = %vector.fission.accumulator.body
+  %.lcssa21 = phi <vscale x 4 x i32> [ %35, %vector.fission.accumulator.body ]
+  %.lcssa = phi <vscale x 4 x i32> [ %36, %vector.fission.accumulator.body ]
+  %38 = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %.lcssa21)
+  %39 = call i32 @llvm.vector.reduce.xor.nxv4i32(<vscale x 4 x i32> %.lcssa)
+  br label %vector.fission.accumulator.exit.ph
+
+vector.fission.accumulator.exit.ph:               ; preds = %vector.fission.accumulator.body.middle
+  br label %scalar.fission.accumulator.check
+
+scalar.fission.accumulator.check:                 ; preds = %vector.fission.accumulator.ph, %vector.fission.accumulator.exit.ph
+  %fission.resume.rdx = phi i32 [ 17, %vector.fission.accumulator.ph ], [ %38, %vector.fission.accumulator.exit.ph ]
+  %fission.resume.rdx9 = phi i32 [ 23, %vector.fission.accumulator.ph ], [ %39, %vector.fission.accumulator.exit.ph ]
+  %40 = icmp eq i64 %fission.vector.trip.count4, %n
+  br i1 %40, label %vector.fission.done, label %scalar.fission.accumulator.ph
+
+scalar.fission.accumulator.ph:                    ; preds = %scalar.fission.accumulator.check
+  br label %vector.ph
+
+vector.ph:                                        ; preds = %scalar.fission.accumulator.ph
+  %41 = insertelement <vscale x 4 x i32> zeroinitializer, i32 %fission.resume.rdx, i32 0
+  %42 = insertelement <vscale x 4 x i32> zeroinitializer, i32 %fission.resume.rdx9, i32 0
+  br label %vector.body
+
+vector.body:                                      ; preds = %vector.body, %vector.ph
+  %index18 = phi i64 [ 0, %vector.ph ], [ %current.iteration.next, %vector.body ]
+  %vec.phi19 = phi <vscale x 4 x i32> [ %41, %vector.ph ], [ %48, %vector.body ]
+  %vec.phi20 = phi <vscale x 4 x i32> [ %42, %vector.ph ], [ %49, %vector.body ]
+  %avl = phi i64 [ %31, %vector.ph ], [ %avl.next, %vector.body ]
+  %43 = call i32 @llvm.experimental.get.vector.length.i64(i64 %avl, i32 4, i1 true)
+  %44 = add i64 %fission.vector.trip.count4, %index18
+  %45 = getelementptr i32, ptr %fission.scratch, i64 %44
+  %vp.op.load = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 %45, <vscale x 4 x i1> splat (i1 true), i32 %43)
+  %46 = add <vscale x 4 x i32> %vec.phi19, %vp.op.load
+  %47 = xor <vscale x 4 x i32> %vec.phi20, %vp.op.load
+  %48 = call <vscale x 4 x i32> @llvm.vp.merge.nxv4i32(<vscale x 4 x i1> splat (i1 true), <vscale x 4 x i32> %46, <vscale x 4 x i32> %vec.phi19, i32 %43)
+  %49 = call <vscale x 4 x i32> @llvm.vp.merge.nxv4i32(<vscale x 4 x i1> splat (i1 true), <vscale x 4 x i32> %47, <vscale x 4 x i32> %vec.phi20, i32 %43)
+  %50 = zext i32 %43 to i64
+  %current.iteration.next = add i64 %50, %index18
+  %avl.next = sub nuw i64 %avl, %50
+  %51 = icmp eq i64 %avl.next, 0
+  br i1 %51, label %middle.block, label %vector.body, !llvm.loop !18
+
+middle.block:                                     ; preds = %vector.body
+  %52 = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %48)
+  %53 = call i32 @llvm.vector.reduce.xor.nxv4i32(<vscale x 4 x i32> %49)
+  br label %scalar.fission.accumulator.body.middle
+
+scalar.fission.accumulator.body.middle:           ; preds = %middle.block
+  br label %scalar.fission.accumulator.exit
+
+scalar.fission.accumulator.exit:                  ; preds = %scalar.fission.accumulator.body.middle
+  br label %vector.fission.done
+
+vector.fission.done:                              ; preds = %scalar.fission.accumulator.check, %scalar.fission.accumulator.exit
+  %fission.result = phi i32 [ %fission.resume.rdx, %scalar.fission.accumulator.check ], [ %52, %scalar.fission.accumulator.exit ]
+  %fission.result16 = phi i32 [ %fission.resume.rdx9, %scalar.fission.accumulator.check ], [ %53, %scalar.fission.accumulator.exit ]
+  br label %exit
+
+exit:                                             ; preds = %vector.fission.done
+  %update.lcssa = phi i32 [ %fission.result, %vector.fission.done ]
+  %updated.bits.lcssa = phi i32 [ %fission.result16, %vector.fission.done ]
+  store i32 %update.lcssa, ptr %out, align 4
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %updated.bits.lcssa, ptr %o1, align 4
+  ret void
+
+bypass:                                           ; preds = %entry
+  store i32 17, ptr %out, align 4
+  %b1 = getelementptr i32, ptr %out, i64 1
+  store i32 23, ptr %b1, align 4
+  ret void
+}
+
+!8 = distinct !{!8, !100000}
+!13 = distinct !{!13, !100000}
+!17 = distinct !{!17, !100000}
+!18 = distinct !{!18, !100000}
+!100000 = !{!"llvm.loop.reduction_fission.stage"}
 
 #--- affine-evl.ll
 ; Retained affine_const EVL output. Checker/probe fixture only; executable

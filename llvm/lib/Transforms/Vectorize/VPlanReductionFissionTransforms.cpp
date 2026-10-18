@@ -86,6 +86,25 @@ VPValue *removeStageTailPredication(StagePlanBuildResult &Stage) {
   }
 
   for (VPRecipeBase &R : make_early_inc_range(*Body)) {
+    if (auto *Group = dyn_cast<VPInterleaveRecipe>(&R);
+        Group && Group->getMask() == Mask) {
+      auto *Unmasked = new VPInterleaveRecipe(
+          Group->getInterleaveGroup(), Group->getAddr(), {}, nullptr, false,
+          *Group, Group->getDebugLoc());
+      Unmasked->insertBefore(Group);
+      for (auto [Old, New] :
+           zip(Group->definedValues(), Unmasked->definedValues())) {
+        Old->replaceAllUsesWith(New);
+        for (auto &Entry : Stage.Values)
+          if (Entry.second == Old)
+            Entry.second = New;
+      }
+      for (auto &Entry : Stage.Recipes)
+        if (Entry.second == Group)
+          Entry.second = Unmasked;
+      Group->eraseFromParent();
+      continue;
+    }
     if (auto *Reduction = dyn_cast<VPReductionRecipe>(&R);
         Reduction && Reduction->getCondOp() == Mask) {
       auto *Unmasked = new VPReductionRecipe(
@@ -228,7 +247,10 @@ Expected<StagePlanBuildResult> buildStagePlan(
     Clones.push_back({&Recipe, Clone});
     for (auto [OldValue, NewValue] :
          zip(Recipe.definedValues(), Clone->definedValues()))
-      Result.Values[OldValue] = NewValue;
+      // A multi-result recipe may also be needed for a different, non-scratch
+      // member. Its cloned results must not bypass a selected scratch crossing.
+      if (!is_contained(AllowedCrossings, OldValue))
+        Result.Values[OldValue] = NewValue;
   }
 
   // Materialize dependencies defined outside the vector body (for example,
@@ -519,6 +541,37 @@ Expected<VPFissionScalarRemainder> buildScalarRemainder(VPlan &VectorPlan) {
   for (VPRecipeBase &R : make_early_inc_range(
            *Plan.getVectorLoopRegion()->getEntryBasicBlock())) {
     VPSingleDefRecipe *Scalar = nullptr;
+    if (auto *Interleave = dyn_cast<VPInterleaveRecipe>(&R)) {
+      const auto *Group = Interleave->getInterleaveGroup();
+      if (!Group->isFull() || Group->isReverse() || Interleave->getMask() ||
+          Interleave->needsMaskForGaps() ||
+          Interleave->getNumStoreOperands() != 0)
+        return createStringError(errc::invalid_argument,
+                                 "unsupported scalar remainder interleave");
+      // getAddr() denotes member zero at this stage's current canonical
+      // iteration, even if group construction adjusted another member's
+      // address to form it. Recreate the original scalar loads with their own
+      // alignment/metadata; never execute a Factor*VF load in the remainder.
+      VPBuilder Builder(Interleave);
+      const DataLayout &DL = Group->getInsertPos()->getDataLayout();
+      for (auto [Index, Def] : enumerate(Interleave->definedValues())) {
+        auto *Member = cast<LoadInst>(Group->getMember(Index));
+        VPValue *Addr = Interleave->getAddr();
+        if (Index != 0) {
+          uint64_t Offset =
+              Index * DL.getTypeAllocSize(Member->getType()).getFixedValue();
+          Addr = Builder.createPtrAdd(
+              Addr, Plan.getConstantInt(64, Offset), Member->getDebugLoc());
+        }
+        auto *Load = new VPReplicateRecipe(
+            Member, {Addr}, true, nullptr, {}, VPIRMetadata(*Member),
+            Member->getDebugLoc());
+        Load->insertBefore(Interleave);
+        Def->replaceAllUsesWith(Load);
+      }
+      Interleave->eraseFromParent();
+      continue;
+    }
     if (auto *Store = dyn_cast<VPWidenStoreRecipe>(&R)) {
       if (Store->getMask())
         return createStringError(errc::invalid_argument,

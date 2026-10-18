@@ -43,7 +43,8 @@ bool llvm::isReductionFissionEnabled() { return EnableVPlanReductionFission; }
 
 static cl::opt<unsigned> VPlanReductionFissionMinChainDepth(
     "vplan-reduction-fission-min-chain-depth", cl::init(8), cl::Hidden,
-    cl::desc("Minimum producer dependency depth for reduction fission"));
+    cl::desc("Preferred producer dependency depth for reduction fission cuts "
+             "(shorter producers remain eligible)"));
 
 static cl::opt<bool> VPlanReductionFissionCombineAddContributions(
     "vplan-reduction-fission-combine-add-contributions", cl::init(true),
@@ -53,21 +54,23 @@ static cl::opt<bool> VPlanReductionFissionCombineAddContributions(
 static cl::opt<unsigned> VPlanReductionFissionForceProducerVF(
     "vplan-reduction-fission-force-producer-vf", cl::init(0), cl::Hidden,
     cl::desc("Experimental producer scalable VF minimum; requires an explicit "
-             "accumulator VF and bypasses register-pressure headroom only"));
+             "accumulator VF; stage legality and resource limits still apply"));
 
 static cl::opt<unsigned> VPlanReductionFissionForceAccumulatorVF(
     "vplan-reduction-fission-force-accumulator-vf", cl::init(0), cl::Hidden,
     cl::desc(
         "Experimental accumulator scalable VF minimum; requires an "
-        "explicit producer VF and bypasses register-pressure headroom only"));
+        "explicit producer VF; stage legality and resource limits still apply"));
 
 static cl::opt<unsigned> VPlanReductionFissionMinReductions(
     "vplan-reduction-fission-min-reductions", cl::init(4), cl::Hidden,
-    cl::desc("Minimum number of reductions for reduction fission"));
+    cl::desc("Deprecated compatibility option; reduction count does not veto "
+             "explicitly enabled fission"));
 
 static cl::opt<unsigned> VPlanReductionFissionMinPressurePercent(
     "vplan-reduction-fission-min-pressure-percent", cl::init(100), cl::Hidden,
-    cl::desc("Minimum register pressure as a percentage of capacity"));
+    cl::desc("Deprecated compatibility option; register pressure does not veto "
+             "explicitly enabled fission"));
 
 static cl::opt<unsigned long long> VPlanReductionFissionMaxScratchBytes(
     "vplan-reduction-fission-max-scratch-bytes", cl::init(64 * 1024),
@@ -91,8 +94,15 @@ void llvm::saveReductionFissionPlan(VPlan &Plan,
                                     SmallVectorImpl<VPlanPtr> &Plans) {
   if (isReductionFissionEnabled() && !Plan.isOuterLoop() &&
       any_of(Plan.vectorFactors(),
-             [](ElementCount VF) { return VF.isScalable(); }))
+             [](ElementCount VF) { return VF.isScalable(); })) {
+    LLVM_DEBUG({
+      dbgs() << "LV-FISSION: saved plan for "
+             << Plan.getScalarHeader()->getIRBasicBlock()->getParent()->getName()
+             << "\n";
+      Plan.print(dbgs());
+    });
     Plans.emplace_back(Plan.duplicate());
+  }
 }
 
 static SmallVector<VPlan *, 4> getStagePlans(VPReductionFissionCandidate &C) {
@@ -243,72 +253,37 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
     // Compute in 64 bits so even an extreme user multiplier cannot wrap.
     uint64_t Limit =
         uint64_t(RegisterVF) * VPlanReductionFissionMaxScalableVFMultiplier;
+    // A stage can also need a narrower VF than any fused-plan candidate.
+    // Recipe/type legality is checked after partitioning, not inherited from
+    // the original plan's VF range.
+    for (uint64_t Width = 1; Width < LargestScalableVF; Width *= 2)
+      if (!is_contained(VFs, ElementCount::getScalable(Width)))
+        VFs.push_back(ElementCount::getScalable(Width));
     for (uint64_t Width = uint64_t(LargestScalableVF) * 2;
          Width <= Limit && Width <= std::numeric_limits<unsigned>::max();
          Width *= 2)
       VFs.push_back(ElementCount::getScalable(Width));
 
-    SmallVector<VPFissionVFPressure, 8> BaselinePressure;
-    std::optional<VPReductionFissionAnalysis> Analysis;
-    bool AttemptedAnalysis = false;
-    for (ElementCount VF : VFs) {
-      if (!isLegalReductionFissionVF(Plan, VF, TTI))
-        continue;
-      VPRegisterPressureBreakdown Pressure =
-          calculateRegisterPressureForPlan(Plan, VF, TTI);
-      BaselinePressure.push_back({VF, Pressure});
-      DEBUG_WITH_TYPE("vplan-reduction-fission",
-                      dbgs() << "LV-FISSION: "
-                             << OrigLoop->getHeader()->getParent()->getName()
-                             << ": pressure: vf=" << VF << " accumulator="
-                             << (Pressure.AccumulatorRegs.empty()
-                                     ? 0
-                                     : Pressure.AccumulatorRegs.begin()->second)
-                             << " total="
-                             << (Pressure.PeakTotalRegs.empty()
-                                     ? 0
-                                     : Pressure.PeakTotalRegs.begin()->second)
-                             << " capacity="
-                             << (Pressure.Capacity.empty()
-                                     ? 0
-                                     : Pressure.Capacity.begin()->second)
-                             << "\n");
-
-      bool MeetsPressureThreshold =
-          any_of(Pressure.PeakTotalRegs, [&](const auto &Entry) {
-            uint64_t Capacity = Pressure.Capacity.lookup(Entry.first);
-            return Capacity &&
-                   uint64_t(Entry.second) * 100 >=
-                       Capacity * VPlanReductionFissionMinPressurePercent;
-          });
-      if (Analysis || !MeetsPressureThreshold)
-        continue;
-      VPReductionFissionConfig Config;
-      AttemptedAnalysis = true;
-      Config.MinimumReductionCount = VPlanReductionFissionMinReductions;
-      Config.MinimumLongProducerDepth = VPlanReductionFissionMinChainDepth;
-      VPReductionFissionAnalysis A =
-          analyzeVPReductionFission(Plan, Pressure, Config);
-      if (A.isCandidate()) {
-        Analysis = std::move(A);
-      } else {
-        DebugReject(getVPReductionFissionRejectReasonName(*A.RejectReason));
-        if (*A.RejectReason == VPReductionFissionRejectReason::TooFewReductions)
-          return std::nullopt;
-      }
+    if (!isSupportedReductionFissionPlan(Plan, TTI)) {
+      DebugReject(getVPReductionFissionRejectReasonName(
+          VPReductionFissionRejectReason::UnsupportedRecipe));
+      continue;
     }
-    if (!Analysis) {
-      if (BaselinePressure.empty())
-        DebugReject(getVPReductionFissionRejectReasonName(
-            VPReductionFissionRejectReason::UnsupportedRecipe));
-      else if (!AttemptedAnalysis)
-        DebugReject(getVPReductionFissionRejectReasonName(
-            VPReductionFissionRejectReason::NoAccumulatorPressureOverflow));
+
+    // Candidate discovery is structural. In particular the fused plan need
+    // not have a pressure overflow, or be legal at either selected stage VF.
+    // Check the completed stages independently below.
+    VPReductionFissionConfig Config;
+    Config.MinimumLongProducerDepth = VPlanReductionFissionMinChainDepth;
+    VPReductionFissionAnalysis Analysis =
+        analyzeVPReductionFission(Plan, {}, Config);
+    if (!Analysis.isCandidate()) {
+      DebugReject(getVPReductionFissionRejectReasonName(*Analysis.RejectReason));
       continue;
     }
 
     Expected<VPScratchPlan> Scratch = buildScratchPlan(
-        Analysis->Partition.FrontierValues, TripCount->MaxTripCount,
+        Analysis.Partition.FrontierValues, TripCount->MaxTripCount,
         OrigLoop->getHeader()->getDataLayout(),
         VPlanReductionFissionMaxScratchBytes);
     if (!Scratch) {
@@ -317,7 +292,7 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
     }
 
     Expected<VPReductionFissionCandidate> Candidate =
-        buildReductionFissionStagePlans(Plan, *Analysis, *Scratch, VFs);
+        buildReductionFissionStagePlans(Plan, Analysis, *Scratch, VFs);
     if (!Candidate) {
       DebugReject(toString(Candidate.takeError()));
       continue;
@@ -349,31 +324,26 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
     SmallVector<VPFissionVFPressure, 8> ProducerPressure;
     SmallVector<VPFissionVFPressure, 8> AccumulatorPressure;
     for (ElementCount VF : VFs) {
-      if (!isLegalReductionFissionVF(*Candidate->ProducerPlan, VF, TTI) ||
-          !isLegalReductionFissionVF(*Candidate->AccumulatorPlan, VF, TTI))
-        continue;
-      ProducerPressure.push_back({VF, calculateRegisterPressureForPlan(
-                                          *Candidate->ProducerPlan, VF, TTI)});
-      AccumulatorPressure.push_back(
-          {VF, calculateRegisterPressureForPlan(*Candidate->AccumulatorPlan, VF,
-                                                TTI)});
-      DEBUG_WITH_TYPE(
-          "vplan-reduction-fission",
-          dbgs() << "LV-FISSION: "
-                 << OrigLoop->getHeader()->getParent()->getName()
-                 << ": split-pressure: vf=" << VF << " producer="
-                 << (ProducerPressure.back().Pressure.PeakTotalRegs.empty()
-                         ? 0
-                         : ProducerPressure.back()
-                               .Pressure.PeakTotalRegs.begin()
-                               ->second)
-                 << " accumulator="
-                 << (AccumulatorPressure.back().Pressure.PeakTotalRegs.empty()
-                         ? 0
-                         : AccumulatorPressure.back()
-                               .Pressure.PeakTotalRegs.begin()
-                               ->second)
-                 << "\n");
+      auto CollectPressure = [&](VPlan &Stage, StringRef Name,
+                                 SmallVectorImpl<VPFissionVFPressure> &Pressures) {
+        if (!isLegalReductionFissionVF(Stage, VF, TTI))
+          return;
+        Pressures.push_back(
+            {VF, calculateRegisterPressureForPlan(Stage, VF, TTI)});
+        const auto &Pressure = Pressures.back().Pressure;
+        DEBUG_WITH_TYPE(
+            "vplan-reduction-fission",
+            dbgs() << "LV-FISSION: "
+                   << OrigLoop->getHeader()->getParent()->getName() << ": "
+                   << Name << "-pressure: vf=" << VF << " total="
+                   << (Pressure.PeakTotalRegs.empty()
+                           ? 0
+                           : Pressure.PeakTotalRegs.begin()->second)
+                   << "\n");
+      };
+      CollectPressure(*Candidate->ProducerPlan, "producer", ProducerPressure);
+      CollectPressure(*Candidate->AccumulatorPlan, "accumulator",
+                      AccumulatorPressure);
     }
 
     if (ForceStageVFs) {
@@ -393,12 +363,11 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
     }
 
     VPReductionFissionDecision Decision = selectReductionFissionConfiguration(
-        ActualBaselineVF, BaselinePressure, ProducerPressure,
-        AccumulatorPressure, Scratch->TotalBytes,
+        ActualBaselineVF, ProducerPressure, AccumulatorPressure,
+        Scratch->TotalBytes,
         VPlanReductionFissionMaxScratchBytes,
         Candidate->Partition.DuplicatedRecipeCount,
-        VPlanReductionFissionMaxDuplicatedRecipes,
-        /*AllowPressureOverflow=*/ForceStageVFs);
+        VPlanReductionFissionMaxDuplicatedRecipes);
     if (!Decision.SelectFission) {
       DebugReject(getVPReductionFissionRejectReasonName(*Decision.Reason));
       continue;
@@ -407,7 +376,7 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
     // Accept a combined cut only if it saves scratch at the selected VF pair.
     if (VPlanReductionFissionCombineAddContributions) {
       auto Combined = buildReductionFissionStagePlans(
-          Plan, *Analysis, *Scratch, VFs, /*CombineAddContributions=*/true);
+          Plan, Analysis, *Scratch, VFs, /*CombineAddContributions=*/true);
       if (!Combined) {
         DebugReject(toString(Combined.takeError()));
       } else if (Combined->Scratch.TotalBytes < Candidate->Scratch.TotalBytes &&
@@ -427,12 +396,11 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
               AVF, calculateRegisterPressureForPlan(*Combined->AccumulatorPlan,
                                                     AVF, TTI)};
           auto CombinedDecision = selectReductionFissionConfiguration(
-              ActualBaselineVF, BaselinePressure, {PP}, {AP},
+              ActualBaselineVF, {PP}, {AP},
               Combined->Scratch.TotalBytes,
               VPlanReductionFissionMaxScratchBytes,
               Combined->Partition.DuplicatedRecipeCount,
-              VPlanReductionFissionMaxDuplicatedRecipes,
-              /*AllowPressureOverflow=*/ForceStageVFs);
+              VPlanReductionFissionMaxDuplicatedRecipes);
           if (CombinedDecision.SelectFission) {
             DEBUG_WITH_TYPE(
                 "vplan-reduction-fission",
@@ -451,20 +419,12 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
 
     Candidate->TripCount = *TripCount;
     Candidate->Selected = Decision.Fission;
-    bool HasInLoopReduction = any_of(Analysis->Slices, [](const auto &Slice) {
-      return Slice.Accumulator->isInLoop();
-    });
-    if (Ctx.FPReordering || HasInLoopReduction)
-      if (auto Reason = checkFissionFPCost(Plan, *Candidate, TTI)) {
-        DebugReject(getVPReductionFissionRejectReasonName(*Reason));
-        continue;
-      }
     uint64_t SelectedScratchBytes = Candidate->Scratch.TotalBytes;
     DEBUG_WITH_TYPE(
         "vplan-reduction-fission",
         dbgs() << "LV-FISSION: "
                << OrigLoop->getHeader()->getParent()->getName()
-               << ": candidate: reductions=" << Analysis->Slices.size()
+               << ": candidate: reductions=" << Analysis.Slices.size()
                << " scratch-bytes=" << SelectedScratchBytes
                << " baseline-vf=" << Decision.BaselineVF
                << " producer-vf=" << Decision.Fission->ProducerVF
@@ -668,6 +628,9 @@ executeReductionFissionCandidate(VPReductionFissionCandidate &Candidate,
       // Disable further transformation of a runtime-sized scalar remainder.
       if (VF.isScalar())
         StageLoop->addStringLoopAttribute("llvm.loop.unroll.runtime.disable");
+      // Follow-up metadata may deliberately allow ordinary LV again. Keep
+      // fission provenance independently of those hints on all four stages.
+      StageLoop->addStringLoopAttribute("llvm.loop.reduction_fission.stage");
     }
   };
 
@@ -780,12 +743,34 @@ executeReductionFissionCandidate(VPReductionFissionCandidate &Candidate,
 bool llvm::tryReductionFission(ArrayRef<VPlanPtr> Plans,
                                ElementCount BaselineVF,
                                VPReductionFissionContext &Context) {
-  if (!isReductionFissionEnabled() ||
-      !getScalarReductionFissionStage(Context.L).empty())
+  if (!isReductionFissionEnabled() || isReductionFissionStage(Context.L))
     return false;
   auto Candidate = planReductionFission(Plans, BaselineVF, Context);
   if (!Candidate)
     return false;
+  // Logical traffic per participating iteration, excluding padding and cache
+  // effects. Scalar companions use the same slots and do not add iterations.
+  uint64_t ScratchBytesPerIteration = 0;
+  for (const VPScratchSlot &Slot : Candidate->Scratch.Slots)
+    ScratchBytesPerIteration += Slot.Bytes / Slot.ElementCount;
+  SmallPtrSet<const Instruction *, 8> ProducerLoads;
+  auto OriginalLoads = [](VPRecipeBase &R) {
+    SmallVector<const Instruction *, 8> Loads;
+    if (auto *Load = dyn_cast<VPWidenLoadRecipe>(&R))
+      Loads.push_back(&Load->getIngredient());
+    else if (auto *Group = dyn_cast<VPInterleaveRecipe>(&R))
+      append_range(Loads, Group->getInterleaveGroup()->members());
+    return Loads;
+  };
+  for (VPRecipeBase &R : *Candidate->ProducerPlan->getVectorLoopRegion()
+                              ->getEntryBasicBlock())
+    for (const Instruction *Load : OriginalLoads(R))
+      ProducerLoads.insert(Load);
+  unsigned RereadLoads = 0;
+  for (VPRecipeBase &R : *Candidate->AccumulatorPlan->getVectorLoopRegion()
+                              ->getEntryBasicBlock())
+    for (const Instruction *Load : OriginalLoads(R))
+      RereadLoads += ProducerLoads.contains(Load);
   Context.ORE.emit([&]() {
     return OptimizationRemark(DEBUG_TYPE, "Selected", Context.L.getStartLoc(),
                               Context.L.getHeader())
@@ -802,7 +787,16 @@ bool llvm::tryReductionFission(ArrayRef<VPlanPtr> Plans,
            << ", scratch capacity "
            << ore::NV("MaxTripCount", Candidate->TripCount.MaxTripCount)
            << ", scratch bytes "
-           << ore::NV("ScratchBytes", Candidate->Scratch.TotalBytes);
+           << ore::NV("ScratchBytes", Candidate->Scratch.TotalBytes)
+           << ", scratch store bytes/iteration "
+           << ore::NV("ScratchStoreBytesPerIteration", ScratchBytesPerIteration)
+           << ", scratch load bytes/iteration "
+           << ore::NV("ScratchLoadBytesPerIteration", ScratchBytesPerIteration)
+           << ", duplicated recipes "
+           << ore::NV("DuplicatedRecipes",
+                      Candidate->Partition.DuplicatedRecipeCount)
+           << ", reread loads/iteration "
+           << ore::NV("RereadLoadsPerIteration", RereadLoads);
   });
   for (VPRecipeBase &R : Candidate->AccumulatorPlan->getVectorLoopRegion()
                              ->getEntryBasicBlock()

@@ -12,11 +12,149 @@
 #include "VPlanTestBase.h"
 #include "llvm/IR/Constants.h"
 #include "gtest/gtest.h"
+#include <algorithm>
 
 namespace llvm {
 namespace {
 
 using VPlanReductionFissionTest = VPlanTestBase;
+
+// Give structural partition tests an actual varying source. Constant-only DAGs
+// must no longer be mistaken for useful scratch producers.
+static VPWidenLoadRecipe *addInput(VPlan &Plan, VPBasicBlock *Body, Type *Ty) {
+  auto *Ptr = PoisonValue::get(PointerType::getUnqual(Ty->getContext()));
+  auto *IRLoad = new LoadInst(
+      Ty, Ptr, "input", false, Align(4),
+      Plan.getScalarHeader()->getIRBasicBlock()->getTerminator()->getIterator());
+  auto *Load = new VPWidenLoadRecipe(*IRLoad, Plan.getOrAddLiveIn(Ptr), nullptr,
+                                    true, VPIRMetadata(), DebugLoc());
+  Body->appendRecipe(Load);
+  return Load;
+}
+
+TEST_F(VPlanReductionFissionTest, InterleaveMembersAndScratchCrossings) {
+  for (unsigned Factor : {2, 3, 4, 5, 6, 7, 8}) {
+    SCOPED_TRACE(Factor);
+    VPlan &Plan = getPlan();
+    Plan.resetTripCount(Plan.getConstantInt(64, 17));
+    auto *Body = Plan.createVPBasicBlock("body");
+    auto *Region =
+        Plan.createLoopRegion(Plan.getIndexType(), {}, "loop", Body, Body);
+    auto *Middle = Plan.createVPBasicBlock("middle");
+    VPBlockUtils::connectBlocks(Plan.getEntry(), Region);
+    VPBlockUtils::connectBlocks(Region, Middle);
+    VPBlockUtils::connectBlocks(Middle, Plan.getScalarHeader());
+    SmallVector<LoadInst *> Loads;
+    for (unsigned I = 0; I < Factor; ++I)
+      Loads.push_back(&cast<LoadInst>(
+          addInput(Plan, Body, Type::getInt32Ty(C))->getIngredient()));
+    // The unit fixture's ordinary load recipes are replaced by a group.
+    for (VPRecipeBase &R : make_early_inc_range(*Body))
+      if (isa<VPWidenLoadRecipe>(R))
+        R.eraseFromParent();
+    Loads[0]->setAlignment(Align(16));
+    InterleaveGroup<Instruction> IG(Loads[0], Factor, Align(16));
+    for (unsigned I = 1; I < Factor; ++I)
+      ASSERT_TRUE(IG.insertMember(Loads[I], I, Align(4)));
+    auto *Group = new VPInterleaveRecipe(
+        &IG, Plan.getOrAddLiveIn(Loads[0]->getPointerOperand()), {},
+        Region->createHeaderMask(), false, {}, {});
+    Body->appendRecipe(Group);
+    auto *Use = new VPInstruction(
+        Instruction::Add, {Group->getVPValue(0), Group->getVPValue(0)},
+        VPIRFlags::getDefaultFlags(Instruction::Add));
+    Body->appendRecipe(Use);
+    auto *Other = new VPInstruction(Instruction::Xor,
+                                    {Use, Group->getVPValue(Factor - 1)});
+    Body->appendRecipe(Other);
+    auto *Increment = new VPInstruction(
+        Instruction::Add, {Region->getCanonicalIV(), &Plan.getVFxUF()},
+        VPIRFlags::getDefaultFlags(Instruction::Add));
+    Body->appendRecipe(Increment);
+    Body->appendRecipe(new VPInstruction(
+        VPInstruction::BranchOnCount, {Increment, &Plan.getVectorTripCount()}));
+    auto *Zero = Plan.getConstantInt(32, 0);
+    SmallVector<VPReductionPHIRecipe *> Phis;
+    SmallVector<VPInstruction *> Updates;
+    for (unsigned I = 0; I < Factor; ++I) {
+      auto *Phi = new VPReductionPHIRecipe(nullptr, RecurKind::Add, *Zero,
+                                            *Zero, RdxUnordered{1}, {});
+      Phi->insertBefore(Group);
+      auto *Update = new VPInstruction(
+          Instruction::Add, {Phi, Group->getVPValue(I)},
+          VPIRFlags::getDefaultFlags(Instruction::Add));
+      Update->insertBefore(Increment);
+      Phi->setOperand(1, Update);
+      Phis.push_back(Phi);
+      Updates.push_back(Update);
+    }
+    VPReductionFissionConfig Config;
+    Config.MinimumLongProducerDepth = 1000;
+    auto Direct = analyzeVPReductionFission(Plan, {}, Config);
+    ASSERT_TRUE(Direct.isCandidate());
+    EXPECT_EQ(Direct.Partition.FrontierValues.size(), Factor);
+    for (unsigned I = 0; I < Factor; ++I) {
+      EXPECT_TRUE(is_contained(Direct.Partition.FrontierValues,
+                              Group->getVPValue(I)));
+      Phis[I]->setOperand(1, Zero);
+      Updates[I]->eraseFromParent();
+      Phis[I]->eraseFromParent();
+    }
+    VPReductionFissionAnalysis Analysis;
+    Analysis.Partition.ProducerRecipes.insert(Group);
+    // Member zero crosses scratch, while another member still requires the
+    // entire recipe in the consumer. Repeated uses must all read scratch.
+    Analysis.Partition.AccumulatorRecipes.insert(Group);
+    Analysis.Partition.AccumulatorRecipes.insert(Use);
+    Analysis.Partition.AccumulatorRecipes.insert(Other);
+    Analysis.Partition.FrontierValues.push_back(Group->getVPValue(0));
+    auto Scratch = buildScratchPlan(Analysis.Partition.FrontierValues, 17,
+                                     M->getDataLayout(), 68);
+    ASSERT_TRUE(static_cast<bool>(Scratch));
+    auto Candidate = buildReductionFissionStagePlans(
+        Plan, Analysis, *Scratch, {ElementCount::getScalable(2),
+                                   ElementCount::getScalable(4)});
+    ASSERT_TRUE(static_cast<bool>(Candidate)) << toString(Candidate.takeError());
+    for (VPlan *Stage : {Candidate->ProducerPlan.get(),
+                        Candidate->AccumulatorPlan.get(),
+                        Candidate->ProducerRemainder.Plan.get(),
+                        Candidate->AccumulatorRemainder.Plan.get()})
+      EXPECT_TRUE(verifyVPlanIsValid(*Stage));
+    auto *Consumer =
+        Candidate->AccumulatorPlan->getVectorLoopRegion()->getEntryBasicBlock();
+    unsigned ScratchUsers = 0;
+    for (VPRecipeBase &R : *Consumer)
+      if (auto *I = dyn_cast<VPInstruction>(&R);
+          I && I->getOpcode() == Instruction::Add &&
+          isa<VPFissionScratchLoadRecipe>(I->getOperand(0))) {
+        EXPECT_EQ(I->getOperand(0), I->getOperand(1));
+        ++ScratchUsers;
+      }
+    EXPECT_EQ(ScratchUsers, 1u);
+    for (VPlan *Stage : {Candidate->ProducerRemainder.Plan.get(),
+                        Candidate->AccumulatorRemainder.Plan.get()}) {
+      unsigned Members = 0;
+      for (VPRecipeBase &R : *Stage->getVectorLoopRegion()->getEntryBasicBlock()) {
+        EXPECT_FALSE(isa<VPInterleaveRecipe>(R));
+        auto *Load = dyn_cast<VPReplicateRecipe>(&R);
+        if (!Load || !isa<LoadInst>(Load->getUnderlyingValue()))
+          continue;
+        ASSERT_LT(Members, Factor);
+        EXPECT_EQ(Load->getUnderlyingValue(), Loads[Members]);
+        if (Members) {
+          auto *Addr = dyn_cast<VPInstruction>(Load->getOperand(0));
+          ASSERT_NE(Addr, nullptr);
+          EXPECT_EQ(Addr->getOpcode(), VPInstruction::PtrAdd);
+          EXPECT_EQ(cast<ConstantInt>(Addr->getOperand(1)->getLiveInIRValue())
+                        ->getZExtValue(),
+                    4 * Members);
+        }
+        ++Members;
+      }
+      EXPECT_EQ(Members, Factor);
+    }
+  }
+}
 
 TEST_F(VPlanReductionFissionTest, DuplicateMapsSymbolicAndRegionValues) {
   VPlan &Plan = getPlan();
@@ -57,8 +195,9 @@ TEST_F(VPlanReductionFissionTest, AnalysisClassifiesLongAndShortProducers) {
   VPBasicBlock *Body = Plan.getEntry();
   VPValue *Zero = Plan.getOrAddLiveIn(ConstantInt::get(Type::getInt32Ty(C), 0));
 
+  auto *Input = addInput(Plan, Body, Zero->getScalarType());
   auto BuildChain = [&](unsigned Depth) -> VPValue * {
-    VPValue *Value = Zero;
+    VPValue *Value = Input;
     for (unsigned I = 0; I != Depth; ++I) {
       auto *Next =
           new VPInstruction(Instruction::Add, {Value, Zero},
@@ -113,32 +252,30 @@ TEST_F(VPlanReductionFissionTest, AnalysisClassifiesLongAndShortProducers) {
   EXPECT_TRUE(is_contained(Analysis.Partition.FrontierValues, Long0));
   EXPECT_TRUE(is_contained(Analysis.Partition.FrontierValues, Long1));
 
+  // Overflow and reduction count no longer determine candidacy.
   VPRegisterPressureBreakdown NoOverflow;
   Analysis = analyzeVPReductionFission(Plan, NoOverflow, Config);
-  ASSERT_TRUE(Analysis.RejectReason.has_value());
-  EXPECT_EQ(*Analysis.RejectReason,
-            VPReductionFissionRejectReason::NoAccumulatorPressureOverflow);
-
+  ASSERT_TRUE(Analysis.isCandidate());
   Config.MinimumReductionCount = 7;
-  Analysis = analyzeVPReductionFission(Plan, Pressure, Config);
-  ASSERT_TRUE(Analysis.RejectReason.has_value());
-  EXPECT_EQ(*Analysis.RejectReason,
-            VPReductionFissionRejectReason::TooFewReductions);
+  Analysis = analyzeVPReductionFission(Plan, NoOverflow, Config);
+  ASSERT_TRUE(Analysis.isCandidate());
 
-  Config.MinimumReductionCount = 5;
-  Config.MinimumLongProducerDepth = 9;
-  Analysis = analyzeVPReductionFission(Plan, Pressure, Config);
-  ASSERT_TRUE(Analysis.RejectReason.has_value());
-  EXPECT_EQ(*Analysis.RejectReason,
-            VPReductionFissionRejectReason::NoLongProducer);
+  // If no chain meets the preferred depth, include short varying inputs too.
+  Config.MinimumLongProducerDepth = 100;
+  Analysis = analyzeVPReductionFission(Plan, NoOverflow, Config);
+  ASSERT_TRUE(Analysis.isCandidate());
+  EXPECT_TRUE(is_contained(Analysis.Partition.FrontierValues, Short));
+  EXPECT_TRUE(Analysis.Partition.ProducerRecipes.contains(
+      Short->getDefiningRecipe()));
 }
 
 TEST_F(VPlanReductionFissionTest,
        AnalysisAcceptsOrdinaryWidenedReductionUpdate) {
   VPlan &Plan = getPlan();
   VPValue *Zero = Plan.getOrAddLiveIn(ConstantInt::get(Type::getInt32Ty(C), 0));
+  auto *Input = addInput(Plan, Plan.getEntry(), Zero->getScalarType());
   auto *Producer0 =
-      new VPInstruction(Instruction::Mul, {Zero, Zero},
+      new VPInstruction(Instruction::Mul, {Input, Zero},
                         VPIRFlags::getDefaultFlags(Instruction::Mul));
   auto *Producer1 =
       new VPInstruction(Instruction::Add, {Producer0, Zero},
@@ -177,7 +314,8 @@ TEST_F(VPlanReductionFissionTest, AnalysisRejectsCoupledAccumulatorGraphs) {
                                         RdxUnordered{1}, {});
   auto *Phi1 = new VPReductionPHIRecipe(nullptr, RecurKind::Add, *Zero, *Zero,
                                         RdxUnordered{1}, {});
-  auto *Long0 = new VPInstruction(Instruction::Mul, {Zero, Zero},
+  auto *Input = addInput(Plan, Body, Zero->getScalarType());
+  auto *Long0 = new VPInstruction(Instruction::Mul, {Input, Zero},
                                   VPIRFlags::getDefaultFlags(Instruction::Mul));
   auto *Long1 = new VPInstruction(Instruction::Add, {Long0, Zero},
                                   VPIRFlags::getDefaultFlags(Instruction::Add));
@@ -229,7 +367,8 @@ TEST_F(VPlanReductionFissionTest, MultiUpdateKeepsShortInputsAndUpdateOrder) {
   auto *Zero = Plan.getOrAddLiveIn(ConstantInt::get(Type::getInt32Ty(C), 0));
   auto *Phi = new VPReductionPHIRecipe(nullptr, RecurKind::Add, *Zero, *Zero,
                                        RdxUnordered{1}, {});
-  auto *Long0 = new VPInstruction(Instruction::Mul, {Zero, Zero},
+  auto *Input = addInput(Plan, Body, Zero->getScalarType());
+  auto *Long0 = new VPInstruction(Instruction::Mul, {Input, Zero},
                                   VPIRFlags::getDefaultFlags(Instruction::Mul));
   auto *Long1 = new VPInstruction(Instruction::Add, {Long0, Zero},
                                   VPIRFlags::getDefaultFlags(Instruction::Add));
@@ -265,8 +404,9 @@ TEST_F(VPlanReductionFissionTest, FusedUpdateAndDependentSelectStayTogether) {
   auto *Zero = Plan.getOrAddLiveIn(ConstantFP::get(Type::getDoubleTy(C), 0));
   auto *Phi = new VPReductionPHIRecipe(nullptr, RecurKind::FAdd, *Zero, *Zero,
                                        RdxUnordered{1}, {});
+  auto *Input = addInput(Plan, Body, Zero->getScalarType());
   auto *Long0 =
-      new VPInstruction(Instruction::FMul, {Zero, Zero},
+      new VPInstruction(Instruction::FMul, {Input, Zero},
                         VPIRFlags::getDefaultFlags(Instruction::FMul));
   auto *Long1 =
       new VPInstruction(Instruction::FAdd, {Long0, Zero},
@@ -300,7 +440,8 @@ TEST_F(VPlanReductionFissionTest, NonAddRecurrenceUsesSamePartitionAnalysis) {
   auto *Zero = Plan.getOrAddLiveIn(ConstantInt::get(Type::getInt32Ty(C), 0));
   auto *Phi = new VPReductionPHIRecipe(nullptr, RecurKind::Xor, *Zero, *Zero,
                                        RdxUnordered{1}, {});
-  auto *Long0 = new VPInstruction(Instruction::Mul, {Zero, Zero},
+  auto *Input = addInput(Plan, Plan.getEntry(), Zero->getScalarType());
+  auto *Long0 = new VPInstruction(Instruction::Mul, {Input, Zero},
                                   VPIRFlags::getDefaultFlags(Instruction::Mul));
   auto *Long1 = new VPInstruction(Instruction::Add, {Long0, Zero},
                                   VPIRFlags::getDefaultFlags(Instruction::Add));
@@ -458,11 +599,12 @@ TEST_F(VPlanReductionFissionTest, CombinedAddCutIsPrivateAndConservative) {
           *OtherStart, RdxUnordered{1}, {});
       Body->appendRecipe(OtherPhi);
     }
+    auto *Input = addInput(Plan, Body, Ty);
     unsigned AddOp = K == Floating ? Instruction::FAdd : Instruction::Add;
     unsigned MulOp = K == Floating ? Instruction::FMul : Instruction::Mul;
-    auto *A = new VPInstruction(MulOp, {Zero, Seed},
+    auto *A = new VPInstruction(MulOp, {Input, Seed},
                                 VPIRFlags::getDefaultFlags(MulOp));
-    auto *B = new VPInstruction(MulOp, {Seed, Seed},
+    auto *B = new VPInstruction(MulOp, {Input, Seed},
                                 VPIRFlags::getDefaultFlags(MulOp));
     Body->appendRecipe(A);
     Body->appendRecipe(B);
@@ -485,7 +627,7 @@ TEST_F(VPlanReductionFissionTest, CombinedAddCutIsPrivateAndConservative) {
     Body->appendRecipe(Last);
     VPInstruction *Root = Last;
     if (K == ThreeTerms) {
-      auto *D = new VPInstruction(MulOp, {Seed, Zero},
+      auto *D = new VPInstruction(MulOp, {Input, Zero},
                                   VPIRFlags::getDefaultFlags(MulOp));
       Body->appendRecipe(D);
       Root = new VPInstruction(AddOp, {Last, D},
@@ -504,8 +646,10 @@ TEST_F(VPlanReductionFissionTest, CombinedAddCutIsPrivateAndConservative) {
     if (OtherPhi) {
       VPValue *OtherInput = A;
       if (K == MixedWidth) {
+        auto *OtherInputLoad =
+            addInput(Plan, Body, OtherSeed->getScalarType());
         OtherInput =
-            new VPInstruction(Instruction::Mul, {OtherSeed, OtherSeed},
+            new VPInstruction(Instruction::Mul, {OtherInputLoad, OtherSeed},
                               VPIRFlags::getDefaultFlags(Instruction::Mul));
         Body->appendRecipe(OtherInput->getDefiningRecipe());
       }
@@ -681,6 +825,8 @@ TEST_F(VPlanReductionFissionTest, PreviewBuildsIndependentVectorRegions) {
   Body->appendRecipe(Accumulator);
   Body->appendRecipe(WideIV);
   Body->appendRecipe(ActiveMask);
+  auto *Input = addInput(Baseline, Body, Zero->getScalarType());
+  LongProducer->setOperand(0, Input);
   Body->appendRecipe(LongProducer);
   Body->appendRecipe(Update);
   Body->appendRecipe(IndexNext);
@@ -798,9 +944,6 @@ TEST_F(VPlanReductionFissionTest, SelectorUnlocksLargerProducerVF) {
     Result.Capacity[1] = Capacity;
     return Result;
   };
-  SmallVector<VPFissionVFPressure, 2> Baseline = {
-      {ElementCount::getScalable(4), Pressure(4, 8)},
-      {ElementCount::getScalable(8), Pressure(10, 8)}};
   SmallVector<VPFissionVFPressure, 2> Producer = {
       {ElementCount::getScalable(4), Pressure(3, 8)},
       {ElementCount::getScalable(8), Pressure(6, 8)}};
@@ -809,7 +952,7 @@ TEST_F(VPlanReductionFissionTest, SelectorUnlocksLargerProducerVF) {
       {ElementCount::getScalable(8), Pressure(9, 8)}};
 
   VPReductionFissionDecision Decision = selectReductionFissionConfiguration(
-      ElementCount::getScalable(4), Baseline, Producer, Accumulator,
+      ElementCount::getScalable(4), Producer, Accumulator,
       /*ScratchBytes=*/128,
       /*MaximumScratchBytes=*/1024, /*DuplicatedRecipeCount=*/0,
       /*MaximumDuplicatedRecipes=*/2);
@@ -820,29 +963,24 @@ TEST_F(VPlanReductionFissionTest, SelectorUnlocksLargerProducerVF) {
   EXPECT_EQ(Decision.Fission->AccumulatorVF, ElementCount::getScalable(4));
 }
 
-TEST_F(VPlanReductionFissionTest, SelectorComparesAgainstActualBaselineVF) {
+TEST_F(VPlanReductionFissionTest, SelectorAllowsProducerVFDecrease) {
   auto Pressure = [](unsigned Peak) {
     VPRegisterPressureBreakdown Result;
     Result.PeakTotalRegs[1] = Peak;
     Result.Capacity[1] = 32;
     return Result;
   };
-  // The ordinary vectorizer has selected VF 8, even though the pressure-only
-  // heuristic would select VF 4. Do not lower the producer VF to that value.
-  SmallVector<VPFissionVFPressure, 2> Baseline = {
-      {ElementCount::getScalable(8), Pressure(40)},
-      {ElementCount::getScalable(4), Pressure(20)}};
+  // The baseline VF is diagnostic, not a legality restriction on a stage.
   SmallVector<VPFissionVFPressure, 1> Producer = {
       {ElementCount::getScalable(4), Pressure(12)}};
   SmallVector<VPFissionVFPressure, 1> Accumulator = {
       {ElementCount::getScalable(4), Pressure(16)}};
   auto Decision = selectReductionFissionConfiguration(
-      ElementCount::getScalable(8), Baseline, Producer, Accumulator, 128, 1024,
+      ElementCount::getScalable(8), Producer, Accumulator, 128, 1024,
       0, 2);
-  EXPECT_FALSE(Decision.SelectFission);
+  ASSERT_TRUE(Decision.SelectFission);
   EXPECT_EQ(Decision.BaselineVF, ElementCount::getScalable(8));
-  EXPECT_EQ(Decision.Reason,
-            VPReductionFissionRejectReason::ProducerVFDecrease);
+  EXPECT_EQ(Decision.Fission->ProducerVF, ElementCount::getScalable(4));
 }
 
 TEST_F(VPlanReductionFissionTest, SelectorAllowsSameVFWithLowerPressure) {
@@ -852,9 +990,6 @@ TEST_F(VPlanReductionFissionTest, SelectorAllowsSameVFWithLowerPressure) {
     Result.Capacity[1] = 32;
     return Result;
   };
-  SmallVector<VPFissionVFPressure, 2> Baseline = {
-      {ElementCount::getScalable(2), Pressure(28)},
-      {ElementCount::getScalable(4), Pressure(55)}};
   SmallVector<VPFissionVFPressure, 2> Producer = {
       {ElementCount::getScalable(2), Pressure(18)},
       {ElementCount::getScalable(4), Pressure(35)}};
@@ -863,7 +998,7 @@ TEST_F(VPlanReductionFissionTest, SelectorAllowsSameVFWithLowerPressure) {
       {ElementCount::getScalable(4), Pressure(49)}};
 
   auto Decision = selectReductionFissionConfiguration(
-      ElementCount::getScalable(2), Baseline, Producer, Accumulator, 16384,
+      ElementCount::getScalable(2), Producer, Accumulator, 16384,
       65536, 0, 8);
   ASSERT_TRUE(Decision.SelectFission);
   ASSERT_TRUE(Decision.Fission.has_value());
@@ -872,93 +1007,80 @@ TEST_F(VPlanReductionFissionTest, SelectorAllowsSameVFWithLowerPressure) {
   EXPECT_EQ(Decision.Fission->AccumulatorVF, ElementCount::getScalable(2));
 }
 
-TEST_F(VPlanReductionFissionTest, SelectorRejectsSameVFWithoutLowerPressure) {
+TEST_F(VPlanReductionFissionTest, SelectorAllowsSameVFWithoutLowerPressure) {
   auto Pressure = [](unsigned Peak) {
     VPRegisterPressureBreakdown Result;
     Result.PeakTotalRegs[1] = Peak;
     Result.Capacity[1] = 32;
     return Result;
   };
-  SmallVector<VPFissionVFPressure, 1> Baseline = {
-      {ElementCount::getScalable(2), Pressure(28)}};
   SmallVector<VPFissionVFPressure, 1> Producer = {
       {ElementCount::getScalable(2), Pressure(18)}};
   SmallVector<VPFissionVFPressure, 1> Accumulator = {
       {ElementCount::getScalable(2), Pressure(28)}};
   auto Decision = selectReductionFissionConfiguration(
-      ElementCount::getScalable(2), Baseline, Producer, Accumulator, 128, 1024,
+      ElementCount::getScalable(2), Producer, Accumulator, 128, 1024,
       0, 2);
-  EXPECT_FALSE(Decision.SelectFission);
-  EXPECT_EQ(Decision.Reason,
-            VPReductionFissionRejectReason::FissionPressureNotReduced);
+  ASSERT_TRUE(Decision.SelectFission);
+  EXPECT_EQ(Decision.Fission->ProducerVF, ElementCount::getScalable(2));
+  EXPECT_EQ(Decision.Fission->AccumulatorVF, ElementCount::getScalable(2));
 }
 
-TEST_F(VPlanReductionFissionTest, ExplicitPressureOverflowKeepsResourceLimits) {
+TEST_F(VPlanReductionFissionTest, PressureFallbackKeepsResourceLimits) {
   auto Pressure = [](unsigned Peak) {
     VPRegisterPressureBreakdown Result;
     Result.PeakTotalRegs[1] = Peak;
     Result.Capacity[1] = 32;
     return Result;
   };
-  SmallVector<VPFissionVFPressure, 2> Baseline = {
-      {ElementCount::getScalable(2), Pressure(28)},
-      {ElementCount::getScalable(4), Pressure(55)}};
   SmallVector<VPFissionVFPressure, 1> Producer = {
       {ElementCount::getScalable(4), Pressure(35)}};
   SmallVector<VPFissionVFPressure, 1> Accumulator = {
       {ElementCount::getScalable(2), Pressure(25)}};
 
-  auto Select = [&](bool AllowOverflow, uint64_t Scratch, unsigned Duplicates) {
+  auto Select = [&](uint64_t Scratch, unsigned Duplicates) {
     return selectReductionFissionConfiguration(
-        ElementCount::getScalable(2), Baseline, Producer, Accumulator, Scratch,
-        65536, Duplicates, 8, AllowOverflow);
+        ElementCount::getScalable(2), Producer, Accumulator, Scratch,
+        65536, Duplicates, 8);
   };
-  EXPECT_FALSE(Select(false, 16384, 0).SelectFission);
-  auto Forced = Select(true, 16384, 0);
+  auto Forced = Select(16384, 0);
   ASSERT_TRUE(Forced.SelectFission);
   ASSERT_TRUE(Forced.Fission.has_value());
   EXPECT_EQ(Forced.Fission->ProducerVF, ElementCount::getScalable(4));
   EXPECT_EQ(Forced.Fission->AccumulatorVF, ElementCount::getScalable(2));
-  EXPECT_EQ(Select(true, 65537, 0).Reason,
+  EXPECT_EQ(Select(65537, 0).Reason,
             VPReductionFissionRejectReason::ScratchLimit);
-  EXPECT_EQ(Select(true, 16384, 9).Reason,
+  EXPECT_EQ(Select(16384, 9).Reason,
             VPReductionFissionRejectReason::CrossPartitionDependence);
 }
 
-TEST_F(VPlanReductionFissionTest, SelectorRejectsNewUncomparedPressureClass) {
+TEST_F(VPlanReductionFissionTest, SelectorAllowsIndependentPressureClassesAndVFs) {
   auto Pressure = [](unsigned ClassID, unsigned Peak, unsigned Capacity) {
     VPRegisterPressureBreakdown Result;
     Result.PeakTotalRegs[ClassID] = Peak;
     Result.Capacity[ClassID] = Capacity;
     return Result;
   };
-  SmallVector<VPFissionVFPressure, 2> Baseline = {
-      {ElementCount::getScalable(4), Pressure(1, 4, 8)},
-      {ElementCount::getScalable(8), Pressure(1, 10, 8)}};
   SmallVector<VPFissionVFPressure, 2> Producer = {
       {ElementCount::getScalable(8), Pressure(2, 6, 8)}};
   SmallVector<VPFissionVFPressure, 2> Accumulator = {
       {ElementCount::getScalable(4), Pressure(1, 3, 8)}};
 
   VPReductionFissionDecision Decision = selectReductionFissionConfiguration(
-      ElementCount::getScalable(4), Baseline, Producer, Accumulator, 128, 1024,
+      ElementCount::getScalable(4), Producer, Accumulator, 128, 1024,
       0, 2);
-  EXPECT_FALSE(Decision.SelectFission);
-  ASSERT_TRUE(Decision.Reason.has_value());
-  EXPECT_EQ(*Decision.Reason,
-            VPReductionFissionRejectReason::FissionPressureNotReduced);
+  ASSERT_TRUE(Decision.SelectFission);
+  EXPECT_EQ(Decision.Fission->ProducerVF, ElementCount::getScalable(8));
+  EXPECT_EQ(Decision.Fission->AccumulatorVF, ElementCount::getScalable(4));
 }
 
-TEST_F(VPlanReductionFissionTest, SelectorRequiresRegisterHeadroom) {
+TEST_F(VPlanReductionFissionTest, SelectorPrefersRegisterHeadroom) {
   auto Pressure = [](unsigned Peak) {
     VPRegisterPressureBreakdown Result;
     Result.PeakTotalRegs[1] = Peak;
     Result.Capacity[1] = 8;
     return Result;
   };
-  SmallVector<VPFissionVFPressure, 2> Baseline = {
-      {ElementCount::getScalable(2), Pressure(4)},
-      {ElementCount::getScalable(4), Pressure(8)}};
   SmallVector<VPFissionVFPressure, 2> Producer = {
       {ElementCount::getScalable(2), Pressure(3)},
       {ElementCount::getScalable(4), Pressure(6)}};
@@ -967,7 +1089,7 @@ TEST_F(VPlanReductionFissionTest, SelectorRequiresRegisterHeadroom) {
       {ElementCount::getScalable(4), Pressure(8)}};
 
   VPReductionFissionDecision Decision = selectReductionFissionConfiguration(
-      ElementCount::getScalable(2), Baseline, Producer, Accumulator,
+      ElementCount::getScalable(2), Producer, Accumulator,
       /*ScratchBytes=*/128,
       /*MaximumScratchBytes=*/1024, /*DuplicatedRecipeCount=*/0,
       /*MaximumDuplicatedRecipes=*/2);
@@ -975,6 +1097,64 @@ TEST_F(VPlanReductionFissionTest, SelectorRequiresRegisterHeadroom) {
   ASSERT_TRUE(Decision.Fission.has_value());
   EXPECT_EQ(Decision.Fission->ProducerVF, ElementCount::getScalable(4));
   EXPECT_EQ(Decision.Fission->AccumulatorVF, ElementCount::getScalable(2));
+}
+
+TEST_F(VPlanReductionFissionTest, SelectorFallsBackIndependentlyOfInputOrder) {
+  VPRegisterPressureBreakdown Full;
+  Full.PeakTotalRegs[1] = 8;
+  Full.Capacity[1] = 8;
+  VPRegisterPressureBreakdown Overflow = Full;
+  Overflow.PeakTotalRegs[1] = 40;
+  SmallVector<VPFissionVFPressure, 3> Producer = {
+      {ElementCount::getScalable(8), Overflow},
+      {ElementCount::getScalable(2), Full},
+      {ElementCount::getScalable(4), Overflow}};
+  SmallVector<VPFissionVFPressure, 2> Accumulator = {
+      {ElementCount::getScalable(16), Overflow},
+      {ElementCount::getScalable(4), Full}};
+  auto Select = [&] {
+    return selectReductionFissionConfiguration(ElementCount::getScalable(8),
+                                               Producer, Accumulator, 128,
+                                               128, 8, 8);
+  };
+  auto Decision = Select();
+  ASSERT_TRUE(Decision.SelectFission);
+  EXPECT_EQ(Decision.Fission->ProducerVF, ElementCount::getScalable(2));
+  EXPECT_EQ(Decision.Fission->AccumulatorVF, ElementCount::getScalable(4));
+  std::reverse(Producer.begin(), Producer.end());
+  std::reverse(Accumulator.begin(), Accumulator.end());
+  Decision = Select();
+  ASSERT_TRUE(Decision.SelectFission);
+  EXPECT_EQ(Decision.Fission->ProducerVF, ElementCount::getScalable(2));
+  EXPECT_EQ(Decision.Fission->AccumulatorVF, ElementCount::getScalable(4));
+  Producer.clear();
+  EXPECT_EQ(Select().Reason, VPReductionFissionRejectReason::UnsupportedRecipe);
+  Producer.push_back({ElementCount::getScalable(2), Full});
+  Accumulator.clear();
+  EXPECT_EQ(Select().Reason, VPReductionFissionRejectReason::UnsupportedRecipe);
+}
+
+TEST_F(VPlanReductionFissionTest, AnalysisRejectsInvariantOnlyAndEmptyCuts) {
+  VPlan &Plan = getPlan();
+  EXPECT_FALSE(analyzeVPReductionFission(Plan, {}).isCandidate());
+  auto *Zero = Plan.getOrAddLiveIn(ConstantInt::get(Type::getInt32Ty(C), 0));
+  auto *Phi = new VPReductionPHIRecipe(nullptr, RecurKind::Add, *Zero, *Zero,
+                                      RdxUnordered{1}, {});
+  auto *Invariant = new VPInstruction(
+      Instruction::Mul, {Zero, Zero},
+      VPIRFlags::getDefaultFlags(Instruction::Mul));
+  auto *Update = new VPInstruction(
+      Instruction::Add, {Phi, Invariant},
+      VPIRFlags::getDefaultFlags(Instruction::Add));
+  Phi->setOperand(1, Update);
+  Plan.getEntry()->appendRecipe(Phi);
+  Plan.getEntry()->appendRecipe(Invariant);
+  Plan.getEntry()->appendRecipe(Update);
+  auto Analysis = analyzeVPReductionFission(Plan, {}, {1, 1});
+  EXPECT_FALSE(Analysis.isCandidate());
+  EXPECT_TRUE(Analysis.Partition.FrontierValues.empty());
+  EXPECT_TRUE(Analysis.Partition.ProducerRecipes.empty());
+  EXPECT_EQ(Phi->getBackedgeValue(), Update);
 }
 
 TEST_F(VPlanReductionFissionTest, ScratchLayoutRequiresBoundedConstantStorage) {

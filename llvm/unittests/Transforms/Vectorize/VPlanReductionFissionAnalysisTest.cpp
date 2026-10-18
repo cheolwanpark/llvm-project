@@ -12,6 +12,7 @@
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetTransformInfoImpl.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/VFABIDemangler.h"
 #include "gtest/gtest.h"
 
 namespace llvm {
@@ -44,6 +45,243 @@ public:
     return Ty->isIntegerTy(32) || Ty->isIntegerTy(64);
   }
 };
+
+class ReductionLegalityTTI final : public TargetTransformInfoImplBase {
+public:
+  explicit ReductionLegalityTTI(const DataLayout &DL)
+      : TargetTransformInfoImplBase(DL) {}
+  bool isTypeLegal(Type *) const override { return true; }
+  bool isElementTypeLegalForScalableVector(Type *) const override { return true; }
+  InstructionCost
+  getArithmeticReductionCost(unsigned, VectorType *Ty,
+                             std::optional<FastMathFlags>,
+                             TTI::TargetCostKind) const override {
+    return Ty->getElementCount().getKnownMinValue() <= 2
+               ? InstructionCost(1)
+               : InstructionCost::getInvalid();
+  }
+};
+
+class InterleaveLegalityTTI final : public TargetTransformInfoImplBase {
+public:
+  explicit InterleaveLegalityTTI(const DataLayout &DL)
+      : TargetTransformInfoImplBase(DL) {}
+  bool isTypeLegal(Type *) const override { return true; }
+  bool isElementTypeLegalForScalableVector(Type *) const override { return true; }
+  bool isLegalInterleavedAccessType(VectorType *Ty, unsigned Factor,
+                                     Align Alignment,
+                                     unsigned AS) const override {
+    return Ty->getElementCount() == ElementCount::getScalable(2) &&
+           Factor >= 2 && Factor <= 8 && Alignment == Align(4) && AS == 0;
+  }
+};
+
+TEST_F(VPlanReductionFissionAnalysisTest, SingleScalarIntegerArithmetic) {
+  DataLayout DL("");
+  TargetTransformInfo TTI(std::make_unique<ReductionLegalityTTI>(DL));
+  VPlan &Plan = getPlan();
+  auto *Body = Plan.createVPBasicBlock("vector.body");
+  auto *Region =
+      Plan.createLoopRegion(Plan.getIndexType(), {}, "loop", Body, Body);
+  VPBlockUtils::connectBlocks(Plan.getEntry(), Region);
+  VPBlockUtils::connectBlocks(Region, Plan.getScalarHeader());
+  auto *Ty = Type::getInt64Ty(C);
+  auto *Three = ConstantInt::get(Ty, 3);
+  auto *Mask = Region->createHeaderMask();
+  auto Check = [&](Instruction *I, ArrayRef<VPValue *> Ops, bool SingleScalar,
+                   VPValue *Mask, bool Supported) {
+    auto *R =
+        new VPReplicateRecipe(I, Ops, SingleScalar, Mask, VPIRFlags(*I), {}, {});
+    Body->appendRecipe(R);
+    EXPECT_EQ(isSupportedReductionFissionPlan(Plan, TTI), Supported);
+    for (unsigned Width : {2, 4})
+      EXPECT_EQ(isLegalReductionFissionVF(
+                    Plan, ElementCount::getScalable(Width), TTI),
+                Supported);
+    R->eraseFromParent();
+  };
+  for (unsigned Opcode : {Instruction::Add, Instruction::Sub, Instruction::Mul,
+                          Instruction::And, Instruction::Or, Instruction::Xor,
+                          Instruction::Shl, Instruction::LShr,
+                          Instruction::AShr, Instruction::UDiv,
+                          Instruction::SDiv, Instruction::URem,
+                          Instruction::SRem}) {
+    SCOPED_TRACE(Opcode);
+    auto *I = BinaryOperator::Create(
+        static_cast<Instruction::BinaryOps>(Opcode), PoisonValue::get(Ty),
+        Three, "address.op", ScalarHeader->getTerminator()->getIterator());
+    SmallVector<VPValue *> Ops{Region->getCanonicalIV(),
+                               Plan.getConstantInt(64, 3)};
+    Check(I, Ops, true, nullptr, !I->isIntDivRem());
+    Check(I, Ops, false, nullptr, false); // per-lane replication
+    Check(I, Ops, true, Mask, false);
+  }
+  // A scalar recipe is not permission to move memory or FP operations, even
+  // if the corresponding instruction would otherwise be speculatable.
+  auto *Ptr = PoisonValue::get(PointerType::getUnqual(C));
+  auto *Load = new LoadInst(Ty, Ptr, "load", false, Align(8),
+                            ScalarHeader->getTerminator()->getIterator());
+  Check(Load, {Plan.getOrAddLiveIn(Ptr)}, true, nullptr, false);
+  auto *FP = ConstantFP::get(Type::getDoubleTy(C), 2.0);
+  auto *Mul = BinaryOperator::CreateFMul(
+      FP, FP, "fp", ScalarHeader->getTerminator()->getIterator());
+  Check(Mul, {Plan.getOrAddLiveIn(FP), Plan.getOrAddLiveIn(FP)}, true, nullptr,
+        false);
+}
+
+TEST_F(VPlanReductionFissionAnalysisTest, CompleteForwardInterleaveLegality) {
+  DataLayout DL("");
+  TargetTransformInfo TTI(std::make_unique<InterleaveLegalityTTI>(DL));
+  for (unsigned Factor : {2, 3, 4, 5, 6, 7, 8}) {
+    SCOPED_TRACE(Factor);
+    VPlan &Plan = getPlan();
+    auto *Body = Plan.createVPBasicBlock("vector.body");
+    auto *Region =
+        Plan.createLoopRegion(Plan.getIndexType(), {}, "loop", Body, Body);
+    VPBlockUtils::connectBlocks(Plan.getEntry(), Region);
+    VPBlockUtils::connectBlocks(Region, Plan.getScalarHeader());
+    auto *Ptr = PoisonValue::get(PointerType::getUnqual(C));
+    SmallVector<LoadInst *> Loads;
+    for (unsigned I = 0; I < Factor; ++I)
+      Loads.push_back(new LoadInst(
+          Type::getInt32Ty(C), Ptr, "member", false, Align(I ? 4 : 16),
+          ScalarHeader->getTerminator()->getIterator()));
+    InterleaveGroup<Instruction> Group(Loads[0], Factor, Loads[0]->getAlign());
+    for (unsigned I = 1; I < Factor; ++I)
+      ASSERT_TRUE(Group.insertMember(Loads[I], I, Loads[I]->getAlign()));
+    auto Check = [&](const InterleaveGroup<Instruction> &IG, VPValue *Mask,
+                     bool Gaps, bool Supported) {
+      auto *R = new VPInterleaveRecipe(&IG, Plan.getOrAddLiveIn(Ptr), {}, Mask,
+                                        Gaps, {}, {});
+      Body->appendRecipe(R);
+      EXPECT_EQ(isSupportedReductionFissionPlan(Plan, TTI), Supported);
+      EXPECT_EQ(isLegalReductionFissionVF(Plan, ElementCount::getScalable(2),
+                                           TTI),
+                Supported);
+      EXPECT_FALSE(isLegalReductionFissionVF(
+          Plan, ElementCount::getScalable(4), TTI));
+      R->eraseFromParent();
+    };
+    Check(Group, nullptr, false, true);
+    Check(Group, Region->createHeaderMask(), false, true);
+    Check(Group, Plan.getFalse(), false, false); // data predicate
+    Check(Group, nullptr, true, false);
+    Loads[0]->setVolatile(true);
+    Check(Group, nullptr, false, false);
+    Loads[0]->setVolatile(false);
+    Loads[0]->setAtomic(AtomicOrdering::Monotonic);
+    Check(Group, nullptr, false, false);
+    Loads[0]->setAtomic(AtomicOrdering::NotAtomic);
+    InterleaveGroup<Instruction> Reverse(Loads[0], -int(Factor), Align(4));
+    for (unsigned I = 1; I < Factor; ++I)
+      ASSERT_TRUE(Reverse.insertMember(Loads[I], I, Align(4)));
+    Check(Reverse, nullptr, false, false);
+    InterleaveGroup<Instruction> Gap(Loads[0], Factor + 1, Align(4));
+    for (unsigned I = 1; I < Factor; ++I)
+      ASSERT_TRUE(Gap.insertMember(Loads[I], I, Align(4)));
+    Check(Gap, nullptr, false, false);
+
+    auto *Value = Plan.getConstantInt(32, 1);
+    auto *Store = new StoreInst(Value->getLiveInIRValue(), Ptr, false, Align(4),
+                                ScalarHeader->getTerminator()->getIterator());
+    InterleaveGroup<Instruction> Stores(Store, Factor, Align(4));
+    SmallVector<VPValue *> StoredValues(Factor, Value);
+    for (unsigned I = 1; I < Factor; ++I) {
+      auto *S = new StoreInst(Value->getLiveInIRValue(), Ptr, false, Align(4),
+                              ScalarHeader->getTerminator()->getIterator());
+      ASSERT_TRUE(Stores.insertMember(S, I, Align(4)));
+    }
+    auto *R = new VPInterleaveRecipe(&Stores, Plan.getOrAddLiveIn(Ptr),
+                                      StoredValues, nullptr, false, {}, {});
+    Body->appendRecipe(R);
+    EXPECT_FALSE(isSupportedReductionFissionPlan(Plan, TTI));
+    R->eraseFromParent();
+  }
+}
+
+TEST_F(VPlanReductionFissionAnalysisTest,
+       UnorderedFAddRetainsTargetLoweringLegality) {
+  VPlan &Plan = getPlan();
+  auto *Body = Plan.createVPBasicBlock("vector.body");
+  auto *Region =
+      Plan.createLoopRegion(Plan.getIndexType(), {}, "vector loop", Body, Body);
+  VPBlockUtils::connectBlocks(Plan.getEntry(), Region);
+  VPBlockUtils::connectBlocks(Region, Plan.getScalarHeader());
+  auto *Zero = Plan.getOrAddLiveIn(ConstantFP::get(Type::getDoubleTy(C), 0));
+  FastMathFlags FMF;
+  FMF.setAllowReassoc();
+  auto *Phi = new VPReductionPHIRecipe(nullptr, RecurKind::FAdd, *Zero, *Zero,
+                                      RdxUnordered{1}, FMF);
+  auto *Update = new VPInstruction(Instruction::FAdd, {Phi, Zero}, FMF);
+  Phi->setOperand(1, Update);
+  Body->appendRecipe(Phi);
+  Body->appendRecipe(Update);
+  DataLayout DL("");
+  TargetTransformInfo TTI(std::make_unique<ReductionLegalityTTI>(DL));
+  EXPECT_TRUE(isSupportedReductionFissionPlan(Plan, TTI));
+  EXPECT_TRUE(isLegalReductionFissionVF(Plan, ElementCount::getScalable(2), TTI));
+  EXPECT_FALSE(isLegalReductionFissionVF(Plan, ElementCount::getScalable(4), TTI));
+}
+
+TEST_F(VPlanReductionFissionAnalysisTest, ScalableCallSignatureRestrictsStageVF) {
+  Type *I32 = Type::getInt32Ty(C);
+  Type *I64 = Type::getInt64Ty(C);
+  ElementCount VF2 = ElementCount::getScalable(2);
+  ElementCount VF4 = ElementCount::getScalable(4);
+  auto *NarrowFT = FunctionType::get(I32, {I32}, false);
+  auto NarrowInfo = VFABI::tryDemangleForVFABI("_ZGVrNxv_foo(vecfoo)", NarrowFT);
+  ASSERT_TRUE(NarrowInfo);
+  // 'x' does not encode an arbitrary scalable VF. i32(i32) means nxv4,
+  // even if a mismatched vector declaration happens to use nxv2.
+  EXPECT_EQ(NarrowInfo->Shape.VF, VF4);
+  EXPECT_EQ(VFABI::createFunctionType(*NarrowInfo, NarrowFT)->getReturnType(),
+            VectorType::get(I32, VF4));
+
+  for (bool HasNarrowArgument : {false, true}) {
+    SCOPED_TRACE(HasNarrowArgument);
+    SmallVector<Type *, 2> Params;
+    if (HasNarrowArgument)
+      Params.push_back(I32);
+    Params.push_back(I64);
+    auto *ScalarFT = FunctionType::get(I32, Params, false);
+    auto Info = VFABI::tryDemangleForVFABI(
+        HasNarrowArgument ? "_ZGVrNxvv_foo(vecfoo)" : "_ZGVrNxv_foo(vecfoo)",
+        ScalarFT);
+    ASSERT_TRUE(Info);
+    EXPECT_EQ(Info->Shape.VF, VF2);
+    auto *Scalar =
+        Function::Create(ScalarFT, GlobalValue::ExternalLinkage, "foo", M.get());
+    auto *Variant = Function::Create(VFABI::createFunctionType(*Info, ScalarFT),
+                                     GlobalValue::ExternalLinkage, "vecfoo",
+                                     M.get());
+    Variant->addFnAttr(Attribute::Speculatable);
+    Variant->setMemoryEffects(MemoryEffects::none());
+
+    VPlan &Plan = getPlan();
+    auto *Body = Plan.createVPBasicBlock("vector.body");
+    auto *Region =
+        Plan.createLoopRegion(Plan.getIndexType(), {}, "vector loop", Body, Body);
+    VPBlockUtils::connectBlocks(Plan.getEntry(), Region);
+    VPBlockUtils::connectBlocks(Region, Plan.getScalarHeader());
+    SmallVector<VPValue *, 3> Args;
+    for (Type *Ty : Params)
+      Args.push_back(Plan.getOrAddLiveIn(ConstantInt::get(Ty, 1)));
+    Args.push_back(Plan.getOrAddLiveIn(Scalar));
+    Body->appendRecipe(new VPWidenCallRecipe(nullptr, Variant, Args));
+    DataLayout DL("");
+    TargetTransformInfo TTI(std::make_unique<ReductionLegalityTTI>(DL));
+    EXPECT_TRUE(isSupportedReductionFissionPlan(Plan, TTI));
+    EXPECT_TRUE(isLegalReductionFissionVF(Plan, VF2, TTI));
+    EXPECT_FALSE(
+        isLegalReductionFissionVF(Plan, ElementCount::getScalable(1), TTI));
+    EXPECT_FALSE(isLegalReductionFissionVF(Plan, VF4, TTI));
+    EXPECT_FALSE(
+        isLegalReductionFissionVF(Plan, ElementCount::getScalable(8), TTI));
+    // VF-independent discovery still checks the vector callee's contract.
+    Variant->addParamAttr(0, Attribute::NoUndef);
+    EXPECT_FALSE(isSupportedReductionFissionPlan(Plan, TTI));
+  }
+}
 
 TEST_F(VPlanReductionFissionAnalysisTest, DependencyMetricsForChain) {
   VPlan &Plan = getPlan();

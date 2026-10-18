@@ -7,6 +7,7 @@
 // Instantiated by check-reduction-fission.py; @...@ are template substitutions.
 // The original scalar IR is compiled by the same backend as the specializations.
 
+#define _DEFAULT_SOURCE 1
 #include <float.h>
 #include <math.h>
 #include <stdbool.h>
@@ -14,10 +15,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 typedef void CombinedFn(const uint32_t *, uint32_t *, uint64_t, double *, double,
                         const double *, uint32_t *, uint32_t *, int32_t);
 typedef void InductionFn(const uint32_t *, uint32_t *, int32_t);
+typedef void ShortIntFn(const uint32_t *, uint32_t *, uint64_t);
+typedef void ShortFPFn(const double *, double *, uint64_t, double);
+typedef void FixedCallFn(const uint64_t *, uint32_t *);
+typedef void BoundedCallFn(const uint64_t *, uint32_t *, uint64_t);
 typedef void FPFn(const double *, double *);
 typedef void ScalarSumFn(const uint32_t *, void *, uint64_t, uint32_t);
 typedef void ScalarMixedFn(const uint32_t *, const double *, uint32_t *,
@@ -25,6 +32,17 @@ typedef void ScalarMixedFn(const uint32_t *, const double *, uint32_t *,
 typedef uint32_t ScalarConstantFn(uint32_t);
 typedef void ScalarNestedFn(const uint32_t *, const double *, uint32_t *,
                             double *, uint64_t, uint64_t, double);
+typedef void ExportFn(const uint32_t *, const double *, uint32_t *, uint64_t *,
+                      double *, float *, uint64_t, uint64_t, double);
+extern ExportFn ref_export_unconditional, ref_export_diamond;
+extern ExportFn ref_export_compact, ref_export_nested;
+extern ExportFn ref_export_offset, ref_export_stride, ref_export_down;
+extern ExportFn ref_export_current, ref_export_affine_compact, ref_export_serial;
+extern ExportFn ref_export_acyclic_nested, ref_export_enclosing;
+extern ExportFn ref_compact_cfg_serial, ref_compact_cfg_nested;
+extern ExportFn ref_compact_cfg_affine, ref_compact_cfg_enclosing;
+extern ExportFn ref_chunk_mixed, ref_chunk_narrow, ref_chunk_ne, ref_chunk_nested;
+extern ShortFPFn ref_chunk_ordered;
 typedef void AffineFn(const uint32_t *, const double *, uint32_t *, double *,
                       float *, uint64_t, double, int64_t);
 typedef uint32_t CompactDelayFn(const uint32_t *, uint64_t);
@@ -43,9 +61,23 @@ extern ScalarNestedFn ref_scalar_diamond_nested;
 extern ScalarMixedFn ref_compact_triangle, ref_compact_diamond;
 extern ScalarSumFn ref_compact_integer;
 extern ScalarNestedFn ref_compact_nested;
+typedef void AdapterFn(const void *, void *);
+extern ShortIntFn ref_short_one, ref_short_two;
+extern ShortFPFn ref_short_ordered, ref_short_ordered_two;
+extern FixedCallFn ref_independent_vfs;
+extern BoundedCallFn ref_independent_vfs_bounded;
 extern ScalarMixedFn ref_acyclic_serial, ref_acyclic_nested, ref_acyclic_three_way;
 extern ScalarNestedFn ref_acyclic_enclosing;
 @DECLARATIONS@
+
+enum {
+  InterleaveMaxTripCount = 65,
+  InterleaveMaxFactor = @INTERLEAVE_MAX_FACTOR@,
+  InterleaveMaxOutputs = @INTERLEAVE_MAX_OUTPUTS@,
+  InterleaveInputElements = InterleaveMaxTripCount * InterleaveMaxFactor,
+  // double is the largest input element in these fixture families.
+  InterleaveMaxInputBytes = InterleaveInputElements * sizeof(double)
+};
 
 static const struct {
   const char *Name;
@@ -122,6 +154,15 @@ static const struct {
   CompactDelayFn *Fn, *Reference;
   unsigned VectorLanes;
 } CompactDelays[] = {@COMPACT_DELAYS@};
+static const struct {
+  const char *Name;
+  CompactDelayFn *Fn, *Reference;
+} CrossRetention[] = {@CROSS_RETENTION@};
+static const struct {
+  const char *Name;
+  RecurrenceFn *Fn, *Reference;
+  unsigned Mode, VectorLanes;
+} RetainedExports[] = {@RETAINED_EXPORTS@};
 
 static const struct {
   const char *Name;
@@ -138,6 +179,27 @@ static const struct {
   ScalarNestedFn *Fn, *Reference;
   unsigned VectorLanes;
 } CompactNested[] = {@COMPACT_NESTED@};
+static const struct {
+  const char *Name;
+  ExportFn *Fn, *Reference;
+  unsigned Mode, VectorLanes;
+} Exports[] = {@EXPORTS@};
+static const struct {
+  const char *Name;
+  ExportFn *Fn, *Reference;
+  bool Nested;
+  unsigned Capacity, VectorLanes, MaxN;
+} Chunks[] = {@CHUNKS@};
+static const struct {
+  const char *Name;
+  ShortFPFn *Fn;
+  unsigned ProducerLanes, ConsumerLanes;
+} AosChunks[] = {@AOS_CHUNKS@};
+static const struct {
+  const char *Name;
+  ScalarSumFn *Fn, *Reference;
+  unsigned Mode, VectorLanes;
+} Integration[] = {@INTEGRATION@};
 
 // No memory access, exceptions, convergence, or FP-environment effects. opt
 // only sees the explicitly attributed declaration, with no vector mapping.
@@ -149,17 +211,112 @@ uint32_t scalar_helper(uint32_t X) {
 
 static unsigned ScalarVectorVisits, ScalarVectorRuns, ScalarTailVisits;
 static unsigned CompactIterations, CompactParticipants;
+static unsigned ExportEmptyVisits, ExportBypassVisits, ExportInactiveFinalVisits;
+static unsigned CompactCFGBypasses[3];
 static unsigned AcyclicIterations, AcyclicLatches;
 void record_scalar_consumer_vector(void) { ++ScalarVectorVisits; }
 void record_scalar_consumer_tail(void) { ++ScalarTailVisits; }
 void record_compact_iteration(void) { ++CompactIterations; }
 void record_compact_participant(void) { ++CompactParticipants; }
+void record_export_guard(uint64_t P) { ExportEmptyVisits += P == 0; }
+void record_export_bypass(void) { ++ExportBypassVisits; }
+void record_export_final(uint32_t X) { ExportInactiveFinalVisits += X == 0; }
+void record_compact_cfg_bypass(unsigned Edge) {
+  if (Edge >= 3) abort();
+  ++CompactCFGBypasses[Edge];
+}
 void record_acyclic_iteration(void) { ++AcyclicIterations; }
 void record_acyclic_latch(void) { ++AcyclicLatches; }
 
 static void reset_compact_probes(void) {
   ScalarVectorVisits = ScalarTailVisits = 0;
   CompactIterations = CompactParticipants = 0;
+  ExportEmptyVisits = 0;
+  ExportBypassVisits = ExportInactiveFinalVisits = 0;
+  memset(CompactCFGBypasses, 0, sizeof(CompactCFGBypasses));
+}
+
+static const struct {
+  const char *Name;
+  ShortIntFn *Fn, *Reference;
+} ShortInts[] = {@SHORT_INT@};
+static const struct {
+  const char *Name;
+  bool Relaxed;
+  unsigned Outputs;
+  ShortFPFn *Fn, *Reference;
+} ShortFP[] = {@SHORT_FP@};
+static const struct {
+  const char *Name;
+  FixedCallFn *Fn;
+} FixedCalls[] = {@FIXED_CALL@};
+static const struct {
+  const char *Name;
+  BoundedCallFn *Fn;
+} BoundedCalls[] = {@BOUNDED_CALL@};
+static const struct {
+  const char *Name;
+  unsigned Factor, Outputs, ProducerVF, AccumulatorVF;
+  ShortIntFn *Fn, *Reference;
+  // Zero means that no additional ordinary vector tail was emitted.
+  unsigned ProducerTailVF, AccumulatorTailVF;
+} InterleaveInts[] = {@INTERLEAVE_INT@};
+static const struct {
+  const char *Name;
+  unsigned Factor, Outputs, ProducerVF, AccumulatorVF;
+  ShortFPFn *Fn, *Reference;
+  unsigned ProducerTailVF, AccumulatorTailVF;
+} InterleaveFP[] = {@INTERLEAVE_FP@};
+static const struct {
+  const char *Name;
+  unsigned Factor, Lanes, ElementBytes;
+  AdapterFn *Fn;
+} Adapters[] = {@ADAPTER@};
+static const struct {
+  const char *Name;
+  uint32_t (*Fn)(void);
+} AdapterPoison[] = {@ADAPTER_POISON@};
+
+static uint64_t InterleaveEntries[4];
+static uint64_t InterleaveTailEntries[2], InterleaveTailLanes[2];
+static uint64_t OrdinaryTailEntries, OrdinaryTailLanes;
+void fission_interleave_probe(uint32_t Stage) {
+  if (Stage >= 4) abort();
+  ++InterleaveEntries[Stage];
+}
+void fission_interleave_tail_probe(uint32_t Role, uint64_t Lanes) {
+  if (Role >= 2 || !Lanes) abort();
+  ++InterleaveTailEntries[Role];
+  InterleaveTailLanes[Role] += Lanes;
+}
+static void reset_interleave_probes(void) {
+  memset(InterleaveEntries, 0, sizeof(InterleaveEntries));
+  memset(InterleaveTailEntries, 0, sizeof(InterleaveTailEntries));
+  memset(InterleaveTailLanes, 0, sizeof(InterleaveTailLanes));
+}
+
+// The participating AoS objects end exactly at an inaccessible page, so a
+// widened scalar tail or a vector chunk rounded upward cannot silently pass
+// by reading the rest of a generously sized input array. Bypasses use NULL.
+static const void *guarded_input(const void *Input, size_t Bytes) {
+  static char *Pages;
+  static size_t WritableBytes;
+  if (!Bytes) return NULL;
+  if (!Pages) {
+    long Size = sysconf(_SC_PAGESIZE);
+    if (Size <= 0) abort();
+    size_t PageSize = (size_t)Size;
+    WritableBytes =
+        ((InterleaveMaxInputBytes + PageSize - 1) / PageSize) * PageSize;
+    Pages = mmap(NULL, WritableBytes + PageSize, PROT_READ | PROT_WRITE,
+                 MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (Pages == MAP_FAILED ||
+        mprotect(Pages + WritableBytes, PageSize, PROT_NONE)) abort();
+  }
+  if (Bytes > InterleaveMaxInputBytes) abort();
+  char *EndAligned = Pages + WritableBytes - Bytes;
+  memcpy(EndAligned, Input, Bytes);
+  return EndAligned;
 }
 
 static uint32_t Seed = 314159265;
@@ -168,6 +325,10 @@ static unsigned Runs;
 static uint32_t random_value(void) {
   Seed = 1664525 * Seed + 1013904223;
   return Seed;
+}
+static uint64_t random_wide_value(void) {
+  uint64_t High = random_value();
+  return (High << 32) | random_value();
 }
 static void fail(const char *Name, unsigned N, unsigned Trial, const char *What) {
   fprintf(stderr, "%s: N=%u trial=%u: %s\n", Name, N, Trial, What);
@@ -346,6 +507,28 @@ static bool compact_floats_equal(const float *A, const float *B, unsigned N) {
       return false;
   return true;
 }
+static void check_interleave_entries(const char *Name, unsigned N,
+                                     unsigned Trial, unsigned PVF,
+                                     unsigned AVF, unsigned PTVF,
+                                     unsigned ATVF) {
+  unsigned Active = N && N <= 65 ? N : 0;
+  unsigned PR = Active % PVF, AR = Active % AVF;
+  uint64_t TailEntries[] = {PTVF ? PR / PTVF : 0, ATVF ? AR / ATVF : 0};
+  uint64_t TailLanes[] = {TailEntries[0] * PTVF, TailEntries[1] * ATVF};
+  uint64_t Expected[] = {Active / PVF, PTVF ? PR % PTVF : PR,
+                        Active / AVF, ATVF ? AR % ATVF : AR};
+  if (memcmp(InterleaveEntries, Expected, sizeof(Expected)) ||
+      memcmp(InterleaveTailEntries, TailEntries, sizeof(TailEntries)) ||
+      memcmp(InterleaveTailLanes, TailLanes, sizeof(TailLanes)) ||
+      InterleaveEntries[0] * PVF + InterleaveEntries[1] +
+          InterleaveTailLanes[0] != Active ||
+      InterleaveEntries[2] * AVF + InterleaveEntries[3] +
+          InterleaveTailLanes[1] != Active)
+    fail(Name, N, Trial,
+         "vector/scalar/ordinary-tail entries or participating lanes mismatch");
+  OrdinaryTailEntries += InterleaveTailEntries[0] + InterleaveTailEntries[1];
+  OrdinaryTailLanes += InterleaveTailLanes[0] + InterleaveTailLanes[1];
+}
 static void fill_fp(double *A, unsigned Count, unsigned Trial) {
   for (unsigned I = 0; I < Count; ++I) {
     switch (Trial % 8) {
@@ -481,6 +664,125 @@ static CompactRecurrenceCounts reference_compact_recurrence(
   Out[1] = S1;
   *Dout = DS;
   return Counts;
+}
+
+// Independent formulas for the exact historical feedback/export fixtures.
+// Observed accumulators stay scalar; their consumers contain only closed sums.
+static unsigned retained_export_oracle(unsigned Kind, const uint32_t *A, const double *D,
+                                       uint32_t *Out, double *DOut, uint64_t N,
+                                       double Start, unsigned Mode) {
+  uint32_t R0 = 17, R1 = (uint32_t)-7, Prev = 23, Older = 11;
+  uint32_t LastR0 = 17, LastPrev = 23;
+  double RD = Start, DP = -0.0, DO = 0.5;
+  unsigned P = 0;
+  if (N && N <= 65)
+    for (unsigned I = 0; I < N; ++I) {
+      uint32_t X = A[Kind == 3 ? R0 : I];
+      double DX = D[I];
+      uint32_t Next = (X & 127) + Older;
+      double DN = DX - DO;
+      LastR0 = R0;
+      LastPrev = Prev;
+      bool Active = Kind < 7 || (Mode == 0 ? false : Mode == 1 ? true :
+                                 Mode == 3 ? I == 0 : Mode == 4 ? I+1 == N :
+                                 Mode == 5 ? DP > 0.0 :
+                                 ((Kind == 7 ? R0 : Prev) & 1) != 0);
+      if (Active) {
+        unsigned Address = Kind >= 7 ? ((Kind == 9 ? R0 : Prev) & 63) : I;
+        uint32_t Raw = (Kind == 0 ? R0 : Prev) ^ A[Kind == 3 ? LastR0 : Address];
+        bool Left = Kind != 4 || (R0 & 1);
+        uint32_t C = Left ? scalar_helper(Raw) : Raw ^ 7;
+        double DC = (Kind >= 7 ? D[Address] : Left ? DX : DX * 0.5) - DP;
+        R0 += C;
+        R1 += Kind == 2 ? R0 : C;
+        RD = RD + DC;
+        ++P;
+      }
+      if (Kind == 1) Next = R0;
+      if (Kind == 8) Next = (X & 127) + R0;
+      Older = Prev;
+      Prev = Next;
+      DO = DP;
+      DP = DN;
+    }
+  Out[0] = R0 + (Kind == 5 ? LastR0 : Kind == 6 || Kind == 10 ? LastPrev : 0);
+  Out[1] = R1;
+  *DOut = RD;
+  return P;
+}
+
+static void check_retained_exports(void) {
+  uint32_t SavedSeed = Seed;
+  unsigned Total = 0;
+  for (unsigned C = 0; C < sizeof(RetainedExports) / sizeof(*RetainedExports); ++C) {
+    unsigned Kind = RetainedExports[C].Mode, Lanes = RetainedExports[C].VectorLanes;
+    unsigned Runs = 0, Vectors = 0, Tails = 0;
+    for (unsigned K = 0; K < 68; ++K)
+      for (unsigned Mode = 0; Mode < (Kind >= 7 ? 6u : 1u); ++Mode)
+        for (unsigned Trial = 0; Trial < 8; ++Trial)
+          for (unsigned Alias = 0; Alias < 2; ++Alias) {
+            uint64_t N = K == 67 ? UINT64_MAX : K;
+            // The original address-feedback fixture has an unbounded R0 GEP.
+            // N=0/1 and entry bypasses are defined without inventing a bound.
+            if (Kind == 3 && N > 1 && N <= 65) continue;
+            bool Enter = N && N <= 65;
+            uint32_t Actual[68], Original[68], Independent[68];
+            double AD[68], OD[68], ID[68];
+            for (unsigned I = 0; I < 68; ++I) Actual[I] = Trial < 2 ? 0 : random_value();
+            fill_fp(AD, 68, Trial);
+            memcpy(Original, Actual, sizeof(Actual));
+            memcpy(Independent, Actual, sizeof(Actual));
+            memcpy(OD, AD, sizeof(AD));
+            memcpy(ID, AD, sizeof(AD));
+            uint32_t AO[4] = {111,0,0,222}, OO[4] = {111,0,0,222}, IO[4] = {111,0,0,222};
+            double ADO[3] = {3.5,0,-7.5}, ODO[3] = {3.5,0,-7.5}, IDO[3] = {3.5,0,-7.5};
+            double Start = Trial & 1 ? 0.25 : -0.0;
+            unsigned P = retained_export_oracle(Kind, Enter ? Independent : NULL,
+                Enter ? ID : NULL, Alias ? Independent+1 : IO+1, Alias ? ID+1 : IDO+1, N, Start, Mode);
+            RetainedExports[C].Reference(Enter ? Original : NULL, Enter ? OD : NULL,
+                Alias ? Original+1 : OO+1, Alias ? OD+1 : ODO+1, N, 1, Start, Mode);
+            if (memcmp(Original, Independent, sizeof(Original)) || memcmp(OO, IO, sizeof(OO)) ||
+                !compact_doubles_equal(OD, ID, 68) || !compact_doubles_equal(ODO, IDO, 3))
+              fail(RetainedExports[C].Name, N, Trial, "retained original / independent formula");
+            AcyclicIterations = AcyclicLatches = ScalarVectorVisits = ScalarTailVisits = 0;
+            RetainedExports[C].Fn(Enter ? Actual : NULL, Enter ? AD : NULL,
+                Alias ? Actual+1 : AO+1, Alias ? AD+1 : ADO+1, N, 1, Start, Mode);
+            unsigned V = Lanes ? P / Lanes : 0, T = Lanes ? P % Lanes : P;
+            if (memcmp(Actual, Original, sizeof(Actual)) || memcmp(AO, OO, sizeof(AO)) ||
+                !compact_doubles_equal(AD, OD, 68) || !compact_doubles_equal(ADO, ODO, 3) ||
+                AcyclicIterations != (Enter ? N : 0) || AcyclicLatches != (Enter ? N : 0) ||
+                ScalarVectorVisits != V || ScalarTailVisits != T)
+              fail(RetainedExports[C].Name, N, Trial, "retained transformed result/count/alias/canary");
+            Vectors += V;
+            Tails += T;
+            ++Runs;
+          }
+    if (!Runs || !Tails || (Kind != 3 && Lanes && Lanes <= 65 && !Vectors)) abort();
+    printf("Retained export %s: %u comparisons, vector=%u tail=%u\n",
+           RetainedExports[C].Name, Runs, Vectors, Tails);
+    Total += Runs;
+  }
+  Seed = SavedSeed;
+  printf("Retained exports: %u additional host comparisons (not RVV execution)\n", Total);
+  for (unsigned C = 0; C < sizeof(CrossRetention) / sizeof(*CrossRetention); ++C) {
+    unsigned Runs = 0;
+    for (unsigned K = 0; K < 68; ++K)
+      for (unsigned Trial = 0; Trial < 8; ++Trial) {
+        uint64_t N = K == 67 ? UINT64_MAX : K;
+        uint32_t A[66], Saved[66], Expected = 19;
+        for (unsigned I = 0; I < 66; ++I) A[I] = Trial == 0 ? 0 : Trial == 1 ? 1 : random_value();
+        memcpy(Saved, A, sizeof(A));
+        if (N && N <= 65)
+          for (unsigned I = 0; I < N; ++I) if (A[I]) Expected += A[I];
+        const uint32_t *Input = N && N <= 65 ? A : NULL;
+        if (CrossRetention[C].Reference(Input, N) != Expected ||
+            CrossRetention[C].Fn(Input, N) != Expected || memcmp(A, Saved, sizeof(A)))
+          fail(CrossRetention[C].Name, N, Trial, "retained cross reduction result/input");
+        ++Runs;
+      }
+    printf("Cross retention %s: %u original/transformed/formula comparisons\n", CrossRetention[C].Name, Runs);
+  }
+  Seed = SavedSeed;
 }
 
 static void check_compact_delays(void) {
@@ -724,16 +1026,777 @@ static void check_recurrences(void) {
 }
 
 
+static void check_deinterleave_adapter(void) {
+  // The oracle is scalar AoS indexing, independent of the Python adapter's
+  // shuffle masks. Byte copies compare integer and double representations,
+  // including signed zeros, infinities and NaN payloads, without FP arithmetic.
+  enum { MaxElements = @ADAPTER_MAX_ELEMENTS@ };
+  uint64_t Input[MaxElements], Saved[MaxElements];
+  uint64_t Output[2 * MaxElements + 2], Expected[2 * MaxElements + 2];
+  unsigned Comparisons = 0;
+  for (unsigned C = 0; C < sizeof(Adapters) / sizeof(*Adapters); ++C)
+    for (unsigned Trial = 0; Trial < 8; ++Trial) {
+      unsigned F = Adapters[C].Factor, L = Adapters[C].Lanes;
+      unsigned Bytes = Adapters[C].ElementBytes;
+      for (unsigned I = 0; I < MaxElements; ++I)
+        Input[I] = random_wide_value();
+      // Include distinct boundary representations in the double probes as
+      // well as arbitrary payloads. No C floating operation can quiet a NaN.
+      static const uint64_t Special[] = {
+          UINT64_C(0), UINT64_C(0x8000000000000000),
+          UINT64_C(0x7ff0000000000000), UINT64_C(0xfff0000000000000),
+          UINT64_C(0x7ff8000000001234), UINT64_C(0xfff8000000005678),
+          UINT64_C(0x0000000000000001), UINT64_C(0x7fefffffffffffff)};
+      memcpy(Input, &Special[Trial], Bytes);
+      memcpy((unsigned char *)Input + (F * L - 1) * Bytes,
+             &Special[7 - Trial], Bytes);
+      memcpy(Saved, Input, sizeof(Input));
+      for (unsigned I = 0; I < 2 * MaxElements + 2; ++I)
+        Output[I] = Expected[I] = random_wide_value();
+      unsigned char *Ref = (unsigned char *)(Expected + 1);
+      const unsigned char *Source = (const unsigned char *)Input;
+      for (unsigned Use = 0; Use < 2; ++Use)
+        for (unsigned Member = 0; Member < F; ++Member)
+          for (unsigned Lane = 0; Lane < L; ++Lane) {
+            unsigned ToMember = Use == 0 ? Member : F - 1 - Member;
+            size_t To = ((Use * F + ToMember) * L + Lane) * Bytes;
+            size_t From = (F * Lane + Member) * Bytes;
+            memcpy(Ref + To, Source + From, Bytes);
+          }
+      Adapters[C].Fn(Input, Output + 1);
+      if (memcmp(Output, Expected, sizeof(Output)))
+        fail(Adapters[C].Name, L, Trial, "adapter lane/aggregate/canary mismatch");
+      if (memcmp(Input, Saved, sizeof(Input)))
+        fail(Adapters[C].Name, L, Trial, "adapter input modified");
+      ++Comparisons;
+    }
+  for (unsigned C = 0; C < sizeof(AdapterPoison) / sizeof(*AdapterPoison); ++C) {
+    if (AdapterPoison[C].Fn() != (UINT32_C(17) ^ (uint32_t)-19))
+      fail(AdapterPoison[C].Name, 0, 0, "defined lane contaminated by poison");
+    ++Comparisons;
+  }
+  printf("PASS: %u host deinterleave adapter comparisons against scalar indexing\n",
+         Comparisons);
+}
+
+// Independent producer/export oracle. It evaluates each original producer
+// once, retains its last iteration (including inactive iterations), and writes
+// outputs only after that row's reductions. No transformed IR/probes are used
+// to calculate expected values or participation, including aliased future rows.
+typedef struct {
+  uint32_t A[262], Out[22];
+  double D[262], DOut[10];
+  float FOut[10];
+  uint64_t Indices[10];
+} ExportState;
+
+typedef struct {
+  unsigned Iterations, Participants, Vectors, Tails, Empty, Bypasses, InactiveFinal;
+  unsigned CFGBypasses[3];
+} ExportCounts;
+
+static void export_oracle(unsigned Mode, const uint32_t *A, const double *D,
+                           uint32_t *Out, uint64_t *Indices, double *DOut,
+                           float *FOut, uint64_t Rows, uint64_t N, double Start,
+                           unsigned Lanes, ExportCounts *Counts) {
+  unsigned Control = Mode;
+  bool Stateful = Mode >= 16;
+  if (Mode >= 4) {
+    static const unsigned Bases[] = {0, 1, 1, 0, 2, 1, 1, 3, 2, 2, 2, 3, 2, 2, 2};
+    Mode = Bases[Mode - 4];
+  }
+  bool Nested = Mode == 3, Compact = Mode >= 2;
+  bool Enter = N && N <= 65;
+  Counts->Bypasses = !Enter || (Nested && (!Rows || Rows > 4));
+  if (Nested && (!Enter || !Rows || Rows > 4)) return;
+  uint32_t R0 = 17, R1 = (uint32_t)-7, Salt = 3;
+  double RD = Start;
+  float RF = (float)Start;
+  for (unsigned Row = 0; Row < (Nested ? Rows : 1); ++Row) {
+    uint32_t State = 23;
+    uint32_t LastX = (uint32_t)-99, LastC = (uint32_t)-101;
+    double LastD = -0.0;
+    float LastF = -0.0f;
+    uint64_t Current = UINT64_MAX, Next = 0;
+    unsigned P = 0, Base = Nested ? 65 * Row : 0;
+    if (Enter) {
+      for (unsigned I = 0; I < N; ++I) {
+        LastX = A[Base + I];
+        bool Active = Mode == 0 || LastX != 0;
+        if (Stateful && Rows == 2) Active = Active && (State & 1);
+        if (Active) {
+          uint32_t Arg = LastX;
+          if (Mode != 0) {
+            int64_t Divisor = LastX <= INT32_MAX ? (int64_t)LastX :
+                              (int64_t)LastX - INT64_C(4294967296);
+            Arg = (uint32_t)(INT64_C(840) / Divisor);
+          }
+          if (Control == 12 || Control == 16) {
+            uint32_t Bias = I & 1 ? LastX + 23 : LastX - 9;
+            uint32_t Extra = LastX > 5 ? Bias + 5 : Bias ^ 3;
+            Arg ^= Extra;
+          } else if (Control >= 13) {
+            Arg = LastX > 5 ? Arg + (I & 1 ? 23 : 5) : Arg ^ UINT32_MAX;
+          }
+          if (Nested) Arg ^= Salt;
+          if (Stateful) Arg ^= State;
+          LastC = scalar_helper(Arg);
+          LastD = D[Base + I] * 3.0;
+          LastF = (float)LastD;
+        } else {
+          LastC = LastX ^ 7;
+          LastD = -0.0;
+          LastF = -0.0f;
+          if (Control >= 12) {
+            unsigned Edge = (Control == 14 || Control == 15 || Control == 18) ? I % 3 : 0;
+            ++Counts->CFGBypasses[Edge];
+            if (Stateful && (Control != 18 || Edge == 1)) State += LastX + 1;
+          }
+        }
+        if (Control == 9) {
+          // The serial diamond follows the original conditional producer.
+          LastC = I & 1 ? LastC + 23 : LastC ^ UINT32_MAX;
+          LastD *= I & 1 ? 0.5 : -1.0;
+          LastF = (float)LastD;
+        } else if (Control == 10 && Active) {
+          // Nested diamond exists only on the original active arm.
+          LastC = LastX > 5 ? LastC + 23 : LastC ^ UINT32_MAX;
+        }
+        if (!Compact || Active) {
+          R0 += LastC;
+          R1 = LastC + R1;
+          RD = RD + LastD;
+          RF = RF + LastF;
+          ++P;
+        }
+        Current = Control < 4 || Control == 12 || Control == 16 ? I : Control == 4 ? 7 + I :
+                  Control == 6 ? 137 - 2 * I : 7 + 2 * I;
+        Next = Control < 4 || Control == 12 || Control == 16 ? I + 1 : Control == 4 ? Current + 1 :
+               Control == 6 ? Current - 2 : Current + 2;
+      }
+      Counts->Iterations += N;
+      Counts->Participants += P;
+      Counts->Vectors += Lanes ? P / Lanes : 0;
+      Counts->Tails += Lanes ? P % Lanes : P;
+      Counts->Empty += Compact && P == 0;
+      Counts->InactiveFinal += Mode != 0 && LastX == 0;
+    }
+    unsigned O = Nested ? Row * 5 : 0, F = Nested ? Row * 2 : 0;
+    Out[O] = R0;
+    Out[O + 1] = R1;
+    Out[O + 2] = LastX;
+    Out[O + 3] = LastC;
+    Out[O + 4] = Stateful ? State : LastC;
+    Indices[F] = Current;
+    Indices[F + 1] = Next;
+    DOut[F] = RD;
+    DOut[F + 1] = LastD;
+    FOut[F] = RF;
+    FOut[F + 1] = LastF;
+    Salt = LastC;
+  }
+}
+
+static void init_export_state(ExportState *S, unsigned N, unsigned P,
+                              unsigned Layout, unsigned Trial) {
+  // Include padding in the bitwise state comparisons and preserve canaries
+  // before/after every typed output and the input arrays.
+  memset(S, 0x5a, sizeof(*S));
+  static const double Values[] = {0.0, -0.0, 0x1p54, -0x1p54,
+                                   0.25, -0.125, 1.0, -1.0};
+  for (unsigned R = 0; R < 4; ++R)
+    for (unsigned I = 0; I < 65; ++I) {
+      // Retain the inherited prefix/suffix layouts. New export controls also
+      // exercise exactly P evenly spaced participants among N iterations.
+      bool Active = Layout == 2 ? I < N && (I + 1) * P / N != I * P / N :
+                    Layout ? I < N && I >= N - P : I < P;
+      S->A[1 + 65 * R + I] = Active ? 1 + (I + R) % 13 : 0;
+      S->D[1 + 65 * R + I] = Trial == 0 ? -0.0 :
+                                      Values[(I + R + Trial) % 8];
+    }
+}
+
+static void export_pointers(ExportState *S, bool Nested, bool Alias,
+                            bool NoInput, bool NoFP, const uint32_t **A,
+                            const double **D, uint32_t **Out, double **DOut) {
+  *A = NoInput ? NULL : S->A + 1;
+  *D = NoFP ? NULL : S->D + 1;
+  *Out = Alias ? S->A + 1 + (Nested ? 65 : 0) : S->Out + 1;
+  *DOut = Alias ? S->D + 1 + (Nested ? 65 : 0) : S->DOut + 1;
+}
+
+static void check_exports(void) {
+  static const uint64_t Ns[] = {0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17,
+                                 31, 32, 33, 63, 64, 65, 66, UINT64_MAX};
+  static const uint64_t RowCounts[] = {0, 1, 2, 4, 5, UINT64_MAX};
+  unsigned Total = 0;
+  for (unsigned C = 0; C < sizeof(Exports) / sizeof(*Exports); ++C) {
+    unsigned Mode = Exports[C].Mode, Lanes = Exports[C].VectorLanes;
+    bool Stateful = Mode >= 16;
+    bool Nested = Mode == 3 || Mode == 11 || Mode == 15;
+    bool Compact = Mode == 2 || Mode == 3 || Mode == 8 || Mode == 11 || Mode >= 12;
+    bool Unconditional = Mode == 0 || Mode == 4 || Mode == 7;
+    uint64_t Iterations = 0, Participants = 0, Vectors = 0, Tails = 0, Empty = 0;
+    unsigned Bypasses = 0, FinalInactive = 0, Runs = 0;
+    unsigned CFGEdges = 0;
+    for (unsigned K = 0; K < sizeof(Ns) / sizeof(*Ns); ++K)
+      for (unsigned J = 0; J < (Stateful ? 2 : Nested ? 6 : 1); ++J)
+        for (unsigned Pattern = 0; Pattern < (Ns[K] == 65 ? 66 : 5); ++Pattern)
+          for (unsigned Layout = 0; Layout < (Mode >= 4 ? 3 : 2); ++Layout)
+            for (unsigned Trial = 0; Trial < 3; ++Trial)
+              for (unsigned Alias = 0; Alias < 2; ++Alias) {
+                uint64_t N = Ns[K], Rows = Stateful ? 1 + J : Nested ? RowCounts[J] : 1;
+                bool Enter = N && N <= 65 && (!Nested || (Rows && Rows <= 4));
+                unsigned P = 0;
+                if (N && N <= 65)
+                  P = N == 65 ? Pattern : Pattern == 0 ? 0 : Pattern == 1 ? 1 :
+                      Pattern == 2 ? N : Pattern == 3 ? N - 1 : (N + 1) / 2;
+                double Start = Trial == 0 ? -0.0 : Trial == 1 ? 0.0 : 0.25;
+                ExportState Actual, Original, Independent;
+                init_export_state(&Actual, N <= 65 ? N : 0, P, Layout, Trial);
+                memcpy(&Original, &Actual, sizeof(Actual));
+                memcpy(&Independent, &Actual, sizeof(Actual));
+                // For all-inactive nonalias nests no later output can create
+                // a participant. Aliased nests instead use their real FP input
+                // because a row's output may enable a later row's contribution.
+                bool NoFP = !Enter || (!Unconditional && P == 0 && (!Nested || !Alias));
+                const uint32_t *A;
+                const double *D;
+                uint32_t *Out;
+                double *DOut;
+                ExportCounts Expected = {0};
+                export_pointers(&Independent, Nested, Alias, !Enter, NoFP,
+                                &A, &D, &Out, &DOut);
+                export_oracle(Mode, A, D, Out, Independent.Indices + 1, DOut,
+                              Independent.FOut + 1, Rows, N, Start, Lanes, &Expected);
+                export_pointers(&Original, Nested, Alias, !Enter, NoFP,
+                                &A, &D, &Out, &DOut);
+                Exports[C].Reference(A, D, Out, Original.Indices + 1, DOut,
+                                     Original.FOut + 1, Rows, N, Start);
+                if (memcmp(&Original, &Independent, sizeof(Original)))
+                  fail(Exports[C].Name, N, Pattern, "original IR versus independent export oracle");
+                export_pointers(&Actual, Nested, Alias, !Enter, NoFP,
+                                &A, &D, &Out, &DOut);
+                reset_compact_probes();
+                Exports[C].Fn(A, D, Out, Actual.Indices + 1, DOut,
+                              Actual.FOut + 1, Rows, N, Start);
+                check_compact_probes(Exports[C].Name, N, Pattern,
+                                     Expected.Iterations, Expected.Participants,
+                                     Expected.Vectors, Expected.Tails);
+                if (ExportEmptyVisits != Expected.Empty)
+                  fail(Exports[C].Name, N, Pattern, "P=0 consumer bypass count");
+                if (ExportBypassVisits != Expected.Bypasses ||
+                    ExportInactiveFinalVisits != Expected.InactiveFinal)
+                  fail(Exports[C].Name, N, Pattern, "entry bypass/final-inactive execution counts");
+                for (unsigned Edge = 0; Edge < 3; ++Edge) {
+                  if (CompactCFGBypasses[Edge] != Expected.CFGBypasses[Edge])
+                    fail(Exports[C].Name, N, Pattern, "exact compact CFG bypass-edge counts");
+                  if (CompactCFGBypasses[Edge]) CFGEdges |= 1u << Edge;
+                }
+                if (memcmp(&Actual, &Original, sizeof(Actual)) ||
+                    memcmp(&Actual, &Independent, sizeof(Actual)))
+                  fail(Exports[C].Name, N, Pattern,
+                       "producer exports/reductions/alias/canary/input mismatch");
+                Iterations += CompactIterations;
+                Participants += CompactParticipants;
+                Vectors += ScalarVectorVisits;
+                Tails += ScalarTailVisits;
+                Empty += ExportEmptyVisits;
+                Bypasses += ExportBypassVisits;
+                FinalInactive += ExportInactiveFinalVisits;
+                ++Runs;
+              }
+    // A width above the bound intentionally executes no vector iterations.
+    // Every claimed path otherwise needs concrete nonzero execution evidence
+    // for THIS function, vscale, FP setting and single/repeated-LV variant.
+    if (!Iterations || !Participants || !Tails || !Bypasses ||
+        (Lanes && Lanes <= 65 && !Vectors) || ((!Lanes || Lanes > 65) && Vectors) ||
+        (Compact && !Empty) || (!Compact && Empty) ||
+        (!Unconditional && !FinalInactive))
+      fail(Exports[C].Name, 65, 0, "missing concrete export-path execution evidence");
+    if (Mode >= 12 && CFGEdges != ((Mode == 14 || Mode == 15 || Mode == 18) ? 7u : 1u))
+      fail(Exports[C].Name, 65, CFGEdges, "every compact CFG bypass edge must execute");
+    printf("Producer exports %s: %u comparisons; N=%llu P=%llu vector=%llu "
+           "tail=%llu empty=%llu zero-entry=%u final-inactive=%u cfg-bypass-mask=%u\n",
+           Exports[C].Name, Runs, (unsigned long long)Iterations,
+           (unsigned long long)Participants, (unsigned long long)Vectors,
+           (unsigned long long)Tails, (unsigned long long)Empty, Bypasses, FinalInactive,
+           CFGEdges);
+    Total += Runs;
+  }
+  if (!Total) abort();
+  printf("Producer exports: %u additional host comparisons (not RVV execution)\n", Total);
+}
+
+// These validation-only probes run in the actual transformed scheduler and
+// stage headers. They enforce a complete producer followed by exactly count
+// consumer lanes, then scratch reuse at local index zero in the next chunk.
+static const char *ChunkName;
+static unsigned ChunkN, ChunkCapacity, ChunkLanes, ChunkRows;
+static unsigned ChunkBase, ChunkCount, ChunkProduced, ChunkConsumed;
+static unsigned ChunkProgress, ChunkCompletedRows, ChunkBegins, ChunkEnds;
+static unsigned ChunkVectors, ChunkTails, ChunkPartial, ChunkComplete;
+static bool ChunkActive;
+
+void record_chunk_begin(uint64_t Base, uint64_t Count) {
+  unsigned Remaining = ChunkN - ChunkProgress;
+  unsigned Expected = Remaining < ChunkCapacity ? Remaining : ChunkCapacity;
+  if (ChunkActive || ChunkCompletedRows >= ChunkRows || !Remaining ||
+      Base != ChunkProgress || Count != Expected || !Count)
+    fail(ChunkName, ChunkN, ChunkBegins, "chunk base/count/order mismatch");
+  ChunkActive = true;
+  ChunkBase = (unsigned)Base;
+  ChunkCount = (unsigned)Count;
+  ChunkProduced = ChunkConsumed = 0;
+  ++ChunkBegins;
+  ChunkPartial += Count < ChunkCapacity;
+  ChunkComplete += Count == ChunkCapacity;
+}
+
+void record_chunk_producer(uint64_t Global, uint64_t Local) {
+  if (!ChunkActive || ChunkConsumed || ChunkProduced >= ChunkCount ||
+      Local != ChunkProduced || Global != ChunkBase + Local)
+    fail(ChunkName, ChunkN, ChunkBegins, "producer global/local ordinal or schedule");
+  ++ChunkProduced;
+}
+
+static void record_chunk_lanes(unsigned Lanes) {
+  if (!ChunkActive || !Lanes || ChunkProduced != ChunkCount ||
+      ChunkConsumed > ChunkCount || Lanes > ChunkCount - ChunkConsumed)
+    fail(ChunkName, ChunkN, ChunkBegins, "consumer before producer or invalid lane count");
+  ChunkConsumed += Lanes;
+}
+
+void record_chunk_vector(void) {
+  record_chunk_lanes(ChunkLanes);
+  ++ChunkVectors;
+}
+
+void record_chunk_tail(void) {
+  record_chunk_lanes(1);
+  ++ChunkTails;
+}
+
+void record_chunk_end(void) {
+  if (!ChunkActive || ChunkProduced != ChunkCount || ChunkConsumed != ChunkCount)
+    fail(ChunkName, ChunkN, ChunkBegins, "incomplete chunk producer/consumer execution");
+  ChunkActive = false;
+  ChunkProgress += ChunkCount;
+  if (ChunkProgress == ChunkN) {
+    ChunkProgress = 0;
+    ++ChunkCompletedRows;
+  }
+  ++ChunkEnds;
+}
+
+// Single original-order traversal, independent of chunks and transformed IR.
+// Outputs can alias the current or next row's inputs. Observe stores at each
+// row exit before reading the next row; salt depends on its last producer.
+static void chunk_oracle(bool Nested, const uint32_t *A, const double *D,
+                         uint32_t *Out, uint64_t *Indices, double *DOut,
+                         float *FOut, uint64_t Rows, uint64_t N, double Start,
+                         unsigned MaxN) {
+  bool Enter = N && N <= MaxN;
+  if (Nested && (!Enter || !Rows || Rows > 4)) return;
+  uint32_t R0 = 17, R1 = (uint32_t)-7, Salt = 3;
+  double RD = Start;
+  float RF = (float)Start;
+  for (unsigned Row = 0; Row < (Nested ? Rows : 1); ++Row) {
+    uint32_t X = (uint32_t)-99, C = (uint32_t)-101;
+    uint64_t IV = UINT64_MAX, Next = 0;
+    double DC = -0.0;
+    float FC = -0.0f;
+    for (unsigned I = 0; Enter && I < N; ++I) {
+      unsigned Offset = (Nested ? 65 * Row : 0) + I;
+      X = A[Offset];
+      C = scalar_helper(Nested ? X ^ Salt : X);
+      DC = D[Offset] * 3.0;
+      FC = (float)DC;
+      R0 += C;
+      R1 = C + R1;
+      RD = RD + DC;
+      RF = RF + FC;
+      IV = I;
+      Next = I + 1;
+    }
+    unsigned O = Nested ? Row * 5 : 0, F = Nested ? Row * 2 : 0;
+    Out[O] = R0;
+    Out[O + 1] = R1;
+    Out[O + 2] = X;
+    Out[O + 3] = Out[O + 4] = C;
+    Indices[F] = IV;
+    Indices[F + 1] = Next;
+    DOut[F] = RD;
+    DOut[F + 1] = DC;
+    FOut[F] = RF;
+    FOut[F + 1] = FC;
+    Salt = C;
+  }
+}
+
+static void check_chunks(void) {
+  static const uint64_t Ns[] = {0, 1, 2, 3, 4, 7, 8, 9, 10, 15, 16, 17,
+                                 18, 19, 27, 28, 32, 33, 63, 64, 65, 66,
+                                 127, 128, 129, 254, 255, 256,
+                                 UINT64_MAX};
+  static const uint64_t RowCounts[] = {0, 1, 2, 4, 5, UINT64_MAX};
+  unsigned Total = 0;
+  for (unsigned C = 0; C < sizeof(Chunks) / sizeof(*Chunks); ++C) {
+    bool Nested = Chunks[C].Nested;
+    unsigned Capacity = Chunks[C].Capacity, Lanes = Chunks[C].VectorLanes;
+    unsigned MaxN = Chunks[C].MaxN;
+    unsigned Runs = 0, Vectors = 0, Tails = 0, Complete = 0, Partial = 0;
+    unsigned Zero = 0, Multi = 0, AliasMulti = 0;
+    for (unsigned K = 0; K < sizeof(Ns) / sizeof(*Ns); ++K)
+      for (unsigned J = 0; J < (Nested ? 6 : 1); ++J)
+        for (unsigned Trial = 0; Trial < 10; ++Trial)
+          for (unsigned Alias = 0; Alias < 2; ++Alias) {
+            uint64_t N = Ns[K], Rows = Nested ? RowCounts[J] : 1;
+            bool Enter = N && N <= MaxN && (!Nested || (Rows && Rows <= 4));
+            double Start = Trial == 0 ? -0.0 : Trial == 1 ? 0.0 : 0.25;
+            ExportState Actual, Original, Independent;
+            init_export_state(&Actual, N <= MaxN ? N : 0, N <= MaxN ? N : 0,
+                              Trial % 2, Trial);
+            // Move cancellation across each chunk boundary; adding chunk
+            // sums to Start, resetting an accumulator, or adding an identity
+            // can change bits. The independent oracle retains every addition.
+            for (unsigned R = 0; R < 4; ++R)
+              for (unsigned I = 0; I < 65; ++I) {
+                unsigned Position = (65 * R + I + Trial) % Capacity;
+                if (Trial >= 2)
+                  Actual.D[1 + 65 * R + I] = Position == 0 ? 0x1p54 :
+                      Position == Capacity - 1 ? -0x1p54 : 0.25;
+              }
+            memcpy(&Original, &Actual, sizeof(Actual));
+            memcpy(&Independent, &Actual, sizeof(Actual));
+            const uint32_t *A;
+            const double *D;
+            uint32_t *Out;
+            double *DOut;
+            export_pointers(&Independent, Nested, Alias, !Enter, !Enter,
+                            &A, &D, &Out, &DOut);
+            chunk_oracle(Nested, A, D, Out, Independent.Indices + 1, DOut,
+                         Independent.FOut + 1, Rows, N, Start, MaxN);
+            export_pointers(&Original, Nested, Alias, !Enter, !Enter,
+                            &A, &D, &Out, &DOut);
+            Chunks[C].Reference(A, D, Out, Original.Indices + 1, DOut,
+                                Original.FOut + 1, Rows, N, Start);
+            if (memcmp(&Original, &Independent, sizeof(Original)))
+              fail(Chunks[C].Name, N, Trial, "original IR versus independent chunk oracle");
+            ChunkName = Chunks[C].Name;
+            ChunkN = Enter ? N : 0;
+            ChunkRows = Enter ? Rows : 0;
+            ChunkCapacity = Capacity;
+            ChunkLanes = Lanes;
+            ChunkActive = false;
+            ChunkProgress = ChunkCompletedRows = ChunkBegins = ChunkEnds = 0;
+            ChunkVectors = ChunkTails = ChunkComplete = ChunkPartial = 0;
+            export_pointers(&Actual, Nested, Alias, !Enter, !Enter,
+                            &A, &D, &Out, &DOut);
+            Chunks[C].Fn(A, D, Out, Actual.Indices + 1, DOut,
+                         Actual.FOut + 1, Rows, N, Start);
+            unsigned Full = ChunkN / Capacity, Remainder = ChunkN % Capacity;
+            unsigned ExpectedChunks = ChunkRows * (Full + (Remainder != 0));
+            unsigned ExpectedVectors = Lanes ? ChunkRows *
+                (Full * (Capacity / Lanes) + Remainder / Lanes) : 0;
+            unsigned ExpectedTails = ChunkN * ChunkRows - ExpectedVectors * Lanes;
+            if (ChunkActive || ChunkProgress || ChunkCompletedRows != ChunkRows ||
+                ChunkBegins != ExpectedChunks || ChunkEnds != ExpectedChunks ||
+                ChunkVectors != ExpectedVectors || ChunkTails != ExpectedTails ||
+                ChunkComplete != ChunkRows * Full ||
+                ChunkPartial != ChunkRows * (Remainder != 0))
+              fail(ChunkName, N, Trial, "exact chunk/vector/tail/row execution counts");
+            if (memcmp(&Actual, &Original, sizeof(Actual)) ||
+                memcmp(&Actual, &Independent, sizeof(Actual)))
+              fail(ChunkName, N, Trial, "chunk reductions/exports/alias/input/canary mismatch");
+            Vectors += ChunkVectors;
+            Tails += ChunkTails;
+            Complete += ChunkComplete;
+            Partial += ChunkPartial;
+            Zero += !Enter;
+            Multi += Enter && N > Capacity;
+            AliasMulti += Nested && Alias && Enter && Rows > 1 && N > Capacity;
+            ++Runs;
+          }
+    if (!Complete || !Tails || !Zero || !Multi ||
+        (Capacity > 1 && !Partial) || (Nested && !AliasMulti) ||
+        (Lanes && Lanes <= Capacity && !Vectors) ||
+        ((!Lanes || Lanes > Capacity) && Vectors))
+      fail(Chunks[C].Name, 65, 0, "missing concrete chunk path execution evidence");
+    printf("Bounded chunks %s: %u comparisons; C=%u vector=%u tail=%u "
+           "complete=%u partial=%u zero=%u multi=%u alias-multi=%u\n",
+           Chunks[C].Name, Runs, Capacity, Vectors, Tails, Complete, Partial,
+           Zero, Multi, AliasMulti);
+    Total += Runs;
+  }
+  if (!Total) abort();
+  printf("Bounded chunks: %u additional host comparisons (not RVV execution)\n", Total);
+}
+
+// AoS probes use the actual load/store addresses from each emitted stage.
+// In particular a global producer IV must never index the reused scratch.
+static const double *AosInput;
+static double AosSum, AosBits;
+static unsigned AosProducerVectors, AosProducerTails, AosBypasses;
+static unsigned AosProducerLanes;
+
+static void aos_equal(double Actual, double Expected) {
+  if (memcmp(&Actual, &Expected, sizeof(double)))
+    fail(ChunkName, ChunkN, ChunkBegins, "ordered chunk carry bits");
+}
+
+static double aos_term(const double *A, unsigned I) {
+  double Scaled = A[2 * I] * 2.0;
+  double Shared = Scaled + A[2 * I];
+  double Pair = Shared - A[2 * I + 1];
+  return Pair * 3.0;
+}
+
+void record_aos_chunk_begin(uint64_t Base, uint64_t Count, double Sum, double Bits) {
+  record_chunk_begin(Base, Count);
+  aos_equal(Sum, AosSum);
+  aos_equal(Bits, AosBits);
+}
+
+static unsigned aos_index(const double *Base, const double *Address,
+                          unsigned Stride, unsigned Bound) {
+  uintptr_t B = (uintptr_t)Base, P = (uintptr_t)Address;
+  unsigned Bytes = Stride * sizeof(double);
+  if (P < B || (P - B) % Bytes || (P - B) / Bytes >= Bound)
+    fail(ChunkName, ChunkN, ChunkBegins, "invalid actual stage address");
+  return (P - B) / Bytes;
+}
+
+void record_aos_chunk_producer(const double *Input, const double *Scratch,
+                               const double *Address, uint64_t Lanes, uint32_t Vector) {
+  unsigned Global = aos_index(AosInput, Input, 2, ChunkN);
+  unsigned Local = aos_index(Scratch, Address, 1, ChunkCapacity);
+  if (!ChunkActive || ChunkConsumed || !Lanes ||
+      Lanes != (Vector ? AosProducerLanes : 1) ||
+      Local != ChunkProduced || Global != ChunkBase + Local ||
+      ChunkProduced > ChunkCount || Lanes > ChunkCount - ChunkProduced)
+    fail(ChunkName, ChunkN, ChunkBegins, "vector producer global/local/count/order");
+  ChunkProduced += Lanes;
+  if (Vector) ++AosProducerVectors;
+  else ++AosProducerTails;
+}
+
+void record_aos_chunk_consumer(const double *Scratch, const double *Address,
+                               uint64_t Lanes, uint32_t Vector) {
+  unsigned Local = aos_index(Scratch, Address, 1, ChunkCapacity);
+  if (Local != ChunkConsumed || Lanes != (Vector ? ChunkLanes : 1))
+    fail(ChunkName, ChunkN, ChunkBegins, "consumer local/count");
+  record_chunk_lanes(Lanes);
+  if (Vector) ++ChunkVectors;
+  else ++ChunkTails;
+}
+
+void record_aos_chunk_end(double Sum, double Bits) {
+  for (unsigned I = ChunkBase; I < ChunkBase + ChunkCount; ++I) {
+    double Term = aos_term(AosInput, I);
+    AosSum = AosSum + Term;
+    AosBits = AosBits + Term;
+  }
+  aos_equal(Sum, AosSum);
+  aos_equal(Bits, AosBits);
+  record_chunk_end();
+}
+
+void record_aos_chunk_bypass(void) { ++AosBypasses; }
+
+static void aos_oracle(const double *A, double *Out, uint64_t N, double Start) {
+  double Sum = Start, Bits = -0.0;
+  // One original-order traversal, with no chunk sums or extra identity adds.
+  if (N && N <= 65)
+    for (unsigned I = 0; I < N; ++I) {
+      double Term = aos_term(A, I);
+      Sum = Sum + Term;
+      Bits = Bits + Term;
+    }
+  Out[0] = Sum;
+  Out[1] = Bits;
+}
+
+static void check_aos_chunks(void) {
+  static const uint64_t Ns[] = {0, 1, 2, 3, 7, 8, 15, 16, 31, 32, 33,
+                                63, 64, 65, 66, UINT64_MAX};
+  unsigned Total = 0;
+  for (unsigned C = 0; C < sizeof(AosChunks) / sizeof(*AosChunks); ++C) {
+    unsigned PV = AosChunks[C].ProducerLanes, CV = AosChunks[C].ConsumerLanes;
+    unsigned Runs = 0, PVector = 0, PTail = 0, CVector = 0, CTail = 0;
+    unsigned Complete = 0, Partial = 0, Multi = 0, Zero = 0;
+    for (unsigned K = 0; K < sizeof(Ns) / sizeof(*Ns); ++K)
+      for (unsigned Trial = 0; Trial < 10; ++Trial)
+        for (unsigned Alias = 0; Alias < 2; ++Alias) {
+          uint64_t N = Ns[K];
+          bool Enter = N && N <= 65;
+          double Start = Trial == 0 ? -0.0 : Trial == 1 ? 0.0 : 0.25;
+          struct { double A[132], Out[4]; } Actual, Original, Independent;
+          for (unsigned I = 0; I < 132; ++I) Actual.A[I] = -7654.5;
+          for (unsigned I = 0; I < 4; ++I) Actual.Out[I] = 9876.5;
+          for (unsigned I = 0; I < 65; ++I) {
+            Actual.A[1 + 2 * I] = Trial == 0 ? -0.0 : Trial == 1 ? 0.0 :
+                (double)((int)((I * 17 + Trial * 11) % 53) - 26) / 16.0;
+            Actual.A[2 + 2 * I] = Trial < 2 ? -0.0 : (double)(I % 7) / 8.0;
+          }
+          if (Trial >= 2) {
+            // Opposite large terms straddle the full/partial chunk boundary.
+            Actual.A[1 + 2 * 62] = 0x1p54;
+            Actual.A[1 + 2 * 63] = 0.25;
+            Actual.A[1 + 2 * 64] = -0x1p54;
+          }
+          memcpy(&Original, &Actual, sizeof(Actual));
+          memcpy(&Independent, &Actual, sizeof(Actual));
+          double *ExpectedOut = Alias ? Independent.A + 129 : Independent.Out + 1;
+          aos_oracle(Enter ? Independent.A + 1 : NULL, ExpectedOut, N, Start);
+          ref_chunk_ordered(Enter ? Original.A + 1 : NULL,
+                            Alias ? Original.A + 129 : Original.Out + 1, N, Start);
+          if (memcmp(&Original, &Independent, sizeof(Original)))
+            fail(AosChunks[C].Name, N, Trial, "original AoS IR versus independent oracle");
+          ChunkName = AosChunks[C].Name;
+          ChunkN = Enter ? N : 0;
+          ChunkRows = Enter ? 1 : 0;
+          ChunkCapacity = 64;
+          ChunkLanes = CV;
+          AosProducerLanes = PV;
+          ChunkActive = false;
+          ChunkProgress = ChunkCompletedRows = ChunkBegins = ChunkEnds = 0;
+          ChunkVectors = ChunkTails = ChunkComplete = ChunkPartial = 0;
+          AosProducerVectors = AosProducerTails = AosBypasses = 0;
+          AosInput = Enter ? Actual.A + 1 : NULL;
+          AosSum = Start;
+          AosBits = -0.0;
+          AosChunks[C].Fn(AosInput, Alias ? Actual.A + 129 : Actual.Out + 1, N, Start);
+          unsigned Full = ChunkN / 64, Rem = ChunkN % 64;
+          unsigned ExpectedPV = Full * (64 / PV) + Rem / PV;
+          unsigned ExpectedCV = Full * (64 / CV) + Rem / CV;
+          if (ChunkActive || ChunkProgress || ChunkCompletedRows != ChunkRows ||
+              ChunkBegins != Full + (Rem != 0) || ChunkEnds != ChunkBegins ||
+              ChunkComplete != Full || ChunkPartial != (Rem != 0) ||
+              AosProducerVectors != ExpectedPV || ChunkVectors != ExpectedCV ||
+              AosProducerTails != ChunkN - ExpectedPV * PV ||
+              ChunkTails != ChunkN - ExpectedCV * CV || AosBypasses != !Enter)
+            fail(ChunkName, N, Trial, "AoS exact chunk/producer/consumer/vector/tail/bypass counts");
+          if (memcmp(&Actual, &Original, sizeof(Actual)) ||
+              memcmp(&Actual, &Independent, sizeof(Actual)))
+            fail(ChunkName, N, Trial, "AoS chunk output/alias/input/canary bits");
+          PVector += AosProducerVectors;
+          PTail += AosProducerTails;
+          CVector += ChunkVectors;
+          CTail += ChunkTails;
+          Complete += ChunkComplete;
+          Partial += ChunkPartial;
+          Multi += ChunkBegins > 1;
+          Zero += AosBypasses;
+          ++Runs;
+        }
+    if (!Complete || !Partial || !Multi || !Zero || !PTail || !CTail ||
+        ((PV <= 64) != (PVector != 0)) || ((CV <= 64) != (CVector != 0)))
+      fail(AosChunks[C].Name, 65, 0, "missing actual AoS chunk path evidence");
+    printf("Vectorizable producer chunks %s: %u comparisons; C=64 PV=%u CV=%u "
+           "producer-vector=%u producer-tail=%u consumer-vector=%u consumer-tail=%u "
+           "complete=%u partial=%u multi=%u zero=%u\n", AosChunks[C].Name, Runs,
+           PV, CV, PVector, PTail, CVector, CTail, Complete, Partial, Multi, Zero);
+    Total += Runs;
+  }
+  if (!Total) abort();
+  printf("Vectorizable producer chunks: %u additional host comparisons (not RVV execution)\n", Total);
+}
+
+static void check_integration(void) {
+  unsigned Total = 0;
+  for (unsigned C = 0; C < sizeof(Integration) / sizeof(*Integration); ++C) {
+    unsigned Mode = Integration[C].Mode, Lanes = Integration[C].VectorLanes;
+    unsigned Vectors = 0, Tails = 0, Zeros = 0, Multiple = 0, Complete = 0, Partial = 0;
+    for (unsigned K = 0; K < 75; ++K)
+      for (unsigned Trial = 0; Trial < 8; ++Trial)
+        for (unsigned Alias = 0; Alias < 2; ++Alias) {
+          static const uint64_t Extra[] = {127, 128, 129, 254, 255, 256, 257, UINT64_MAX};
+          uint64_t N = K < 67 ? K : Extra[K - 67];
+          bool Enter = N && N <= (Mode == 2 ? 255 : 65);
+          struct { uint32_t A[258], Out[3]; } Actual, Original, Formula;
+          for (unsigned I = 0; I < 258; ++I)
+            Actual.A[I] = Trial == 0 ? 0 : Trial == 1 ? I : random_value();
+          for (unsigned I = 0; I < 3; ++I) Actual.Out[I] = random_value();
+          memcpy(&Original, &Actual, sizeof(Actual));
+          memcpy(&Formula, &Actual, sizeof(Actual));
+          uint32_t Start = random_value(), Sum = Start;
+          if (Enter)
+            for (unsigned I = 0; I < N; ++I) {
+              uint32_t X = Formula.A[1 + I];
+              if (Mode == 1 && X) X *= 3;
+              Sum += scalar_helper(X ^ 7);
+            }
+          uint32_t *Expected = Alias ? Formula.A + 1 : Formula.Out + 1;
+          *Expected = Sum;
+          Integration[C].Reference(Enter ? Original.A + 1 : NULL,
+                                   Alias ? Original.A + 1 : Original.Out + 1, N, Start);
+          if (memcmp(&Original, &Formula, sizeof(Original)))
+            fail(Integration[C].Name, N, Trial, "integration original IR / independent formula");
+          AcyclicIterations = AcyclicLatches = ScalarVectorVisits = ScalarTailVisits = 0;
+          ChunkName = Integration[C].Name;
+          ChunkN = Enter ? N : 0;
+          ChunkRows = Enter ? 1 : 0;
+          ChunkCapacity = 65;
+          ChunkLanes = Lanes;
+          ChunkActive = false;
+          ChunkProgress = ChunkCompletedRows = ChunkBegins = ChunkEnds = 0;
+          ChunkVectors = ChunkTails = ChunkComplete = ChunkPartial = 0;
+          Integration[C].Fn(Enter ? Actual.A + 1 : NULL,
+                            Alias ? Actual.A + 1 : Actual.Out + 1, N, Start);
+          if (memcmp(&Actual, &Formula, sizeof(Actual)) ||
+              memcmp(&Actual, &Original, sizeof(Actual)))
+            fail(Integration[C].Name, N, Trial, "integration transformed result/alias/input/canary");
+          if (Mode == 2) {
+            unsigned Full = ChunkN / 65, Rem = ChunkN % 65;
+            unsigned EV = Full * (65 / Lanes) + Rem / Lanes;
+            if (ChunkActive || ChunkProgress || ChunkCompletedRows != ChunkRows ||
+                ChunkBegins != Full + (Rem != 0) || ChunkEnds != ChunkBegins ||
+                ChunkComplete != Full || ChunkPartial != (Rem != 0) ||
+                ChunkVectors != EV || ChunkTails != ChunkN - EV * Lanes ||
+                AcyclicIterations || AcyclicLatches || ScalarVectorVisits || ScalarTailVisits)
+              fail(ChunkName, N, Trial, "integration exact chunk and stage counts");
+            Vectors += ChunkVectors;
+            Tails += ChunkTails;
+            Multiple += ChunkBegins > 1;
+            Complete += ChunkComplete;
+            Partial += ChunkPartial;
+          } else {
+            check_acyclic_probes(Integration[C].Name, Enter ? N : 0, Trial, 1, Lanes);
+            if (ChunkBegins || ChunkEnds || ChunkVectors || ChunkTails)
+              fail(ChunkName, N, Trial, "full-trip integration entered chunk machinery");
+            Vectors += ScalarVectorVisits;
+            Tails += ScalarTailVisits;
+          }
+          Zeros += !Enter;
+          ++Total;
+        }
+    if (!Tails || !Zeros || ((Lanes <= 65) != (Vectors != 0)) ||
+        (Mode == 2 && (!Multiple || !Complete || !Partial)))
+      fail(Integration[C].Name, 65, 0, "missing integration execution paths");
+    printf("Integration %s: vector=%u tail=%u bypass=%u multi=%u full=%u partial=%u\n",
+           Integration[C].Name, Vectors, Tails, Zeros, Multiple, Complete, Partial);
+  }
+  if (!Total) abort();
+  printf("Integration: %u additional original/transformed/independent host comparisons\n", Total);
+}
+
 int main(void) {
   check_recurrences();
   check_compact_recurrences();
   check_compact_delays();
+  check_retained_exports();
   static const unsigned Counts[] = {
-      0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 257, 1023, 1024, 1025};
+      0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 66,
+      257, 1023, 1024, 1025};
   static const int32_t Steps[] = {0, 1, -3, INT32_MAX, INT32_MIN};
-  uint32_t Input[1026], Out[10], RefOut[10], Dst[1026], RefDst[1026];
+  uint32_t Input[1026], Out[InterleaveMaxOutputs + 2];
+  uint32_t RefOut[InterleaveMaxOutputs + 2], Dst[1026], RefDst[1026];
   uint32_t Dst2[1026], RefDst2[1026];
   double FPInput[1026], Result[7], RefResult[7];
+  uint64_t CallInput[65];
+  uint32_t InterleaveInput[InterleaveInputElements];
+  double InterleaveFPInput[InterleaveInputElements];
   for (unsigned C = 0; C < sizeof(Combined) / sizeof(*Combined); ++C)
     for (unsigned K = 0; K < sizeof(Counts) / sizeof(*Counts); ++K)
       for (unsigned Trial = 0; Trial < 20; ++Trial) {
@@ -745,7 +1808,8 @@ int main(void) {
           Dst[I] = RefDst[I] = random_value();
           Dst2[I] = RefDst2[I] = random_value();
         }
-        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I)
+          Out[I] = RefOut[I] = random_value();
         for (unsigned I = 0; I < 7; ++I) Result[I] = RefResult[I] = I + 0.25;
         fill_fp(FPInput, 1026, Trial);
         ref_combined(Input, RefOut + 1, N, RefResult + 1, Start, FPInput,
@@ -765,7 +1829,8 @@ int main(void) {
   for (unsigned C = 0; C < sizeof(Inductions) / sizeof(*Inductions); ++C)
     for (unsigned Trial = 0; Trial < 200; ++Trial) {
       for (unsigned I = 0; I < 1026; ++I) Input[I] = random_value();
-      for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+      for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I)
+        Out[I] = RefOut[I] = random_value();
       Inductions[C].Reference(Input, RefOut + 1, Steps[Trial % 5]);
       Inductions[C].Fn(Input, Out + 1, Steps[Trial % 5]);
       if (memcmp(Out, RefOut, sizeof(Out)))
@@ -828,7 +1893,7 @@ int main(void) {
         fill_fp(FPInput, 1026, Trial);
         const uint32_t *A = N && N <= 65 ? Input : NULL;
         const double *D = N && N <= 65 ? FPInput : NULL;
-        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I) Out[I] = RefOut[I] = random_value();
         double ActualD[3] = {19.5, 7.0, 3.25}, ExpectedD[3] = {19.5, 7.0, 3.25};
         float ActualF[3] = {19.5f, 7.0f, 3.25f}, ExpectedF[3] = {19.5f, 7.0f, 3.25f};
         ref_scalar_mixed(A, D, RefOut + 1, ExpectedD + 1, ExpectedF + 1, N, Start);
@@ -866,7 +1931,7 @@ int main(void) {
         // calls supply zero divisors for the untaken arithmetic arm.
         const uint32_t *A = Enter ? Input : NULL;
         const double *D = Enter && Pattern != 0 ? FPInput : NULL;
-        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I) Out[I] = RefOut[I] = random_value();
         double ActualD[3] = {19.5, 7.0, 3.25}, ExpectedD[3] = {19.5, 7.0, 3.25};
         float ActualF[3] = {19.5f, 7.0f, 3.25f}, ExpectedF[3] = {19.5f, 7.0f, 3.25f};
         ref_scalar_diamond(A, D, RefOut + 1, ExpectedD + 1, ExpectedF + 1, N, Start);
@@ -931,7 +1996,8 @@ int main(void) {
         const uint32_t *A = Enter ? Input : NULL;
         const double *D = NeedsD ? FPInput : NULL;
         double Start = Trial % 2 ? 3.5 : -0.0;
-        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I)
+          Out[I] = RefOut[I] = random_value();
         double ActualD[3] = {19.5, 7.0, 3.25}, ExpectedD[3] = {19.5, 7.0, 3.25};
         float ActualF[3] = {19.5f, 7.0f, 3.25f}, ExpectedF[3] = {19.5f, 7.0f, 3.25f};
         Acyclic[C].Reference(A, D, RefOut + 1, ExpectedD + 1, ExpectedF + 1, N, Start);
@@ -1023,7 +2089,8 @@ int main(void) {
         memcpy(SavedD, FPInput, sizeof(SavedD));
         const uint32_t *A = Enter ? Input : NULL;
         const double *D = NeedsD ? FPInput : NULL;
-        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I)
+          Out[I] = RefOut[I] = random_value();
         double ActualD[3] = {19.5, 7.0, 3.25}, ExpectedD[3] = {19.5, 7.0, 3.25};
         float ActualF[3] = {19.5f, 7.0f, 3.25f}, ExpectedF[3] = {19.5f, 7.0f, 3.25f};
         Affine[C].Reference(A, D, RefOut + 1, ExpectedD + 1, ExpectedF + 1,
@@ -1172,7 +2239,7 @@ int main(void) {
           double SavedD[1026];
           memcpy(SavedInput, Input, sizeof(SavedInput));
           memcpy(SavedD, FPInput, sizeof(SavedD));
-          for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+          for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I) Out[I] = RefOut[I] = random_value();
           for (unsigned I = 0; I < 7; ++I) Result[I] = RefResult[I] = I + 0.25;
           // With rejected row/inner guards even the output pointers may be
           // null: no row, producer or consumer may execute.
@@ -1292,7 +2359,7 @@ int main(void) {
         // P=0: every divisor is zero and every conditional FP pointer is null.
         const uint32_t *A = Enter ? Input : NULL;
         const double *D = P ? FPInput : NULL;
-        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I) Out[I] = RefOut[I] = random_value();
         double ActualD[3] = {19.5, 7.0, 3.25}, ExpectedD[3] = {19.5, 7.0, 3.25};
         float ActualF[3] = {19.5f, 7.0f, 3.25f}, ExpectedF[3] = {19.5f, 7.0f, 3.25f};
         Compact[C].Reference(A, D, RefOut + 1, ExpectedD + 1, ExpectedF + 1, N, Start);
@@ -1363,7 +2430,7 @@ int main(void) {
           if (Enter)
             compact_nested_counts(Input, Rows, N, Lanes, false, &P, &V, &T);
           double Start = Trial % 2 ? 3.5 : -0.0;
-          for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+          for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I) Out[I] = RefOut[I] = random_value();
           for (unsigned I = 0; I < 7; ++I) Result[I] = RefResult[I] = I + 0.25;
           CompactNested[C].Reference(Enter ? Input : NULL, P ? FPInput : NULL,
                                       Enter ? RefOut + 1 : NULL, Enter ? RefResult + 1 : NULL,
@@ -1396,11 +2463,177 @@ int main(void) {
             fail(CompactNested[C].Name, (unsigned)N, Trial, "compact nested future-row alias mismatch");
           Runs += 2;
         }
-  printf("PASS: %u executions; integer and ordered FP exact; relaxed FP "
+  // Newly admitted short producers run both vector chunks and scalar tails
+  // at small vscales. Larger vscales also exercise scalar-only stage dispatch.
+  // Zero and out-of-bound counts exercise the original guarded bypass.
+  for (unsigned C = 0; C < sizeof(ShortInts) / sizeof(*ShortInts); ++C)
+    for (unsigned K = 0; K < sizeof(Counts) / sizeof(*Counts); ++K)
+      for (unsigned Trial = 0; Trial < 20; ++Trial) {
+        unsigned N = Counts[K];
+        for (unsigned I = 0; I < 1026; ++I) Input[I] = random_value();
+        for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I)
+          Out[I] = RefOut[I] = random_value();
+        ShortInts[C].Reference(Input, RefOut + 1, N);
+        ShortInts[C].Fn(Input, Out + 1, N);
+        if (memcmp(Out, RefOut, sizeof(Out)))
+          fail(ShortInts[C].Name, N, Trial, "short integer result/canary mismatch");
+        ++Runs;
+      }
+  for (unsigned C = 0; C < sizeof(ShortFP) / sizeof(*ShortFP); ++C)
+    for (unsigned K = 0; K < sizeof(Counts) / sizeof(*Counts); ++K)
+      for (unsigned Trial = 0; Trial < 20; ++Trial) {
+        unsigned N = Counts[K];
+        double Start = Trial % 8 == 2 ? -0.0 : Trial % 8 == 3 ? 1.0 : 3.5;
+        fill_fp(FPInput, 1026, Trial);
+        for (unsigned I = 0; I < 7; ++I) Result[I] = RefResult[I] = I + 0.25;
+        ShortFP[C].Reference(FPInput, RefResult + 1, N, Start);
+        ShortFP[C].Fn(FPInput, Result + 1, N, Start);
+        for (unsigned I = 0; I < 7; ++I) {
+          bool Output = I >= 1 && I <= ShortFP[C].Outputs;
+          if (!equal_fp(Result[I], RefResult[I],
+                        Output && ShortFP[C].Relaxed, FPInput,
+                        N <= 65 ? N : 0, I == 1 ? Start : -0.0, Trial))
+            fail(ShortFP[C].Name, N, Trial,
+                 "short FP ordered/relaxed result or canary mismatch");
+        }
+        ++Runs;
+      }
+  // The nxv2 producer and nxv8 consumer have different full-chunk bounds.
+  // At scale=1, N=2..7 takes a producer vector chunk and a scalar consumer;
+  // N=9 takes both vector stages and both tails. Large scales also exercise
+  // the scalar-only consumer dispatch. Bypass calls use a null input to
+  // ensure that the original N=0 and N>65 guards still suppress input reads.
+  for (unsigned C = 0; C < sizeof(FixedCalls) / sizeof(*FixedCalls); ++C)
+    for (unsigned Trial = 0; Trial < 200; ++Trial) {
+      for (unsigned I = 0; I < 65; ++I)
+        CallInput[I] = random_wide_value();
+      for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I)
+        Out[I] = RefOut[I] = random_value();
+      ref_independent_vfs(CallInput, RefOut + 1);
+      FixedCalls[C].Fn(CallInput, Out + 1);
+      if (memcmp(Out, RefOut, sizeof(Out)))
+        fail(FixedCalls[C].Name, 65, Trial, "fixed call result/canary mismatch");
+      ++Runs;
+    }
+  for (unsigned C = 0; C < sizeof(BoundedCalls) / sizeof(*BoundedCalls); ++C)
+    for (unsigned K = 0; K < sizeof(Counts) / sizeof(*Counts); ++K)
+      for (unsigned Trial = 0; Trial < 20; ++Trial) {
+        unsigned N = Counts[K];
+        for (unsigned I = 0; I < 65; ++I)
+          CallInput[I] = random_wide_value();
+        for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I)
+          Out[I] = RefOut[I] = random_value();
+        const uint64_t *A = N && N <= 65 ? CallInput : NULL;
+        ref_independent_vfs_bounded(A, RefOut + 1, N);
+        BoundedCalls[C].Fn(A, Out + 1, N);
+        if (memcmp(Out, RefOut, sizeof(Out)))
+          fail(BoundedCalls[C].Name, N, Trial,
+               "bounded call result/canary mismatch");
+        ++Runs;
+      }
+  // Both VF orders execute the vector producer/consumer and their separate
+  // tails. Repeated ordinary LV may add vector tails; count their entries
+  // and lanes as well as residual scalar visits. Exact multiples have zero
+  // tail visits. The same checks hold when a complete input group is
+  // intentionally reread in the consumer.
+  for (unsigned C = 0; C < sizeof(InterleaveInts) / sizeof(*InterleaveInts); ++C)
+    for (unsigned K = 0; K < sizeof(Counts) / sizeof(*Counts); ++K)
+      for (unsigned Trial = 0; Trial < 20; ++Trial) {
+        unsigned N = Counts[K], Factor = InterleaveInts[C].Factor;
+        for (unsigned I = 0; I < 65 * Factor; ++I)
+          InterleaveInput[I] = random_value();
+        const uint32_t *A = guarded_input(
+            InterleaveInput, N && N <= 65 ? N * Factor * sizeof(*A) : 0);
+        for (unsigned I = 0; I < sizeof(Out) / sizeof(*Out); ++I)
+          Out[I] = RefOut[I] = random_value();
+        InterleaveInts[C].Reference(A, RefOut + 1, N);
+        reset_interleave_probes();
+        InterleaveInts[C].Fn(A, Out + 1, N);
+        check_interleave_entries(
+            InterleaveInts[C].Name, N, Trial, InterleaveInts[C].ProducerVF,
+            InterleaveInts[C].AccumulatorVF, InterleaveInts[C].ProducerTailVF,
+            InterleaveInts[C].AccumulatorTailVF);
+        if (memcmp(Out, RefOut, sizeof(Out)))
+          fail(InterleaveInts[C].Name, N, Trial,
+               "interleaved integer result/canary mismatch");
+        if (N && N <= InterleaveMaxTripCount &&
+            memcmp(A, InterleaveInput, N * Factor * sizeof(*A)))
+          fail(InterleaveInts[C].Name, N, Trial,
+               "interleaved integer input modified");
+        ++Runs;
+        if (Trial == 0 && N >= 2 && N <= 65) {
+          uint32_t AliasReference[InterleaveInputElements];
+          if (N * Factor < InterleaveInts[C].Outputs) abort();
+          memcpy(AliasReference, InterleaveInput, N * Factor * sizeof(*A));
+          InterleaveInts[C].Reference(AliasReference, AliasReference, N);
+          reset_interleave_probes();
+          InterleaveInts[C].Fn(A, (uint32_t *)A, N);
+          check_interleave_entries(
+              InterleaveInts[C].Name, N, Trial, InterleaveInts[C].ProducerVF,
+              InterleaveInts[C].AccumulatorVF, InterleaveInts[C].ProducerTailVF,
+              InterleaveInts[C].AccumulatorTailVF);
+          if (memcmp(A, AliasReference, N * Factor * sizeof(*A)))
+            fail(InterleaveInts[C].Name, N, Trial,
+                 "interleaved integer aliased output mismatch");
+          ++Runs;
+        }
+      }
+  for (unsigned C = 0; C < sizeof(InterleaveFP) / sizeof(*InterleaveFP); ++C)
+    for (unsigned K = 0; K < sizeof(Counts) / sizeof(*Counts); ++K)
+      for (unsigned Trial = 0; Trial < 20; ++Trial) {
+        unsigned N = Counts[K], Factor = InterleaveFP[C].Factor;
+        double Start = Trial % 8 == 2 ? -0.0 : Trial % 8 == 3 ? 1.0 : 3.5;
+        fill_fp(InterleaveFPInput, 65 * Factor, Trial);
+        const double *A = guarded_input(
+            InterleaveFPInput, N && N <= 65 ? N * Factor * sizeof(*A) : 0);
+        for (unsigned I = 0; I < 7; ++I) Result[I] = RefResult[I] = I + 0.25;
+        InterleaveFP[C].Reference(A, RefResult + 1, N, Start);
+        reset_interleave_probes();
+        InterleaveFP[C].Fn(A, Result + 1, N, Start);
+        check_interleave_entries(
+            InterleaveFP[C].Name, N, Trial, InterleaveFP[C].ProducerVF,
+            InterleaveFP[C].AccumulatorVF, InterleaveFP[C].ProducerTailVF,
+            InterleaveFP[C].AccumulatorTailVF);
+        if (memcmp(Result, RefResult, sizeof(Result)))
+          fail(InterleaveFP[C].Name, N, Trial,
+               "interleaved ordered FP result/canary mismatch");
+        if (N && N <= InterleaveMaxTripCount &&
+            memcmp(A, InterleaveFPInput, N * Factor * sizeof(*A)))
+          fail(InterleaveFP[C].Name, N, Trial,
+               "interleaved ordered FP input modified");
+        ++Runs;
+        if (Trial == 0 && N >= 2 && N <= 65) {
+          double AliasReference[InterleaveInputElements];
+          if (N * Factor < InterleaveFP[C].Outputs) abort();
+          memcpy(AliasReference, InterleaveFPInput, N * Factor * sizeof(*A));
+          InterleaveFP[C].Reference(AliasReference, AliasReference, N, Start);
+          reset_interleave_probes();
+          InterleaveFP[C].Fn(A, (double *)A, N, Start);
+          check_interleave_entries(
+              InterleaveFP[C].Name, N, Trial, InterleaveFP[C].ProducerVF,
+              InterleaveFP[C].AccumulatorVF, InterleaveFP[C].ProducerTailVF,
+              InterleaveFP[C].AccumulatorTailVF);
+          if (memcmp(A, AliasReference, N * Factor * sizeof(*A)))
+            fail(InterleaveFP[C].Name, N, Trial,
+                 "interleaved ordered FP aliased output mismatch");
+          ++Runs;
+        }
+      }
+  check_deinterleave_adapter();
+  check_exports();
+  check_chunks();
+  check_aos_chunks();
+  check_integration();
+  printf("PASS: %u executions; interleave stages/tails counted with guarded "
+         "input ends; integer and ordered FP exact; relaxed FP "
          "classification/signed-zero/error bounds; max absolute FP difference %.17g\n",
          Runs, MaxError);
   printf("Early scalar fission: %u host comparisons entered a vector consumer\n",
          ScalarVectorRuns);
+  printf("Ordinary AoS vector tails: %llu entries, %llu participating lanes "
+         "(scalar-remainder host configuration only)\n",
+         (unsigned long long)OrdinaryTailEntries,
+         (unsigned long long)OrdinaryTailLanes);
   printf("Compact streams: exact integer/non-NaN FP bits; NaNs by classification; "
          "exact producer/participant/vector/tail counts\n");
   printf("Acyclic producers: original IR and independent scalar references; "

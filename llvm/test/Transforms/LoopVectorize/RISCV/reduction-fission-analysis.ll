@@ -17,10 +17,12 @@
 ; RUN:   -vplan-reduction-fission-min-reductions=2 \
 ; RUN:   -vplan-reduction-fission-min-chain-depth=1 \
 ; RUN:   -debug-only=vplan-reduction-fission -disable-output %s 2>&1 \
-; RUN:   | FileCheck %s --check-prefix=TOOFEW
+; RUN:   | FileCheck %s --check-prefix=ONE
 
 ; DEBUG: LV-FISSION: dynamic_trip: rejected: non-constant-trip-count
-; TOOFEW: LV-FISSION: constant_trip_too_few: rejected: too-few-reductions
+; One reduction and a load are sufficient under the explicit enable flag.
+; The historical minimum-count option no longer vetoes this candidate.
+; ONE: LV-FISSION: constant_trip_one: candidate: reductions=1 scratch-bytes=256
 
 define void @options_smoke() {
 entry:
@@ -46,7 +48,7 @@ exit:
 }
 
 
-define i32 @constant_trip_too_few(ptr noalias readonly %a) {
+define i32 @constant_trip_one(ptr noalias readonly %a) {
 entry:
   br label %loop
 

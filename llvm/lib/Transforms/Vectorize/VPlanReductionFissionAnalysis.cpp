@@ -50,6 +50,24 @@ void collectVPProducerSliceImpl(
     collectVPProducerSliceImpl(*Operand, Slice, Recurrences, AllowedRecipes);
 }
 
+// A structural variation check, not an algebraic invariance analysis. In
+// particular, arithmetic depending only on live-ins is not scratch work.
+bool hasVaryingProducer(
+    const SmallPtrSetImpl<const VPRecipeBase *> &Recipes,
+    const SmallPtrSetImpl<const VPRecipeBase *> &Recurrences,
+    const VPBasicBlock *Body) {
+  return any_of(Recurrences, [Body](const VPRecipeBase *R) {
+           return R->getParent() == Body;
+         }) ||
+         any_of(Recipes, [Body](const VPRecipeBase *R) {
+           return R->getParent() == Body &&
+                  (R->mayReadFromMemory() ||
+                   isa<VPWidenCanonicalIVRecipe,
+                       VPWidenIntOrFpInductionRecipe, VPScalarIVStepsRecipe,
+                       VPDerivedIVRecipe>(R));
+         });
+}
+
 } // namespace
 
 Expected<VPFissionTripCountInfo>
@@ -140,6 +158,14 @@ bool llvm::verifyFissionMemorySchedule(
         I = &L->getIngredient();
       else if (auto *Rep = dyn_cast<VPReplicateRecipe>(&R))
         I = dyn_cast_or_null<Instruction>(Rep->getUnderlyingValue());
+      else if (auto *Group = dyn_cast<VPInterleaveRecipe>(&R)) {
+        // Check every original access, not just the insertion member. Stores
+        // are excluded by recipe legality before constructing the stages.
+        for (Instruction *Member : Group->getInterleaveGroup()->members())
+          if (!isa<LoadInst>(Member) || !is_contained(Accesses, Member))
+            return false;
+        continue;
+      }
       if (!I || !isa<LoadInst, StoreInst>(I))
         continue;
       if (!is_contained(Accesses, I))
@@ -173,121 +199,6 @@ bool llvm::isSupportedFissionFAdd(PHINode &Phi, const RecurrenceDescriptor &Rdx,
     if (U != &Phi && L.contains(cast<Instruction>(U)))
       return false;
   return true;
-}
-
-std::optional<VPReductionFissionRejectReason>
-llvm::checkFissionFPCost(VPlan &Baseline,
-                         const VPReductionFissionCandidate &Candidate,
-                         const TargetTransformInfo &TTI) {
-  // Compare the costs affected by the split: scratch traffic, FP accumulation
-  // and register spills. Producer arithmetic is common at ProducerVF. This is
-  // deliberately a supplement to, rather than a replacement for, the existing
-  // pressure/duplication policy. MaxTripCount is never a frequency estimate.
-  struct CostSummary {
-    double PerElement = 0;
-    double Setup = 0;
-    double Tail = 0;
-    bool Valid = true;
-  };
-  auto *Exact = dyn_cast<SCEVConstant>(Candidate.TripCount.ExactTripCount);
-  auto Summarize = [&](VPlan &Plan, ElementCount VF) {
-    CostSummary Result;
-    uint64_t Width =
-        uint64_t(VF.getKnownMinValue()) *
-        (VF.isScalable() ? TTI.getVScaleForTuning().value_or(1) : 1);
-    uint64_t Tail = Exact ? Exact->getAPInt().getZExtValue() % Width : 0;
-    auto Add = [&](InstructionCost Cost, double &To, double Divisor = 1) {
-      if (!Cost.isValid())
-        Result.Valid = false;
-      else
-        To += double(Cost.getValue()) / Divisor;
-    };
-    constexpr auto Kind = TTI::TCK_RecipThroughput;
-    Type *SpillTy = Candidate.Scratch.Slots.front().ElementType;
-    for (VPRecipeBase &R : *Plan.getVectorLoopRegion()->getEntryBasicBlock()) {
-      if (auto *L = dyn_cast<VPFissionScratchLoadRecipe>(&R)) {
-        Add(TTI.getMemoryOpCost(Instruction::Load,
-                                VectorType::get(L->getElementType(), VF),
-                                L->getAlignment(), 0, Kind),
-            Result.PerElement, Width);
-        Add(TTI.getMemoryOpCost(Instruction::Load, L->getElementType(),
-                                L->getAlignment(), 0, Kind) *
-                Tail,
-            Result.Tail);
-      }
-      if (auto *S = dyn_cast<VPFissionScratchStoreRecipe>(&R)) {
-        Add(TTI.getMemoryOpCost(Instruction::Store,
-                                VectorType::get(S->getElementType(), VF),
-                                S->getAlignment(), 0, Kind),
-            Result.PerElement, Width);
-        Add(TTI.getMemoryOpCost(Instruction::Store, S->getElementType(),
-                                S->getAlignment(), 0, Kind) *
-                Tail,
-            Result.Tail);
-      }
-      auto *Phi = dyn_cast<VPReductionPHIRecipe>(&R);
-      if (!Phi || Phi->getRecurrenceKind() != RecurKind::FAdd)
-        continue;
-      auto *Ty = VectorType::get(Phi->getScalarType(), VF);
-      InstructionCost Reduction = TTI.getArithmeticReductionCost(
-          Instruction::FAdd, Ty, Phi->getFastMathFlagsOrNone(), Kind);
-      if (Phi->isInLoop())
-        Add(Reduction, Result.PerElement, Width);
-      else {
-        Add(TTI.getArithmeticInstrCost(Instruction::FAdd, Ty, Kind),
-            Result.PerElement, Width);
-        Add(Reduction, Result.Setup);
-      }
-      if (Exact)
-        Add(TTI.getArithmeticInstrCost(Instruction::FAdd, Phi->getScalarType(),
-                                       Kind) *
-                Tail,
-            Result.Tail);
-    }
-    auto Pressure = calculateRegisterPressureForPlan(Plan, VF, TTI);
-    for (const auto &[Class, Total] : Pressure.PeakTotalRegs) {
-      unsigned Capacity = Pressure.Capacity.lookup(Class);
-      if (Total <= Capacity)
-        continue;
-      bool Vector = Class == TTI.getRegisterClassForType(true, SpillTy);
-      Type *Ty = SpillTy;
-      if (Vector) {
-        unsigned RegBits =
-            TTI.getRegisterBitWidth(TargetTransformInfo::RGK_ScalableVector)
-                .getKnownMinValue();
-        Ty = VectorType::get(
-            SpillTy, ElementCount::getScalable(std::max(
-                         1u, RegBits / SpillTy->getScalarSizeInBits())));
-      }
-      InstructionCost Spill =
-          TTI.getMemoryOpCost(Instruction::Load, Ty, Align(1), 0, Kind) +
-          TTI.getMemoryOpCost(Instruction::Store, Ty, Align(1), 0, Kind);
-      Add(Spill * (Total - Capacity), Result.PerElement, Width);
-    }
-    if (Exact) {
-      double N = Exact->getAPInt().getZExtValue();
-      Result.PerElement *= (N - Tail) / N;
-    }
-    return Result;
-  };
-  auto B = Summarize(Baseline, Candidate.Selected->ProducerVF);
-  auto P = Summarize(*Candidate.ProducerPlan, Candidate.Selected->ProducerVF);
-  auto A =
-      Summarize(*Candidate.AccumulatorPlan, Candidate.Selected->AccumulatorVF);
-  if (!B.Valid || !P.Valid || !A.Valid)
-    return VPReductionFissionRejectReason::InvalidFissionCost;
-  double Before = B.PerElement;
-  double After = P.PerElement + A.PerElement;
-  if (Exact) {
-    double N = Exact->getAPInt().getZExtValue();
-    Before += (B.Setup + B.Tail) / N;
-    // Two additional entry checks and scalar-tail dispatches. For a dynamic
-    // N use steady-state costs; no static capacity is used to amortize these.
-    After += (P.Setup + A.Setup + P.Tail + A.Tail + 4) / N;
-  }
-  if (After >= Before)
-    return VPReductionFissionRejectReason::FissionCostNotReduced;
-  return std::nullopt;
 }
 
 void llvm::collectVPProducerSlice(
@@ -551,9 +462,10 @@ VPRegisterPressureBreakdown llvm::calculateRegisterPressureForPlan(
   return Result;
 }
 
-bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
-                                     const TargetTransformInfo &TTI) {
-  if (!VF.isVector() || Plan.hasEarlyExit())
+static bool isSupportedFissionPlan(VPlan &Plan, ElementCount VF,
+                                  const TargetTransformInfo &TTI,
+                                  bool CheckVF) {
+  if ((CheckVF && !VF.isVector()) || Plan.hasEarlyExit())
     return false;
   VPBasicBlock *Body = Plan.getVectorLoopRegion()->getEntryBasicBlock();
   if (Body != Plan.getVectorLoopRegion()->getExitingBasicBlock())
@@ -571,8 +483,9 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
       Recipes.push_back(&R);
   for (VPRecipeBase *Recipe : Recipes) {
     VPRecipeBase &R = *Recipe;
-    // These forms are parametric in VF. Other forms (replication, interleave
-    // groups, scaled/ordered reductions, recurrences) need separate replanning.
+    // These forms support stage cloning and independent scalar remainders.
+    // Lane-wise replication and other recurrences still need separate
+    // support. Target/type legality is checked per stage VF.
     if (!isa<VPInstruction, VPReductionPHIRecipe, VPWidenRecipe,
              VPWidenCastRecipe, VPWidenGEPRecipe, VPWidenLoadRecipe,
              VPWidenIntOrFpInductionRecipe, VPWidenStoreRecipe,
@@ -580,12 +493,46 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
              VPWidenIntrinsicRecipe, VPWidenCanonicalIVRecipe,
              VPScalarIVStepsRecipe, VPDerivedIVRecipe, VPVectorPointerRecipe,
              VPReplicateRecipe, VPFissionScratchLoadRecipe,
-             VPFissionScratchStoreRecipe>(R)) {
+             VPFissionScratchStoreRecipe, VPInterleaveRecipe>(R)) {
       LLVM_DEBUG({
         dbgs() << "LV-FISSION: unsupported recipe at VF " << VF << "\n";
         R.dump();
       });
       return false;
+    }
+    if (auto *Interleave = dyn_cast<VPInterleaveRecipe>(&R)) {
+      const auto *Group = Interleave->getInterleaveGroup();
+      unsigned Factor = Group->getFactor();
+      // Full, forward, unconditional groups cover exactly Factor objects per
+      // participating iteration. Only the canonical tail mask can be removed:
+      // stages execute full chunks and have independent scalar tails. Reject
+      // data predicates, speculative gap loads and reverse addressing.
+      // Scalable deinterleave intrinsics represent factors 2 through 8.
+      if (!Group->isFull() || Group->isReverse() ||
+          !IsTailMask(Interleave->getMask()) ||
+          Interleave->needsMaskForGaps() ||
+          Interleave->getNumStoreOperands() != 0 || Factor < 2 || Factor > 8 ||
+          Interleave->getNumDefinedValues() != Factor)
+        return false;
+      auto *First = dyn_cast<LoadInst>(Group->getMember(0));
+      if (!First)
+        return false;
+      for (auto [Index, Def] : enumerate(Interleave->definedValues())) {
+        auto *Member = dyn_cast<LoadInst>(Group->getMember(Index));
+        if (!Member || !Member->isSimple() ||
+            Member->getType() != First->getType() ||
+            Member->getPointerAddressSpace() != First->getPointerAddressSpace() ||
+            Def->getUnderlyingValue() != Member)
+          return false;
+      }
+      // Query the member vector type, not the Factor*VF wide load type. A
+      // legal fused-plan group says nothing about lowering at another stage
+      // VF (for example RVV's EMUL*NFIELDS limit).
+      if (CheckVF &&
+          !TTI.isLegalInterleavedAccessType(
+              VectorType::get(First->getType(), VF), Factor, Group->getAlign(),
+              First->getPointerAddressSpace()))
+        return false;
     }
     if (isa<VPExpandSCEVRecipe>(R) && R.getParent() == Body)
       return false;
@@ -599,17 +546,43 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
           IV->getVFValue() != &Plan.getVF())
         return false;
     }
-    // Consecutive addresses are represented by a uniform scalar GEP even in
-    // an otherwise fully widened plan. Do not admit lane-wise replication.
-    if (auto *Replicate = dyn_cast<VPReplicateRecipe>(&R))
+    // Address slices may contain single-scalar integer arithmetic as well as
+    // GEPs. In particular, narrowing the address of an interleave group leaves
+    // a replicate for i * Factor; a power-of-two Factor happens to simplify to
+    // a VPInstruction shift instead. Both representations can be cloned at
+    // each stage's canonical index, including its scalar resume index.
+    // Do not admit lane-wise replication, memory accesses or trapping ops.
+    if (auto *Replicate = dyn_cast<VPReplicateRecipe>(&R)) {
+      auto *I = cast<Instruction>(Replicate->getUnderlyingValue());
+      bool SafeIntegerOp =
+          isa<BinaryOperator>(I) && I->getType()->isIntegerTy() &&
+          !I->isIntDivRem() &&
+          isSafeToSpeculativelyExecuteWithVariableReplaced(
+              I, /*IgnoreUBImplyingAttrs=*/false);
       if (!Replicate->isSingleScalar() || Replicate->isPredicated() ||
-          !isa<GetElementPtrInst>(Replicate->getUnderlyingValue()))
+          (!isa<GetElementPtrInst>(I) && !SafeIntegerOp)) {
+        LLVM_DEBUG({
+          dbgs() << "LV-FISSION: unsupported scalar recipe at VF " << VF
+                 << "\n";
+          R.dump();
+        });
         return false;
+      }
+    }
     if (auto *Phi = dyn_cast<VPReductionPHIRecipe>(&R)) {
       if (Phi->getVFScaleFactor() != 1 ||
           Phi->getRecurrenceKind() == RecurKind::AnyOf ||
           RecurrenceDescriptor::isFindIVRecurrenceKind(
               Phi->getRecurrenceKind()))
+        return false;
+      // Preserve target lowering support checks from the removed FP cost
+      // gate, including unordered out-of-loop sums. No cost comparison is
+      // needed to establish that a stage can lower its reduction at this VF.
+      if (CheckVF && Phi->getRecurrenceKind() == RecurKind::FAdd &&
+          !TTI.getArithmeticReductionCost(
+                  Instruction::FAdd, VectorType::get(Phi->getScalarType(), VF),
+                  Phi->getFastMathFlagsOrNone(), TTI::TCK_RecipThroughput)
+               .isValid())
         return false;
       if (Phi->isInLoop()) {
         auto *Update = dyn_cast<VPReductionRecipe>(Phi->getBackedgeValue());
@@ -632,11 +605,6 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
            !Rdx->getFastMathFlagsOrNone().allowReassoc()) ||
           (I && (I->getOpcode() != Instruction::FAdd ||
                  I->getFunction()->hasFnAttribute(Attribute::StrictFP))))
-        return false;
-      if (!TTI.getArithmeticReductionCost(
-                  Instruction::FAdd, VectorType::get(Rdx->getScalarType(), VF),
-                  Rdx->getFastMathFlagsOrNone(), TTI::TCK_RecipThroughput)
-               .isValid())
         return false;
       if (any_of(Rdx->users(), [&](VPUser *U) {
             auto *UserR = cast<VPRecipeBase>(U);
@@ -669,6 +637,8 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
             return AttrBuilder(Variant->getContext(), AS).overlaps(UBAttrs);
           }))
         return false;
+      if (!CheckVF)
+        continue;
       FunctionType *FT = Variant->getFunctionType();
       if (auto *VT = dyn_cast<VectorType>(FT->getReturnType());
           !VT || VT->getElementCount() != VF)
@@ -683,6 +653,8 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
       if (!isTriviallyVectorizable(ID) || R.mayHaveSideEffects() ||
           R.mayReadFromMemory())
         return false;
+      if (!CheckVF)
+        continue;
       SmallVector<Type *, 4> ParamTypes;
       for (auto [I, Op] : enumerate(Intrinsic->operands())) {
         Type *Ty = Op->getScalarType();
@@ -700,41 +672,45 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
       if (!TTI.getIntrinsicInstrCost(Attrs, TTI::TCK_CodeSize).isValid())
         return false;
     }
-    for (VPValue *Def : R.definedValues()) {
-      Type *Ty = Def->getScalarType();
-      if (isa<VPDerivedIVRecipe, VPScalarIVStepsRecipe>(R) ||
-          (isa<VPReductionPHIRecipe>(R) &&
-           cast<VPReductionPHIRecipe>(R).isInLoop()) ||
-          (isa<VPReductionRecipe>(R) &&
-           cast<VPReductionRecipe>(R).isInLoop()) ||
-          vputils::onlyFirstLaneUsed(Def))
-        continue;
-      if (!VectorType::isValidElementType(Ty) ||
-          (VF.isScalable() && !Ty->isIntegerTy(1) &&
-           !TTI.isElementTypeLegalForScalableVector(Ty)) ||
-          !TTI.isTypeLegal(VectorType::get(Ty, VF))) {
-        LLVM_DEBUG({
-          dbgs() << "LV-FISSION: illegal vector element " << *Ty << " at VF "
-                 << VF << "\n";
-          R.dump();
-        });
-        return false;
+    if (CheckVF) {
+      for (VPValue *Def : R.definedValues()) {
+        Type *Ty = Def->getScalarType();
+        if (isa<VPDerivedIVRecipe, VPScalarIVStepsRecipe>(R) ||
+            (isa<VPReductionPHIRecipe>(R) &&
+             cast<VPReductionPHIRecipe>(R).isInLoop()) ||
+            (isa<VPReductionRecipe>(R) &&
+             cast<VPReductionRecipe>(R).isInLoop()) ||
+            vputils::onlyFirstLaneUsed(Def))
+          continue;
+        if (!VectorType::isValidElementType(Ty) ||
+            (VF.isScalable() && !Ty->isIntegerTy(1) &&
+             !TTI.isElementTypeLegalForScalableVector(Ty)) ||
+            !TTI.isTypeLegal(VectorType::get(Ty, VF))) {
+          LLVM_DEBUG({
+            dbgs() << "LV-FISSION: illegal vector element " << *Ty << " at VF "
+                   << VF << "\n";
+            R.dump();
+          });
+          return false;
+        }
       }
     }
     if (auto *Load = dyn_cast<VPWidenLoadRecipe>(&R)) {
       auto *Ty = VectorType::get(Load->getScalarType(), VF);
       auto *IRLoad = cast<LoadInst>(Load->getUnderlyingValue());
       if (!Load->isConsecutive() ||
-          !TTI.isLegalMaskedLoad(Ty, IRLoad->getAlign(),
-                                 IRLoad->getPointerAddressSpace()))
+          (CheckVF && !TTI.isLegalMaskedLoad(
+                          Ty, IRLoad->getAlign(),
+                          IRLoad->getPointerAddressSpace())))
         return false;
     }
     if (auto *Store = dyn_cast<VPWidenStoreRecipe>(&R)) {
       auto &IRStore = cast<StoreInst>(Store->getIngredient());
       if (!IRStore.isSimple() || !Store->isConsecutive() ||
-          !TTI.isLegalMaskedStore(
-              VectorType::get(Store->getStoredValue()->getScalarType(), VF),
-              IRStore.getAlign(), IRStore.getPointerAddressSpace()))
+          (CheckVF && !TTI.isLegalMaskedStore(
+                           VectorType::get(
+                               Store->getStoredValue()->getScalarType(), VF),
+                           IRStore.getAlign(), IRStore.getPointerAddressSpace())))
         return false;
       // Prefix stores require a scan, not a reduction of a complete chunk.
       SmallPtrSet<VPValue *, 16> Seen;
@@ -752,15 +728,28 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
       }
     }
     if (auto *Load = dyn_cast<VPFissionScratchLoadRecipe>(&R))
-      if (!TTI.isLegalMaskedLoad(VectorType::get(Load->getElementType(), VF),
+      if (CheckVF &&
+          !TTI.isLegalMaskedLoad(VectorType::get(Load->getElementType(), VF),
                                  Load->getAlignment(), 0))
         return false;
     if (auto *Store = dyn_cast<VPFissionScratchStoreRecipe>(&R))
-      if (!TTI.isLegalMaskedStore(VectorType::get(Store->getElementType(), VF),
+      if (CheckVF &&
+          !TTI.isLegalMaskedStore(VectorType::get(Store->getElementType(), VF),
                                   Store->getAlignment(), 0))
         return false;
   }
   return true;
+}
+
+bool llvm::isSupportedReductionFissionPlan(VPlan &Plan,
+                                          const TargetTransformInfo &TTI) {
+  return isSupportedFissionPlan(Plan, ElementCount::getFixed(1), TTI,
+                               /*CheckVF=*/false);
+}
+
+bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
+                                     const TargetTransformInfo &TTI) {
+  return isSupportedFissionPlan(Plan, VF, TTI, /*CheckVF=*/true);
 }
 
 StringRef llvm::getVPReductionFissionRejectReasonName(
@@ -819,37 +808,41 @@ StringRef llvm::getVPReductionFissionRejectReasonName(
 }
 
 VPReductionFissionDecision llvm::selectReductionFissionConfiguration(
-    ElementCount ActualBaselineVF, ArrayRef<VPFissionVFPressure> Baseline,
-    ArrayRef<VPFissionVFPressure> Producer,
+    ElementCount ActualBaselineVF, ArrayRef<VPFissionVFPressure> Producer,
     ArrayRef<VPFissionVFPressure> Accumulator, uint64_t ScratchBytes,
     uint64_t MaximumScratchBytes, unsigned DuplicatedRecipeCount,
-    unsigned MaximumDuplicatedRecipes, bool AllowPressureOverflow) {
+    unsigned MaximumDuplicatedRecipes) {
   VPReductionFissionDecision Decision;
-  auto LargestSafe =
-      [AllowPressureOverflow](ArrayRef<VPFissionVFPressure> Candidates)
+  auto SelectVF = [](ArrayRef<VPFissionVFPressure> Candidates)
       -> const VPFissionVFPressure * {
     const VPFissionVFPressure *Best = nullptr;
+    const VPFissionVFPressure *Smallest = nullptr;
     for (const VPFissionVFPressure &Candidate : Candidates) {
-      // Reserve registers for masks and target-introduced temporaries.
+      if (!Smallest ||
+          Candidate.VF.getKnownMinValue() < Smallest->VF.getKnownMinValue())
+        Smallest = &Candidate;
+      // Keep the existing ordering: prefer the largest VF with headroom for
+      // masks and target temporaries. Pressure is an estimate, not legality.
       bool HasHeadroom =
           all_of(Candidate.Pressure.PeakTotalRegs, [&](const auto &Entry) {
             return Entry.second <
                    Candidate.Pressure.Capacity.lookup(Entry.first);
           });
-      if (!HasHeadroom && !AllowPressureOverflow)
-        continue;
-      if (!Best ||
-          Candidate.VF.getKnownMinValue() > Best->VF.getKnownMinValue())
+      if (HasHeadroom &&
+          (!Best ||
+           Candidate.VF.getKnownMinValue() > Best->VF.getKnownMinValue()))
         Best = &Candidate;
     }
-    return Best;
+    // If every legal VF is under pressure, deterministically use the smallest
+    // legal VF. Do not make an experimental split contingent on spill estimates.
+    return Best ? Best : Smallest;
   };
 
-  const VPFissionVFPressure *ProducerBest = LargestSafe(Producer);
-  const VPFissionVFPressure *AccumulatorBest = LargestSafe(Accumulator);
+  const VPFissionVFPressure *ProducerBest = SelectVF(Producer);
+  const VPFissionVFPressure *AccumulatorBest = SelectVF(Accumulator);
   Decision.BaselineVF = ActualBaselineVF;
   if (!ProducerBest || !AccumulatorBest) {
-    Decision.Reason = VPReductionFissionRejectReason::NoPressureSafeVF;
+    Decision.Reason = VPReductionFissionRejectReason::UnsupportedRecipe;
     return Decision;
   }
   if (ScratchBytes > MaximumScratchBytes) {
@@ -860,51 +853,6 @@ VPReductionFissionDecision llvm::selectReductionFissionConfiguration(
     Decision.Reason = VPReductionFissionRejectReason::CrossPartitionDependence;
     return Decision;
   }
-  // Require a non-decreasing producer VF and lower peak pressure.
-  if (!ElementCount::isKnownGE(ProducerBest->VF, ActualBaselineVF)) {
-    Decision.Reason = VPReductionFissionRejectReason::ProducerVFDecrease;
-    return Decision;
-  }
-
-  const VPFissionVFPressure *FusedAtProducerVF = nullptr;
-  for (const VPFissionVFPressure &Candidate : Baseline)
-    if (Candidate.VF == ProducerBest->VF) {
-      FusedAtProducerVF = &Candidate;
-      break;
-    }
-  if (!FusedAtProducerVF) {
-    Decision.Reason = VPReductionFissionRejectReason::FissionPressureNotReduced;
-    return Decision;
-  }
-
-  bool StrictlyLower = false;
-  auto HasNewPressureClass = [&](const VPRegisterPressureBreakdown &Pressure) {
-    return any_of(Pressure.PeakTotalRegs, [&](const auto &Entry) {
-      return Entry.second != 0 &&
-             !FusedAtProducerVF->Pressure.PeakTotalRegs.contains(Entry.first);
-    });
-  };
-  if (HasNewPressureClass(ProducerBest->Pressure) ||
-      HasNewPressureClass(AccumulatorBest->Pressure)) {
-    Decision.Reason = VPReductionFissionRejectReason::FissionPressureNotReduced;
-    return Decision;
-  }
-  for (const auto &Entry : FusedAtProducerVF->Pressure.PeakTotalRegs) {
-    unsigned SplitPeak =
-        std::max(ProducerBest->Pressure.PeakTotalRegs.lookup(Entry.first),
-                 AccumulatorBest->Pressure.PeakTotalRegs.lookup(Entry.first));
-    if (SplitPeak > Entry.second) {
-      Decision.Reason =
-          VPReductionFissionRejectReason::FissionPressureNotReduced;
-      return Decision;
-    }
-    StrictlyLower |= SplitPeak < Entry.second;
-  }
-  if (!StrictlyLower) {
-    Decision.Reason = VPReductionFissionRejectReason::FissionPressureNotReduced;
-    return Decision;
-  }
-
   Decision.SelectFission = true;
   Decision.Fission =
       VPFissionConfiguration{ProducerBest->VF, AccumulatorBest->VF};
@@ -913,9 +861,11 @@ VPReductionFissionDecision llvm::selectReductionFissionConfiguration(
 
 VPReductionFissionAnalysis
 llvm::analyzeVPReductionFission(VPlan &Plan,
-                                const VPRegisterPressureBreakdown &Pressure,
+                                const VPRegisterPressureBreakdown & /*Pressure*/,
                                 const VPReductionFissionConfig &Config) {
   VPReductionFissionAnalysis Result;
+  VPRegionBlock *Region = Plan.getVectorLoopRegion();
+  VPBasicBlock *Body = Region ? Region->getEntryBasicBlock() : Plan.getEntry();
   SmallVector<VPRecipeBase *, 64> Recipes;
   ReversePostOrderTraversal<VPBlockDeepTraversalWrapper<VPBlockBase *>> RPOT(
       Plan.getEntry());
@@ -973,8 +923,11 @@ llvm::analyzeVPReductionFission(VPlan &Plan,
               return isa<VPReductionPHIRecipe>(Phi);
             }))
           return false;
+        Input.IsVarying = R->getParent() == Body &&
+                          hasVaryingProducer(Input.Recipes, Recurrences, Body);
         Input.Dependency = calculateVPDependencyMetrics(*V, &Input.Recipes);
-        Input.IsLong = Input.Dependency.CriticalPathDepth >=
+        Input.IsLong = Input.IsVarying && !Input.Recipes.empty() &&
+                       Input.Dependency.CriticalPathDepth >=
                        Config.MinimumLongProducerDepth;
         Slice.Inputs.push_back(std::move(Input));
         return true;
@@ -995,23 +948,21 @@ llvm::analyzeVPReductionFission(VPlan &Plan,
     Result.Slices.push_back(std::move(Slice));
   }
 
-  if (Result.Slices.size() < Config.MinimumReductionCount) {
-    Result.RejectReason = VPReductionFissionRejectReason::TooFewReductions;
+  if (Result.Slices.empty()) {
+    Result.RejectReason = VPReductionFissionRejectReason::CrossPartitionDependence;
     return Result;
   }
   SmallVector<const VPReductionProducerInput *, 16> Inputs;
   for (const auto &Slice : Result.Slices)
     for (const auto &Input : Slice.Inputs)
       Inputs.push_back(&Input);
-  if (!any_of(Inputs, [](const auto *Input) { return Input->IsLong; })) {
-    Result.RejectReason = VPReductionFissionRejectReason::NoLongProducer;
-    return Result;
-  }
-  if (!Pressure.hasAccumulatorCausedOverflow()) {
-    Result.RejectReason =
-        VPReductionFissionRejectReason::NoAccumulatorPressureOverflow;
-    return Result;
-  }
+  // The depth setting only prefers the established long/shared cut. When
+  // none exists, every nonempty varying producer slice is eligible, including
+  // a single load. Live-ins and invariant-only arithmetic stay in the consumer.
+  if (!any_of(Inputs, [](const auto *Input) { return Input->IsLong; }))
+    for (auto &Slice : Result.Slices)
+      for (auto &Input : Slice.Inputs)
+        Input.IsLong = Input.IsVarying && !Input.Recipes.empty();
 
   SmallPtrSet<VPValue *, 8> SeenFrontier;
   DenseMap<const VPRecipeBase *, unsigned> LongSliceMembership;
@@ -1038,6 +989,12 @@ llvm::analyzeVPReductionFission(VPlan &Plan,
         return UserRecipe && !SharedLongRecipes.contains(UserRecipe) &&
                LongSliceMembership.contains(UserRecipe);
       });
+      SmallPtrSet<const VPRecipeBase *, 16> DefSlice;
+      SmallPtrSet<const VPRecipeBase *, 4> DefRecurrences;
+      collectVPProducerSlice(*Def, DefSlice, DefRecurrences);
+      if (Recipe->getParent() != Body ||
+          !hasVaryingProducer(DefSlice, DefRecurrences, Body))
+        continue;
       bool IsLong = calculateVPDependencyMetrics(*Def).CriticalPathDepth >=
                     Config.MinimumLongProducerDepth;
       if (CrossesToSuffix && IsLong && SeenFrontier.insert(Def).second)
@@ -1063,7 +1020,16 @@ llvm::analyzeVPReductionFission(VPlan &Plan,
     if (Input->IsLong) {
       bool CoveredBySharedWaist =
           any_of(Result.Partition.FrontierValues, [&](VPValue *Frontier) {
-            return Input->Recipes.contains(Frontier->getDefiningRecipe());
+            auto *Def = Frontier->getDefiningRecipe();
+            if (!Input->Recipes.contains(Def))
+              return false;
+            // Membership of a multi-result recipe does not imply dependence
+            // on every result. A scratch crossing for member zero cannot
+            // cover a different member's independent reduction input.
+            return Def->getNumDefinedValues() == 1 || Input->Value == Frontier ||
+                   any_of(Input->Recipes, [&](const VPRecipeBase *R) {
+                     return is_contained(R->operands(), Frontier);
+                   });
           });
       if (!CoveredBySharedWaist) {
         Result.Partition.ProducerRecipes.insert(Input->Recipes.begin(),

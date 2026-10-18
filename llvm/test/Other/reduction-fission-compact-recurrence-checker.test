@@ -49,6 +49,8 @@ import sys
 
 spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
 checker = importlib.util.module_from_spec(spec)
+sys.dont_write_bytecode = True
+sys.modules[spec.name] = checker
 spec.loader.exec_module(checker)
 tests, work = map(Path, sys.argv[2:])
 source = (tests / 'reduction-fission-scalar-compact-recurrence.ll').read_text()

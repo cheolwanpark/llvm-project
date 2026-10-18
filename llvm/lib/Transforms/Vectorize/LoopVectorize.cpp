@@ -6621,7 +6621,7 @@ void LoopVectorizationPlanner::buildVPlans(VPlan &VPlan1, ElementCount MinVF,
     RUN_VPLAN_PASS(VPlanTransforms::truncateToMinimalBitwidths, *Plan,
                    Config.getMinimalBitwidths());
     RUN_VPLAN_PASS(VPlanTransforms::optimize, *Plan);
-    if (getScalarReductionFissionStage(*OrigLoop).empty())
+    if (!isReductionFissionStage(*OrigLoop))
       saveReductionFissionPlan(*Plan, ReductionFissionPlans);
     // Private relaxed candidates can only be executed by fission. In
     // particular, they must never become normal vectorizer fallback plans.

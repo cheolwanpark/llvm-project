@@ -22,6 +22,7 @@
 #include "VPlanDominatorTree.h"
 #include "VPlanHelpers.h"
 #include "VPlanPatternMatch.h"
+#include "VPlanReductionFission.h"
 #include "VPlanTransforms.h"
 #include "VPlanUtils.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -1762,6 +1763,7 @@ void LoopVectorizationPlanner::updateLoopMetadataAndProfileInfo(
                                *ORE);
       Hints.setAlreadyVectorized();
     }
+    preserveReductionFissionStageMetadata(OrigLoopID, *OrigLoop);
   }
   // Tag the scalar remainder so downstream passes (e.g. the unroller and
   // WarnMissedTransforms) can produce more informative remarks.  Only emit
@@ -1788,6 +1790,7 @@ void LoopVectorizationPlanner::updateLoopMetadataAndProfileInfo(
       Hints.setAlreadyVectorized();
     }
   }
+  preserveReductionFissionStageMetadata(OrigLoopID, *VectorLoop);
   // Tag the vector loop body so downstream passes can identify it.  Only
   // emit when remarks are enabled.
   if (ORE->enabled())

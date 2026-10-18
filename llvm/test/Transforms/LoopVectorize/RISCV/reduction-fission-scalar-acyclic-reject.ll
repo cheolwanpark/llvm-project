@@ -1,23 +1,31 @@
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission \
-; RUN:   -S %s | FileCheck %s --implicit-check-not=scalar.fission
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=259 -S %s | FileCheck %s --implicit-check-not=scalar.fission
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission \
 ; RUN:   -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -S %s | FileCheck %s --implicit-check-not=scalar.fission
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=259 -S %s | FileCheck %s --implicit-check-not=scalar.fission
 ; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=259 \
 ; RUN:   -pass-remarks-missed=vplan-reduction-fission -disable-output %s 2>&1 | FileCheck %s --check-prefix=REASON
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission \
 ; RUN:   -enable-vplan-native-path -pass-remarks=vplan-reduction-fission \
+; RUN:   -vplan-reduction-fission-max-scratch-bytes=259 \
 ; RUN:   -pass-remarks-missed=vplan-reduction-fission \
 ; RUN:   -S %s -o %t.cycle 2>%t.cycle.remarks
 ; RUN: FileCheck %s --check-prefix=CYCLE < %t.cycle.remarks
 ; RUN: FileCheck %s --check-prefix=CYCLEIR --implicit-check-not=scalar.fission < %t.cycle
+; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
+; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
+; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 \
+; RUN:   -S %s | FileCheck %s --check-prefix=EXPORT
 ;
-; Generalized admission must not admit effects, feedback, live-outs, cycles,
-; exits or conditional participation through a larger CFG. The latter still
-; needs exactly one recognized participation arm and a two-input latch merge.
+; Generalized admission must not admit effects, feedback, partial-state exports,
+; cycles or early exits. The two former larger-CFG compact rejections below now
+; have one terminal update edge and accumulator-preserving bypasses. At 259
+; bytes they reject for scratch; the 260-byte run requires their exact split.
 ; Loop::getStartLoc uses loop metadata or the preheader/header terminator,
 ; not the latch's debug location. Supply the original loop start at each
 ; preheader so every rejection retains its exact source location.
@@ -283,9 +291,17 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-acyclic-reject.c:62:3: scalar-IR reduction fission rejected: scalar-unsupported-live-out
+; Final latch-merged values are now legal exports. Keep this exact source
+; function as a scratch rejection at 259 and a positive case at 260 bytes.
+; Serial/nested mixed exports are executed by scalar-export-controls.ll.
+; REASON: scalar-acyclic-reject.c:62:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 ; CHECK-LABEL: define i32 @reject_acyclic_liveout(
 ; CHECK: ret i32
+; EXPORT-LABEL: define i32 @reject_acyclic_liveout(
+; EXPORT: alloca [65 x i32]
+; EXPORT: %c.fission.export = phi i32 [ %c, %latch ]
+; EXPORT: %[[FINAL:.*]] = phi i32 [ %c.fission.export, %scalar.fission.consumer.body ]
+; EXPORT: ret i32 %[[FINAL]]
 define i32 @reject_acyclic_liveout(ptr %a, i64 %n) !dbg !16 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -519,9 +535,17 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-acyclic-reject.c:112:3: scalar-IR reduction fission rejected: scalar-unsupported-cfg
+; REASON: scalar-acyclic-reject.c:112:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 ; CHECK-LABEL: define i32 @reject_acyclic_conditional_serial(
 ; CHECK: ret i32
+; EXPORT-LABEL: define i32 @reject_acyclic_conditional_serial(
+; EXPORT: left2:
+; EXPORT: %fission.participating.next = add nuw i64 %fission.participating, 1
+; EXPORT: store i32 %first,
+; EXPORT: br label %latch
+; EXPORT: scalar.fission.consumer.guard:
+; EXPORT: %fission.empty = icmp eq i64 %fission.participating.count, 0
+; EXPORT: ret i32
 define i32 @reject_acyclic_conditional_serial(ptr %a, i64 %n) !dbg !26 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -565,9 +589,18 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-acyclic-reject.c:122:3: scalar-IR reduction fission rejected: scalar-unsupported-cfg
+; REASON: scalar-acyclic-reject.c:122:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 ; CHECK-LABEL: define i32 @reject_acyclic_conditional_nested(
 ; CHECK: ret i32
+; EXPORT-LABEL: define i32 @reject_acyclic_conditional_nested(
+; EXPORT: active.merge:
+; EXPORT: %active = phi i32
+; EXPORT: %fission.participating.next = add nuw i64 %fission.participating, 1
+; EXPORT: store i32 %active,
+; EXPORT: br label %latch
+; EXPORT: scalar.fission.consumer.guard:
+; EXPORT: %fission.empty = icmp eq i64 %fission.participating.count, 0
+; EXPORT: ret i32
 define i32 @reject_acyclic_conditional_nested(ptr %a, i64 %n) !dbg !28 {
 entry:
   %valid = icmp ule i64 %n, 65

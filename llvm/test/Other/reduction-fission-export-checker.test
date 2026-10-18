@@ -1,0 +1,96 @@
+# REQUIRES: riscv-registered-target
+# RUN: split-file %s %t
+# RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+# RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
+# RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
+# RUN:   -enable-vplan-reduction-fission -tail-folding-policy=dont-fold-tail \
+# RUN:   -enable-epilogue-vectorization=false -S %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-controls.ll -o %t.once.ll
+# RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
+# RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
+# RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
+# RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
+# RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
+# RUN:   -S %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-controls.ll -o %t.twice.ll
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py \
+# RUN:   %S/../Transforms/LoopVectorize/RISCV/reduction-fission-scalar-export-controls.ll %t.once.ll %t.twice.ll
+
+# Fresh outputs exercise the same production certificate used before host
+# compilation. Every mutation requires its own export/control obligation.
+# The complete execution driver also checks EVL under both FP policies and
+# compares scalar-tail execution with original IR and an independent C oracle.
+
+#--- check.py
+import importlib.util
+from pathlib import Path
+import re
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = checker
+spec.loader.exec_module(checker)
+source = Path(sys.argv[2]).read_text()
+
+
+def change(text, value, old, new, last=False):
+    pattern = r'^  %' + re.escape(value) + r' = [^\n]*$'
+    matches = list(re.finditer(pattern, text, re.M))
+    assert len(matches) == 1, (value, len(matches))
+    match = matches[0]
+    assert match[0].count(old) in ((1, 2) if value.startswith('out.') else (1,)), (value, old, match[0])
+    parts = match[0].rsplit(old, 1) if last else match[0].split(old, 1)
+    return text[:match.start()] + new.join(parts) + text[match.end():]
+
+
+for path in sys.argv[3:]:
+    module = Path(path).read_text()
+    for name, base in checker.EXPORT_CONTROL_BASES.items():
+        body = checker.function_definition(module, name)
+        assert checker.check_producer_exports(module, name, False, source=source) == body
+        probed = checker.check_producer_exports(module, name, False, probe=True, source=source)
+        for recorder in ('compact_iteration', 'compact_participant',
+                         'scalar_consumer_vector', 'scalar_consumer_tail', 'export_bypass'):
+            assert probed.count('call void @record_' + recorder + '(') == 1, (name, recorder)
+
+        def reject(candidate, obligation):
+            mutated = module.replace(body, candidate, 1)
+            try:
+                checker.check_producer_exports(mutated, name, False, source=source)
+            except AssertionError as error:
+                assert obligation in str(error), (name, obligation, error)
+            else:
+                raise AssertionError(name + ': accepted ' + obligation)
+
+        latch = 'loop' if base == 'export_unconditional' else 'latch'
+        header = 'inner' if base == 'export_nested' else 'loop'
+        for value, old, new, obligation in [
+            ('iv.fission.export', '%iv,', '%next,', 'producer export iv:'),
+            ('next.fission.export', '%next,', '%iv,', 'producer export next:'),
+            ('x.fission.export', '%x,', '%c,', 'producer export x:'),
+            ('c.fission.export', '%c,', '%x,', 'producer export c:'),
+            ('c.fission.export', '%' + latch + ' ]', '%preheader ]', 'producer export c:'),
+            ('out.c.copy', '%c.fission.export,', '%x.fission.export,', 'producer export c.copy:'),
+            ('out.iv', '%iv.fission.export,', '%next.fission.export,', 'producer export iv:'),
+        ]:
+            reject(change(body, value, old, new), obligation)
+            if value.startswith('out.'):
+                # Exercise both vector and scalar incoming edges when the
+                # original result exit is their two-predecessor join.
+                reject(change(body, value, old, new, last=True), obligation)
+        if base != 'export_nested':
+            for value, old, new in [('iv', '-1,', '7,'), ('next', '0,', '-1,'),
+                                    ('c.copy', '-101,', '-99,')]:
+                reject(change(body, 'final.' + value, old, new), 'producer export ' + value + ':')
+            reject(change(body, 'final.iv', '%entry ]', '%preheader ]'), 'producer export iv:')
+        # Wrong producer iteration arithmetic must fail preservation even when
+        # all seven result PHIs still look superficially correct.
+        step = '-2' if name == 'export_down' else '1' if name == 'export_offset' else '2'
+        reject(change(body, 'next', ', ' + step, ', 3'), 'export control:')
+        if base not in ('export_compact', 'export_nested'):
+            reject(change(body, 'fission.completed.count', '%' + latch + ' ]',
+                          '%preheader ]'), 'export control:')
+        if base == 'export_nested':
+            reject(change(body, 'salt', '%out.c,', '%out.x,'), 'export control:')
+
+print('PASS: bounded final-value export mutations, single/repeated LV')
