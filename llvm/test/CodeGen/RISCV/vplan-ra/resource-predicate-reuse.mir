@@ -1,4 +1,5 @@
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=reuse:0:0:s4 -vplan-ra-features-output=%t.json %s -o %t.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=reuse:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
 # RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; assert r['supported']; o=[x for x in r['operations'] if x['kind']=='unit']; p=[x['predicate_id'] for x in o]; assert len(p)==20; assert p[0]>0; assert p[0]==p[1]==p[2]==p[3]==p[5]==p[6]; assert p[4] not in (0,p[0]); assert p[7]==p[8] and p[7] not in (0,p[0],p[4]); assert p[9]==p[12]==p[17]==p[19] and p[9] not in (0,p[0],p[4],p[7]); assert p[10]==p[11] and p[10] not in (0,p[0],p[4],p[7],p[9]); assert p[13]==p[15] and p[13] not in (0,p[0],p[4],p[7],p[9],p[10]); assert p[14]==p[16]==p[18]==0; assert [x['group8'] for x in o[:3]]==[16,32,64]; assert r['unit8']==384 and r['masked8']==384"
 # RUN: FileCheck %s --check-prefix=UNCHANGED < %t.mir
 # UNCHANGED: $v0 = COPY $v1
@@ -17,11 +18,13 @@
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="reuse:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="reuse:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"reuse:0:0:s4"}
 ...
 ---
 name: reuse

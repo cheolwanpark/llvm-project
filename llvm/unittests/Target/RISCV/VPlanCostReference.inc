@@ -1,14 +1,17 @@
-//===- VPlanRACostModel.cpp - Research hook for RA-informed costs -----------===//
+// Frozen pre-refactor formula. Test-only oracle: never linked into LLVM.
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-#include "VPlanRACostModel.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringSwitch.h"
-#include <algorithm>
-#include <array>
+class ReferencePredicateCost {
+  unsigned SharedDivisor;
+  DenseMap<int64_t, InstructionCost> Shared;
+  InstructionCost Residual = 0;
 
-void llvm::detail::VPlanRAPredicateCost::add(InstructionCost Delay,
-                                          int64_t Predicate) {
+public:
+  explicit ReferencePredicateCost(unsigned D) : SharedDivisor(D) {}
+  void add(InstructionCost, int64_t);
+  InstructionCost getCost() const;
+};
+void ReferencePredicateCost::add(InstructionCost Delay, int64_t Predicate) {
   if (!Predicate || !SharedDivisor) {
     Residual += Delay;
     return;
@@ -21,25 +24,23 @@ void llvm::detail::VPlanRAPredicateCost::add(InstructionCost Delay,
   Shared[Predicate] = std::max(Shared[Predicate], PredicateDelay);
 }
 
-llvm::InstructionCost llvm::detail::VPlanRAPredicateCost::getCost() const {
+InstructionCost ReferencePredicateCost::getCost() const {
   InstructionCost Total = Residual;
   for (const auto &Entry : Shared)
     Total += Entry.second;
   return Total;
 }
 
-llvm::InstructionCost llvm::costWithRAFeatures(
-    const VPlan &Plan, ElementCount VF, InstructionCost OriginalCost,
-    const json::Object &Features) {
+static InstructionCost referenceCost(const json::Object &Features) {
+  InstructionCost OriginalCost = InstructionCost::getInvalid();
   // Scalar reference costs, width normalization and tails stay with the caller.
   const json::Object *R = Features.getObject("resource_demand");
-  if (VF.isScalar() || !R || R->getInteger("version") != 1 ||
-      R->getBoolean("supported") != true)
+  if (!R || R->getInteger("version") != 1 || R->getBoolean("supported") != true)
     return OriginalCost;
 
   static constexpr const char *Keys[] = {
-      "unit8", "spill8", "strided8", "indexed8", "masked8",
-      "integer8", "fp8", "fused8", "scalar8", "config8"};
+      "unit8",    "spill8", "strided8", "indexed8", "masked8",
+      "integer8", "fp8",    "fused8",   "scalar8",  "config8"};
   std::array<InstructionCost, 10> Work;
   for (unsigned I = 0; I != Work.size(); ++I) {
     auto Value = R->getInteger(Keys[I]);
@@ -76,7 +77,7 @@ llvm::InstructionCost llvm::costWithRAFeatures(
   // Missing/zero identities keep independent service for older observations.
   // Ordinary memory work still counts every access. The combined demand stays
   // on memory so arithmetic and copies can overlap it.
-  detail::VPlanRAPredicateCost PredicateCost(/*SharedDivisor=*/4);
+  ReferencePredicateCost PredicateCost(/*SharedDivisor=*/4);
   // Strided element service grows with the additional register chunks in an
   // instruction. At coefficient 1/8, the extra memory demand in cost units is
   // (work8 / 8) * max(group8 / 8 - 1, 0) / 8. Keep it inside the resource
@@ -125,13 +126,11 @@ llvm::InstructionCost llvm::costWithRAFeatures(
         auto OpWork = Op->getInteger("work8");
         auto Masked = Op->getBoolean("masked");
         auto Form = Op->getString("form");
-        if (!SEW || (*SEW != 16 && *SEW != 32 && *SEW != 64) ||
-            !Group || (*Group != 1 && *Group != 2 && *Group != 4 &&
-                       *Group != 8 && *Group != 16 && *Group != 32 &&
-                       *Group != 64) ||
-            !OpWork || *OpWork < 0 || !Masked ||
-            !Form || (*Form != "vv" && *Form != "vf" &&
-                      *Form != "reverse_vf"))
+        if (!SEW || (*SEW != 16 && *SEW != 32 && *SEW != 64) || !Group ||
+            (*Group != 1 && *Group != 2 && *Group != 4 && *Group != 8 &&
+             *Group != 16 && *Group != 32 && *Group != 64) ||
+            !OpWork || *OpWork < 0 || !Masked || !Form ||
+            (*Form != "vv" && *Form != "vf" && *Form != "reverse_vf"))
           return OriginalCost;
         int64_t Service = *SEW == 16 ? 29 : (*SEW == 32 ? 25 : 37);
         // work8 is eight times the chunk demand; multiply by two to use
@@ -142,9 +141,9 @@ llvm::InstructionCost llvm::costWithRAFeatures(
       if (*Kind == "slide" || *Kind == "copy") {
         auto Group = Op->getInteger("group8");
         auto OpWork = Op->getInteger("work8");
-        if (!Group || (*Group != 1 && *Group != 2 && *Group != 4 &&
-                       *Group != 8 && *Group != 16 && *Group != 32 &&
-                       *Group != 64) ||
+        if (!Group ||
+            (*Group != 1 && *Group != 2 && *Group != 4 && *Group != 8 &&
+             *Group != 16 && *Group != 32 && *Group != 64) ||
             !OpWork || *OpWork < 0)
           return OriginalCost;
         if (*Kind == "copy") {
@@ -173,9 +172,9 @@ llvm::InstructionCost llvm::costWithRAFeatures(
         continue;
       auto Group = Op->getInteger("group8");
       auto OpWork = Op->getInteger("work8");
-      if (!Group || (*Group != 1 && *Group != 2 && *Group != 4 &&
-                     *Group != 8 && *Group != 16 && *Group != 32 &&
-                     *Group != 64) ||
+      if (!Group ||
+          (*Group != 1 && *Group != 2 && *Group != 4 && *Group != 8 &&
+           *Group != 16 && *Group != 32 && *Group != 64) ||
           !OpWork || *OpWork < 0)
         return OriginalCost;
       if (*Kind == "strided" || Direction) {
@@ -296,7 +295,7 @@ llvm::InstructionCost llvm::costWithRAFeatures(
       }
       First += InstructionCost(Latency) * 16;
       Last = std::max(Last + InstructionCost(Latency) * 16,
-                     First + InstructionCost(*Chunks - 1) * 16);
+                      First + InstructionCost(*Chunks - 1) * 16);
       Ready.push_back({First, Last});
       if (*Kind != "load")
         LoadUse = std::max(LoadUse, Last);
@@ -314,7 +313,8 @@ llvm::InstructionCost llvm::costWithRAFeatures(
   //            + sum(nonzero slides: max(group8 / 8 - 1, 0))
   // scalar = scalar_work / 2 + config_unused
   // divider = sum(divide_work8 / 8 * service(sew))
-  // body = max(memory + masked_serial, arithmetic, movement, scalar, recurrence,
+  // body = max(memory + masked_serial, arithmetic, movement, scalar,
+  // recurrence,
   //            divider, load_use)
   //        + spill / 2 + config_additive
   // Hypothesis: recurring scalar throughput can overlap vector execution.
@@ -352,8 +352,7 @@ llvm::InstructionCost llvm::costWithRAFeatures(
   InstructionCost Arithmetic = Work[5] * 2 + (Work[6] + Work[7]) * 4;
   InstructionCost Body =
       std::max({Memory + MaskedSerial, Arithmetic, Movement,
-                Work[8] + ConfigUnused * 2,
-                Recurrence, Divider, LoadUse}) +
+                Work[8] + ConfigUnused * 2, Recurrence, Divider, LoadUse}) +
       Work[1] + ConfigAdditive * 2;
   Body /= 16;
   return Body;

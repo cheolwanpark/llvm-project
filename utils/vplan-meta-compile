@@ -2,7 +2,7 @@
 """Compile every generated VPlan/VF through RA, then replay LV with feedback.
 
 This is fixed experiment infrastructure. Research lives in
-RISCVVPlanRAFeatures.cpp and VPlanRACostModel.cpp, not this driver.
+RISCVVPlanAnalytics.cpp and RISCVVPlanCost.cpp, not this driver.
 No measurements or benchmark database are read by this program.
 """
 from __future__ import annotations
@@ -62,8 +62,6 @@ def validate_flags(flags: list[str]) -> None:
         if flag in forbidden or flag.startswith(("-flto", "-fprofile", "-fsanitize",
                                                   "-fpass-plugin")):
             raise MetaCompileError(f"unsupported meta-compiler option: {flag}")
-        if flag.startswith("-O") and flag != "-O2":
-            raise MetaCompileError("meta compilation currently supports -O2 only")
         if flag == "-mllvm":
             if i + 1 == len(flags):
                 raise MetaCompileError("missing -mllvm argument")
@@ -107,7 +105,7 @@ class Driver:
     def manifest(self, path: Path, run_id: str) -> dict:
         try:
             value = json.loads(path.read_text())
-            if value["version"] != 1 or value["run_id"] != run_id:
+            if value["version"] != 2 or value["run_id"] != run_id:
                 raise ValueError("version/run mismatch")
             rows = value["candidates"]
             if not isinstance(rows, list) or len({r["id"] for r in rows}) != len(rows):
@@ -131,7 +129,7 @@ class Driver:
         self.run("prepare", [*self.flags, *llvm_flag("vplan-pipeline", "prepare"),
                              "-emit-llvm", "-c", str(self.source), "-o", str(checkpoint)])
         identity = {"checkpoint": digest(checkpoint), "compiler": digest(self.clang),
-                    "flags": self.flags, "protocol": 1}
+                    "flags": self.flags, "protocol": 2}
         run_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         write_json(self.work / "identity.json", identity | {"run_id": run_id})
         common = [*resume_flags(self.flags), "-x", "ir", str(checkpoint),
@@ -142,17 +140,29 @@ class Driver:
                               "-S", "-emit-llvm", "-o", str(self.work / "discovery.ll")])
         manifest = self.manifest(manifest_path, run_id)
         feedback = []
-        for index, row in enumerate(manifest["candidates"]):
+        scalar_analytics = {}
+        # Score scalar candidates first; vector costs consume only their raw
+        # analytics, never middle-end costs or Python-computed model values.
+        ordered = sorted(enumerate(manifest["candidates"]), key=lambda item: item[1]["vf"] != "f1")
+        for index, row in ordered:
             if not row["probeable"]:
                 continue
             label = f"probe-{index:04d}"
-            features_path = self.work / f"{label}.json"
+            analytics_path = self.work / f"{label}.analytics.json"
+            cost_path = self.work / f"{label}.cost.json"
+            loop_key = (row["function"], row["loop"])
+            scalar_flags = []
+            if row["vf"] != "f1":
+                if loop_key not in scalar_analytics:
+                    raise MetaCompileError(f"{label}: missing scalar candidate")
+                scalar_flags = llvm_flag("vplan-scalar-analytics-input", str(scalar_analytics[loop_key]))
             probe_manifest = self.work / f"{label}.manifest.json"
             mir = self.work / f"{label}.mir"
             self.run(label, [*common, *llvm_flag("vplan-probe-candidate", row["id"]),
                              *llvm_flag("vplan-candidates-output", str(probe_manifest)),
-                             *llvm_flag("vplan-ra-features-output", str(features_path)),
-                             *llvm_flag("stop-after", "riscv-vplan-ra-observe"),
+                             *llvm_flag("vplan-analytics-output", str(analytics_path)),
+                             *llvm_flag("vplan-cost-output", str(cost_path)), *scalar_flags,
+                             *llvm_flag("stop-after", "riscv-vplan-cost"),
                              "-S", "-o", str(mir)])
             probe = self.manifest(probe_manifest, run_id)
             if probe["candidates"] != manifest["candidates"]:
@@ -161,22 +171,27 @@ class Driver:
             if len(choices) != 1:
                 raise MetaCompileError(f"{label}: requested candidate was not selected exactly once")
             try:
-                observation = json.loads(features_path.read_text())
-                if (observation["version"] != 1 or observation["run_id"] != run_id
-                    or observation["id"] != row["id"] or observation["stage"] != "post-ra"
-                    or observation["function"] != row["function"]
-                    or not isinstance(observation["features"], dict)
+                observation = json.loads(analytics_path.read_text())
+                cost = json.loads(cost_path.read_text())
+                if (observation["Version"] != 2 or observation["RunID"] != run_id
+                    or observation["Candidate"] != row["id"] or observation["Stage"] != "post-ra-cleanup"
+                    or observation["Function"] != row["function"] or observation["Error"]
+                    or cost["version"] != 2 or cost["run_id"] != run_id
+                    or cost["id"] != row["id"] or cost["supported"] is not True
+                    or not isinstance(cost["cost"], dict)
                     or not mir.is_file() or not mir.stat().st_size):
-                    raise ValueError("identity, stage, features, or MIR mismatch")
+                    raise ValueError("identity, stage, analytics, cost, or MIR mismatch")
             except (OSError, ValueError, KeyError, TypeError) as exc:
-                raise MetaCompileError(f"{label}: invalid RA observation: {exc}") from exc
-            feedback.append({"id": row["id"], "features": observation["features"],
+                raise MetaCompileError(f"{label}: invalid backend result: {exc}") from exc
+            if row["vf"] == "f1":
+                scalar_analytics.setdefault(loop_key, analytics_path)
+            feedback.append({"id": row["id"], "cost": cost["cost"],
                              "selection": choices[0], "mir": str(mir)})
         feedback_path = self.work / "feedback.json"
-        write_json(feedback_path, {"version": 1, "run_id": run_id, "candidates": feedback})
-        result = {"version": 1, "run_id": run_id, "candidates": len(feedback),
+        write_json(feedback_path, {"version": 2, "run_id": run_id, "candidates": feedback})
+        result = {"version": 2, "run_id": run_id, "candidates": len(feedback),
                   "manifest": str(manifest_path), "feedback": str(feedback_path),
-                  "stage": "post-ra"}
+                  "stage": "post-ra-cleanup"}
         if not stop_after_ra:
             if output is None:
                 raise MetaCompileError("final compilation requires --output")

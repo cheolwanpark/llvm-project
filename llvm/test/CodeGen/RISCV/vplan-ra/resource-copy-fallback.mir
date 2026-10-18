@@ -1,6 +1,8 @@
 # RUN: split-file %s %t
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-ra-features-output=%t.slide.json %t/slide.mir -o %t.slide.mir
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-ra-features-output=%t.gather.json %t/gather.mir -o %t.gather.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-analytics-output=%t.slide.json.analytics %t/slide.mir -o %t.slide.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.slide.json.analytics > %t.slide.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-analytics-output=%t.gather.json.analytics %t/gather.mir -o %t.gather.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.gather.json.analytics > %t.gather.json
 # RUN: FileCheck %s --check-prefix=SLIDE < %t.slide.json
 # RUN: FileCheck %s < %t.gather.json
 # RUN: %python -c "import json; s,g=[json.load(open(p))['features']['resource_demand'] for p in ['%t.slide.json','%t.gather.json']]; expected=[dict(group8=16,index_group8=0,index_sew=0,kind='copy',masked=False,sew=0,work8=16),dict(group8=16,index_group8=0,index_sew=0,kind='integer',masked=False,sew=32,work8=16)]; assert g['supported'] is False and g['operations']==expected; assert s['supported'] is True and s['operations']==expected+[dict(group8=16,index_group8=0,index_sew=0,kind='slide',masked=False,sew=32,work8=16)]; assert s['recurrences']==[]"
@@ -28,11 +30,13 @@
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="fallback:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="fallback:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"fallback:0:0:s4"}
 ...
 ---
 name: fallback
@@ -58,11 +62,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="fallback:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="fallback:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"fallback:0:0:s4"}
 ...
 ---
 name: fallback

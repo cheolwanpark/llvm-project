@@ -1,167 +1,79 @@
-# Post-RA model for VPlan vector cost
+# Backend analytics and VPlan cost selection
 
-The Post-RA model uses RISC-V machine instructions after register allocation to
-estimate the cost of each generated VPlan/VF candidate. Backend observations are
-returned as version 1 JSON feedback to the middle-end cost hook before final
-main-loop VF selection. The model is enabled through the meta-compiler/feedback
-path below; an ordinary clang invocation without that feedback uses the existing
-costs. Candidate generation, legality, lowering, register allocation, interleave
-count (IC), and epilogue policies retain their existing behavior.
+The meta compiler checkpoints IR immediately before LoopVectorize, materializes
+each generated scalar/vector candidate, and uses backend-computed scores for the
+final selection. It supports non-LTO RISCV64 `-O2` and `-O3`. Both levels use their
+normal optimization pipelines; the cost functions do not inspect the optimization
+level. All invocations replay the same target, ABI and optimization options.
 
-`utils/vplan-meta-compile` compiles one C source through a non-LTO RISCV64 `-O2`
-pipeline. It checkpoints the module immediately before `LoopVectorizePass`,
-enumerates generated main VPlans and their supported fixed/scalable VFs, runs
-each valid candidate through register allocation, and returns to that checkpoint
-to make the final main-VF decision using the observations. It never reads cycle
-measurements or a benchmark database.
+Ordinary compilations without the meta/feedback options retain LLVM's normal
+cost policy. The backend cost model currently targets `xiangshan-kunminghu` RVV
+inner loops. Its values are heuristic model units, not measured CPU cycles.
 
-For database-backed evaluation and VPlan output, see the
-[standalone tools](utils/vplan-tools/README.md). With an externally supplied
-`results.sqlite` at the checkout root:
+## Pipeline
 
-```sh
-utils/vplan-tools/evaluate
-utils/vplan-tools/print-vplans --benchmark tsvc-s000-l00 --detail
+```text
+prepare checkpoint -> discover candidates
+                   -> scalar probe: analytics -> body cost -> score
+                   -> vector probes: analytics -> body cost -> score
+                                      ^ same loop's scalar analytics
+                   -> final replay using backend scores
 ```
 
-## Build and run
+IC is fixed to one. The existing tail-folding legality and target preferences are
+retained, with scalar tails where folding is unavailable. Separate vector
+epilogues are disabled. Candidate construction and recipe lowering still use
+LLVM; the meta path does not use the original body/scalar/spill costs to rank or
+exclude generated candidates. Runtime safety guards remain, while the old
+outside-loop profitability test is bypassed.
 
-The following builds a standalone checkout with CMake, Ninja, a C/C++ toolchain,
-and Python 3. RISC-V supplies the model; AArch64 enables the accompanying VPlan
-reporting regression tests. The build uses two compile jobs and one link job.
+### Observation boundary
 
-```sh
-git clone --depth 1 --single-branch --branch backend-aware-vector-cost \
-  https://github.com/cheolwanpark/llvm-project.git
-cd llvm-project
-cmake -S llvm -B build-vplan-tools -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON \
-  -DLLVM_ENABLE_PROJECTS=clang '-DLLVM_TARGETS_TO_BUILD=RISCV;AArch64' \
-  -DLLVM_INCLUDE_TESTS=ON -DCLANG_INCLUDE_TESTS=OFF \
-  -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
-  -DLLVM_PARALLEL_COMPILE_JOBS=2 -DLLVM_PARALLEL_LINK_JOBS=1 \
-  -DCLANG_ENABLE_STATIC_ANALYZER=OFF -DCLANG_ENABLE_OBJC_REWRITER=OFF
-cmake --build build-vplan-tools --parallel 2 --target \
-  clang clang-resource-headers opt llc FileCheck count not split-file llvm-config \
-  VectorizeTests VPlanRATests
+Previously observation ran immediately after register assignment/rewrite.
+The two backend passes now run consecutively at the end of RISC-V `addPostRegAlloc`.
+This is after RVV and scalar register assignment/rewrite, stack-slot coloring,
+copy propagation, post-RA LICM and RISC-V redundant-copy elimination when those
+passes are enabled. It precedes post-RA sinking, frame lowering, later pseudo
+expansion and scheduling. Frame indices and RVV pseudo operand information are
+therefore available. The snapshot is not final assembly or a finalized frame.
 
-mkdir post-ra-example
-cat > post-ra-example/kernel.c <<'C'
-void add(float *restrict dst, const float *restrict a,
-         const float *restrict b, unsigned n) {
-  for (unsigned i = 0; i < n; ++i)
-    dst[i] = a[i] + b[i];
-}
-C
-python3 utils/vplan-meta-compile \
-  --clang build-vplan-tools/bin/clang --input post-ra-example/kernel.c \
-  --work-dir post-ra-example/observations --output post-ra-example/kernel.o \
-  --detail \
-  -- --target=riscv64-unknown-elf -march=rv64gcv \
-  -mcpu=xiangshan-kunminghu -O2 -ffreestanding \
-  -mllvm -scalable-vectorization=on \
-  -mllvm -force-vector-interleave=1 \
-  -mllvm -riscv-v-register-bit-width-lmul=8
-```
+### Analytics only
 
-This creates a RISC-V object, `post-ra-example/kernel.o`, and the candidate,
-probe MIR, feedback, and final-selection artifacts under
-`post-ra-example/observations`. Use a new example/work directory on another run.
-Cross-compilation does not execute the kernel and needs no RISC-V runtime for
-this freestanding example.
+`RISCVVPlanAnalytics` preserves the MachineFunction and exposes a typed result to
+its consumer. JSON is only an optional dump and a process-boundary format.
 
-The work directory must be new or empty. `--emit llvm|asm|obj` selects the final
-output (default `obj`). `--stop-after-ra` collects every candidate without running
-the final compilation; in that mode `--output` is unnecessary. `--detail` requests
-a detailed final VPlan report. Only the final compiler's diagnostics are forwarded
-to stderr; stdout is a small JSON result. All intermediate diagnostics are saved.
-`--timeout` is seconds per compiler invocation, default 120, with no total timeout.
+The result includes opcode/base opcode and category, SEW and fractional LMUL,
+physical operands and register units, operand register groups, masks and proven
+predicate identities, memory direction, spill/reload frame objects and fixed or
+scalable byte sizes, CFG/region membership, and physical RAW dependency edges.
+Physical register reuse is not treated as a value dependency. Implicit uses,
+partial definitions, undef operands and clobbers are retained explicitly.
 
-## Compiler interfaces
+Single-block regions expose proven iteration distances zero and one; other
+regions have block-local dependency coverage. Unsupported/unknown facts remain
+visible. Instruction/byte counts and physical-register liveness are observations;
+chunk service, issue floors, latencies, resource demand and coefficients are not
+part of analytics.
 
-Pass these hidden LLVM options through clang's `-mllvm`:
+Cost-free IR metadata connects a probe to its loop and carries VF, tuning width,
+trip-count upper bound and exact constant trip count when available. At the end
+of the IR suffix, induction information verifies the iteration mapping; provable
+constant-stride unrolling adjusts the observed width. Single-block EVL loops are
+recognized by their VL-based induction update. Lost/ambiguous identities,
+unprovable mappings and fully unrolled loops are diagnosed rather than scored
+using the original VF by assumption.
 
-| Option | Meaning |
-| --- | --- |
-| `-vplan-pipeline=prepare` | Run the optimization prefix and emit checkpoint bitcode with `-emit-llvm -c`. |
-| `-vplan-pipeline=resume` | Consume a prepared checkpoint and run the remaining optimization pipeline. |
-| `-vplan-candidates-output=PATH` | Write versioned candidate and actual-selection JSON. |
-| `-vplan-ra-run-id=DIGEST` | Bind all artifacts to a checkpoint/compiler/options identity. |
-| `-vplan-probe-candidate=ID` | Select a specific regenerated plan/VF after ordinary planning. |
-| `-vplan-ra-features-output=PATH` | Observe the probe function after complete RISC-V RA. |
-| `-stop-after=riscv-vplan-ra-observe` | Stop after observation and emit MIR instead of assembly. |
-| `-vplan-ra-feedback=PATH` | Read backend observations for the final cost comparison. |
+The dump includes instructions outside the selected body for inspection. Their
+cost, including one-time guards, initialization and exit work, is excluded from
+this version's ranking. Dynamic trip count and runtime VL are not fabricated.
 
-The driver supplies these options. Do not substitute `force-vector-width`: that
-changes planning and takes shortcuts through the normal cost comparison. Probes
-bypass the selected candidate's outside-loop *profitability* rejection, while
-retaining legality checks and runtime guards. Invalid-cost plans are recorded but
-cannot be probed. Any valid candidate that fails to compile or materialize fails
-the operation; the driver never silently removes it.
+### Backend cost
 
-Preparation and resumption share the normal pipeline construction. Prefix passes
-are not rerun on the checkpoint. The normal compiler path remains unchanged when
-the options are absent. Preparation creates a module-wide boundary between the
-function optimization prefix and suffix; analyses are rebuilt on resumption.
-The initial supported workload is extracted inner loops. Multiple original loops
-are probed independently, leaving other loops at baseline choices. Interacting
-loops whose regenerated candidate context changes are rejected, not merged into
-a misleading comparison. LTO, profiling, sanitizers, outer-loop VPlans and other
-optimization levels are not supported by this initial interface.
+`RISCVVPlanCost` consumes analytics only. `RISCVVPlanCost.cpp` and `RISCVVPlanScoring.cpp`
+are separate modules with no VPlan, TTI or MachineFunction access in their
+calculation interfaces.
 
-The RA observer is immediately after both RVV and general register allocation and
-register rewriting, before subsequent post-RA optimizations and frame lowering.
-It checks that non-debug instructions have no virtual register operands. Raw MIR
-still contains pseudos and frame indices; it is not final assembly or measured
-execution time. All target/ABI/codegen options are replayed via the same clang.
-
-## Artifacts and protocol
-
-- `pre-vectorize.bc`, `identity.json`: checkpoint and its SHA-256 identity, including
-  the compiler binary, compiler options and protocol version.
-- `candidates.json`: candidates with identity, original body cost, VF, scalar-tail
-  status and probeability; original selection records are separate.
-- `probe-NNNN.mir`, `.json`, `.manifest.json`: machine state, features and actual
-  configuration for one candidate; `.stderr`/`.stdout` retain compiler diagnostics.
-- `feedback.json`: complete observations returned to the vectorizer.
-- `final.manifest.json`, `final.stderr`: actual final choices and effective cost
-  report. The candidate manifest's body costs remain the original costs used to
-  verify replay; the final VPlan report contains the effective ranking costs.
-- `commands.json`, `result.json`: exact invocations and successful completion.
-
-Protocol version 1 uses JSON. Feedback has `version`, `run_id`, and `candidates`.
-Each feedback row contains `id`, an extensible `features` object, the probe's
-`selection` (`id`, `ic`, `epilogue_vf`, `emitted`), and its `mir` path for diagnosis.
-The compiler consumes the feature object, not the MIR path. IDs combine function,
-original loop ordinal, generated plan ordinal, and VF (`fN`/`sN`). They are opaque
-join keys within one run, never model inputs or persistent IDs across revisions.
-Duplicate, missing, extra, stale, and mismatched feedback is rejected. Final IC
-and epilogue VF must match the corresponding probe.
-
-## Observations and cost calculation
-
-`llvm/lib/Target/RISCV/RISCVVPlanRAFeatures.cpp` implements
-`collectRISCVVPlanRAFeatures(const MachineFunction &)`. It returns a
-`resource_demand` object containing a version, support status, aggregate work,
-per-operation classifications, and proven dependency observations. Collection is
-read-only. The current resource model requires the `xiangshan-kunminghu` tune CPU
-and vector instructions. It identifies an unambiguous innermost vector loop,
-requires a latch that is its unique exiting block, and requires every region
-block to dominate that latch. Unsupported instructions or ambiguous regions mark
-the observation unsupported. Recurrence and load-use observations are collected
-for single-block regions only.
-
-Aggregate fields ending in `8` represent eighth units of work; vector service
-uses 128-bit chunks, SEW, and register grouping where applicable. These are model
-units, not CPU cycles. Per-operation records distinguish unit-stride, strided,
-and indexed accesses, load/store direction, masks, proven predicate identity,
-copies, slides, and floating-point division. Packed-mask Boolean operations use
-packed-bit demand with an issue floor. Configuration work is partitioned into
-proven-unused scalar results and additive work with live or uncertain results.
-
-`llvm/lib/Transforms/Vectorize/VPlanRACostModel.cpp` implements
-`costWithRAFeatures(Plan, VF, OriginalCost, Features)`. Its main-loop body estimate
-has the following structure:
+The vector body formula and coefficients are retained from the preceding model:
 
 ```text
 body = max(memory + masked_service, arithmetic, movement,
@@ -170,90 +82,101 @@ body = max(memory + masked_service, arithmetic, movement,
        + spill_service + additive_configuration
 ```
 
-- Memory includes ordinary access demand and extra strided group service. When
-  all access directions are present and consistent with aggregate work, separate
-  load/store services compete with a shared floor that retains at least 7/8 of
-  symmetric ordinary demand. Masked group service shares one quarter of its
-  delivery term among accesses with a proven common predicate; unproven
-  identities keep independent service.
-- Arithmetic combines integer and floating-point demand. Copies and slides share
-  a movement resource; division has its own service bound. Scalar work and
-  proven-unused configuration results compete with vector resources. Recurring
-  spill traffic and live/uncertain configuration work remain additive.
-- Proven loop-carried FP chains contribute a recurrence bound. Load-rooted,
-  block-local arithmetic paths contribute a load-use bound with chunk forwarding.
-  Independent chains and paths compete by maximum rather than summation.
+This includes separate load/store services with a shared floor, predicate sharing,
+strided group service, movement, FP division, and the original conservative
+recurrence/load-use eligibility. New dependency observations do not automatically
+introduce new latency assumptions. Whole-register loads/stores use the same
+unit-stride memory service, with their physical transfer width. Arithmetic remains saturating with fractional
+InstructionCost precision. The test-only frozen formula oracle checks migration.
 
-The implementation accumulates with saturating `InstructionCost` arithmetic and
-preserves fractional precision through the final body-cost division. The caller
-continues to handle VF normalization, scalar tails, profitability, and the scalar
-reference cost. IC and epilogue selection use original costs, preserving the
-configuration observed by the probe.
+Scalar candidates use the existing scalar resource coefficient (0.5 per ordinary
+scalar instruction) and the same spill/configuration policy. This is a new scalar
+reference, not the previous TTI scalar estimate. A scalar candidate means that
+LoopVectorize leaves that loop scalar; ordinary later optimizations still run.
 
-Scalar VFs, missing or unsupported `resource_demand`, unsupported versions, and
-malformed required cost observations return `OriginalCost`. Optional extensions
-have conservative compatibility behavior: missing dependency observations add
-no new bound; incomplete direction information retains symmetric memory service;
-and missing or inconsistent configuration partitions retain additive
-configuration service. This cost fallback is distinct from invalid feedback
-transport: stale, incomplete candidate sets or mismatched probe selections are
-rejected by the protocol rather than silently accepted.
+For effective width W and the original comparison's constant trip-count bound T:
 
-Coefficients are empirical heuristics informed by hardware structure, not a
-calibrated model of measured CPU cycles. Some priors come from other RISC-V
-scheduling descriptions; Kunminghu itself has `NoSchedModel`. In particular,
-divider service and dependency latencies should not be read as measured Kunminghu
-RVV timings. The resource maximum expresses assumed overlap, not a proof that
-instructions execute in parallel.
-
-## Tests and provenance
-
-After the build above, run the focused regression suites and reporting tests:
-
-```sh
-python3 build-vplan-tools/bin/llvm-lit -j 2 \
-  llvm/test/Analysis/CostModel/RISCV \
-  llvm/test/Transforms/LoopVectorize/RISCV \
-  llvm/test/CodeGen/RISCV/vplan-ra \
-  llvm/test/Transforms/LoopVectorize/AArch64/print-vplans.ll \
-  llvm/test/Transforms/LoopVectorize/AArch64/print-vplans-costs.ll \
-  llvm/test/Transforms/LoopVectorize/AArch64/print-vplans-paths.ll
-build-vplan-tools/unittests/Transforms/Vectorize/VectorizeTests
-build-vplan-tools/unittests/Transforms/Vectorize/VPlanRATests
+```text
+unknown T:    body / W
+scalar tail:  body * floor(T/W) + (scalar_body / scalar_width) * (T % W)
+folded tail:  body * ceil(T/W)
 ```
 
-`VectorizeTests` covers model arithmetic and fallback behavior. MIR tests cover
-resource and dependency collection. `VPlanRATests` uses a separate synthetic hook
-to test that feedback changes actual vectorizer selection; that synthetic hook
-is not linked into clang or opt. Clang and opt use the production Post-RA model
-when supplied with valid feedback.
+A known bound is not claimed to be the actual execution count. These are scores
+for repeated loop-body work, not full function execution estimates. Scalar probes
+also use the tail formula when their bodies have been unrolled. The middle
+end compares the returned rational scores without recomputing normalization or
+tails. Ties retain scalar first, then candidate manifest order.
 
-The published implementation is the frozen Old final model (experiment e000051),
-source commit `4a5ff1127e111754133ddfe3712dc89dcb01520b`. Its supporting reporting
-code comes from `0a3f77007be9520449ea8ec854a0a777ee48329c`, and post-RA transport
-and meta-compilation infrastructure from
-`c93c542395f5c014ad2d98f96a125f408cb3eed3`. The publication preserves the final
-source tree apart from this documentation, without experimental switches or
-additional model tuning.
+## Usage
 
-Reproduction against the frozen development evaluation assets gives:
+Build with the instructions in [README.md](README.md), then run:
 
-| Metric | Original-cost baseline | Post-RA model |
-| --- | ---: | ---: |
-| Tuning Top-1 correct | 3/8 | 5/8 |
-| Validation Top-1 correct | 62/132 | 81/132 |
-| Validation mean regret | 0.06188774993050167 | 0.026960697618935218 |
-| Compilation failures across all benchmarks | 0/214 | 0/214 |
+```sh
+python3 utils/vplan-meta-compile \
+  --clang build-vplan-tools/bin/clang --input kernel.c \
+  --work-dir observations-o3 --output kernel.o --detail \
+  -- --target=riscv64-unknown-elf -march=rv64gcv \
+  -mcpu=xiangshan-kunminghu -O3 -ffreestanding
+```
 
-Scoring uses the same fixed 140-benchmark cohort (8 tuning, 132 validation); the
-other 74 benchmarks are not newly admitted to the score. Reproduction checks
-compare exact rational VF costs, per-plan body/ranking costs, selections,
-measurements, candidate/probe policy, resource observations, and serialized probe
-MachineFunctions, separating run identities and paths as provenance. Only
-aggregate floating-point metrics use a `1e-12` tolerance.
+Use a new or empty work directory. `-O2` works identically as an interface, but
+may generate different candidates and machine code. No optimization option is
+silently replaced with `-O2`. Other optimization levels, size optimization, LTO,
+profiling, sanitizers and new-PM codegen are outside the initial meta interface.
 
-The validation set was used during model selection and is a development
-evaluation set, not an independent test set. These results measure agreement
-with frozen measured-VF rankings; they do not demonstrate an improvement in
-measured execution speed from this compiler. Evaluation databases, campaign
-logs, and build outputs are not part of this branch.
+`--emit llvm|asm|obj` selects the final artifact. `--stop-after-ra` collects all
+analytics and backend costs without final replay. `--timeout` applies separately
+to each compiler invocation. No benchmark database or measurements are read by
+the meta compiler. Evaluation tools preserve the database's compilation context;
+O2 and O3 measurements must not be mixed as if they were equivalent.
+
+## Compiler interfaces and artifacts
+
+Pass hidden options through clang with `-mllvm`:
+
+| Option | Purpose |
+| --- | --- |
+| `-vplan-pipeline=prepare\|resume` | Produce or consume the pre-vectorizer checkpoint. |
+| `-vplan-candidates-output=PATH` | Candidate/configuration manifest. |
+| `-vplan-ra-run-id=DIGEST` | Checkpoint/compiler/options identity. |
+| `-vplan-probe-candidate=ID` | Materialize one generated candidate. |
+| `-vplan-analytics-output=PATH` | Raw cost-independent observations. |
+| `-stop-after=riscv-vplan-analytics` | Run analytics without costing. |
+| `-vplan-scalar-analytics-input=PATH` | Same loop's scalar observations for vector scoring. |
+| `-vplan-cost-output=PATH` | Cost result and resource breakdown. |
+| `-stop-after=riscv-vplan-cost` | Stop after both backend passes. |
+| `-vplan-ra-feedback=PATH` | Read computed scores for final selection. |
+| `-print-vplans`, `-print-detailed-vplans` | Report effective scores and optional breakdown. |
+
+Protocol v2 intentionally rejects old v1 feedback; regenerate artifacts.
+`pre-vectorize.bc` records the optimization level and rejects mismatched resume.
+`identity.json` binds the checkpoint, compiler and complete flags.
+`candidates.json` records generated candidates without a legacy cost prerequisite.
+Each probe writes `.analytics.json`, `.cost.json`, `.mir`, `.manifest.json` and
+compiler logs. `feedback.json` contains costs and observed selections, not feature
+objects for the middle end to reinterpret. Quarter-unit numerators and integer
+denominators preserve exact score comparisons; cross-products avoid overflow.
+
+Missing, extra, stale and duplicate feedback, unsupported model operations,
+unprovable regions and probe/final configuration changes fail explicitly. They
+never silently drop a candidate or fall back to the old cost model. Analytics
+can still be dumped for unsupported cases, with the reason available for diagnosis.
+
+## Validation
+
+```sh
+cmake --build build-vplan-tools --parallel 2 --target \
+  clang opt llc FileCheck RISCVTests VectorizeTests VPlanRATests
+python3 build-vplan-tools/bin/llvm-lit -j 2 \
+  llvm/test/CodeGen/RISCV/vplan-ra \
+  llvm/test/Transforms/LoopVectorize/RISCV/vplan-ra-checkpoint.ll
+build-vplan-tools/unittests/Target/RISCV/RISCVTests --gtest_filter=VPlanBackendCost.*
+build-vplan-tools/unittests/Transforms/Vectorize/VPlanRATests
+VPLAN_CLANG="$PWD/build-vplan-tools/bin/clang" \
+  python3 -m unittest discover -s utils/vplan-tools/tests
+```
+
+Formula preservation applies to equivalent observations. Cleanup changes the
+observations, and the scalar reference and ranking policy have changed, so old
+selected VFs and frozen evaluation metrics are not claimed as current results.

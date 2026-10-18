@@ -1,4 +1,5 @@
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-ra-features-output=%t.json %s -o %t.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
 # RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; assert not r['supported'] and r['loop_blocks']==1; assert r['unit8']==16 and r['masked8']==16 and r['scalar8']==0; o=r['operations']; assert len(o)==2 and o[0]['kind']=='copy'; assert o[1]['kind']=='unit' and o[1]['predicate_id']>0"
 # RUN: FileCheck %s < %t.mir
 # CHECK: $v0 = COPY $v1
@@ -13,11 +14,13 @@
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="fallback:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="fallback:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"fallback:0:0:s4"}
 ...
 ---
 name: fallback

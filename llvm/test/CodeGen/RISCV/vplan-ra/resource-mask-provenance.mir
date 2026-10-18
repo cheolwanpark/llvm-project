@@ -1,4 +1,5 @@
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_provenance:0:0:s4 -vplan-ra-features-output=%t.json %s -o %t.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_provenance:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
 # RUN: %python %S/Inputs/check-mask-resource.py provenance %t.json
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=none -verify-machineinstrs %s -o %t.before.mir
 # RUN: diff %t.before.mir %t.mir
@@ -10,11 +11,13 @@
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="mask_provenance:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="mask_provenance:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"mask_provenance:0:0:s4"}
 ...
 ---
 name: mask_provenance

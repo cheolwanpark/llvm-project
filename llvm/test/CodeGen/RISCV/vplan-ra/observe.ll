@@ -1,13 +1,13 @@
-; RUN: llc -mtriple=riscv64 -mattr=+v -vplan-ra-run-id=test -vplan-probe-candidate=kernel:0:0:s4 -vplan-ra-features-output=%t.json -stop-after=riscv-vplan-ra-observe %s -o %t.mir
+; RUN: llc -mtriple=riscv64 -mattr=+v -vplan-ra-run-id=test -vplan-probe-candidate=kernel:0:0:s4 -vplan-analytics-output=%t.json -stop-after=riscv-vplan-analytics %s -o %t.mir
 ; RUN: FileCheck %s --check-prefix=FEATURES < %t.json
 ; RUN: FileCheck %s --check-prefix=MIR < %t.mir
 ; RUN: llc -mtriple=riscv64 -mattr=+v %s -o %t.direct.s
-; RUN: llc -mtriple=riscv64 -mattr=+v -vplan-ra-run-id=test -vplan-probe-candidate=kernel:0:0:s4 -vplan-ra-features-output=%t.full.json %s -o %t.observed.s
+; RUN: llc -mtriple=riscv64 -mattr=+v -vplan-ra-run-id=test -vplan-probe-candidate=kernel:0:0:s4 -vplan-analytics-output=%t.full.json %s -o %t.observed.s
 ; RUN: diff %t.direct.s %t.observed.s
 
-; FEATURES-DAG: "stage":"post-ra"
-; FEATURES-DAG: "id":"kernel:0:0:s4"
-; FEATURES-DAG: "features":{
+; FEATURES-DAG: "Stage":"post-ra-cleanup"
+; FEATURES-DAG: "Candidate":"kernel:0:0:s4"
+; FEATURES-DAG: "Instructions":[
 ; MIR: body: |
 ; MIR-NOT: %{{[0-9]+}}
 ; MIR: $v

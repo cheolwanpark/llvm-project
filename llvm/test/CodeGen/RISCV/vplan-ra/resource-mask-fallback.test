@@ -1,13 +1,18 @@
 # RUN: split-file %s %t
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-ra-features-output=%t/population.out.json %t/population.mir -o %t/population.out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-analytics-output=%t/population.out.json.analytics %t/population.mir -o %t/population.out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/population.out.json.analytics > %t/population.out.json
 # RUN: %python %S/Inputs/check-mask-resource.py fallback %t/population.out.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-ra-features-output=%t/first.out.json %t/first.mir -o %t/first.out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-analytics-output=%t/first.out.json.analytics %t/first.mir -o %t/first.out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/first.out.json.analytics > %t/first.out.json
 # RUN: %python %S/Inputs/check-mask-resource.py fallback %t/first.out.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-ra-features-output=%t/prefix.out.json %t/prefix.mir -o %t/prefix.out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-analytics-output=%t/prefix.out.json.analytics %t/prefix.mir -o %t/prefix.out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/prefix.out.json.analytics > %t/prefix.out.json
 # RUN: %python %S/Inputs/check-mask-resource.py fallback %t/prefix.out.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-ra-features-output=%t/load.out.json %t/load.mir -o %t/load.out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-analytics-output=%t/load.out.json.analytics %t/load.mir -o %t/load.out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/load.out.json.analytics > %t/load.out.json
 # RUN: %python %S/Inputs/check-mask-resource.py fallback %t/load.out.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-ra-features-output=%t/store.out.json %t/store.mir -o %t/store.out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-analytics-output=%t/store.out.json.analytics %t/store.mir -o %t/store.out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/store.out.json.analytics > %t/store.out.json
 # RUN: %python %S/Inputs/check-mask-resource.py fallback %t/store.out.json
 # All fixtures satisfy the verifier, including mask SEW=0 and single VRs.
 # Accept the Boolean prefix, then retain unsupported fallback for each distinct
@@ -18,11 +23,13 @@
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"mask_fallback:0:0:s4"}
 ...
 ---
 name: mask_fallback
@@ -48,11 +55,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"mask_fallback:0:0:s4"}
 ...
 ---
 name: mask_fallback
@@ -78,11 +87,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"mask_fallback:0:0:s4"}
 ...
 ---
 name: mask_fallback
@@ -108,11 +119,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"mask_fallback:0:0:s4"}
 ...
 ---
 name: mask_fallback
@@ -138,11 +151,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="mask_fallback:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"mask_fallback:0:0:s4"}
 ...
 ---
 name: mask_fallback

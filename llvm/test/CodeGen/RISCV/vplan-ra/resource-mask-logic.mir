@@ -3,13 +3,17 @@
 # sew_mask is exactly 0, not log2(data SEW). No passthrough/policy operands.
 # Setup/exit masks are excluded. Count even known clear/set Boolean results.
 # The before/after comparison checks every instruction and operand unchanged.
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=128 -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-ra-features-output=%t.128.json %s -o %t.128.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=128 -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-analytics-output=%t.128.json.analytics %s -o %t.128.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.128.json.analytics > %t.128.json
 # RUN: %python %S/Inputs/check-mask-resource.py logic %t.128.json 128
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=256 -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-ra-features-output=%t.256.json %s -o %t.256.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=256 -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-analytics-output=%t.256.json.analytics %s -o %t.256.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.256.json.analytics > %t.256.json
 # RUN: %python %S/Inputs/check-mask-resource.py logic %t.256.json 256
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=1024 -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-ra-features-output=%t.1024.json %s -o %t.1024.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=1024 -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-analytics-output=%t.1024.json.analytics %s -o %t.1024.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.1024.json.analytics > %t.1024.json
 # RUN: %python %S/Inputs/check-mask-resource.py logic %t.1024.json 1024
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=2048 -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-ra-features-output=%t.2048.json %s -o %t.2048.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=2048 -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_logic:0:0:s4 -vplan-analytics-output=%t.2048.json.analytics %s -o %t.2048.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.2048.json.analytics > %t.2048.json
 # RUN: %python %S/Inputs/check-mask-resource.py logic %t.2048.json 2048
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -riscv-v-vector-bits-min=128 -run-pass=none -verify-machineinstrs %s -o %t.before.mir
 # RUN: diff %t.before.mir %t.128.mir
@@ -20,11 +24,13 @@
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="mask_logic:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="mask_logic:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"mask_logic:0:0:s4"}
 ...
 ---
 name: mask_logic

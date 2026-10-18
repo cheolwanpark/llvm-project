@@ -153,7 +153,8 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVExpandAtomicPseudoPass(*PR);
   initializeRISCVRedundantCopyEliminationPass(*PR);
   initializeRISCVAsmPrinterPass(*PR);
-  initializeRISCVVPlanRAObservePass(*PR);
+  initializeRISCVVPlanAnalyticsPass(*PR);
+  initializeRISCVVPlanCostPass(*PR);
   initializeRISCVPromoteConstantPass(*PR);
 }
 
@@ -465,8 +466,6 @@ bool RISCVPassConfig::addRegAssignAndRewriteFast() {
       EnableRISCVDeadRegisterElimination)
     addPass(createRISCVDeadRegisterDefinitionsPass());
   bool Result = TargetPassConfig::addRegAssignAndRewriteFast();
-  if (!getVPlanRAFeaturesOutput().empty())
-    addPass(createRISCVVPlanRAObservePass());
   return Result;
 }
 
@@ -478,8 +477,6 @@ bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
       EnableRISCVDeadRegisterElimination)
     addPass(createRISCVDeadRegisterDefinitionsPass());
   bool Result = TargetPassConfig::addRegAssignAndRewriteOptimized();
-  if (!getVPlanRAFeaturesOutput().empty())
-    addPass(createRISCVVPlanRAObservePass());
   return Result;
 }
 
@@ -672,6 +669,10 @@ void RISCVPassConfig::addPostRegAlloc() {
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
       EnableRedundantCopyElimination)
     addPass(createRISCVRedundantCopyEliminationPass());
+  if (vplanAnalyticsEnabled())
+    addPass(createRISCVVPlanAnalyticsPass());
+  if (vplanCostEnabled())
+    addPass(createRISCVVPlanCostPass());
 }
 
 bool RISCVPassConfig::addILPOpts() {

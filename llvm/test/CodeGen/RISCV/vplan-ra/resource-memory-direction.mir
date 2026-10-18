@@ -1,6 +1,8 @@
 # RUN: split-file %s %t
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loads:0:0:s4 -vplan-ra-features-output=%t.loads.json %t/loads.mir -o %t.loads.mir
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=stores:0:0:s4 -vplan-ra-features-output=%t.stores.json %t/stores.mir -o %t.stores.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loads:0:0:s4 -vplan-analytics-output=%t.loads.json.analytics %t/loads.mir -o %t.loads.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.loads.json.analytics > %t.loads.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=stores:0:0:s4 -vplan-analytics-output=%t.stores.json.analytics %t/stores.mir -o %t.stores.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.stores.json.analytics > %t.stores.json
 # RUN: FileCheck %s --check-prefix=LOAD < %t.loads.json
 # RUN: FileCheck %s --check-prefix=STORE < %t.stores.json
 # RUN: %python -c "import json; a=json.load(open('%t.loads.json'))['features']['resource_demand']; b=json.load(open('%t.stores.json'))['features']['resource_demand']; assert a['supported'] and b['supported']; assert all(x['direction']=='load' for x in a['operations']); assert all(x['direction']=='store' for x in b['operations']); assert [{k:v for k,v in x.items() if k!='direction'} for x in a['operations']]==[{k:v for k,v in x.items() if k!='direction'} for x in b['operations']]; assert a['unit8']==b['unit8']==72 and a['strided8']==b['strided8']==128 and a['indexed8']==b['indexed8']==128 and a['masked8']==b['masked8']==256"
@@ -27,11 +29,13 @@
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="loads:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="loads:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"loads:0:0:s4"}
 ...
 ---
 name: loads
@@ -59,11 +63,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="stores:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="stores:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"stores:0:0:s4"}
 ...
 ---
 name: stores

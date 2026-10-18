@@ -100,12 +100,12 @@ these adjustments:
 - Emit final optimized LLVM IR; no runtime library is linked or target code run.
 
 The embedded source is unchanged. Meta mode prepares a pre-vectorizer checkpoint,
-enumerates generated candidates, probes each valid plan/VF through RISC-V vector
-and general register allocation, and resumes with collected resource features.
-The final report contains the effective Post-RA costs used in main-loop selection.
-Unsupported resource observations retain original costs under the model's
-fallback rules. Compilation, replay, or feedback transport failures fail the
-operation. See [VPLAN_RA.md](../../VPLAN_RA.md) for the model and protocol.
+enumerates generated scalar/vector candidates, and probes each through RISC-V
+register allocation and post-RA cleanup. An analytics-only pass supplies raw
+facts to a separate backend cost pass; final selection uses its scores exclusively.
+Both `-O2` and `-O3` retain their normal pipelines. Unsupported observations,
+compilation, replay, or feedback failures fail the operation explicitly.
+See [VPLAN_RA.md](../../VPLAN_RA.md) for the model and protocol.
 Coefficients are empirical heuristics; costs are model units, not measured CPU
 cycles.
 

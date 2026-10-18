@@ -1,4 +1,5 @@
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=unsupported:0:0:s4 -vplan-ra-features-output=%t.json %s -o %t.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=unsupported:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
 # RUN: FileCheck %s < %t.json
 # RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; assert r['supported'] is False; assert r['operations'] == [dict(group8=16, index_group8=0, index_sew=0, kind='slide', masked=False, sew=32, work8=16)]"
 # A supported slide followed by an unsupported gather must retain fallback.
@@ -14,11 +15,13 @@
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="unsupported:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="unsupported:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"unsupported:0:0:s4"}
 ...
 ---
 name: unsupported

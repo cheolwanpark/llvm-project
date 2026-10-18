@@ -845,15 +845,17 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
   if (vplanRAEnabled())
     initializeVPlanRA(CI.getVirtualFileSystem());
   if (getVPlanPipelineStage() != VPlanPipelineStage::Full) {
-    if (mapToLevel(CodeGenOpts) != OptimizationLevel::O2 ||
-        !TargetTriple.isRISCV64() || CodeGenOpts.PrepareForLTO ||
-        CodeGenOpts.PrepareForThinLTO || CodeGenOpts.FatLTO ||
-        !CodeGenOpts.ThinLTOIndexFile.empty() || CodeGenOpts.DisableLLVMPasses ||
-        CodeGenOpts.EnableNewPMCodeGen || !LangOpts.Sanitize.empty() ||
-        CodeGenOpts.hasProfileIRInstr() || CodeGenOpts.hasProfileIRUse() ||
-        !CodeGenOpts.SampleProfileFile.empty())
-      reportFatalUsageError("VPlan meta compilation requires non-LTO RISCV64 -O2 "
-                            "without profiling, sanitizers or new-PM codegen");
+    if ((mapToLevel(CodeGenOpts) != OptimizationLevel::O2 &&
+         mapToLevel(CodeGenOpts) != OptimizationLevel::O3) ||
+        CodeGenOpts.OptimizeSize || !TargetTriple.isRISCV64() ||
+        CodeGenOpts.PrepareForLTO || CodeGenOpts.PrepareForThinLTO ||
+        CodeGenOpts.FatLTO || !CodeGenOpts.ThinLTOIndexFile.empty() ||
+        CodeGenOpts.DisableLLVMPasses || CodeGenOpts.EnableNewPMCodeGen ||
+        !LangOpts.Sanitize.empty() || CodeGenOpts.hasProfileIRInstr() ||
+        CodeGenOpts.hasProfileIRUse() || !CodeGenOpts.SampleProfileFile.empty())
+      reportFatalUsageError(
+          "VPlan meta compilation requires non-LTO RISCV64 -O2/-O3 "
+          "without profiling, sanitizers or new-PM codegen");
     if (getVPlanPipelineStage() == VPlanPipelineStage::Prepare &&
         Action != Backend_EmitBC && Action != Backend_EmitLL)
       reportFatalUsageError("VPlan prepare requires -emit-llvm");

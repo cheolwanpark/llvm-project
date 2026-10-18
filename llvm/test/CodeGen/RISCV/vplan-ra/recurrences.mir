@@ -1,43 +1,63 @@
 # RUN: split-file %s %t
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/dependent.json %t/dependent.mir -o %t/dependent-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/dependent.json.analytics %t/dependent.mir -o %t/dependent-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/dependent.json.analytics > %t/dependent.json
 # RUN: FileCheck %s --check-prefix=DEPENDENT < %t/dependent.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/independent.json %t/independent.mir -o %t/independent-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/independent.json.analytics %t/independent.mir -o %t/independent-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/independent.json.analytics > %t/independent.json
 # RUN: FileCheck %s --check-prefix=INDEPENDENT < %t/independent.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/tied-dependent.json %t/tied-dependent.mir -o %t/tied-dependent-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/tied-dependent.json.analytics %t/tied-dependent.mir -o %t/tied-dependent-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/tied-dependent.json.analytics > %t/tied-dependent.json
 # RUN: FileCheck %s --check-prefix=TIED-DEPENDENT < %t/tied-dependent.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/tied-independent.json %t/tied-independent.mir -o %t/tied-independent-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/tied-independent.json.analytics %t/tied-independent.mir -o %t/tied-independent-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/tied-independent.json.analytics > %t/tied-independent.json
 # RUN: FileCheck %s --check-prefix=TIED-INDEPENDENT < %t/tied-independent.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/grouped.json %t/grouped.mir -o %t/grouped-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/grouped.json.analytics %t/grouped.mir -o %t/grouped-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/grouped.json.analytics > %t/grouped.json
 # RUN: FileCheck %s --check-prefix=GROUPED < %t/grouped.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/alias-overwrite.json %t/alias-overwrite.mir -o %t/alias-overwrite-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/alias-overwrite.json.analytics %t/alias-overwrite.mir -o %t/alias-overwrite-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/alias-overwrite.json.analytics > %t/alias-overwrite.json
 # RUN: FileCheck %s --check-prefix=ALIAS-OVERWRITE < %t/alias-overwrite.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/alias-reuse.json %t/alias-reuse.mir -o %t/alias-reuse-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/alias-reuse.json.analytics %t/alias-reuse.mir -o %t/alias-reuse-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/alias-reuse.json.analytics > %t/alias-reuse.json
 # RUN: FileCheck %s --check-prefix=ALIAS-REUSE < %t/alias-reuse.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/overwrite.json %t/overwrite.mir -o %t/overwrite-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/overwrite.json.analytics %t/overwrite.mir -o %t/overwrite-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/overwrite.json.analytics > %t/overwrite.json
 # RUN: FileCheck %s --check-prefix=OVERWRITE < %t/overwrite.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/undef.json %t/undef.mir -o %t/undef-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/undef.json.analytics %t/undef.mir -o %t/undef-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/undef.json.analytics > %t/undef.json
 # RUN: FileCheck %s --check-prefix=UNDEF < %t/undef.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/passthrough.json %t/passthrough.mir -o %t/passthrough-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/passthrough.json.analytics %t/passthrough.mir -o %t/passthrough-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/passthrough.json.analytics > %t/passthrough.json
 # RUN: FileCheck %s --check-prefix=PASSTHROUGH < %t/passthrough.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/load-reuse.json %t/load-reuse.mir -o %t/load-reuse-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/load-reuse.json.analytics %t/load-reuse.mir -o %t/load-reuse-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/load-reuse.json.analytics > %t/load-reuse.json
 # RUN: FileCheck %s --check-prefix=LOAD-REUSE < %t/load-reuse.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/implicit-def.json %t/implicit-def.mir -o %t/implicit-def-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/implicit-def.json.analytics %t/implicit-def.mir -o %t/implicit-def-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/implicit-def.json.analytics > %t/implicit-def.json
 # RUN: FileCheck %s --check-prefix=IMPLICIT-DEF < %t/implicit-def.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/fractional.json %t/fractional.mir -o %t/fractional-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/fractional.json.analytics %t/fractional.mir -o %t/fractional-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/fractional.json.analytics > %t/fractional.json
 # RUN: FileCheck %s --check-prefix=FRACTIONAL < %t/fractional.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/e64.json %t/e64.mir -o %t/e64-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/e64.json.analytics %t/e64.mir -o %t/e64-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/e64.json.analytics > %t/e64.json
 # RUN: FileCheck %s --check-prefix=E64 < %t/e64.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/masked.json %t/masked.mir -o %t/masked-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/masked.json.analytics %t/masked.mir -o %t/masked-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/masked.json.analytics > %t/masked.json
 # RUN: FileCheck %s --check-prefix=MASKED < %t/masked.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/integer.json %t/integer.mir -o %t/integer-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/integer.json.analytics %t/integer.mir -o %t/integer-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/integer.json.analytics > %t/integer.json
 # RUN: FileCheck %s --check-prefix=INTEGER < %t/integer.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/branching.json %t/branching.mir -o %t/branching-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/branching.json.analytics %t/branching.mir -o %t/branching-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/branching.json.analytics > %t/branching.json
 # RUN: FileCheck %s --check-prefix=BRANCHING < %t/branching.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/multiple-backedges.json %t/multiple-backedges.mir -o %t/multiple-backedges-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/multiple-backedges.json.analytics %t/multiple-backedges.mir -o %t/multiple-backedges-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/multiple-backedges.json.analytics > %t/multiple-backedges.json
 # RUN: FileCheck %s --check-prefix=MULTIPLE-BACKEDGES < %t/multiple-backedges.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/widening.json %t/widening.mir -o %t/widening-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/widening.json.analytics %t/widening.mir -o %t/widening-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/widening.json.analytics > %t/widening.json
 # RUN: FileCheck %s --check-prefix=WIDENING < %t/widening.json
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-ra-features-output=%t/reduction.json %t/reduction.mir -o %t/reduction-out.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/reduction.json.analytics %t/reduction.mir -o %t/reduction-out.mir
+# RUN: %python %S/Inputs/legacy-view.py %t/reduction.json.analytics > %t/reduction.json
 # RUN: FileCheck %s --check-prefix=REDUCTION < %t/reduction.json
 #
 # Identical instruction totals can describe a two-step recurrence, independent
@@ -97,11 +117,13 @@
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -130,11 +152,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -163,11 +187,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -196,11 +222,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -229,11 +257,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -261,11 +291,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -294,11 +326,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -327,11 +361,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -360,11 +396,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -392,11 +430,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -424,11 +464,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -457,11 +499,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -490,11 +534,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -522,11 +568,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -554,11 +602,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -586,11 +636,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -618,11 +670,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -652,11 +706,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -686,11 +742,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence
@@ -718,11 +776,13 @@ body: |
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="recurrence:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="recurrence:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"recurrence:0:0:s4"}
 ...
 ---
 name: recurrence

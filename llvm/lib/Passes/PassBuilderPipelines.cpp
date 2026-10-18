@@ -165,20 +165,32 @@ namespace {
 // Kept at module boundaries so every function is checkpointed before LV.
 class VPlanCheckpointPass : public PassInfoMixin<VPlanCheckpointPass> {
   bool Resume;
+  OptimizationLevel Level;
 
 public:
-  explicit VPlanCheckpointPass(bool Resume) : Resume(Resume) {}
+  VPlanCheckpointPass(bool Resume, OptimizationLevel Level)
+      : Resume(Resume), Level(Level) {}
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
     auto *Marker = M.getNamedMetadata("llvm.vplan.checkpoint");
     if (Resume) {
       if (!Marker || Marker->getNumOperands() != 1)
         reportFatalUsageError("vplan resume requires a prepared checkpoint");
+      auto *Record = Marker->getOperand(0);
+      auto *Stored = Record->getNumOperands() == 1
+                         ? dyn_cast<MDString>(Record->getOperand(0))
+                         : nullptr;
+      if (!Stored ||
+          Stored->getString() != (Level == OptimizationLevel::O3 ? "O3" : "O2"))
+        reportFatalUsageError("VPlan checkpoint optimization level mismatch");
       M.eraseNamedMetadata(Marker);
     } else {
       if (Marker)
         reportFatalUsageError("module is already a VPlan checkpoint");
       M.getOrInsertNamedMetadata("llvm.vplan.checkpoint")
-          ->addOperand(MDNode::get(M.getContext(), {}));
+          ->addOperand(MDNode::get(
+              M.getContext(),
+              MDString::get(M.getContext(),
+                            Level == OptimizationLevel::O3 ? "O3" : "O2")));
     }
     return PreservedAnalyses::none();
   }
@@ -186,7 +198,12 @@ public:
 };
 class VPlanRAFinishPass : public PassInfoMixin<VPlanRAFinishPass> {
 public:
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
+    auto &FAM =
+        AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+    for (auto &F : M)
+      if (!F.isDeclaration())
+        finalizeVPlanRAIterationMapping(F, FAM);
     finishVPlanRA(M);
     return PreservedAnalyses::all();
   }
@@ -1554,7 +1571,7 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
 
   FunctionPassManager OptimizePM;
   if (getVPlanPipelineStage() == VPlanPipelineStage::Resume) {
-    MPM.addPass(VPlanCheckpointPass(/*Resume=*/true));
+    MPM.addPass(VPlanCheckpointPass(/*Resume=*/true, Level));
     if (EnableGlobalAnalyses)
       MPM.addPass(RecomputeGlobalsAAPass());
   } else {
@@ -1686,7 +1703,7 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
   if (getVPlanPipelineStage() == VPlanPipelineStage::Prepare) {
     MPM.addPass(createModuleToFunctionPassAdaptor(std::move(OptimizePM),
                                                 PTO.EagerlyInvalidateAnalyses));
-    MPM.addPass(VPlanCheckpointPass(/*Resume=*/false));
+    MPM.addPass(VPlanCheckpointPass(/*Resume=*/false, Level));
     return MPM;
   }
 
@@ -1814,8 +1831,9 @@ ModulePassManager
 PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
                                            ThinOrFullLTOPhase Phase) {
   if (getVPlanPipelineStage() != VPlanPipelineStage::Full &&
-      (Level != OptimizationLevel::O2 || Phase != ThinOrFullLTOPhase::None))
-    reportFatalUsageError("VPlan checkpoint pipelines require non-LTO -O2");
+      ((Level != OptimizationLevel::O2 && Level != OptimizationLevel::O3) ||
+       Phase != ThinOrFullLTOPhase::None))
+    reportFatalUsageError("VPlan checkpoint pipelines require non-LTO -O2/-O3");
 
   if (Level == OptimizationLevel::O0)
     return buildO0DefaultPipeline(Level, Phase);

@@ -469,3 +469,8 @@ void VPlanCostReport::legacy(const Instruction *I, StringRef Category,
        << " ir=" << *I << '\n';
   });
 }
+
+void VPlanCostReport::backendWidth(const VPlan &Plan, ElementCount VF,
+                                   unsigned Width) {
+  candidate(Plan, VF, false).EstimatedWidth = Width;
+}

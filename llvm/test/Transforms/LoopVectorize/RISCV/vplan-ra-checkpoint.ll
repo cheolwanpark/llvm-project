@@ -4,17 +4,21 @@
 ; RUN: FileCheck %s --check-prefix=RESUME < %t.ll
 ; RUN: FileCheck %s --check-prefix=MANIFEST < %t.json
 ; RUN: not opt -mtriple=riscv64 -passes='default<O2>' -vplan-pipeline=resume %s -disable-output 2>&1 | FileCheck %s --check-prefix=BAD-RESUME
-; RUN: not opt -mtriple=riscv64 -passes='default<O3>' -vplan-pipeline=prepare %s -disable-output 2>&1 | FileCheck %s --check-prefix=BAD-LEVEL
+; RUN: not opt -mtriple=riscv64 -passes='default<O1>' -vplan-pipeline=prepare %s -disable-output 2>&1 | FileCheck %s --check-prefix=BAD-LEVEL
 
+; RUN: opt -mtriple=riscv64 -mattr=+v -passes='default<O3>' -vplan-pipeline=prepare %s -o %t.o3.bc
+; RUN: opt -mtriple=riscv64 -mattr=+v -passes='default<O3>' -vplan-pipeline=resume -vplan-ra-run-id=o3 -vplan-candidates-output=%t.o3.json %t.o3.bc -S -o %t.o3.ll
+; RUN: not opt -passes='default<O2>' -vplan-pipeline=resume %t.o3.bc -disable-output 2>&1 | FileCheck %s --check-prefix=MISMATCH
+; MISMATCH: VPlan checkpoint optimization level mismatch
 ; PREPARE-NOT: vector.body
 ; PREPARE: llvm.vplan.checkpoint
-; RESUME: vector.body
+; RESUME-NOT: vector.body
 ; RESUME-NOT: llvm.vplan.checkpoint
 ; MANIFEST-DAG: "run_id":"test"
 ; MANIFEST-DAG: "vf":"f1"
 ; MANIFEST-DAG: "selections":
 ; BAD-RESUME: vplan resume requires a prepared checkpoint
-; BAD-LEVEL: VPlan checkpoint pipelines require non-LTO -O2
+; BAD-LEVEL: VPlan checkpoint pipelines require non-LTO -O2/-O3
 
 define void @kernel(ptr noalias %a, ptr noalias %b, i64 %n) {
 entry:

@@ -53,6 +53,9 @@ See the [tools guide](utils/vplan-tools/README.md) for the database contract,
 metrics, and artifacts, and [LLVM's original README](LLVM_README.md) for general
 LLVM guidance.
 
+The meta pipeline supports non-LTO RISCV64 `-O2` and `-O3`; it preserves the selected
+optimization level through preparation, probes and final compilation.
+
 ## Flags
 
 `print-vplan` is an alias for `print-vplans`. Explicit relative paths use the
@@ -71,7 +74,7 @@ current working directory; paths also expand `~`.
 | `--json-output PATH` | Evaluate only | Save metrics and exact rational VF costs. |
 | `--artifacts-dir PATH` | Evaluate only | Save reports and backend artifacts; tuning reports include details. |
 | `--exclude-reasons` | Evaluate only | List excluded benchmarks and reasons. |
-| `--compiler-mode meta\|direct` | Both | Default `meta` runs the Post-RA feedback pipeline; `direct` compares existing costs. |
+| `--compiler-mode meta\|direct` | Both | Default `meta` runs the backend analytics/cost feedback pipeline; `direct` compares existing costs. |
 
 Pass LLVM options to clang with `-mllvm` before each option. The reporting flags
 alone do not enable the Post-RA model; the default meta evaluation path generates
@@ -85,9 +88,10 @@ the required feedback.
 | `-vplan-candidates-output=PATH` | Meta-compiler: write candidate and selection JSON. |
 | `-vplan-ra-run-id=DIGEST` | Meta-compiler: bind artifacts to a run identity. |
 | `-vplan-probe-candidate=ID` | Meta-compiler: probe one generated plan/VF. |
-| `-vplan-ra-features-output=PATH` | Meta-compiler: collect backend observations. |
+| `-vplan-analytics-output=PATH` | Meta-compiler: dump cost-independent backend observations. |
 | `-vplan-ra-feedback=PATH` | Meta-compiler: provide observations for final costing. |
-| `-stop-after=riscv-vplan-ra-observe` | Stop after observation and emit MIR. |
+| `-vplan-cost-output=PATH` | Meta-compiler: write backend-computed scores. |
+| `-stop-after=riscv-vplan-cost` | Stop after analytics and costing, and emit MIR. |
 
 See [VPLAN_RA.md](VPLAN_RA.md#compiler-interfaces) for the compiler interfaces and
 manual invocation details.

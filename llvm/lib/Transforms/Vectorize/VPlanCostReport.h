@@ -130,6 +130,7 @@ public:
   void forgetPlan(const VPlan &Plan) { PlanIDs.erase(&Plan); }
   void scalarBaseline(InstructionCost Cost) { ScalarBaseline = Cost; }
   void bodyCost(const VPlan &Plan, ElementCount VF, InstructionCost Cost);
+  void backendWidth(const VPlan &Plan, ElementCount VF, unsigned Width);
   void skip(const VPlan &Plan, ElementCount VF, StringRef Reason,
             bool Epilogue = false);
   void select(const VPlan &Plan, ElementCount VF, StringRef Reason = {},

@@ -3158,7 +3158,7 @@ LoopVectorizationCostModel::computeMaxVF(ElementCount UserVF, unsigned UserIC) {
   }
 
   auto ExpectedTC = getSmallBestKnownTC(PSE, TheLoop);
-  if (ExpectedTC && ExpectedTC->isFixed() &&
+  if (!vplanRAEnabled() && ExpectedTC && ExpectedTC->isFixed() &&
       ExpectedTC->getFixedValue() <=
           TTI.getMinTripCountTailFoldingThreshold()) {
     if (MaxPowerOf2RuntimeVF > 0u) {
@@ -6371,24 +6371,10 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
 void LoopVectorizationPlanner::registerRACandidates() {
   if (!Config.RA)
     return;
-  if (Config.CostReport)
-    Config.CostReport->Phase = "ra-enumeration";
   for (const auto &P : VPlans) {
     Config.RA->registerPlan(*P);
-    ArrayRef<ElementCount> VFs(P->vectorFactors().begin(),
-                              P->vectorFactors().end());
-    SmallVector<VPRegisterUsage, 8> RUs;
-    bool ConsiderRegPressure = any_of(VFs, [this](ElementCount VF) {
-      return Config.shouldConsiderRegPressureForVF(VF);
-    });
-    if (ConsiderRegPressure)
-      RUs = calculateRegisterUsageForPlan(*P, VFs, TTI, CM.ValuesToIgnore);
-    for (auto [I, VF] : enumerate(VFs)) {
-      auto Cost = VF.isScalar()
-                      ? CM.expectedCost(VF)
-                      : cost(*P, VF, ConsiderRegPressure ? &RUs[I] : nullptr);
-      Config.RA->recordCost(*P, VF, Cost);
-    }
+    for (ElementCount VF : P->vectorFactors())
+      Config.RA->recordCandidate(*P, VF);
   }
 }
 
@@ -6397,12 +6383,8 @@ LoopVectorizationPlanner::selectRAProbe() {
   for (const auto &P : VPlans)
     for (ElementCount VF : P->vectorFactors())
       if (Config.RA->isProbe(*P, VF)) {
-        auto Cost = Config.RA->originalCost(*P, VF);
-        if (!Cost.isValid())
-          reportFatalUsageError("cannot probe an invalid-cost VPlan");
-        return {VectorizationFactor(VF, Cost,
-                                    CM.expectedCost(ElementCount::getFixed(1))),
-                P.get()};
+        // Probe selection is a materialization request, not a cost decision.
+        return {VectorizationFactor(VF, 1, 1), P.get()};
       }
   reportFatalUsageError("requested VPlan RA candidate was not regenerated");
 }
@@ -6413,6 +6395,56 @@ LoopVectorizationPlanner::computeBestVF() {
     Config.CostReport->Phase = "main-selection";
   if (VPlans.empty())
     return {VectorizationFactor::Disabled(), nullptr};
+  if (Config.RA) {
+    ElementCount ScalarVF = ElementCount::getFixed(1);
+    VPlan *Best = nullptr;
+    for (auto &P : VPlans)
+      if (P->hasVF(ScalarVF)) {
+        Best = P.get();
+        break;
+      }
+    if (!Best)
+      reportFatalUsageError("backend selection requires a scalar candidate");
+    if (!vplanRAHasFeedback())
+      return {VectorizationFactor(ScalarVF, 1, 1), Best};
+    auto Scalar = Config.RA->cost(*Best, ScalarVF);
+    auto BestCost = Scalar;
+    auto BestVF = ScalarVF;
+    if (Config.CostReport)
+      Config.CostReport->scalarBaseline(Scalar.Body);
+    for (auto &P : VPlans) {
+      for (auto VF : P->vectorFactors()) {
+        auto C = Config.RA->cost(*P, VF);
+        bool Better = backendCostLess(C, BestCost);
+        if (Config.CostReport) {
+          Config.CostReport->backendWidth(*P, VF, C.Width);
+          Config.CostReport->beginComparison(*P, VF, C.Body, Best, BestVF);
+          Config.CostReport->comparisonContext(
+              PSE.getSmallConstantMaxTripCount(), P->hasScalarTail());
+          Config.CostReport->comparisonScore(C.Score, BestCost.Score, C.Kind,
+                                             C.Divisor, BestCost.Divisor);
+          Config.CostReport->comparisonResult(Better, "backend-score");
+          Config.CostReport->beginComparison(*P, VF, C.Body, nullptr, ScalarVF,
+                                             true);
+          Config.CostReport->comparisonScore(C.Score, Scalar.Score, C.Kind,
+                                             C.Divisor, Scalar.Divisor);
+          Config.CostReport->comparisonResult(backendCostLess(C, Scalar),
+                                              "backend-score");
+          VP_COST_DETAIL(Config.CostReport,
+                         OS << "      backend-breakdown="
+                            << json::Value(json::Object(C.Breakdown)) << '\n');
+        }
+        if (Better) {
+          Best = P.get();
+          BestVF = VF;
+          BestCost = std::move(C);
+        }
+      }
+    }
+    if (Config.CostReport)
+      Config.CostReport->select(*Best, BestVF, "backend-score");
+    return {VectorizationFactor(BestVF, BestCost.Body, Scalar.Body), Best};
+  }
   // If there is a single VPlan with a single VF, return it directly.
   VPlan &FirstPlan = *VPlans[0];
 
@@ -6516,15 +6548,6 @@ LoopVectorizationPlanner::computeBestVF() {
 
       InstructionCost Cost =
           cost(*P, VF, ConsiderRegPressure ? &RUs[I] : nullptr);
-      InstructionCost OriginalCost = Cost;
-      if (Config.RA) {
-        Cost = Config.RA->adjust(*P, VF, Cost);
-        if (Config.CostReport)
-          Config.CostReport->bodyCost(*P, VF, Cost);
-        VP_COST_REPORT(Config.CostReport,
-                       OS << "      ra-original=" << OriginalCost
-                          << " ra-effective=" << Cost << '\n');
-      }
       VectorizationFactor CurrentFactor(VF, Cost, ScalarCost);
 
       if (Config.CostReport)
@@ -6541,19 +6564,8 @@ LoopVectorizationPlanner::computeBestVF() {
       // If profitable add it to ProfitableVF list.
       bool Profitable =
           isMoreProfitable(CurrentFactor, ScalarFactor, P->hasScalarTail());
-      // Epilogue configurations are part of each probed candidate. Keep their
-      // original policy/costs while researching the main-loop ranking.
-      if (Config.RA && Cost != OriginalCost) {
-        auto *SavedReport = Config.CostReport;
-        Config.CostReport = nullptr;
-        Profitable = isMoreProfitable(
-            VectorizationFactor(VF, OriginalCost, ScalarCost), ScalarFactor,
-            P->hasScalarTail());
-        Config.CostReport = SavedReport;
-      }
       if (Profitable) {
-        ProfitableVFs.push_back(Config.RA
-            ? VectorizationFactor(VF, OriginalCost, ScalarCost) : CurrentFactor);
+        ProfitableVFs.push_back(CurrentFactor);
         if (Config.CostReport)
           ReportProfitablePlans.push_back(P.get());
       }
@@ -6753,6 +6765,13 @@ DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
   // 3. Fix the vectorized code: take care of header phi's, live-outs,
   //    predication, updating analyses.
   ILV.fixVectorizedLoop(State);
+  if (Config.RA && Config.RA->probesThisLoop() && HeaderVPBB) {
+    if (auto *Generated =
+            LI->getLoopFor(State.CFG.VPBB2IRBB.lookup(HeaderVPBB))) {
+      SE.forgetLoop(Generated);
+      markVPlanRALoop(*Generated, getVPlanRAProbe(), SE);
+    }
+  }
 
   ILV.printDebugTracesAtEnd();
 
@@ -8686,7 +8705,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // Check the loop for a trip count threshold: vectorize loops with a tiny trip
   // count by optimizing for size, to minimize overheads.
   auto ExpectedTC = getSmallBestKnownTC(PSE, L);
-  if (ExpectedTC && ExpectedTC->isFixed() &&
+  if (!vplanRAEnabled() && ExpectedTC && ExpectedTC->isFixed() &&
       ExpectedTC->getFixedValue() < TinyTripCountVectorThreshold) {
     LLVM_DEBUG(dbgs() << "LV: Found a loop with a very small trip count. "
                       << "This loop is worth vectorizing only if no scalar "
@@ -8783,6 +8802,12 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // Get user vectorization factor and interleave count.
   ElementCount UserVF = Hints.getWidth();
   unsigned UserIC = Hints.getInterleave();
+  if (vplanRAEnabled()) {
+    if (UserIC > 1 || hasForcedEpilogueVF())
+      reportFatalUsageError(
+          "backend selection requires IC=1 and no vector epilogue");
+    UserIC = 1;
+  }
   // Outer loops don't have LoopAccessInfo, so skip the safety check and reset
   // UserIC (interleaving is not supported for outer loops).
   if (!IsInnerLoop)
@@ -8805,6 +8830,18 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   if (RAProbe) {
     std::tie(VF, BestPlanPtr) = LVP.selectRAProbe();
     F->addFnAttr("vplan.ra.candidate", getVPlanRAProbe());
+    F->addFnAttr("vplan.ra.vf", std::to_string(VF.Width.getKnownMinValue()));
+    F->addFnAttr("vplan.ra.scalable", VF.Width.isScalable() ? "1" : "0");
+    F->addFnAttr("vplan.ra.width", std::to_string(estimateElementCount(
+                                       VF.Width, Config.getVScaleForTuning())));
+    F->addFnAttr("vplan.ra.max-trip-count",
+                 std::to_string(PSE.getSmallConstantMaxTripCount()));
+    F->addFnAttr("vplan.ra.exact-trip-count",
+                 std::to_string(PSE.getSE()->getSmallConstantTripCount(L)));
+    F->addFnAttr("vplan.ra.scalar-tail",
+                 BestPlanPtr->hasScalarTail() ? "1" : "0");
+    if (VF.Width.isScalar())
+      markVPlanRALoop(*L, getVPlanRAProbe(), *PSE.getSE());
   }
   unsigned IC = 1;
 
@@ -8816,7 +8853,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     return false;
   }
 
-  if (IsInnerLoop && ORE->allowExtraAnalysis(LV_NAME))
+  if (!RA && IsInnerLoop && ORE->allowExtraAnalysis(LV_NAME))
     LVP.emitInvalidCostRemarks(ORE);
 
   assert((IsInnerLoop || !CM.maskPartialAliasing()) &&
@@ -8826,9 +8863,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                            CM.maskPartialAliasing());
   if (IsInnerLoop && LVP.hasPlanWithVF(VF.Width)) {
     // Select the interleave count.
-    IC = LVP.selectInterleaveCount(
-        *BestPlanPtr, VF.Width,
-        RA ? RA->originalCost(*BestPlanPtr, VF.Width) : VF.Cost);
+    IC = RA ? 1 : LVP.selectInterleaveCount(*BestPlanPtr, VF.Width, VF.Cost);
 
     unsigned SelectedIC = std::max(IC, UserIC);
     //  Optimistically generate runtime checks if they are needed. Drop them if
@@ -8867,7 +8902,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       VP_COST_SUMMARY(
           Config.CostReport,
           OS << "  outside-loop-profitability bypass=forced-vectorization\n");
-    if (!ForceVectorization && !RAProbe &&
+    if (!ForceVectorization && !RA &&
         !isOutsideLoopWorkProfitable(Checks, VF, L, PSE, CostCtx, *BestPlanPtr,
                                      SEL, Config.getVScaleForTuning())) {
       ORE->emit([&]() {
@@ -9037,7 +9072,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   VPlan &BestPlan = *BestPlanPtr;
   // Consider vectorizing the epilogue too if it's profitable.
   std::unique_ptr<VPlan> EpiPlan =
-      LVP.selectBestEpiloguePlan(BestPlan, VF.Width, IC);
+      RA ? nullptr : LVP.selectBestEpiloguePlan(BestPlan, VF.Width, IC);
   if (RA)
     RA->selection(BestPlan, VF.Width, IC,
                   EpiPlan ? EpiPlan->getSingleVF() : ElementCount::getFixed(0),

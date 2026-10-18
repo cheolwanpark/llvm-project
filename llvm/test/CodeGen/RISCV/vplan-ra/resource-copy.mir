@@ -1,4 +1,5 @@
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-ra-observe -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=copy:0:0:s4 -vplan-ra-features-output=%t.json %s -o %t.mir
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=copy:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
+# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
 # RUN: FileCheck %s --check-prefix=FEATURES < %t.json
 # RUN: FileCheck %s --check-prefix=OPS < %t.json
 # RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; ops=r['operations']; copies=[o for o in ops if o['kind']=='copy']; assert len(ops)==16; assert [(o['group8'],o['work8']) for o in copies]==[(8,8),(16,16),(32,32),(64,64),(8,8),(8,0),(16,0),(32,0),(64,0),(8,0)]"
@@ -40,11 +41,13 @@
   entry:
     br label %loop
   loop:
-    br i1 true, label %loop, label %exit
+    br i1 true, label %loop, label %exit, !llvm.loop !900
   exit:
     ret void
   }
-  attributes #0 = { "vplan.ra.candidate"="copy:0:0:s4" }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.candidate"="copy:0:0:s4" }
+  !900 = distinct !{!900, !901}
+  !901 = !{!"llvm.loop.vplan.candidate", !"copy:0:0:s4"}
 ...
 ---
 name: copy

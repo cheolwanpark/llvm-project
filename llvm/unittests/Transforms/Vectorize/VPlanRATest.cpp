@@ -1,7 +1,6 @@
 //===- VPlanRATest.cpp - Backend feedback selection integration tests ------===//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-#include "../lib/Transforms/Vectorize/VPlanRACostModel.h"
 #include "llvm/Analysis/TargetTransformInfoImpl.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Module.h"
@@ -17,17 +16,6 @@
 #include "gtest/gtest.h"
 
 using namespace llvm;
-
-// This executable supplies the research hook instead of pulling the neutral
-// implementation out of the static Vectorize archive. No production test flag
-// or label-aware policy is added to clang/opt.
-InstructionCost llvm::costWithRAFeatures(const VPlan &, ElementCount,
-                                         InstructionCost Original,
-                                         const json::Object &Features) {
-  if (auto C = Features.getInteger("testing_cost"))
-    return InstructionCost(*C);
-  return Original;
-}
 
 namespace {
 class TestTTI : public TargetTransformInfoImplCRTPBase<TestTTI> {
@@ -88,7 +76,7 @@ json::Value runLV(StringRef Manifest) {
   return cantFail(json::parse((*Buffer)->getBuffer()));
 }
 
-TEST(VPlanRA, FeaturesChangeTheActualMainVFSelection) {
+TEST(VPlanRA, BackendScoresChangeTheActualMainVFSelection) {
   SmallString<128> Dir;
   ASSERT_FALSE(sys::fs::createUniqueDirectory("vplan-ra-unit", Dir));
   SmallString<128> Manifest(Dir), Feedback(Dir);
@@ -108,9 +96,9 @@ TEST(VPlanRA, FeaturesChangeTheActualMainVFSelection) {
   auto Baseline = runLV(Manifest);
   auto *Rows = Baseline.getAsObject()->getArray("candidates");
   ASSERT_GE(Rows->size(), 3u);
-  // Run the real vectorizer twice with different synthetic observations.
-  // The production hook is neutral; only this test executable uses the policy.
-  for (StringRef Wanted : {"f2", "f4"}) {
+  // Feed computed scores directly into the real vectorizer, including a scalar
+  // win.
+  for (StringRef Wanted : {"f1", "f2", "f4"}) {
     json::Array FeedbackRows;
     for (auto &Row : *Rows) {
       const auto &O = *Row.getAsObject();
@@ -118,19 +106,30 @@ TEST(VPlanRA, FeaturesChangeTheActualMainVFSelection) {
         continue;
       FeedbackRows.push_back(json::Object{
           {"id", O.getString("id")->str()},
-          {"features", json::Object{{"testing_cost", O.getString("vf") == Wanted ? 1 : 10000}}},
+          {"cost", json::Object{{"body_quarters", 4},
+                                {"scalar_quarters", 4},
+                                {"score_quarters",
+                                 O.getString("vf") == Wanted ? 4 : 40000},
+                                {"divisor", 1},
+                                {"width", 1},
+                                {"scalar_width", 1},
+                                {"kind", "cost-per-lane"}}},
           {"selection", json::Object{{"id", O.getString("id")->str()},
-                                     {"ic", 1}, {"epilogue_vf", "f0"},
+                                     {"ic", 1},
+                                     {"epilogue_vf", "f0"},
                                      {"emitted", true}}}});
     }
-    writeVPlanRAJSON(Feedback, json::Object{{"version", 1}, {"run_id", "unit-test"},
-                                         {"candidates", std::move(FeedbackRows)}});
+    writeVPlanRAJSON(Feedback,
+                     json::Object{{"version", 2},
+                                  {"run_id", "unit-test"},
+                                  {"candidates", std::move(FeedbackRows)}});
     In = Feedback.str().str();
     auto Final = runLV(Manifest);
     auto *Selected = Final.getAsObject()->getArray("selections");
     ASSERT_EQ(Selected->size(), 1u);
     EXPECT_TRUE((*Selected)[0].getAsObject()->getString("id")->ends_with(Wanted));
-    EXPECT_EQ((*Selected)[0].getAsObject()->getBoolean("emitted"), true);
+    EXPECT_EQ((*Selected)[0].getAsObject()->getBoolean("emitted"),
+              Wanted != "f1");
   }
   EXPECT_FALSE(sys::fs::remove_directories(Dir));
 }
