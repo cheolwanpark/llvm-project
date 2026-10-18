@@ -9,12 +9,18 @@
 ; RUN:   -pass-remarks-missed=vplan-reduction-fission -disable-output %s 2>&1 | FileCheck %s --check-prefix=REASON
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission \
-; RUN:   -enable-vplan-native-path -pass-remarks-missed=vplan-reduction-fission \
-; RUN:   -disable-output %s 2>&1 | FileCheck %s --check-prefix=CYCLE
+; RUN:   -enable-vplan-native-path -pass-remarks=vplan-reduction-fission \
+; RUN:   -pass-remarks-missed=vplan-reduction-fission \
+; RUN:   -S %s -o %t.cycle 2>%t.cycle.remarks
+; RUN: FileCheck %s --check-prefix=CYCLE < %t.cycle.remarks
+; RUN: FileCheck %s --check-prefix=CYCLEIR --implicit-check-not=scalar.fission < %t.cycle
 ;
 ; Generalized admission must not admit effects, feedback, live-outs, cycles,
 ; exits or conditional participation through a larger CFG. The latter still
 ; needs exactly one recognized participation arm and a two-input latch merge.
+; Loop::getStartLoc uses loop metadata or the preheader/header terminator,
+; not the latch's debug location. Supply the original loop start at each
+; preheader so every rejection retains its exact source location.
 
 declare i32 @safe(i32) memory(none) nounwind willreturn speculatable
 declare i32 @unsafe(i32) memory(read) nounwind willreturn speculatable
@@ -29,7 +35,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !7
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%update, %latch]
@@ -72,7 +78,22 @@ bypass:
 ; The ordinary worklist only visits the internal natural loop. Explicit outer
 ; hints with the native worklist also exercise our acyclicity rejection for the
 ; original outer target, rather than requiring a remark for an unvisited loop.
+; The outer loop metadata carries 22:3; the inner loop has its own 25:5 start.
+; collectSupportedLoops selects only the explicitly hinted outer loop on the
+; native path. Require its rejection and exclude any inner-loop fission remark.
+; CYCLE-NOT: scalar-acyclic-reject.c:25:5:
 ; CYCLE: scalar-acyclic-reject.c:22:3: scalar-IR reduction fission rejected: scalar-unsupported-cfg
+; CYCLE-NOT: scalar-acyclic-reject.c:25:5:
+; CYCLEIR-LABEL: define i32 @reject_acyclic_internal_cycle(
+; CYCLEIR: loop:
+; CYCLEIR: %sum = phi i32 [ 19, %preheader ], [ %update, %latch ]
+; CYCLEIR: br i1 %choose, label %left, label %right
+; CYCLEIR: left2:
+; CYCLEIR: %again = icmp eq i32 %x, 3
+; CYCLEIR: br i1 %again, label %left2, label %{{[^, ]+}}
+; CYCLEIR: latch:
+; CYCLEIR: %update = add i32 %sum, %c
+; CYCLEIR: br i1 %done, label %exit, label %loop
 ; CHECK-LABEL: define i32 @reject_acyclic_internal_cycle(
 ; CHECK: ret i32
 define i32 @reject_acyclic_internal_cycle(ptr %a, i64 %n) !dbg !8 {
@@ -82,7 +103,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !9
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%update, %latch]
@@ -104,7 +125,7 @@ first.merge:
 left2:
   %pc = add i32 %first, 23
   %again = icmp eq i32 %x, 3
-  br i1 %again, label %left2, label %latch
+  br i1 %again, label %left2, label %latch, !dbg !33, !llvm.loop !34
 right2:
   %nc = sub i32 %first, 9
   br label %latch
@@ -130,7 +151,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !11
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%update, %latch]
@@ -177,7 +198,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !13
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%update, %latch]
@@ -224,7 +245,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !15
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%update, %latch]
@@ -272,7 +293,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !17
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%update, %latch]
@@ -319,7 +340,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !19
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%update, %latch]
@@ -367,7 +388,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !21
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%update, %latch]
@@ -414,7 +435,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !23
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%update, %latch]
@@ -461,7 +482,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !25
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%update, %latch]
@@ -508,7 +529,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !27
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%merged, %latch]
@@ -554,7 +575,7 @@ entry:
   %enter = and i1 %valid, %nonzero
   br i1 %enter, label %preheader, label %bypass
 preheader:
-  br label %loop
+  br label %loop, !dbg !29
 loop:
   %iv = phi i64 [0, %preheader], [%next, %latch]
   %sum = phi i32 [19, %preheader], [%merged, %latch]
@@ -623,6 +644,8 @@ bypass:
 !27 = !DILocation(line: 112, column: 3, scope: !26)
 !28 = distinct !DISubprogram(name: "reject_acyclic_conditional_nested", scope: !1, file: !1, line: 120, type: !4, scopeLine: 120, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
 !29 = !DILocation(line: 122, column: 3, scope: !28)
-!30 = distinct !{!30, !31, !32}
+!30 = distinct !{!30, !9, !31, !32}
 !31 = !{!"llvm.loop.vectorize.enable", i1 true}
 !32 = !{!"llvm.loop.vectorize.width", i32 2}
+!33 = !DILocation(line: 25, column: 5, scope: !8)
+!34 = distinct !{!34, !33}
