@@ -1,9 +1,9 @@
 {
-  "task_id": "t000040",
-  "base_revision": "58e50e29396bd04469f6ec02a9437ab4ad51317a",
-  "hypothesis": "Bounded full-trip scalar fission can split independent unconditional add/fadd reductions while retaining producer-local first-order or mutually dependent scalar state. Closed extractable accumulators need not require every header PHI to be a reduction, original-loop vectorizability or a pressure/depth/reduction-count profitability gate. This revision repairs validation of that inherited extension: ABI padding depends on the insertion order of unique contribution streams, so reversed accumulator PHIs can change reserved scratch bytes without changing capacity, traffic or semantics. Production and immutable benchmark inputs are unchanged.",
-  "semantics": "The inherited unconditional extraction proof requires the accumulator PHI's sole user to be its update, whose only users are its own backedge PHI and final exit LCSSA PHIs. Compact extraction retains its existing update/bypass/merge closure. State feeding predicates, addresses, contributions, other reductions or partial exports cannot be extracted. Nonextractable scalar header PHIs remain in the original producer with their starts, backedges, operations, flags, CFG and execution order; at least one closed add/fadd reduction is required. Retained producer live-outs and retained state plus compact participation remain rejected. The existing effect/call/load whitelist, trip/termination proofs, bounds, ordinal/completed/participating counts, masks, tails, alias behavior, live-outs and stage metadata are unchanged. Ordinary unconstrained unflagged FP preserves per-reduction order and operand order under both settings of the separate fission FP-reordering option; strictfp/constrained FP remain rejection contracts. No d2 chunk/export support is imported. The prior explicit export exit PHIs, defined bypass values and observable stores remain intact. This repair changes only recurrence_runtime's byte expectation and the fixture checker: each matrix row now supplies an exact stream-order byte sum, and a shared remark certificate checks that count, capacity, original source location and stage VFs. Repeated LV may revisit a stage but must select each original loop only once. The focused lit regression checks the execution matrix's shared fixture table against independent literal expectations, then uses actual scalar and repeated-LV vector/tail remarks for both stream orders, all eleven scalar locations and all three scalar capacity boundaries; 24 new mutations reject swapped byte counts, numeric-prefix byte counts, wrong capacity/location and wrong producer/consumer VFs. All inherited checker mutations, typed scratch provenance, retained-state instruction/order certificates, ordered vector/scalar FP and exact count checks remain. Executable verification remains the full original IR / actual transformed paths / independent C-formula matrix, including aliases, enclosing carry/reuse, zero/one-trip, capacity boundaries, vector consumers and scalar tails. Separate strict and explicitly reordered runs and uninstrumented RVV machine verification are requested from the harness; no compilation, tests or executable comparisons were run by this worker.",
-  "costs": "No production allocation, schedule, guard or analysis changes. Full-trip reserved scratch is the insertion-order sum of ABI-aligned unique contribution streams, capped at 65536 bytes and the signed pointer-index ceiling; no final-stream padding is charged by the existing accounting. Seven integer-first capacity-65 fixtures reserve i32[65] then double[65], 260+4+520=784 bytes. recurrence_runtime reverses the extracted accumulator PHIs and reserves double[65] then i32[65], 520+260=780 bytes. This intentionally corrects the former blanket 784-byte expectation. Integer-first capacities 1/255/5461 retain 4+4+8=16, 1020+4+2040=3064 and 21844+4+43688=65536 bytes. Every fixture still stores 12 bytes and loads 12 bytes per completed iteration: 24*N logical scratch traffic, independent of reserved capacity and of two integer accumulators sharing one stream. Enclosing rows reuse the same entry allocations: 24*sum(row N) traffic with no capacity growth per row. No recurrence-state arrays, masks or unbounded storage are added. Original inputs and helpers execute once per original iteration/path; no extra original-input rereads, producer duplication or contribution recomputation. Original entry guards, ordinary LV vector/tail checks and noncanonical ordinal/completed arithmetic remain; no new alias/SCEV/FP guards. The inherited production recognizer uses direct PHI/update/merge user scans, a retained-state bit and existing scalar-type, effect and live-out scans, linear in visited instructions/uses/CFG edges apart from unchanged SCEV queries. The repair replaces a universal padding formula with eleven explicit fixture byte sums and factors existing exact remark assertions into one small helper shared with lit; it adds no generic layout machinery or profitability model. Physical stack traffic, spills, pressure, RVV execution and speedup remain unmeasured.",
+  "task_id": "t000042",
+  "base_revision": "ddcefe9682094295ad1d4e441e0bc5f1da978b76",
+  "hypothesis": "Bounded single-diamond compact add/fadd reductions can be extracted while arbitrary supported scalar state remains in the original producer. The inherited direct-use closure proof already isolates each moved accumulator from predicates, addresses, contributions and retained state. Removing the blanket ParticipationArm && RetainedState veto therefore admits state-dependent participating streams without requiring original-loop vectorizability, pressure/depth/reduction-count heuristics, a profitability model, benchmark identities or source rewrites.",
+  "semantics": "Only the unused retained-state bit and blanket veto are removed in production; the existing recognizer, common participation arm, full-trip finite storage bound, byte/index ceilings, effect/load/call whitelist, strictfp/constrained-FP rejection, live-out rules and emitter remain. Each moved conditional PHI has exactly its update and bypass-merge uses; the update has only the merge use; the merge feeds its own backedge and final Exit LCSSA PHIs. Thus no first edge from extracted state can reach producer state, a predicate, address, contribution or another accumulator. Retained PHIs, starts, backedges, latch merges, operations, flags, branches and execution order stay on the original producer paths. Updates on skipped iterations remain updates; conditional state updates remain conditional. Every participating iteration stores its contributions at old P then increments P once, while bypass iterations retain P. With 0 <= P <= completed <= N <= M, all scratch indices are below finite full-trip capacity. The consumer reads 0..P-1 in original participation order and clones each reduction's operand order/flags; an empty stream returns its exact start without an addition. Ordinary unconstrained ordered FP and explicitly enabled fission FP reordering are checked in separate matrices; neither strictfp nor constrained FP is admitted and no fast-math/errno assumptions are added. Execution verification is requested for the exact unchanged historical recurrence_compact plus nine analogous integer/double-state fixtures: original IR, actual transformed scalar consumers and vector consumers/scalar tails, and independent C formulas. Retained fsub and fadd state, state-driven predicates/addresses/contributions, every-iteration updates, conditional latch merges, reversed PHIs, canonical +1, bounded +3 relational and masked-origin +2 controls, and enclosing-loop reuse are covered. New certificates reuse the existing retained-instruction, compact-count and scalar-tail/result proofs; typed producer/consumer scratch provenance, integer stream sharing and scalar FP operand linkage are also checked. Original-loop Selected/Rejected source locations and independent producer/consumer VF remarks are required before host specialization/instrumentation. Probes are inserted only after checking actual opt output; uninstrumented target IR is separately machine-verified by the harness.",
+  "costs": "Production adds no allocation, traffic, recomputation, reread, duplication, runtime guard, traversal or scheduling machinery. Entry scratch reserves M times each insertion-ordered unique contribution stream, with ABI alignment before each stream and no final-stream padding, still capped at 65536 bytes and the signed pointer-index limit. For i32[65] then double[65], reserved bytes are 260+4+520=784; reversed double[65] then i32[65] reserves 520+260=780. Integer-first M=1/255/5461 reserves 4+4+8=16 / 1020+4+2040=3064 / 21844+4+43688=65536 bytes. Two integer accumulators share the one i32 stream. Logical stores are 12*P bytes, logical reads 12*P bytes, total 24*P, independent of full-trip M and N. Scratch is reserved in the entry block, including entry-bypass executions in the emitted IR. P=0 performs no scratch store/load or consumer update. Enclosing rows reuse the same entry allocations with 24*sum(row P) logical traffic; capacity does not grow with rows. The preserved historical i32-only fixture reserves 260 bytes and transfers 8*P bytes. No recurrence arrays, mask arrays, chunk buffers or unbounded storage are added. Original input loads and helper calls execute once at their original sites/paths, including the original state-dependent rereads of input arrays; fission introduces zero additional input rereads, contribution recomputation or producer duplication. Existing entry and P=0 guards and normal LV minimum/vector/tail checks remain; no new alias/SCEV/FP guards. Production analysis remains direct PHI/update/merge use scans plus the inherited scalar-type/effects/live-out and CFG-edge scans, linear in visited instructions/uses/edges apart from unchanged SCEV queries; one state bit and a rejection disappear. Validation extends the existing focused certificates and shared transformation matrix, adds one small historical-delay certificate and bounded independent C formula families; it is not a general IR parser/equivalence solver or a target cost model. Physical stack traffic, register pressure/spills, RVV execution and speedup are unmeasured.",
   "tests": [
     "llvm/test/Other/reduction-fission-execution-checker.test",
     "llvm/test/Other/reduction-fission-compact-tail-checker.test",
@@ -53,63 +53,47 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
-    "llvm/test/Other/reduction-fission-recurrence-checker.test"
+    "llvm/test/Other/reduction-fission-recurrence-checker.test",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
+    "llvm/test/Other/reduction-fission-compact-recurrence-checker.test"
   ],
-  "limitations": "This worker ran no compiler, build, test runner or executable comparison. The immutable t000039 result records successful compilation and 48/49 mandatory lit files passing; its positive recurrence fixture passed EVL checks but failed the subsequent exact-source byte remark. Later RUN lines, VectorizeTests, full executable comparisons and primary corpus compilations were not validated there. This repair and the inherited recurrence extension require fresh harness-only validation. Retained state plus compact consumers, producer live-outs, chunk scheduling, arbitrary cyclic producer CFGs, early exits, unsafe calls/stores/volatile/atomics, unavailable/oversized finite bounds and strictfp/constrained FP retain their existing restrictions. Conditional retained-state merges and pointer recurrences are not separately exercised by the recurrence execution matrix. Certificates remain fixture-scoped, not general IR equivalence or ABI-layout solvers; whole-function aggregate scratch budgets are unchanged. Fixed-vscale host execution is not RVV execution, and RVV machine verification is not a speedup measurement. No new corpus selection, speedup, maturity, merge result or change to d2/t000036 integration pins is claimed.",
+  "limitations": "The worker did not compile, run tests, invoke the execution checker or operate any toolchain. All current changes and new certificates await harness validation. Retained producer live-outs, partial accumulator exports, incompatible participation, arbitrary compact CFGs beyond the existing single diamond, early exits, non-affine termination controls, unavailable or excessive full-trip bounds, unsafe calls/stores/volatile/atomic effects, strictfp and constrained FP remain unsupported. Pointer-valued recurrences and all possible supported acyclic producer shapes are not separately exercised by this compact matrix. No d2 export/chunk work, aggregate stack-budget policy or profitability model is imported. EVL/VP paths receive IR/machine checks only; host execution specializes the actual scalable vector/remainder paths at fixed vscales and executes actual scalar paths. Host fixed-vscale execution is not RVV target execution; machine verification is not speedup measurement. No new corpus selections, measured speedup, maturity or merge outcome is claimed.",
   "test_expectations": [
-    "Intentional t000040 expectation correction: scalar-recurrence.c:42:3 (recurrence_runtime) requires capacity 65 and scratch bytes 780, precisely 520+260 for double-first streams. Integer-first capacity-65 siblings remain 784, precisely 260+4+520. The final stream is not padded by the existing accounting; accepting either byte count indiscriminately would be incorrect. Both orders still have 24 bytes of logical scratch traffic per completed iteration.",
-    "The execution matrix now carries explicit byte sums for all eleven rows. The shared execution fixture table is checked against independent literal expectations; the same exact-source scratch/stage-VF helper is exercised by the focused regression on actual scalar and LV2 vector/tail output before the full executable matrix. New positive checks cover both orders, analogous integer-first patterns and 1/255/5461 boundaries. Twenty-four additional rejection mutations preserve precise byte/capacity/location/VF obligations; all old semantic mutations remain unchanged. Repeated stage remarks are permitted; duplicate splits are not.",
-    "Inherited t000039 repair retained: Intentional SSA repair: recurrence_partial_export exports pre-update r0 through an exit PHI with bypass 17; recurrence_state_export exports prev through an exit PHI with bypass 23. Both still add that export into the observable output. New output PHI/add/store checks supplement the unchanged implicit scalar.fission prohibition and source-location scalar-unsupported-live-out expectations. No rejection is removed or converted to a split.",
-    "Inherited t000039 repair retained: Intentional ordering repair: recurrence_runtime reverses accumulator PHIs, so scratch allocation/store/load and independent accumulator-update order can reverse. DAG checks permit this for all eleven scalar functions and all eight EVL/scalar-tail functions. Consumer block labels bound matches, both typed scratch streams and their indexed loads are required, both integer updates share the checked i32 load, and the checked double load must feed an unflagged ordered FP reduction with unchanged operand order.",
-    "All original positive function IR and positive .ll RUN commands, capacities, source locations, production use closure, C references, dispatch cases and every inherited checker mutation remain. The focused checker RUN commands now capture scalar and repeated-LV tail remarks. Capacity 1/255/5461 typed allocations, consumers, exact byte counts and scalar execution obligations remain unchanged.",
-    "All eleven new positive functions formerly fail the old requirement that every non-control header PHI be a supported reduction; each now has actual original/transformed/independent execution coverage requested, including ordered FP and integer results. No pre-existing correctness obligation is removed.",
-    "Two existing affine feedback rejection remarks change from scalar-unsupported-recurrence to scalar-unsupported-live-out: feedback prevents extraction of that accumulator, which is retained, and its exported final value then fails the unchanged producer live-out check. Their no-split and result checks remain. Existing single-accumulator rejection diagnostics retain their first recognition failure when nothing can be extracted.",
-    "New rejections cover accumulator PHI/update/predicate/address/other-reduction feedback, partial accumulator exports, retained state exports, stores/effectful calls, unavailable bounds, the first over-capacity mixed stream (5462), strictfp/constrained FP, no extractable add/fadd, and retained state with compact participation.",
-    "The new checker test uses actual scalar and LV2 vector/tail output. Positives include SSA-renamed retained recurrences and normal LV removal of integer nowrap flags. Mutations preserve all inherited checker tests and reject wrong recurrence starts/backedges/operands/opcodes/order, moved/duplicated state work, wrong scratch capacity/index/store count, bound-as-consumer-count and FP reassociation."
+    "Intentional conversion: recurrence_compact is removed from the rejection fixture and appears verbatim, including its original interface and scalar-recurrence.c:12:3 location, in reduction-fission-scalar-recurrence-compact-legacy.ll. Its sole rejection was the removed blanket veto; %prev is isolated producer state, and the %sum/update/merge closure remains sufficient. Expected Selected capacity 65 / bytes 260 replaces the old scalar-unsupported-recurrence expectation. It is executed through original IR / transformed scalar and vector/tail / an independent formula, including skipped iterations changing %prev.",
+    "All other inherited rejection functions, correctness checks and checker mutations remain. New compact negatives retain feedback from accumulator PHIs/merge results into predicates, state and addresses; retaining those accumulators subsequently fails the unchanged export/live-out rule even with independent compact reductions. New independent cases reject retained-state exports, incompatible arms, stores, strictfp, constrained FP, unavailable bounds and capacity 5462. Existing compact partial-state/producer exports, unsafe calls, volatile/atomics and full-stream rejection suites remain mandatory.",
+    "Nine analogous positive functions use two shared integer accumulators plus an ordered double accumulator. They combine integer delay state with ordinary ordered FP fsub state; the reversed canonical sibling also retains reduction-shaped fadd state feeding its predicate and contributions. The merge/affine/enclosing/one/limit siblings update state through active/bypass latch PHIs; the other siblings update state every original iteration, including skipped iterations. Header PHI order does not determine legality.",
+    "The new focused checker regression checks actual scalar, LV2 reordered scalar-tail and LV1 strict EVL output, precise source/capacity/ABI-order byte/stage-VF remarks, all six core shapes and three scalar capacity boundaries. It also checks actual scalar/LV2 tail output for the exact historical function. New mutations reject changed state starts/backedges/operations/order/operand order, changed predicates/addresses, moved/duplicated work, scratch capacity/index/store errors, count increment/bypass errors, wrong P/N bounds and empty guards/starts, skipped zero additions and reassociation. Positive SSA renaming and removal of retained integer poison flags remain allowed. Existing focused checker obligations are preserved.",
+    "The extended executable matrix retains every inherited comparison. New compact core functions run scalar consumers plus actual scalable vector consumers with scalar tails specialized at vscales 1/2/4/8/32; capacities 1/255/5461 run scalar consumers. Each runs separate strict and FP-reordering-option policies and one/two LV invocations. EVL core outputs are checked and uninstrumented RVV machine-verified but not executed on the host.",
+    "The independent compact formula computes exact N, P, floor(P/VF) and P%VF separately per row, including alias writes between rows. Modes cover nonempty producers with P=0, all-active, integer-state sparse, FP-state sparse, first-only and last-only streams. N sweeps 0..66 and UINT64_MAX for capacity 65, and targeted 0/1/small/half/capacity-1/capacity/capacity+1/UINT64_MAX for boundaries. Rows cover 0/1/2/4/5/UINT64_MAX; runtime origins include signed extremes. Integer bits, non-NaN FP bits and signed zero, NaN classification, exact producer/latch/participant/vector/tail probe counts, input/output canaries, aliases and entry scratch reuse are required. Per compiled variant coverage requires zero trips, entered empty streams, active/sparse where possible, first/last-only, capacity, scalar tails and exact/mixed vector paths when VF fits. At VF128 > capacity65, scalar-only execution is expected."
   ],
   "frozen_corpus_evidence": {
-    "analysis": "Read harness/BENCHMARKS_ANALYSIS.md (117 original immutable evaluation inputs).",
-    "earlier_findings": "Inherited reports preserve earlier accepted t000035 results. This worker read BENCHMARKS_ANALYSIS.md, the t000039 revise decision/build result/lit failure and relevant immutable t000039/t000037 diff sections, current scratch accounting/recognizer/checker/C harness, t000036's integration record and a frozen exact-target t000035 primary result. Other worktrees and integration pins are unchanged.",
-    "accepted_base_revision": "6108751ee4350f697bdc673f770c70d157860ab6",
-    "accepted_base_checks": "Historical t000035 acceptance records compilation, 46 lit files, 99 VectorizeTests, 1158276 executable comparisons and 234 primary compilations passing. These do not validate the new revision.",
-    "reaggregated_source": "Read-only evaluations/t000035/primary/*/*/result.json: 234 records.",
+    "analysis": "Read harness/BENCHMARKS_ANALYSIS.md: 117 immutable original inputs; original ordinary-vectorization classification and supplementary normalization/FP/errno experiments are distinct.",
+    "earlier_findings": "Read the current inherited report, accepted t000040 task/build/review record and primary/result.json; inspected the immutable t000037 production recognizer diff, t000040 scratch-accounting repair diff and accepted t000040 uninstrumented recurrence EVL / compact scalar-tail output. Acceptance and older measurements are historical only.",
+    "accepted_base_revision": "ddcefe9682094295ad1d4e441e0bc5f1da978b76",
+    "accepted_base_checks": "t000040 records compilation, 49 mandatory lit files, 99 VectorizeTests, complete executable matrices and 234 immutable primary compilations passing. Its review records 156672 recurrence vector runs and 227840 recurrence tail runs. This does not validate t000042.",
+    "source": "evaluations/t000040/primary/result.json",
     "per_policy": {
       "strict": {
         "inputs": 117,
-        "exit_code_zero": 117,
         "rejected": 91,
         "no_decision": 26,
         "selected": 0,
         "vectorized": 12,
-        "exact_attribution": 117
+        "unresolved": 0
       },
       "reordered": {
         "inputs": 117,
-        "exit_code_zero": 117,
         "rejected": 91,
         "no_decision": 26,
         "selected": 0,
         "vectorized": 12,
-        "exact_attribution": 117
+        "unresolved": 0
       }
     },
-    "interpretation": "Exact original target records only; nested/helper activity is separate. General legality extension is motivated by producer-local state, not by benchmark identities or an expected target-count increase.",
-    "prior_fixture_repair_evidence": {
-      "task": "tasks/t000037.json: revise decision for revision 5fc1566dc345230c62a6819ded05c1c0bb8b39b4",
-      "immutable_diff": "diffs/t000037.patch: production recognizer and recurrence fixture/checker implementation inspected",
-      "failure_log": "builds/t000037/lit.log: invalid exit uses of r0/prev before transformation; EVL double load precedes i32 load in recurrence_runtime",
-      "historical_result": "Compilation exit 0; mandatory lit exit 1, 47 passed and two failed. No recurrence executable or primary-corpus acceptance follows from those results.",
-      "corpus_context": "Read BENCHMARKS_ANALYSIS.md, historical t000035 acceptance and a frozen exact-target primary record. Existing aggregated t000035 evidence is retained as historical only; the 117 original inputs are unchanged.",
-      "scope": "Only the two recurrence lit files and this report change. No d2 import, common checkout edit, integration-pin change or production change."
-    },
-    "repair_evidence": {
-      "task": "tasks/t000039.json: revise decision for 58e50e29396bd04469f6ec02a9437ab4ad51317a",
-      "immutable_diff": "diffs/t000039.patch: prior SSA/independent-order fixture repair; production unchanged",
-      "failure_log": "builds/t000039/lit.log: EVL passed; scalar-recurrence.c:42:3 expected 784 but emitted 780",
-      "historical_result": "Compilation exit 0; lit exit 1 with 48 passing and one failing mandatory file. Later positive-fixture RUN lines and all subsequent mandatory validation remain pending.",
-      "accounting_source": "getScalarFissionScratchBytes iterates insertion-ordered unique Scratch contributions, aligns before each stream and adds its allocation size. Header reduction PHI order determines stream insertion order.",
-      "scope": "Only llvm/utils/check-reduction-fission.py, the positive recurrence lit file, the focused checker regression and this report change; no production or benchmark changes."
-    },
+    "changes_from_parent": [],
+    "interpretation": "No original target-loop selections were established by the accepted base. New legality is general retained-state/compact composition; no benchmark-specific transformation or predicted target-count gain is used.",
     "preserved_integration_pins": {
       "task": "t000036",
       "direction": "d2",
@@ -119,20 +103,20 @@
     }
   },
   "validation_requested": {
-    "task_id": "t000040",
+    "task_id": "t000042",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
       "required": true,
-      "snapshot": "this repaired d1 worktree frozen by harness; t000036 pinned heads and other worktrees unchanged",
-      "base_revision": "58e50e29396bd04469f6ec02a9437ab4ad51317a",
+      "harness_only": true,
+      "base_revision": "ddcefe9682094295ad1d4e441e0bc5f1da978b76",
       "agent_compilation": false,
-      "prior_build_is_not_acceptance": true,
       "fresh_c_harness_compilation_and_link_required": true,
-      "harness_only": true
+      "snapshot": "freeze this d1 worktree; do not change other heads or d2 integration pins"
     },
     "lit": {
       "mandatory_fission_suite": true,
+      "all_inherited_run_lines": true,
       "changed_and_explicit_paths": [
         "llvm/test/Other/reduction-fission-execution-checker.test",
         "llvm/test/Other/reduction-fission-compact-tail-checker.test",
@@ -182,43 +166,47 @@
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
-        "llvm/test/Other/reduction-fission-recurrence-checker.test"
+        "llvm/test/Other/reduction-fission-recurrence-checker.test",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
+        "llvm/test/Other/reduction-fission-compact-recurrence-checker.test"
       ],
-      "every_RUN_required": true,
-      "inherited_mandatory_file_count": 46,
-      "additional_file_count": 3,
-      "total_requested_file_count": 49,
-      "new_tests": [
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence.ll",
-        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-reject.ll",
-        "llvm/test/Other/reduction-fission-recurrence-checker.test"
+      "total_requested_file_count": 53,
+      "new_files": [
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-recurrence-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-recurrence-compact-legacy.ll",
+        "llvm/test/Other/reduction-fission-compact-recurrence-checker.test"
       ],
-      "all_existing_checker_mutations_required": true,
-      "preserve_signature_specialization_and_completed_enclosing_certificates": true,
-      "input_files_are_not_standalone_tests": true,
-      "recurrence_expectation_audit": {
-        "scalar_functions": 11,
-        "evl_and_vector_tail_functions": 8,
-        "scalar_only_capacities": [
-          1,
-          255,
-          5461
-        ],
-        "all_later_RUN_lines_required": true,
-        "checks": "All eleven scalar and eight EVL/LV2 vector-tail patterns retain typed allocation/GEP/load provenance, block bounds, shared i32 loads, ordered FP, exact original source locations and capacities. Only runtime byte expectation changes to 780. Scratch/stage remark assertions are shared with the executable checker, including both stream orders and 1/255/5461 scalar boundaries.",
-        "new_remark_mutations": 24,
-        "both_stream_orders_before_full_executable_matrix": true,
-        "shared_execution_fixture_table_checked_against_independent_literals": true
-      }
+      "preserve_every_inherited_checker_mutation": true
     },
     "unit": {
       "required": true,
-      "target": "VectorizeTests"
+      "suite": "VectorizeTests",
+      "all_tests": true
     },
     "execution": {
       "required": true,
       "checker": "llvm/utils/check-reduction-fission.py",
       "harness": "llvm/utils/reduction-fission-execution.c.in",
+      "harness_only": true,
+      "complete_inherited_matrices": true,
+      "complete_new_matrices": true,
+      "comparison": [
+        "original IR",
+        "actual transformed scalar consumers",
+        "actual transformed vector consumers and scalar tails",
+        "independent C formulas"
+      ],
+      "fp_policies": [
+        "strict",
+        "explicit fission FP reordering option only"
+      ],
+      "loop_vectorize_invocations": [
+        1,
+        2
+      ],
       "vscales": [
         1,
         2,
@@ -226,338 +214,73 @@
         8,
         32
       ],
-      "loop_vectorize_invocations": [
+      "compact_recurrence_functions": 9,
+      "historical_exact_function": "recurrence_compact",
+      "capacities": [
         1,
-        2
+        65,
+        255,
+        5461
       ],
-      "fp_policies": [
-        "strict ordered early scalar fission",
-        "explicitly enabled existing fission FP-reordering option; no additional fast-math/errno assumptions"
+      "require_exact_counts": [
+        "producer iterations N",
+        "producer latches N",
+        "participating arm P",
+        "per-row floor(P/VF) vector visits",
+        "per-row P%VF scalar tail visits"
       ],
-      "required_comparisons": [
-        "Complete linked actual transformed LV1/LV2 scalar-remainder paths against original IR AND independent C references, all existing fixtures and all fourteen affine functions",
-        "N=0..65,66,UINT64_MAX and compact P=0..65; each compact variant must cover zero participants and VF-1/VF/VF+1 boundaries when feasible",
-        "Exact producer/completed/participant/vector/tail visits; modular early exits retain actual completed N rather than capacity witness",
-        "Enclosing-row scratch reuse/reduction carry and future-row output/input aliases, zero-entry null operands, masks, tails and inactive invalid operands",
-        "Integer and non-NaN FP bits/signed zero, NaN classification, infinities/cancellation/subnormals, input preservation, canaries and repeated scratch reuse",
-        "Retain all scalar capacity-boundary tests at 1/255/16384, rejection cases and VPlan comparisons; no correctness-check removal",
-        "Compile and link the freshly emitted portable boundary symbols; execute every acyclic and affine capacity/relational boundary row against its intended original reference and independent formula. Preserve all inherited probes and comparisons.",
-        "All eleven recurrence functions: eight mixed core functions and scalar capacities 1/255/5461, freshly transformed by actual opt with both FP-option settings and one/two LV invocations. Require exactly one split per original loop, exact source location and producer/consumer VF and scratch evidence.",
-        "First-order integer/double delays and mutually dependent two-delay state; canonical +1, bounded +3 relational and masked-origin +2 controls, state-dependent producer diamonds and enclosing rows. Compare original IR, actual split code and independent C formulas; integer bits/non-NaN FP bits/signed zero, NaN classification.",
-        "Core recurrence variants use inherited vscales 1/2/4/8/32 with scalar remainders; capacity cases execute scalar consumers. Default EVL variants receive uninstrumented RVV machine verification. Per variant require N=0, N=1, capacity, tails and vector entry whenever VF<=capacity, with exact N*rows producer/latch and floor(N/VF)/N%VF consumer counts.",
-        "Recurrence tests also require null zero-entry inputs, invalid counts and row bounds, input preservation, full-array output/input alias comparisons including writes to future rows, canaries, enclosing reduction carry and scratch reuse, and separate original-IR/independent-formula alias checks."
+      "require": [
+        "zero producer trips",
+        "nonempty P=0 with unchanged starts and no skipped additions",
+        "all-active and sparse participation",
+        "first-only and last-only participation",
+        "state changes on skipped iterations",
+        "conditional state merges",
+        "capacity edges",
+        "aliases including changed following rows",
+        "repeated enclosing allocation reuse",
+        "ordered FP starts/operands",
+        "bitwise non-NaN/signed-zero and NaN-class comparison"
       ],
-      "comparison_status": "Pending fresh harness-only compilation and complete execution after t000039's mandatory scratch-byte remark failure; no inherited or recurrence comparison omitted.",
-      "persistent_work_dir_required": true,
-      "generated_objects_are_not_completed_comparisons": true,
-      "per_variant_compact_boundary_coverage_required": {
-        "variants": "Every compact function, LV1/LV2, FP option and vscale in the existing matrix",
-        "required": [
-          "Entered producer with P=0 participants, separately from N=0 entry bypass",
-          "Scalar-only, vector-exact and mixed vector/tail paths when feasible",
-          "P=VF-1, VF and VF+1 when in the existing P=0..65 sweep",
-          "Vscale=32 has VF=128, so only zero-participant and scalar-only compact execution are feasible"
-        ]
-      },
-      "both_original_ir_and_independent_references_required": true,
-      "complete_inherited_and_affine_comparisons_required": true,
-      "fresh_c_harness_compilation_and_link_required": true,
-      "boundary_dispatch_rows_required": 26,
-      "boundary_original_reference_functions_required": 8,
-      "complete_inherited_and_recurrence_comparisons_required": true,
-      "recurrence_functions": 11,
-      "recurrence_capacity_bytes": {
-        "1": 16,
-        "65": {
-          "integer_first": 784,
-          "double_first_recurrence_runtime": 780
-        },
-        "255": 3064,
-        "5461": 65536
-      },
-      "recurrence_counts": "Core 0..65,66,UINT64_MAX; capacities 0/1/2/3/4/7/8/M/2/M-1/M/M+1/UINT64_MAX; rows 0/1/2/4/5/UINT64_MAX",
-      "recurrence_fixture_accounting": [
-        {
-          "function": "recurrence_first",
-          "source_location": "scalar-recurrence.c:12:3",
-          "capacity": 65,
-          "stream_order": [
-            "i32",
-            "double"
-          ],
-          "stream_bytes": [
-            260,
-            520
-          ],
-          "interstream_padding": 4,
-          "reserved_bytes": 784,
-          "logical_scratch_bytes_per_completed_iteration": 24
-        },
-        {
-          "function": "recurrence_two",
-          "source_location": "scalar-recurrence.c:22:3",
-          "capacity": 65,
-          "stream_order": [
-            "i32",
-            "double"
-          ],
-          "stream_bytes": [
-            260,
-            520
-          ],
-          "interstream_padding": 4,
-          "reserved_bytes": 784,
-          "logical_scratch_bytes_per_completed_iteration": 24
-        },
-        {
-          "function": "recurrence_affine",
-          "source_location": "scalar-recurrence.c:32:3",
-          "capacity": 65,
-          "stream_order": [
-            "i32",
-            "double"
-          ],
-          "stream_bytes": [
-            260,
-            520
-          ],
-          "interstream_padding": 4,
-          "reserved_bytes": 784,
-          "logical_scratch_bytes_per_completed_iteration": 24
-        },
-        {
-          "function": "recurrence_runtime",
-          "source_location": "scalar-recurrence.c:42:3",
-          "capacity": 65,
-          "stream_order": [
-            "double",
-            "i32"
-          ],
-          "stream_bytes": [
-            520,
-            260
-          ],
-          "interstream_padding": 0,
-          "reserved_bytes": 780,
-          "logical_scratch_bytes_per_completed_iteration": 24
-        },
-        {
-          "function": "recurrence_branch",
-          "source_location": "scalar-recurrence.c:52:3",
-          "capacity": 65,
-          "stream_order": [
-            "i32",
-            "double"
-          ],
-          "stream_bytes": [
-            260,
-            520
-          ],
-          "interstream_padding": 4,
-          "reserved_bytes": 784,
-          "logical_scratch_bytes_per_completed_iteration": 24
-        },
-        {
-          "function": "recurrence_enclosing",
-          "source_location": "scalar-recurrence.c:62:3",
-          "capacity": 65,
-          "stream_order": [
-            "i32",
-            "double"
-          ],
-          "stream_bytes": [
-            260,
-            520
-          ],
-          "interstream_padding": 4,
-          "reserved_bytes": 784,
-          "logical_scratch_bytes_per_completed_iteration": 24
-        },
-        {
-          "function": "recurrence_first_affine",
-          "source_location": "scalar-recurrence.c:102:3",
-          "capacity": 65,
-          "stream_order": [
-            "i32",
-            "double"
-          ],
-          "stream_bytes": [
-            260,
-            520
-          ],
-          "interstream_padding": 4,
-          "reserved_bytes": 784,
-          "logical_scratch_bytes_per_completed_iteration": 24
-        },
-        {
-          "function": "recurrence_first_enclosing",
-          "source_location": "scalar-recurrence.c:112:3",
-          "capacity": 65,
-          "stream_order": [
-            "i32",
-            "double"
-          ],
-          "stream_bytes": [
-            260,
-            520
-          ],
-          "interstream_padding": 4,
-          "reserved_bytes": 784,
-          "logical_scratch_bytes_per_completed_iteration": 24
-        },
-        {
-          "function": "recurrence_one",
-          "source_location": "scalar-recurrence.c:72:3",
-          "capacity": 1,
-          "stream_order": [
-            "i32",
-            "double"
-          ],
-          "stream_bytes": [
-            4,
-            8
-          ],
-          "interstream_padding": 4,
-          "reserved_bytes": 16,
-          "logical_scratch_bytes_per_completed_iteration": 24
-        },
-        {
-          "function": "recurrence_255",
-          "source_location": "scalar-recurrence.c:82:3",
-          "capacity": 255,
-          "stream_order": [
-            "i32",
-            "double"
-          ],
-          "stream_bytes": [
-            1020,
-            2040
-          ],
-          "interstream_padding": 4,
-          "reserved_bytes": 3064,
-          "logical_scratch_bytes_per_completed_iteration": 24
-        },
-        {
-          "function": "recurrence_limit",
-          "source_location": "scalar-recurrence.c:92:3",
-          "capacity": 5461,
-          "stream_order": [
-            "i32",
-            "double"
-          ],
-          "stream_bytes": [
-            21844,
-            43688
-          ],
-          "interstream_padding": 4,
-          "reserved_bytes": 65536,
-          "logical_scratch_bytes_per_completed_iteration": 24
-        }
-      ]
+      "comparison_status": "pending harness-only compile, link and complete execution; generated host objects alone are not completed comparisons"
     },
     "rvv_machine_verification": {
       "required": true,
+      "harness_only": true,
       "target": "riscv64 +v",
-      "policies": [
-        "uninstrumented default EVL/VP",
-        "uninstrumented scalar remainder",
-        "actual LV1/LV2 and capacity-boundary variants"
-      ],
       "verify_machineinstrs": true,
+      "uninstrumented": true,
+      "include": [
+        "inherited paths",
+        "new scalar paths",
+        "new LV1/LV2 EVL paths",
+        "new LV1/LV2 vector/scalar-tail paths",
+        "both FP policies"
+      ],
       "target_execution": false,
-      "speedup_measurement": false,
-      "host_comparison_is_not_target_execution": true,
-      "both_fp_policies_required": true
+      "performance_measurement": false
     },
     "primary_corpus": {
-      "inputs": 117,
-      "compilations": 234,
+      "required": true,
+      "harness_only": true,
+      "immutable_inputs": 117,
       "policies": [
         "strict",
         "reordered"
       ],
-      "immutable_inputs": true,
-      "no_source_rewrites": true,
-      "no_additional_fast_math_or_errno_assumptions": true,
-      "all_compilations_required": true,
-      "exact_original_target_location_required": true,
-      "nested_or_helper_activity_cannot_substitute": true,
-      "retain": [
-        "input hashes and every command/exit code",
-        "exact original-loop source-location Selected/Rejected records and reasons",
-        "independent producer/consumer VF plus scratch capacity/bytes for that exact loop",
-        "other loop/helper records separately",
-        "IR and machine-verified assembly"
-      ]
+      "compilations": 234,
+      "rewrite_inputs": false,
+      "exact_original_loop_attribution": true,
+      "preserve_evidence": [
+        "source-location Selected/Rejected remarks",
+        "producer VF and consumer VF independently",
+        "scratch capacity and exact reserved bytes",
+        "commands, input hashes and per-input results",
+        "IR verification and uninstrumented RVV machine-verified assembly"
+      ],
+      "nested_or_helper_success_is_not_original_target_success": true
     },
-    "artifact_requests": [
-      {
-        "kind": "compact_scalar_tail_exit_and_result_certificate",
-        "required": true,
-        "retain": [
-          "every new and existing mandatory lit RUN command/result",
-          "full exact failed mutation, block, typed PHI, predecessor/branch and result diagnostic",
-          "fresh full LV1/LV2 original/transformed/probe/fixed-vscale IR and stage remarks",
-          "actual vector result, optional middle LCSSA, scalar resume, tail result, optional tail LCSSA, join, empty result and final store linkage",
-          "Exact duplicate-PHI uniqueness diagnostics for both i32 streams, double and float; separate tail forwarding work diagnostics for calls/stores/arithmetic/nonmatching PHIs",
-          "Generated host IR definitions/references and C harness declarations/dispatch rows for all 26 boundary variants, with portable names and unchanged artifact labels."
-        ]
-      },
-      {
-        "kind": "executable_comparisons",
-        "required": true,
-        "retain": [
-          "complete final linked execution output with original/transformed/independent comparison counts",
-          "per-variant compact boundary coverage diagnostics",
-          "enclosing carry/scratch/alias and modular actual-count diagnostics",
-          "commands.jsonl, failed-command.json and failed-command.stdin",
-          "persistent execution directory even on failure"
-        ]
-      },
-      {
-        "kind": "primary_corpus",
-        "required": true,
-        "compilations": 234,
-        "retain": [
-          "strict/reordered exact-source Selected/Rejected/stage-VF/scratch evidence",
-          "input hashes",
-          "complete IR/remarks/assembly and exit codes"
-        ]
-      },
-      {
-        "kind": "producer_recurrence_certificates",
-        "required": true,
-        "retain": [
-          "fresh original/transformed/uninstrumented RVV/probed/fixed-vscale IR, portable declarations and dispatch mapping for all eleven recurrence functions",
-          "recurrence PHI/start/backedge and original operation/placement/order checks, scalar ordinal/completed provenance and exact scratch slot/store/load indexing",
-          "all new checker positive/mutation results alongside every inherited duplicate-PHI and count/result mutation",
-          "complete C linked comparison output and per-variant count/capacity/vector/tail failures; preserve execution work directory even on failure",
-          "exact source-location Selected/Rejected, stage VFs, scratch capacity/bytes and all primary corpus commands/input hashes/results"
-        ]
-      },
-      {
-        "kind": "recurrence_fixture_repair",
-        "required": true,
-        "retain": [
-          "Fresh input verification and transformed IR for partial accumulator and retained-state exports; defined bypass PHIs and observable export stores; source-location Rejected records and no-split checks",
-          "Every RUN result in all 49 mandatory lit files, including recurrence EVL, ordered-FP remainder after repeated LV and scalar RUN lines that the prior EVL failure prevented from executing",
-          "Both typed scratch allocation/GEP/load chains under reversed accumulator PHIs, ordered FP load-to-reduction linkage and actual vector/scalar-tail evidence for all eleven positives",
-          "All inherited and recurrence checker mutations, VectorizeTests, complete original/transformed/independent comparison matrices under both FP policies, RVV machine verification and all 234 immutable primary compilations"
-        ]
-      },
-      {
-        "kind": "recurrence_stream_order_accounting",
-        "required": true,
-        "retain": [
-          "Fresh scalar and repeated-LV vector/tail remarks checking capacity 65, runtime 780 bytes at scalar-recurrence.c:42:3 and integer-first 784 bytes at each original sibling location; producer VF1 and consumer VF1/vscale x4 as appropriate",
-          "All eleven exact capacity/byte/source-location records, including scalar capacities 1/255/5461 at 16/3064/65536 bytes, with preserved typed scratch provenance and ordered FP",
-          "Focused helper positives and all 24 new remark mutations, every inherited checker mutation, and every RUN result in all 49 mandatory lit files before the full executable matrix",
-          "Complete inherited and recurrence original/transformed/independent comparisons under separate strict/reordered policies, zero/one-trip and capacity boundaries, aliases, enclosing reuse, repeated LV, vector consumers and scalar tails",
-          "VectorizeTests, uninstrumented RVV machine verification, and all 234 immutable primary compilations with exact-target Selected/Rejected, stage VF and scratch evidence"
-        ]
-      }
-    ],
-    "acceptance": "Pending fresh harness-only compilation, every RUN in all 49 mandatory fission/checker lit files, VectorizeTests, complete inherited and recurrence original/transformed/independent executable matrices under separate strict and explicitly reordered policies, repeated LV, zero/one-trip and capacity boundaries, aliases, enclosing-loop reuse, vector consumers and scalar tails, uninstrumented LV1/LV2 EVL/scalar-remainder RVV machine verification and all 234 immutable primary corpus compilations. Preserve exact original-target Selected/Rejected source locations, independent producer/consumer VFs and exact scratch capacity/bytes, including both stream orders. Compiler crashes, incorrect transformations and mandatory failures block acceptance. Worker ran no compilation or tests. Historical t000039 compilation/48 passing lit files and historical t000035 acceptance do not validate this revision. No RVV execution, speedup, maturity or integration decision is claimed."
+    "acceptance": "Fresh harness-only build, every inherited/new mandatory RUN, all VectorizeTests, complete original/transformed/independent executable comparisons, uninstrumented RVV machine verification and all 234 immutable primary compilations must pass. Compiler crashes, incorrect transformations or mandatory failures block acceptance. Lack of measured speedup is not a veto. No current validation result is claimed."
   },
-  "future_work": "Consume complete fresh immutable harness results, including every recurrence RUN and linked original/transformed/independent execution, before acceptance or maturity. Repair concrete failures without weakening correctness or either FP contract. Preserve d2/t000036 integration pins; conditional retained-state/compact combinations, producer exports, chunk integration, more general CFGs, aggregate scratch budgets and actual RVV execution/performance remain outside this validation repair."
+  "future_work": "Review immutable harness results and repair concrete failures without weakening counts, FP semantics, exports or source attribution. The assigned objective stops at composing retained local state with the existing single-diamond compact full-trip schedule. Producer exports, d2 chunk/export integration, larger compact CFGs, aggregate stack budgets and actual RVV execution/performance remain future work."
 }

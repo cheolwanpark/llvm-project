@@ -365,7 +365,6 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     }
     return Reduction{&Phi, Update, Merge, Contribution, ContributionOperand};
   };
-  bool RetainedState = false;
   for (PHINode &Phi : Header->phis()) {
     if (&Phi == IV)
       continue;
@@ -373,7 +372,6 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     if (!R) {
       if (!Phi.getType()->isSingleValueType() || Phi.getType()->isVectorTy())
         return Reject("scalar-unsupported-recurrence");
-      RetainedState = true;
       continue;
     }
     if (R->Merge) {
@@ -390,15 +388,14 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   }
   if (Reductions.empty())
     return Reject(FailureReason.empty() ? "scalar-no-reduction" : FailureReason);
-  // Keep the existing compact-participation contract. Retained state is only
-  // admitted with unconditional consumers, even if a new combination could
-  // in principle use the existing participating counter.
-  if (ParticipationArm && RetainedState)
-    return Reject(FailureReason);
-
   // Extracted state only flows around its update/bypass recurrence and final
   // LCSSA exports. In particular no predicate, contribution, other reduction or
   // partial-state export can observe it. This needs no recursive DAG walk.
+  // Retained state can therefore determine compact participation, addresses or
+  // contributions, including through a latch merge of its own. Its PHIs,
+  // operations and branches stay in the producer on their original paths;
+  // only the closed accumulators below move. The existing common arm and
+  // participating counter preserve the exact sequence of contributions.
   for (const Reduction &R : Reductions) {
     if (bool(R.Merge) != bool(ParticipationArm))
       return Reject("scalar-incompatible-participation");

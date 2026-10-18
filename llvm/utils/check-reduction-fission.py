@@ -135,7 +135,8 @@ def scalar_consumer(body, name):
     return parts
 
 
-def check_compact_count(producer, consumer, name, evl):
+def check_compact_count(producer, consumer, name, evl, starts=None,
+                        vectorized=True, recurrence=False, delay=False):
     # These fixtures have one i64 compact counter and one latch. SCEV can
     # forward the single-input LCSSA export to its incoming latch value when
     # expanding the consumer trip count. A later LV invocation forms LCSSA
@@ -167,8 +168,8 @@ def check_compact_count(producer, consumer, name, evl):
 
     counter = '%fission.participating'
     merged, exported = counter + '.merge', counter + '.count'
-    header = 'inner' if name == 'compact_nested' else 'loop'
-    preheader = 'inner.ph' if name == 'compact_nested' else 'preheader'
+    header = 'inner' if re.search(r'^inner:', producer, re.M) else 'loop'
+    preheader = 'inner.ph' if header == 'inner' else 'preheader'
 
     def phi_inputs(text, value, ty='i64'):
         line = require(rf'^  {re.escape(value)} = phi {ty} '
@@ -182,7 +183,7 @@ def check_compact_count(producer, consumer, name, evl):
         ('0', '%' + preheader), (merged, '%latch')], producer
     assert sorted(phi_inputs(block(producer, 'latch'), merged)) == sorted([
         (counter + '.next', '%left'),
-        (counter, '%' + ('right' if name in ('compact_diamond', 'compact_nested')
+        (counter, '%' + ('right' if re.search(r'^right:', producer, re.M)
                          else header))]), producer
     require(r'^  %fission\.participating\.next = add nuw i64 '
             r'%fission\.participating, 1(?:, ![^\n]*)?$', block(producer, 'left'))
@@ -200,23 +201,43 @@ def check_compact_count(producer, consumer, name, evl):
     branch(guard, '%fission.empty', 'scalar.fission.consumer.exit',
            'scalar.fission.consumer.ph')
 
-    starts = {
+    starts = starts if starts is not None else {
         'compact_triangle': [('r0', 'i32', '17'), ('r1', 'i32', '-7'),
                              ('rd', 'double', '%start'), ('rf', 'float', '%fstart')],
         'compact_diamond': [('r0', 'i32', '17'), ('r1', 'i32', '-7'),
                             ('rd', 'double', '%start'), ('rf', 'float', '%fstart')],
         'compact_integer': [('sum', 'i64', '%initial'), ('sum2', 'i64', '0')],
         'compact_nested': [('sum', 'i32', '%carry'), ('dsum', 'double', '%dcarry')],
-    }
+    }[name]
     exit_block = block(consumer, 'scalar.fission.consumer.exit')
     results = {}
-    for value, ty, start in starts[name]:
+    for value, ty, start in starts:
         inputs = phi_inputs(exit_block, f'%{value}.result', ty)
         assert len(inputs) == 2, exit_block
         assert inputs[0] == (start, '%scalar.fission.consumer.guard'), exit_block
         assert inputs[1][1] == '%scalar.fission.consumer.loopexit', exit_block
         assert re.fullmatch(r'%[-\w.$]+', inputs[1][0]), exit_block
         results[value] = inputs[1][0]
+
+    if not vectorized:
+        scalar = block(consumer, 'scalar.fission.consumer.body')
+        assert phi_inputs(scalar, '%fission.consumer.iv') == [
+            ('0', '%scalar.fission.consumer.ph'),
+            ('%fission.consumer.next', '%scalar.fission.consumer.body')], scalar
+        require(r'^  %fission\.consumer\.next = add(?: nuw)?(?: nsw)? i64 '
+                r'%fission\.consumer\.iv, 1(?:, ![^\n]*)?$', scalar)
+        require(r'^  %fission\.consumer\.more = icmp ne i64 '
+                rf'%fission\.consumer\.next, {counts}(?:, ![^\n]*)?$', scalar)
+        branch(scalar, '%fission.consumer.more', 'scalar.fission.consumer.body',
+               'scalar.fission.consumer.loopexit')
+        loop_exit = block(consumer, 'scalar.fission.consumer.loopexit')
+        for value, ty, start in starts:
+            inputs = phi_inputs(scalar, '%' + value + '.consume', ty)
+            assert len(inputs) == 2 and inputs[0] == (
+                start, '%scalar.fission.consumer.ph'), scalar
+            assert inputs[1][1] == '%scalar.fission.consumer.body', scalar
+            assert phi_inputs(loop_exit, results[value], ty) == [inputs[1]], loop_exit
+        return
 
     vector = block(consumer, 'vector.body')
     if evl:
@@ -246,9 +267,9 @@ def check_compact_count(producer, consumer, name, evl):
                 block(consumer, 'scalar.fission.consumer.loopexit'))
         integers = re.findall(r'^  (%[-\w.$]+) = call i(?:32|64) '
                               r'@llvm\.vector\.reduce\.add\.nxv4i(?:32|64)\(', middle, re.M)
-        integer_starts = [value for value, ty, _ in starts[name] if ty.startswith('i')]
+        integer_starts = [value for value, ty, _ in starts if ty.startswith('i')]
         assert [results[value] for value in integer_starts] == integers, exit_block
-        for value, ty, _ in starts[name]:
+        for value, ty, _ in starts:
             if ty.startswith('i'):
                 continue
             reduced = require(rf'^  (%[-\w.$]+) = call {ty} '
@@ -272,10 +293,11 @@ def check_compact_count(producer, consumer, name, evl):
         tail = block(consumer, 'scalar.fission.consumer.body')
         require(r'^  %fission\.consumer\.more = icmp ne i64 '
                 rf'%fission\.consumer\.next, {counts}(?:, ![^\n]*)?$', tail)
-        check_compact_scalar_results(whole, starts[name], results)
+        check_compact_scalar_results(whole, starts, results, recurrence=recurrence,
+                                     delay=delay)
 
 
-def check_compact_scalar_results(body, starts, results):
+def check_compact_scalar_results(body, starts, results, recurrence=False, delay=False):
     """Certify the demonstrated compact scalar-tail joins, not arbitrary IR."""
     # Ignore printed predecessor comments and metadata, never instructions.
     blocks = re.findall(r'^([-\w.$]+):[^\n]*\n(.*?)'
@@ -452,6 +474,56 @@ def check_compact_scalar_results(body, starts, results):
 
     # Follow the compact results to the fixture's observable stores. The
     # nested fixture instead exports row values which also carry to outer.
+    if delay:
+        destination = jump(end)
+        output = '%sum.result'
+        if destination != 'exit':
+            output = forwarded(output, 'i32', end, destination)
+            need(incoming(destination) == [end] and jump(destination) == 'exit' and
+                 len(table[destination]) == 2, 'delay output forwarding')
+        predecessor = end if destination == 'exit' else destination
+        need(incoming('exit') == [predecessor], 'delay output predecessors')
+        returned = match(r'ret i32 (' + ssa + ')', 'exit')[1]
+        need(returned == output or
+             phi('exit', returned, 'i32') == [(output, predecessor)], 'delay output')
+        match(r'ret i32 17', 'bypass')
+        return
+    if recurrence:
+        # The three-reduction recurrence fixtures have two shared integer
+        # contributions and one ordered double stream. Keep the inherited
+        # vector/tail/start/forwarding proof above; only their output interface
+        # differs from the older four-stream compact fixtures below.
+        nested = any(start == '%carry0' for _, _, start in starts)
+        final = 'row.exit' if nested else 'exit'
+        destination = jump(end)
+        output = {}
+        for value, ty, _ in starts:
+            result = '%' + value + '.result'
+            output[value] = (forwarded(result, ty, end, destination)
+                             if destination != final else result)
+        if destination != final:
+            need(incoming(destination) == [end] and jump(destination) == final and
+                 len(table[destination]) == len(starts) + 1, 'output forwarding')
+        predecessor = destination if destination != final else end
+        need(incoming(final) == sorted([predecessor] + ([] if nested else ['entry'])),
+             'output predecessors')
+        for value, ty, start in starts:
+            result, pointer = {'r0': ('%v0', '%out'), 'r1': ('%v1', '%o1'),
+                               'rd': ('%vd', '%dout')}[value]
+            need(phi(final, result, ty) == sorted([(output[value], predecessor)] +
+                 ([] if nested else [(start, 'entry')])), 'output PHI ' + value)
+            match(rf'store {ty} {re.escape(result)}, ptr {re.escape(pointer)}'
+                  r'(?:, align \d+)?', final)
+        match(r'%o1 = getelementptr i32, ptr %out, i64 1', final)
+        if nested:
+            for carry, value, ty, start in [('%carry0', '%v0', 'i32', '17'),
+                                          ('%carry1', '%v1', 'i32', '-7'),
+                                          ('%dcarry', '%vd', 'double', '%start')]:
+                need(phi('outer', carry, ty) == sorted([
+                    (start, 'outer.ph'), (value, 'row.exit')]), 'row reduction carry')
+        else:
+            match(r'ret void', final)
+        return
     final = 'row.exit' if starts[0][0] == 'sum' and starts[0][1] == 'i32' else 'exit'
     destination = jump(end)
     output = {}
@@ -1112,11 +1184,25 @@ RECURRENCE_CASES = [
     ('recurrence_limit', 5461, True, False, False, 92, 21844 + 4 + 43688),
 ]
 
+# name, full-trip capacity, conditional state update, enclosing reuse,
+# original-loop location, insertion-order reserved bytes (no final padding).
+COMPACT_RECURRENCE_CASES = [
+    ('compact_recurrence', 65, False, False, 12, 260 + 4 + 520),
+    ('compact_recurrence_reverse', 65, False, False, 22, 520 + 260),
+    ('compact_recurrence_merge', 65, True, False, 32, 260 + 4 + 520),
+    ('compact_recurrence_affine', 65, True, False, 42, 260 + 4 + 520),
+    ('compact_recurrence_runtime', 65, False, False, 52, 520 + 260),
+    ('compact_recurrence_enclosing', 65, True, True, 62, 260 + 4 + 520),
+    ('compact_recurrence_one', 1, True, False, 72, 4 + 4 + 8),
+    ('compact_recurrence_255', 255, False, False, 82, 1020 + 4 + 2040),
+    ('compact_recurrence_limit', 5461, True, False, 92, 21844 + 4 + 43688),
+]
+
 
 def check_recurrence_remarks(remarks, name, capacity, scratch_bytes, line,
-                             vectorized=True):
+                             vectorized=True, source_file='scalar-recurrence.c'):
     """Check exact fixture accounting and stage VFs at the original loop."""
-    location = re.escape(f'scalar-recurrence.c:{line}:3:')
+    location = re.escape(f'{source_file}:{line}:3:')
     selected = (location + r' split scalar-IR reduction loop;[^\n]*' +
                 f'scratch capacity {capacity}, scratch bytes {scratch_bytes}' + r'\b')
     assert len(re.findall(selected, remarks)) == 1, f'@{name}: scratch remark\n{remarks}'
@@ -1127,7 +1213,7 @@ def check_recurrence_remarks(remarks, name, capacity, scratch_bytes, line,
 
 
 def check_recurrence_function(ir, source, name, evl, vectorized=True,
-                              probe=False, capacity=65):
+                              probe=False, capacity=65, compact=False):
     """Small fixture certificate: retained state, full counts and scratch slots."""
     body, original = (function_definition(text, name) for text in (ir, source))
     producer, consumer = scalar_consumer(body, name)
@@ -1149,7 +1235,7 @@ def check_recurrence_function(ir, source, name, evl, vectorized=True,
     latch = 'latch' if 'latch' in before else header
     labels = list(before)
     labels = labels[labels.index(ph):labels.index(latch) + 1]
-    moved = re.compile(r'  %(r0|r1|rd|u0|u1|ud) = ')
+    moved = re.compile(r'  %(r0|r1|rd|u0|u1|ud' + ('|m0|m1|md' if compact else '') + ') = ')
     # Each retained instruction occurs once, in its original block and order.
     # Allow only normal LV's one-way removal of integer nowrap flags.
     for label in ['entry'] + labels:
@@ -1160,17 +1246,26 @@ def check_recurrence_function(ir, source, name, evl, vectorized=True,
             if not line.strip() or moved.match(line):
                 continue
             if label == latch and line.startswith('  br '):
-                line = line.replace('label %row.exit,', 'label %scalar.fission.consumer.ph,')
-                line = line.replace('label %exit,', 'label %scalar.fission.consumer.ph,')
+                target = 'scalar.fission.consumer.guard' if compact else 'scalar.fission.consumer.ph'
+                line = line.replace('label %row.exit,', f'label %{target},')
+                line = line.replace('label %exit,', f'label %{target},')
             matches = [i for i, candidate in enumerate(candidates)
                        if affine_instruction_refines(line, candidate, normalize)]
             require(len(matches) == 1 and matches[0] > position,
                     'retained instruction/order: ' + line)
             position = matches[0]
-    require(not re.search(r'  %(?:r0|r1|rd|u0|u1|ud) = ', producer),
+    require(not re.search(moved, producer),
             'accumulator extraction')
     for opcode in ('load i32,', 'load double,', 'call i32 @scalar_helper('):
         require(producer.count(opcode) == original.count(opcode), 'no duplication: ' + opcode)
+    if compact:
+        for opcode in ('fadd', 'fsub', 'fcmp'):
+            pattern = r' = ' + opcode + r'\b'
+            expected = sum(bool(re.search(pattern, line))
+                           for label in ['entry'] + labels
+                           for line in before[label].splitlines() if not moved.match(line))
+            require(len(re.findall(pattern, producer)) == expected,
+                    'retained FP operation count: ' + opcode)
     require('<vscale x' not in producer, 'scalar producer')
     require('@scalar_helper(' not in consumer, 'no consumer recomputation')
     require(not re.search(r'\b(?:fast|reassoc|nnan|ninf|nsz|arcp|contract|afn)\b', body),
@@ -1203,7 +1298,22 @@ def check_recurrence_function(ir, source, name, evl, vectorized=True,
     require(normalize(f'%next = add nuw nsw i64 %iv, {step}') in control and
             normalize(compare) in control, 'full-count control')
     counts = ['%n']
-    if index != '%iv':
+    if compact:
+        index = '%fission.participating'
+        starts = [('r0', 'i32', '%carry0' if header == 'inner' else '17'),
+                  ('r1', 'i32', '%carry1' if header == 'inner' else '-7'),
+                  ('rd', 'double', '%dcarry' if header == 'inner' else '%start')]
+        # Integer result calls follow the extracted PHI order. Retained PHIs
+        # may appear anywhere; the reverse siblings intentionally invert it.
+        phi_order = re.findall(r'^  %(r0|r1|rd) = phi ', before[header], re.M)
+        starts = sorted(starts, key=lambda item: phi_order.index(item[0]))
+        # Check integer results in their actual extracted order. The output
+        # certificate associates stores with values independently of that order.
+        check_compact_count(producer, consumer, name, evl, starts=starts,
+                            vectorized=vectorized, recurrence=True)
+        counts = ['%fission.participating.merge', '%fission.participating.count',
+                  '%fission.participating.merge.lcssa']
+    elif index != '%iv':
         require(normalize('%fission.ordinal = phi i64 [0, %' + ph +
                           '], [%fission.completed, %' + latch + ']') in
                 normalize(after[header]), 'ordinal recurrence')
@@ -1239,6 +1349,7 @@ def check_recurrence_function(ir, source, name, evl, vectorized=True,
         counts += re.findall(r'^  (%[-\w.$]+) = phi i64 \[ %fission.completed, %' +
                              re.escape(latch) + r' \](?:, ![^\n]*)?$', consumer, re.M)
 
+    active = after['left'] if compact else after[latch]
     slots = {}
     for ty, contribution in [('i32', '%c'), ('double', '%dc')]:
         allocations = re.findall(r'^  (%[-\w.$]+) = alloca \[' + str(capacity) +
@@ -1246,11 +1357,11 @@ def check_recurrence_function(ir, source, name, evl, vectorized=True,
         require(len(allocations) == 1, 'scratch capacity/type')
         slot = allocations[0]
         stores = re.findall(r'^  store ' + ty + ' ' + re.escape(contribution) +
-                            r', ptr (%[-\w.$]+), align \d+(?:, ![^\n]*)?$', after[latch], re.M)
+                            r', ptr (%[-\w.$]+), align \d+(?:, ![^\n]*)?$', active, re.M)
         require(len(stores) == 1, 'scratch store')
         expected = ('  ' + stores[0] + ' = getelementptr inbounds [' + str(capacity) +
                     ' x ' + ty + '], ptr ' + slot + ', i32 0, i64 ' + index)
-        require(any(normalize(line) == normalize(expected) for line in after[latch].splitlines()),
+        require(any(normalize(line) == normalize(expected) for line in active.splitlines()),
                 'scratch index')
         slots[ty] = slot
     require(sum(len(re.findall(r'^  store ', after[label], re.M)) for label in labels) == 2,
@@ -1267,7 +1378,12 @@ def check_recurrence_function(ir, source, name, evl, vectorized=True,
             load = (r'call <vscale x 4 x ' + ty + r'> @llvm\.vp\.load\.nxv4' + suffix
                     if evl else r'load <vscale x 4 x ' + ty + '>')
             require(len(re.findall(load, vector[0])) == 1, 'unique vector scratch load')
-            require(slots[ty] in vector[0], 'vector scratch provenance')
+            address = re.search(r'^  (%[-\w.$]+) = getelementptr inbounds \[' + str(capacity) +
+                                ' x ' + ty + r'\], ptr ' + re.escape(slots[ty]) +
+                                r', i32 0, i64 (%[-\w.$]+)(?:, ![^\n]*)?$', vector[0], re.M)
+            require(address is not None, 'vector scratch provenance')
+            require(re.search(load + (r'\.p0\(ptr align \d+ ' if evl else r', ptr ') +
+                              re.escape(address[1]) + r',', vector[0]), 'vector scratch load provenance')
         if evl:
             require(re.search(r'%avl = phi i64 \[ ' + count + r', %vector\.ph \]', consumer),
                     'EVL actual count')
@@ -1276,28 +1392,98 @@ def check_recurrence_function(ir, source, name, evl, vectorized=True,
                     'vector actual count')
     if not evl:
         scalar = blocks(consumer)['scalar.fission.consumer.body']
+        loaded = {}
         for ty, slot in slots.items():
             address = re.search(r'^  (%[-\w.$]+) = getelementptr inbounds \[' + str(capacity) +
                                 ' x ' + ty + r'\], ptr ' + re.escape(slot) +
                                 r', i32 0, i64 %fission.consumer.iv(?:, ![^\n]*)?$', scalar, re.M)
             require(address is not None, 'scalar scratch index')
-            require(re.search(r'load ' + ty + r', ptr ' + re.escape(address[1]) + r',', scalar),
-                    'scalar scratch load')
+            value = re.search(r'^  (%[-\w.$]+) = load ' + ty + r', ptr ' +
+                              re.escape(address[1]) + r', align \d+(?:, ![^\n]*)?$', scalar, re.M)
+            require(value is not None, 'scalar scratch load')
+            loaded[ty] = value[1]
         require(re.search(r'icmp (?:eq|ne) i64 %fission.consumer.next, ' + count + r'(?:, ![^\n]*)?$',
                           scalar, re.M), 'scalar actual count')
-        require(re.search(r'%ud.consume = fadd double %rd.consume, %[-\w.$]+', scalar),
+        require(re.search(r'%ud.consume = fadd double %rd.consume, ' + re.escape(loaded['double']) +
+                          r'(?:, ![^\n]*)?$', scalar, re.M),
                 'ordered scalar FP')
+        for expression in ['%u0.consume = add i32 %r0.consume, ' + loaded['i32'],
+                           '%u1.consume = add i32 ' + loaded['i32'] + ', %r1.consume']:
+            require(re.search(r'^  ' + re.escape(expression) + r'(?:, ![^\n]*)?$', scalar, re.M),
+                    'shared scalar contribution')
     if probe:
         probes = [(header, 'acyclic_iteration'), (latch, 'acyclic_latch'),
                   ('scalar.fission.consumer.body', 'scalar_consumer_tail')]
         if vectorized:
             probes.append(('vector.body', 'scalar_consumer_vector'))
+        if compact:
+            probes.append(('left', 'compact_participant'))
         for label, recorder in probes:
             # A single-block producer receives both counters at the same site.
             body, sites = re.subn(
                 rf'(^{re.escape(label)}:[^\n]*\n(?:[^\n]* = phi [^\n]*\n)*)',
                 rf'\1  call void @record_{recorder}()\n', body, count=1, flags=re.M)
             require(sites == 1, 'probe site')
+    return body
+
+
+def check_compact_delay_function(ir, source, evl, vectorized, probe=False):
+    """Certificate for the unchanged formerly rejected recurrence_compact."""
+    name = 'recurrence_compact'
+    body, original = (function_definition(text, name) for text in (ir, source))
+    producer, consumer = scalar_consumer(body, name)
+    blocks = lambda text: dict(re.findall(
+        r'^([-\w.$]+):[^\n]*\n(.*?)(?=^[-\w.$]+:|^}|\Z)', text, re.M | re.S))
+    before, after = blocks(original), blocks(producer)
+    normalize = lambda line: re.sub(r'\s+', '', line.split(', !', 1)[0])
+    for label in ['entry', 'preheader', 'loop', 'left', 'latch']:
+        position = -1
+        candidates = after[label].splitlines()
+        for line in before[label].splitlines():
+            if not line.strip() or re.match(r'  %(sum|update|merge) = ', line):
+                continue
+            if line == '  %x = load i32, ptr %p':
+                # Printing the historical omitted alignment makes the ABI
+                # default explicit. It does not change the load's contract.
+                line += ', align 4'
+            if label == 'latch' and line.startswith('  br '):
+                line = line.replace('label %exit,', 'label %scalar.fission.consumer.guard,')
+            matches = [i for i, candidate in enumerate(candidates)
+                       if affine_instruction_refines(line, candidate, normalize)]
+            assert len(matches) == 1 and matches[0] > position, (name, line, body)
+            position = matches[0]
+    assert producer.count('load i32,') == producer.count('@scalar_helper(') == 1, body
+    assert not re.search(r'  %(sum|update|merge) = ', producer), body
+    assert '<vscale x' not in producer and '@scalar_helper(' not in consumer, body
+    check_compact_count(producer, consumer, name, evl,
+                        starts=[('sum', 'i32', '17')], vectorized=vectorized, delay=True)
+    slot = re.findall(r'^  (%[-\w.$]+) = alloca \[65 x i32\]', producer, re.M)
+    assert len(slot) == 1, body
+    address = re.search(r'^  (%[-\w.$]+) = getelementptr inbounds \[65 x i32\], ptr ' +
+                        re.escape(slot[0]) + r', i32 0, i64 %fission.participating$', after['left'], re.M)
+    assert address and re.search(r'^  store i32 %c, ptr ' + re.escape(address[1]) +
+                                 r', align 4$', after['left'], re.M), body
+    assert len(re.findall(r'^  store ', producer, re.M)) == 1, body
+    assert slot[0] in consumer, body
+    if not evl:
+        tail = blocks(consumer)['scalar.fission.consumer.body']
+        pointer = re.search(r'^  (%[-\w.$]+) = getelementptr inbounds \[65 x i32\], ptr ' +
+                            re.escape(slot[0]) + r', i32 0, i64 %fission.consumer.iv'
+                            r'(?:, ![^\n]*)?$', tail, re.M)
+        assert pointer, body
+        loaded = re.search(r'^  (%[-\w.$]+) = load i32, ptr ' +
+                           re.escape(pointer[1]) + r', align 4(?:, ![^\n]*)?$', tail, re.M)
+        assert loaded and '%update.consume = add i32 %sum.consume, ' + loaded[1] in tail, body
+    if probe:
+        sites = [('loop', 'acyclic_iteration'), ('latch', 'acyclic_latch'),
+                 ('left', 'compact_participant'), ('scalar.fission.consumer.body', 'scalar_consumer_tail')]
+        if vectorized:
+            sites.append(('vector.body', 'scalar_consumer_vector'))
+        for label, recorder in sites:
+            body, count = re.subn(
+                rf'(^{re.escape(label)}:[^\n]*\n(?:[^\n]* = phi [^\n]*\n)*)',
+                rf'\1  call void @record_{recorder}()\n', body, count=1, flags=re.M)
+            assert count == 1, (name, label)
     return body
 
 
@@ -1703,81 +1889,153 @@ def check(args, work):
     # Producer-local recurrences use one focused fixture matrix. Certificates
     # inspect actual opt output before adding any host-only probes.
     recurrence_rows = []
-    recurrence_cases = RECURRENCE_CASES
-    recurrence_source = (tests / 'reduction-fission-scalar-recurrence.ll').read_text()
-    reference, references = rename_execution_functions(
-        recurrence_source, {name: f'ref_{name}' for name, *_ in recurrence_cases}, used_symbols)
-    compile_ir('reference_scalar_recurrence', reference)
-    declarations.extend(f'extern RecurrenceFn {value};' for value in references.values())
-    for boundary in (False, True):
-        cases = [case for case in recurrence_cases if (case[1] != 65) == boundary]
-        source = keep_functions(recurrence_source, [case[0] for case in cases])
-        for relaxed in (False, True):
-            for repeats in (1, 2):
-                for evl in ((False,) if boundary else (True, False)):
-                    options = list(flags)
-                    if boundary:
-                        options = [option for option in options if option not in (
-                            '-force-vector-width=4', '-scalable-vectorization=always',
-                            '-force-vector-interleave=1')]
-                        options += ['-force-vector-width=1', '-force-vector-interleave=0',
-                                    '-force-target-max-scalar-interleave=1',
-                                    '-scalable-vectorization=off']
-                    if relaxed:
-                        options += ['-vplan-reduction-fission-allow-fp-reordering']
-                    if repeats == 2:
-                        options = [option.replace('-passes=loop-vectorize,',
-                                                   '-passes=loop-vectorize,loop-vectorize,')
-                                   for option in options]
-                    if not evl and not boundary:
-                        options += ['-tail-folding-policy=dont-fold-tail',
-                                    '-enable-epilogue-vectorization=false']
-                    result = run([opt, *options], input=source)
-                    tag = ('recurrence_' + ('bounds' if boundary else 'evl' if evl else 'tail') +
-                           f'_{"option_on" if relaxed else "ordered"}_lv{repeats}')
-                    (work / f'{tag}.remarks').write_text(result.stderr)
-                    (work / f'{tag}.rvv.ll').write_text(result.stdout)
-                    assert result.stderr.count('split scalar-IR reduction loop;') == len(cases), result.stderr
-                    instrumented = result.stdout
-                    for name, capacity, two, branch, nested, line, size in cases:
-                        check_recurrence_remarks(result.stderr, name, capacity, size,
-                                                 line, vectorized=not boundary)
-                        checked = check_recurrence_function(
-                            result.stdout, source, name, evl, vectorized=not boundary,
-                            probe=not evl, capacity=capacity)
-                        body = function_definition(result.stdout, name)
-                        instrumented = instrumented.replace(body, checked, 1)
-                    # Codegen uses the uninstrumented original target module.
-                    run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
-                         '-o', str(work / f'{tag}.s')], input=result.stdout)
-                    if not evl:
-                        instrumented += ('\ndeclare void @record_acyclic_iteration()\n'
-                                         'declare void @record_acyclic_latch()\n'
-                                         'declare void @record_scalar_consumer_tail()\n')
-                        if not boundary:
-                            instrumented += 'declare void @record_scalar_consumer_vector()\n'
-                        for scale in ([1] if boundary else args.vscales):
-                            fixed, names = rename_execution_functions(
-                                specialize(instrumented, scale),
-                                {name: f'{name}_{tag}_s{scale}' for name, *_ in cases}, used_symbols)
-                            for name, capacity, two, branch, nested, line, size in cases:
-                                symbol = names[name]
-                                declarations.append(f'extern RecurrenceFn {symbol};')
-                                recurrence_rows.append(
-                                    f'{{"{symbol}", {symbol}, {references[name]}, {capacity}, '
-                                    f'{0 if boundary else 4 * scale}, {str(two).lower()}, '
-                                    f'{str(branch).lower()}, {str(nested).lower()}}}')
-                            compile_ir(f'{tag}_s{scale}', fixed)
-                    records.append({'fixture': 'scalar-recurrence', 'boundary': boundary,
-                                    'fp_reordering_option': relaxed,
-                                    'loop_vectorize_invocations': repeats, 'evl': evl,
-                                    'executed': not evl, 'options': options,
-                                    'selection_remarks': result.stderr,
-                                    'comparison': 'original IR / transformed / independent recurrence; '
-                                                  'ordered FP and integer; exact N, vector/tail visits; '
-                                                  'enclosing carry, aliases, canaries and scratch reuse'})
-                    print(f'Validated recurrence artifact {tag}; host execution pending link', flush=True)
+    compact_recurrence_rows = []
+    for compact, fixture, recurrence_cases in [
+            (False, 'scalar-recurrence', RECURRENCE_CASES),
+            (True, 'scalar-compact-recurrence',
+             [(name, cap, True, conditional, nested, line, size)
+              for name, cap, conditional, nested, line, size in COMPACT_RECURRENCE_CASES])]:
+        recurrence_source = (tests / f'reduction-fission-{fixture}.ll').read_text()
+        reference, references = rename_execution_functions(
+            recurrence_source, {name: f'ref_{name}' for name, *_ in recurrence_cases}, used_symbols)
+        compile_ir('reference_' + fixture.replace('-', '_'), reference)
+        declarations.extend(f'extern RecurrenceFn {value};' for value in references.values())
+        for boundary in (False, True):
+            cases = [case for case in recurrence_cases if (case[1] != 65) == boundary]
+            source = keep_functions(recurrence_source, [case[0] for case in cases])
+            for relaxed in (False, True):
+                for repeats in (1, 2):
+                    for mode in (('scalar',) if boundary else
+                                 ('evl', 'tail', 'scalar') if compact else ('evl', 'tail')):
+                        evl, vectorized = mode == 'evl', mode != 'scalar'
+                        options = list(flags)
+                        if not vectorized:
+                            options = [option for option in options if option not in (
+                                '-force-vector-width=4', '-scalable-vectorization=always',
+                                '-force-vector-interleave=1')]
+                            options += ['-force-vector-width=1', '-force-vector-interleave=0',
+                                        '-force-target-max-scalar-interleave=1',
+                                        '-scalable-vectorization=off']
+                        if relaxed:
+                            options += ['-vplan-reduction-fission-allow-fp-reordering']
+                        if repeats == 2:
+                            options = [option.replace('-passes=loop-vectorize,',
+                                                       '-passes=loop-vectorize,loop-vectorize,')
+                                       for option in options]
+                        if mode == 'tail':
+                            options += ['-tail-folding-policy=dont-fold-tail',
+                                        '-enable-epilogue-vectorization=false']
+                        result = run([opt, *options], input=source)
+                        tag = ((fixture.replace('-', '_') if compact else 'recurrence') + '_' +
+                               ('bounds' if boundary else mode) +
+                               f'_{"option_on" if relaxed else "ordered"}_lv{repeats}')
+                        (work / f'{tag}.remarks').write_text(result.stderr)
+                        (work / f'{tag}.rvv.ll').write_text(result.stdout)
+                        assert result.stderr.count('split scalar-IR reduction loop;') == len(cases), result.stderr
+                        instrumented = result.stdout
+                        for name, capacity, two, branch, nested, line, size in cases:
+                            check_recurrence_remarks(result.stderr, name, capacity, size,
+                                                     line, vectorized=vectorized,
+                                                     source_file=fixture + '.c')
+                            checked = check_recurrence_function(
+                                result.stdout, source, name, evl, vectorized=vectorized,
+                                probe=not evl, capacity=capacity, compact=compact)
+                            body = function_definition(result.stdout, name)
+                            instrumented = instrumented.replace(body, checked, 1)
+                        # Codegen uses the uninstrumented original target module.
+                        run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
+                             '-o', str(work / f'{tag}.s')], input=result.stdout)
+                        if not evl:
+                            instrumented += ('\ndeclare void @record_acyclic_iteration()\n'
+                                             'declare void @record_acyclic_latch()\n'
+                                             'declare void @record_scalar_consumer_tail()\n')
+                            if vectorized:
+                                instrumented += 'declare void @record_scalar_consumer_vector()\n'
+                            if compact:
+                                instrumented += 'declare void @record_compact_participant()\n'
+                            for scale in (args.vscales if vectorized else [1]):
+                                fixed, names = rename_execution_functions(
+                                    specialize(instrumented, scale),
+                                    {name: f'{name}_{tag}_s{scale}' for name, *_ in cases}, used_symbols)
+                                for name, capacity, two, branch, nested, line, size in cases:
+                                    symbol = names[name]
+                                    declarations.append(f'extern RecurrenceFn {symbol};')
+                                    if compact:
+                                        compact_recurrence_rows.append(
+                                            f'{{"{symbol}", {symbol}, {references[name]}, {capacity}, '
+                                            f'{4 * scale if vectorized else 0}, '
+                                            f'{str(branch).lower()}, {str(nested).lower()}, '
+                                            f'{str(name == "compact_recurrence_reverse").lower()}}}')
+                                    else:
+                                        recurrence_rows.append(
+                                            f'{{"{symbol}", {symbol}, {references[name]}, {capacity}, '
+                                            f'{0 if boundary else 4 * scale}, {str(two).lower()}, '
+                                            f'{str(branch).lower()}, {str(nested).lower()}}}')
+                                compile_ir(f'{tag}_s{scale}', fixed)
+                        records.append({'fixture': fixture, 'boundary': boundary,
+                                        'fp_reordering_option': relaxed,
+                                        'loop_vectorize_invocations': repeats, 'evl': evl,
+                                        'consumer_path': mode, 'compact': compact,
+                                        'executed': not evl, 'options': options,
+                                        'selection_remarks': result.stderr,
+                                        'comparison': 'original IR / transformed / independent recurrence; '
+                                                      'ordered FP and integer; exact N, vector/tail visits; '
+                                                      'enclosing carry, aliases, canaries and scratch reuse'})
+                        print(f'Validated recurrence artifact {tag}; host execution pending link', flush=True)
 
+    # Execute the exact historical rejection, without changing its IR/interface.
+    delay_rows = []
+    delay_source = (tests / 'reduction-fission-scalar-recurrence-compact-legacy.ll').read_text()
+    reference, references = rename_execution_functions(
+        delay_source, {'recurrence_compact': 'ref_recurrence_compact'}, used_symbols)
+    compile_ir('reference_compact_delay', reference)
+    declarations.append('extern CompactDelayFn ref_recurrence_compact;')
+    for relaxed in (False, True):
+        for repeats in (1, 2):
+            for mode in ('scalar', 'tail', 'evl'):
+                vectorized, evl = mode != 'scalar', mode == 'evl'
+                options = list(flags)
+                if not vectorized:
+                    options = [option for option in options if option not in (
+                        '-force-vector-width=4', '-scalable-vectorization=always',
+                        '-force-vector-interleave=1')]
+                    options += ['-force-vector-width=1', '-force-vector-interleave=0',
+                                '-force-target-max-scalar-interleave=1', '-scalable-vectorization=off']
+                if relaxed:
+                    options += ['-vplan-reduction-fission-allow-fp-reordering']
+                if repeats == 2:
+                    options = [option.replace('-passes=loop-vectorize,',
+                                               '-passes=loop-vectorize,loop-vectorize,') for option in options]
+                if mode == 'tail':
+                    options += ['-tail-folding-policy=dont-fold-tail', '-enable-epilogue-vectorization=false']
+                result = run([opt, *options], input=delay_source)
+                tag = f'compact_delay_{mode}_option_{int(relaxed)}_lv{repeats}'
+                (work / f'{tag}.rvv.ll').write_text(result.stdout)
+                (work / f'{tag}.remarks').write_text(result.stderr)
+                check_recurrence_remarks(result.stderr, 'recurrence_compact', 65, 260, 12,
+                                         vectorized=vectorized)
+                checked = check_compact_delay_function(result.stdout, delay_source, evl,
+                                                       vectorized, probe=not evl)
+                run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
+                     '-o', str(work / f'{tag}.s')], input=result.stdout)
+                if not evl:
+                    body = function_definition(result.stdout, 'recurrence_compact')
+                    instrumented = result.stdout.replace(body, checked, 1)
+                    for recorder in ['acyclic_iteration', 'acyclic_latch', 'compact_participant',
+                                     'scalar_consumer_tail'] + (['scalar_consumer_vector'] if vectorized else []):
+                        instrumented += f'\ndeclare void @record_{recorder}()\n'
+                    for scale in (args.vscales if vectorized else [1]):
+                        fixed, names = rename_execution_functions(
+                            specialize(instrumented, scale),
+                            {'recurrence_compact': f'recurrence_compact_{tag}_s{scale}'}, used_symbols)
+                        symbol = names['recurrence_compact']
+                        declarations.append(f'extern CompactDelayFn {symbol};')
+                        delay_rows.append(f'{{"{symbol}", {symbol}, ref_recurrence_compact, '
+                                          f'{4 * scale if vectorized else 0}}}')
+                        compile_ir(f'{tag}_s{scale}', fixed)
+                records.append({'fixture': 'scalar-recurrence-compact-legacy', 'options': options,
+                                'fp_reordering_option': relaxed, 'loop_vectorize_invocations': repeats,
+                                'evl': evl, 'executed': not evl, 'selection_remarks': result.stderr})
 
     harness = (root / 'llvm/utils/reduction-fission-execution.c.in').read_text()
     for key, rows in [('DECLARATIONS', declarations), ('COMBINED', combined_rows),
@@ -1788,7 +2046,9 @@ def check(args, work):
                       ('COMPACT', compact_rows), ('COMPACT_INTEGER', compact_integer_rows),
                       ('COMPACT_NESTED', compact_nested_rows), ('ACYCLIC', acyclic_rows),
                       ('ACYCLIC_BOUNDS', acyclic_bound_rows), ('AFFINE', affine_rows),
-                      ('RECURRENCES', recurrence_rows)]:
+                      ('RECURRENCES', recurrence_rows),
+                      ('COMPACT_RECURRENCES', compact_recurrence_rows),
+                      ('COMPACT_DELAYS', delay_rows)]:
         harness = harness.replace(f'@{key}@', '\n'.join(rows) if key == 'DECLARATIONS'
                                    else ',\n'.join(rows))
     harness_path = work / 'harness.c'
@@ -1818,6 +2078,13 @@ def check(args, work):
         'acyclic_counts': list(range(66)) + [66, 2**64 - 1],
         'recurrence_counts': list(range(66)) + [66, 2**64 - 1],
         'recurrence_capacities': [1, 65, 255, 5461],
+        'compact_recurrence_modes': ['empty', 'all', 'integer state sparse',
+                                     'first only', 'last only', 'ordered FP state sparse'],
+        'compact_recurrence_comparison': 'original IR / actual transformed scalar or vector/tail '
+                                         '/ independent formulas; exact N and P, per-row counts '
+                                         'including alias writes, retained PHIs/updates/flags/branches, '
+                                         'ordered FP starts and operands, scratch types/indices, '
+                                         'capacity boundaries and repeated LV; EVL machine verification only',
         'recurrence_comparison': 'original IR / actual transformed stages / independent formulas; '
                                  'integer bits and ordered non-NaN FP bits; retained state, '
                                  'scratch/count provenance, vector/tail/producer/latch visits; '

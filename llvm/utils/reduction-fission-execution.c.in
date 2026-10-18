@@ -27,6 +27,7 @@ typedef void ScalarNestedFn(const uint32_t *, const double *, uint32_t *,
                             double *, uint64_t, uint64_t, double);
 typedef void AffineFn(const uint32_t *, const double *, uint32_t *, double *,
                       float *, uint64_t, double, int64_t);
+typedef uint32_t CompactDelayFn(const uint32_t *, uint64_t);
 typedef void RecurrenceFn(const uint32_t *, const double *, uint32_t *, double *,
                           uint64_t, uint64_t, double, int64_t);
 extern CombinedFn ref_combined;
@@ -110,6 +111,18 @@ static const struct {
   unsigned Capacity, VectorLanes;
   bool Two, Branch, Enclosing;
 } Recurrences[] = {@RECURRENCES@};
+static const struct {
+  const char *Name;
+  RecurrenceFn *Fn, *Reference;
+  unsigned Capacity, VectorLanes;
+  bool Conditional, Enclosing, AddState;
+} CompactRecurrences[] = {@COMPACT_RECURRENCES@};
+static const struct {
+  const char *Name;
+  CompactDelayFn *Fn, *Reference;
+  unsigned VectorLanes;
+} CompactDelays[] = {@COMPACT_DELAYS@};
+
 static const struct {
   const char *Name;
   ScalarMixedFn *Fn, *Reference;
@@ -409,6 +422,206 @@ static void reference_recurrence(bool Two, bool Branch, bool Enclosing,
   *Dout = DS;
 }
 
+// Counts come from this independent scalar formula, including alias writes
+// between rows. Each row has its own P and consumer rounding/tail.
+typedef struct {
+  unsigned Iterations, Participants, Vector, Tail;
+} CompactRecurrenceCounts;
+
+static CompactRecurrenceCounts reference_compact_recurrence(
+    bool Conditional, bool Enclosing, bool AddState, unsigned Capacity, unsigned Lanes,
+    const uint32_t *A, const double *D, uint32_t *Out, double *Dout,
+    uint64_t N, uint64_t Rows, double Start, int64_t Begin) {
+  CompactRecurrenceCounts Counts = {0, 0, 0, 0};
+  uint32_t S0 = 17, S1 = (uint32_t)-7;
+  double DS = Start;
+  unsigned Mode = (uint64_t)Begin & 7;
+  if (N && N <= Capacity && (!Enclosing || (Rows && Rows <= 4)))
+    for (unsigned R = 0; R < (Enclosing ? Rows : 1); ++R) {
+      uint32_t Prev = 23, Older = 11;
+      double DPrev = -0.0, DOlder = 0.5;
+      unsigned P = 0, Base = Enclosing ? 65 * R : 0;
+      for (unsigned I = 0; I < N; ++I) {
+        uint32_t X = A[Base + I];
+        double DX = D[Base + I];
+        bool Participate = Mode == 0 ? false : Mode == 1 ? true :
+                           Mode == 3 ? I == 0 : Mode == 4 ? I + 1 == N :
+                           Mode == 5 ? DPrev > 0.0 : (Prev & 1) != 0;
+        uint32_t Next = Prev;
+        double DNext = DPrev;
+        if (!Conditional || Participate) {
+          Next = (X & 127) + Older;
+          DNext = AddState ? DPrev + DX : DX - DOlder;
+        }
+        if (Participate) {
+          unsigned Address = Base + (Prev & 63);
+          uint32_t C = scalar_helper(Prev ^ A[Address]);
+          double Contribution = D[Address] - DPrev;
+          S0 += C;
+          S1 = C + S1;
+          DS += Contribution;
+          ++P;
+        }
+        Older = Prev;
+        DOlder = DPrev;
+        Prev = Next;
+        DPrev = DNext;
+      }
+      Counts.Iterations += N;
+      Counts.Participants += P;
+      Counts.Vector += Lanes ? P / Lanes : 0;
+      Counts.Tail += Lanes ? P % Lanes : P;
+      if (Enclosing) {
+        Out[0] = S0;
+        Out[1] = S1;
+        *Dout = DS;
+      }
+    }
+  Out[0] = S0;
+  Out[1] = S1;
+  *Dout = DS;
+  return Counts;
+}
+
+static void check_compact_delays(void) {
+  uint32_t SavedSeed = Seed;
+  unsigned Comparisons = 0;
+  for (unsigned C = 0; C < sizeof(CompactDelays) / sizeof(*CompactDelays); ++C)
+    for (unsigned K = 0; K < 68; ++K)
+      for (unsigned Trial = 0; Trial < 8; ++Trial) {
+        uint64_t N = K == 67 ? UINT64_MAX : K;
+        uint32_t A[65], Expected = 17, Prev = 23;
+        unsigned P = 0, Trips = N && N <= 65 ? N : 0;
+        for (unsigned I = 0; I < 65; ++I)
+          A[I] = Trial == 0 ? 0 : Trial == 1 ? 1 : Trial == 2 ? I & 1 :
+                 Trial == 3 ? I == 0 : Trial == 4 ? I + 1 == Trips : random_value();
+        for (unsigned I = 0; I < Trips; ++I) {
+          if (A[I]) {
+            Expected += scalar_helper(Prev);
+            ++P;
+          }
+          Prev = A[I];
+        }
+        uint32_t Ref = CompactDelays[C].Reference(Trips ? A : NULL, N);
+        AcyclicIterations = AcyclicLatches = CompactParticipants = 0;
+        ScalarVectorVisits = ScalarTailVisits = 0;
+        uint32_t Actual = CompactDelays[C].Fn(Trips ? A : NULL, N);
+        unsigned Lanes = CompactDelays[C].VectorLanes;
+        if (Actual != Ref || Ref != Expected || AcyclicIterations != Trips ||
+            AcyclicLatches != Trips || CompactParticipants != P ||
+            ScalarVectorVisits != (Lanes ? P / Lanes : 0) ||
+            ScalarTailVisits != (Lanes ? P % Lanes : P))
+          fail(CompactDelays[C].Name, (unsigned)N, Trial, "historical compact delay formula/result/count");
+        ++Comparisons;
+      }
+  Runs += Comparisons;
+  Seed = SavedSeed;
+  printf("Historical compact delay: %u original/transformed/formula comparisons\n", Comparisons);
+}
+
+static void check_compact_recurrences(void) {
+  uint32_t SavedSeed = Seed;
+  static uint32_t A[5528], Actual[5528], Ref[5528], Formula[5528];
+  static double D[5528], ActualD[5528], RefD[5528], FormulaD[5528];
+  static const uint64_t RowCounts[] = {0, 1, 2, 4, 5, UINT64_MAX};
+  static const int64_t Origins[] = {INT64_MIN, -8, 0, 248, 256, INT64_MAX - 7};
+  unsigned Comparisons = 0, VectorRuns = 0, TailRuns = 0;
+  for (unsigned C = 0; C < sizeof(CompactRecurrences) / sizeof(*CompactRecurrences); ++C) {
+    unsigned Capacity = CompactRecurrences[C].Capacity;
+    unsigned Size = CompactRecurrences[C].Enclosing ? 262 : Capacity + 65;
+    unsigned Lanes = CompactRecurrences[C].VectorLanes;
+    bool SawZero = false, SawEmpty = false, SawAll = false, SawSparse = false;
+    bool SawVector = false, SawTail = false, SawBoundary = false;
+    bool SawFirst = false, SawLast = false, SawMixed = false, SawExact = false;
+    for (unsigned K = 0; K < (Capacity == 65 ? 68u : 12u); ++K)
+      for (unsigned R = 0; R < (CompactRecurrences[C].Enclosing ? 6u : 1u); ++R)
+        for (unsigned Mode = 0; Mode < 6; ++Mode)
+          for (unsigned Trial = 0; Trial < 8; ++Trial) {
+            uint64_t N = Capacity == 65 ? (K == 67 ? UINT64_MAX : K) :
+                         (uint64_t[]){0, 1, 2, 3, 4, 7, 8, Capacity / 2,
+                                      Capacity - 1, Capacity, Capacity + 1, UINT64_MAX}[K];
+            uint64_t Rows = CompactRecurrences[C].Enclosing ? RowCounts[R] : 1;
+            bool Enter = N && N <= Capacity && Rows && Rows <= 4;
+            int64_t Begin = (int64_t)((uint64_t)Origins[Trial % 6] | Mode);
+            double Start = Trial % 2 ? 3.5 : -0.0;
+            for (unsigned I = 0; I < Size; ++I)
+              A[I] = Trial == 0 ? 0 : Trial == 1 ? UINT32_MAX :
+                     Trial == 2 ? I : random_value();
+            fill_fp(D, Size, Trial);
+            for (unsigned Alias = 0; Alias < 2; ++Alias) {
+              memcpy(Actual, A, Size * sizeof(*A));
+              memcpy(Ref, A, Size * sizeof(*A));
+              memcpy(Formula, A, Size * sizeof(*A));
+              memcpy(ActualD, D, Size * sizeof(*D));
+              memcpy(RefD, D, Size * sizeof(*D));
+              memcpy(FormulaD, D, Size * sizeof(*D));
+              uint32_t Out[4] = {123, 0, 0, 456}, RefOut[4] = {123, 0, 0, 456}, FOut[2];
+              double Dout[3] = {17.5, 0.0, -19.5}, RDout[3] = {17.5, 0.0, -19.5}, FDout;
+              unsigned Offset = CompactRecurrences[C].Enclosing ? 65 : 0;
+              CompactRecurrenceCounts Expected = reference_compact_recurrence(
+                  CompactRecurrences[C].Conditional, CompactRecurrences[C].Enclosing,
+                  CompactRecurrences[C].AddState, Capacity, Lanes,
+                  Enter ? Formula : NULL, Enter ? FormulaD : NULL,
+                  Alias ? Formula + Offset : FOut, Alias ? FormulaD + Offset : &FDout,
+                  N, Rows, Start, Begin);
+              CompactRecurrences[C].Reference(Enter ? Ref : NULL, Enter ? RefD : NULL,
+                  Alias ? Ref + Offset : RefOut + 1, Alias ? RefD + Offset : RDout + 1,
+                  N, Rows, Start, Begin);
+              if ((Alias && (memcmp(Formula, Ref, Size * sizeof(*Ref)) ||
+                             !compact_doubles_equal(FormulaD, RefD, Size))) ||
+                  (!Alias && (memcmp(FOut, RefOut + 1, sizeof(FOut)) ||
+                              !compact_doubles_equal(&FDout, RDout + 1, 1))))
+                fail(CompactRecurrences[C].Name, (unsigned)N, Trial, "compact state original / formula");
+              AcyclicIterations = AcyclicLatches = CompactParticipants = 0;
+              ScalarVectorVisits = ScalarTailVisits = 0;
+              CompactRecurrences[C].Fn(Enter ? Actual : NULL, Enter ? ActualD : NULL,
+                  Alias ? Actual + Offset : Out + 1, Alias ? ActualD + Offset : Dout + 1,
+                  N, Rows, Start, Begin);
+              if (memcmp(Actual, Ref, Size * sizeof(*Ref)) ||
+                  !compact_doubles_equal(ActualD, RefD, Size) ||
+                  (!Alias && (memcmp(Out, RefOut, sizeof(Out)) ||
+                              !compact_doubles_equal(Dout, RDout, 3))) ||
+                  AcyclicIterations != Expected.Iterations ||
+                  AcyclicLatches != Expected.Iterations ||
+                  CompactParticipants != Expected.Participants ||
+                  ScalarVectorVisits != Expected.Vector || ScalarTailVisits != Expected.Tail)
+                fail(CompactRecurrences[C].Name, (unsigned)N, Trial, "compact state result/alias/canary/count");
+              if (Mode == 0 && Expected.Participants != 0)
+                fail(CompactRecurrences[C].Name, (unsigned)N, Trial, "empty stream formula");
+              if (Mode == 1 && Expected.Participants != Expected.Iterations)
+                fail(CompactRecurrences[C].Name, (unsigned)N, Trial, "all active formula");
+              if ((Mode == 3 || Mode == 4) &&
+                  Expected.Participants != (Enter ? (CompactRecurrences[C].Enclosing ? Rows : 1) : 0))
+                fail(CompactRecurrences[C].Name, (unsigned)N, Trial, "first/last only formula");
+              SawZero |= N == 0;
+              SawEmpty |= Expected.Iterations && !Expected.Participants;
+              SawAll |= Expected.Participants && Expected.Participants == Expected.Iterations;
+              SawSparse |= Expected.Participants && Expected.Participants < Expected.Iterations;
+              SawBoundary |= Enter && N == Capacity && Mode == 1;
+              SawFirst |= Enter && Mode == 3;
+              SawLast |= Enter && Mode == 4;
+              SawVector |= Expected.Vector != 0;
+              SawTail |= Expected.Tail != 0;
+              SawMixed |= Expected.Vector && Expected.Tail;
+              SawExact |= Expected.Vector && !Expected.Tail;
+              VectorRuns += Expected.Vector != 0;
+              TailRuns += Expected.Tail != 0;
+              ++Comparisons;
+            }
+          }
+    if (!SawZero || !SawEmpty || !SawAll || !SawBoundary || !SawFirst || !SawLast ||
+        !SawTail || (Capacity > 1 && !SawSparse) ||
+        (Lanes && Lanes <= Capacity && (!SawVector || !SawExact)) ||
+        (Lanes && Lanes < Capacity && !SawMixed))
+      fail(CompactRecurrences[C].Name, Capacity, 0, "compact state coverage missing");
+  }
+  Runs += Comparisons;
+  Seed = SavedSeed;
+  printf("Compact producer recurrences: %u comparisons, %u vector runs, %u tail runs; "
+         "exact N/P, aliases, starts, ordered FP and row reuse\n",
+         Comparisons, VectorRuns, TailRuns);
+}
+
 static void check_recurrences(void) {
   uint32_t SavedSeed = Seed;
   static uint32_t A[5463], Actual[5463], Ref[5463], Formula[5463];
@@ -513,6 +726,8 @@ static void check_recurrences(void) {
 
 int main(void) {
   check_recurrences();
+  check_compact_recurrences();
+  check_compact_delays();
   static const unsigned Counts[] = {
       0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 257, 1023, 1024, 1025};
   static const int32_t Steps[] = {0, 1, -3, INT32_MAX, INT32_MIN};

@@ -671,40 +671,6 @@ exit:
 
 ; A producer-local delay alongside a compact reduction is deliberately outside
 ; this extension. Existing compact tests still cover their original contract.
-; REASON: scalar-recurrence.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define i32 @recurrence_compact(
-; CHECK: ret i32
-define i32 @recurrence_compact(ptr %a, i64 %n) !dbg !12 {
-entry:
-  %valid = icmp ule i64 %n, 65
-  %nz = icmp ne i64 %n, 0
-  %enter = and i1 %valid, %nz
-  br i1 %enter, label %preheader, label %bypass
-preheader:
-  br label %loop, !dbg !13
-loop:
-  %iv = phi i64 [0, %preheader], [%next, %latch]
-  %prev = phi i32 [23, %preheader], [%x, %latch]
-  %sum = phi i32 [17, %preheader], [%merge, %latch]
-  %p = getelementptr i32, ptr %a, i64 %iv
-  %x = load i32, ptr %p
-  %choose = icmp ne i32 %x, 0
-  br i1 %choose, label %left, label %latch
-left:
-  %c = call i32 @scalar_helper(i32 %prev)
-  %update = add i32 %sum, %c
-  br label %latch
-latch:
-  %merge = phi i32 [%update, %left], [%sum, %loop]
-  %next = add nuw i64 %iv, 1
-  %done = icmp eq i64 %next, %n
-  br i1 %done, label %exit, label %loop, !dbg !13
-exit:
-  ret i32 %merge
-bypass:
-  ret i32 17
-}
-
 ; A split must extract at least one supported add/fadd accumulator.
 ; REASON: scalar-recurrence.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
 ; CHECK-LABEL: define void @recurrence_no_extractable(
@@ -762,8 +728,6 @@ exit:
 !3 = !{i32 2, !"Debug Info Version", i32 3}
 !4 = !DISubroutineType(types: !5)
 !5 = !{}
-!12 = distinct !DISubprogram(name: "recurrence_compact", scope: !1, file: !1, line: 12, type: !4, scopeLine: 12, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
-!13 = !DILocation(line: 12, column: 3, scope: !12)
 
 !20 = distinct !DISubprogram(name: "recurrence_phi_feedback", scope: !1, file: !1, line: 12, type: !4, scopeLine: 12, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
 !21 = !DILocation(line: 12, column: 3, scope: !20)
