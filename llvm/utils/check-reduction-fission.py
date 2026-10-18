@@ -718,6 +718,14 @@ def check_affine_function(ir, source, name, evl, probe=False):
         # the accepted compact fixture. Its original induction is now strided.
         check_compact_count(producer, consumer, 'compact_triangle', evl)
     else:
+        # The zero-based ordinal advances once at the sole latch, including
+        # the exiting iteration. The finite producer DAG and capacity proof
+        # bound N by 65, so ordinal+1 is exactly the actual completed count
+        # and cannot overflow i64, even for modular early exits where N<n.
+        # Ordinary LV may remove its nuw flag. The same one-way refinement as
+        # for retained arithmetic preserves every originally defined result;
+        # it cannot change this SSA identity, type, operands, step or block.
+        # The ordinal and completed-export PHIs still require exact edges.
         for value, label, expression in [
             ('%fission.ordinal', header,
              f'phi i64 [ 0, %{ph} ], [ %fission.completed, %latch ]'),
@@ -726,7 +734,12 @@ def check_affine_function(ir, source, name, evl, probe=False):
              'phi i64 [ %fission.completed, %latch ]'),
         ]:
             assert value in defined and defined[value][0] == label, (name, value, body)
-            assert normalize(defined[value][2]) == normalize(expression), (name, value, body)
+            if value == '%fission.completed':
+                assert affine_instruction_refines(
+                    '  ' + value + ' = ' + expression,
+                    '  ' + value + ' = ' + defined[value][2], normalize), (name, value, body)
+            else:
+                assert normalize(defined[value][2]) == normalize(expression), (name, value, body)
         # Permit n and observed expanded expressions only after a certificate
         # for the original control proves N=n. An equality witness bounding
         # storage is insufficient, particularly for modular relational exits.

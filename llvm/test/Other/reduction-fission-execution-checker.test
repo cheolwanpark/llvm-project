@@ -437,7 +437,9 @@ for candidate in (affine, many_metadata):
 # the executable comparisons, at every N=0..66 and UINT64_MAX, and P=0..65.
 affine_originals = Path(sys.argv[4]).read_text()
 affine_outputs = Path(sys.argv[6]).read_text()
-for match in checker.FUNCTION_DEFINITION.finditer(affine_outputs):
+retained_affine = list(checker.FUNCTION_DEFINITION.finditer(affine_outputs))
+assert len(retained_affine) == 14
+for match in retained_affine:
     function = match['name']
     assert checker.check_affine_function(affine_outputs, affine_originals, function, evl=True) == match[0]
 
@@ -453,6 +455,94 @@ def reject_count(candidate, original=runtime_source, function=runtime_name, reas
         pass
     else:
         raise AssertionError('accepted affine count mutation: ' + reason)
+
+
+# The completed increment has the SAME one-way refinement contract as the
+# retained producer arithmetic. Five retained outputs (down and four modular
+# early exits) drop nuw; eight retain it. Check both spellings directly through
+# the production checker for every ordinal control, including enclosing reuse.
+# The compact fixture instead keeps its independently checked participant P.
+for match in retained_affine:
+    function = match['name']
+    if function == 'affine_compact':
+        continue
+    original = checker.function_definition(affine_originals, function)
+    retained = match[0]
+    increment = re.search(r'^  %fission.completed = (add(?: nuw)? i64 %fission.ordinal, 1)',
+                          retained, re.M)
+    assert increment, function
+    plain = change_line(retained, '%fission.completed', increment[1],
+                        'add i64 %fission.ordinal, 1')
+    ph = 'inner.ph' if function == 'affine_enclosing' else 'preheader'
+    for flags in ('nuw ', ''):
+        candidate = change_line(plain, '%fission.completed', 'add i64', 'add ' + flags + 'i64')
+        assert checker.check_affine_function(candidate, original, function, evl=True) == candidate
+        marked = candidate
+        for value in ('%fission.ordinal', '%fission.completed', '%fission.completed.count'):
+            marked = attach_metadata(marked, value, ', !dbg !71, !annotation !72')
+        assert checker.check_affine_function(marked, original, function, evl=True) == marked
+
+        # Exercise the actual completed export at the count boundaries, even
+        # where the retained LV used n or a certified expansion. Specializing
+        # the argument on BOTH sides preserves the entry guard: 0, 66 and the
+        # unsigned maximum bypass; 1 and 65 are admitted. These are textual
+        # checker positives, not execution of these retained/specialized IRs.
+        bound = re.search(r'^  %avl = phi i64 \[ (%[-\w.$]+), %vector.ph \]', candidate, re.M)[1]
+        exported = change_line(candidate, '%avl', '[ ' + bound + ', %vector.ph ]',
+                               '[ %fission.completed.count, %vector.ph ]')
+        assert checker.check_affine_function(exported, original, function, evl=True) == exported
+        for n in (0, 1, 65, 66, 2**64 - 1):
+            specialized = [re.sub(r'%n(?![-\w.$])', str(n),
+                                  replace_once(text, 'i64 %n, ', ''))
+                           for text in (exported, original)]
+            assert checker.check_affine_function(specialized[0], specialized[1],
+                                                 function, evl=True) == specialized[0]
+
+        # Flags may be removed only. nsw is not part of the emitted contract,
+        # even though these bounded fixtures also fit the signed range.
+        for value, old, replacements in [
+            ('%fission.completed', 'add ' + flags + 'i64',
+             ('sub ' + flags + 'i64', 'add nsw i64', 'add nuw nsw i64',
+              'add exact i64', 'add disjoint i64', 'add nuw nuw i64')),
+            ('%fission.completed', 'i64', ('i8', 'i32', 'i128')),
+            ('%fission.completed', '%fission.ordinal, 1',
+             ('%fission.ordinal, 0', '%fission.ordinal, 2', '%fission.ordinal, 10',
+              '%iv, 1', '%n, 1', '%fission.ordinal.other, 1', '1, %fission.ordinal')),
+            ('%fission.ordinal', '[ 0, %' + ph + ' ]',
+             ('[ 1, %' + ph + ' ]', '[ 0, %left ]')),
+            ('%fission.ordinal', '[ %fission.completed, %latch ]',
+             ('[ %n, %latch ]', '[ %fission.ordinal, %latch ]',
+              '[ %fission.completed, %left ]',
+              '[ %fission.completed, %latch ], [ 0, %left ]')),
+            ('%fission.ordinal', 'i64', ('i32',)),
+            ('%fission.completed.count', '[ %fission.completed, %latch ]',
+             ('[ %n, %latch ]', '[ %fission.ordinal, %latch ]',
+              '[ %fission.completed.other, %latch ]', '[ %fission.completed, %left ]',
+              '[ %fission.completed, %latch ], [ %n, %preheader ]')),
+            ('%fission.completed.count', 'i64', ('i32',)),
+        ]:
+            for replacement in replacements:
+                reject_count(change_line(marked, value, old, replacement), original, function,
+                             'completed identity/operation/edge: ' + replacement)
+
+        # A complete, unique definition must be in its actual block. Metadata,
+        # comments, prefixes and line splitting cannot hide a missing counter
+        # or export. Keep the ordinal PHI and export checks exact, not a loose
+        # match for an instruction elsewhere in the function.
+        for value, destination in (('%fission.ordinal', 'entry'),
+                                    ('%fission.completed', 'left'),
+                                    ('%fission.completed.count', 'vector.ph')):
+            line = next(line for line in marked.splitlines() if line.startswith('  ' + value + ' = '))
+            moved = replace_once(marked, line + '\n', '')
+            site = re.search(r'^' + re.escape(destination) + r':[^\n]*\n', moved, re.M)[0]
+            for altered in (
+                replace_once(moved, site, site + line + '\n'),
+                replace_once(marked, line + '\n', (line + '\n') * 2),
+                replace_once(marked, line, '  ; ' + line.strip()),
+                replace_once(marked, line, line.replace(value + ' = ', value + '.other = ', 1)),
+                replace_once(marked, line, line.replace(' = ', ' =\n  ', 1)),
+            ):
+                reject_count(altered, original, function, 'completed definition/placement: ' + value)
 
 
 # Function and temporary SSA names are not evidence. The arithmetic/guard/CFG
