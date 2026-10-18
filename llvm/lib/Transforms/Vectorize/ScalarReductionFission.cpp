@@ -30,6 +30,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 
 using namespace llvm;
@@ -151,6 +152,76 @@ getScalarFissionMaxTripCount(Loop &L, ScalarEvolution &SE, IntegerType *CountTy)
       MaxTC.getActiveBits() > CountTy->getBitWidth())
     return createStringError(errc::invalid_argument, "trip-count-overflow");
   return MaxTC.getZExtValue();
+}
+
+// A strict relational comparison must exit when its operands are equal. For
+// bounds of the form start + step * span, recover span by cancelling just the
+// constant SCEV factor. This is a termination witness, not a claim that the
+// loop executes span iterations: a signed or wrapping control can exit earlier.
+// The original producer and its completed/participating counters decide that.
+// No monotonicity, nowrap flags, relational trip formula or runtime test is
+// needed. Check the equality in modular arithmetic before using its range.
+static const SCEV *getScalarFissionExitWitness(Loop &L, ScalarEvolution &SE,
+                                             PHINode *IV, Value *Next,
+                                             ICmpInst *Compare) {
+  auto *Branch = cast<BranchInst>(L.getLoopLatch()->getTerminator());
+  auto Pred = Branch->getSuccessor(0) == L.getHeader()
+                  ? Compare->getPredicate()
+                  : Compare->getInversePredicate();
+  if (Pred != ICmpInst::ICMP_ULT && Pred != ICmpInst::ICMP_UGT &&
+      Pred != ICmpInst::ICMP_SLT && Pred != ICmpInst::ICMP_SGT)
+    return nullptr;
+  // Equality takes the exiting edge, independently of operand order/polarity.
+  unsigned Op =
+      Compare->getOperand(0) == IV || Compare->getOperand(0) == Next ? 0 : 1;
+  const auto *AR = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(IV));
+  if (!AR || AR->getLoop() != &L || !AR->isAffine())
+    return nullptr;
+  const SCEV *Step = AR->getStepRecurrence(SE);
+  const SCEV *Distance = SE.getMinusSCEV(
+      SE.getSCEV(Compare->getOperand(1 - Op)), AR->getStart());
+  const SCEV *Span = nullptr;
+  if (Step->isOne())
+    Span = Distance;
+  else if (auto *Product = dyn_cast<SCEVMulExpr>(Distance);
+           Product && Product->getOperand(0) == Step) {
+    SmallVector<SCEVUse, 2> Factors(drop_begin(Product->operands()));
+    Span = SE.getMulExpr(Factors);
+  }
+  if (!Span)
+    return nullptr;
+  const SCEV *Witness = Compare->getOperand(Op) == Next
+                            ? SE.getMinusSCEV(Span, SE.getOne(IV->getType()))
+                            : Span;
+  const auto *TestAR = dyn_cast<SCEVAddRecExpr>(
+      SE.getSCEV(Compare->getOperand(Op)));
+  if (!TestAR || TestAR->getLoop() != &L || !TestAR->isAffine() ||
+      !SE.getMinusSCEV(TestAR->evaluateAtIteration(Witness, SE),
+                       SE.getSCEV(Compare->getOperand(1 - Op)))
+           ->isZero())
+    return nullptr;
+  return Witness;
+}
+
+static std::optional<uint64_t> getScalarFissionScratchBytes(
+    uint64_t MaxTripCount, const MapVector<Value *, AllocaInst *> &Scratch,
+    const DataLayout &DL) {
+  uint64_t ScratchBytes = 0;
+  for (const auto &[Contribution, Slot] : Scratch) {
+    Type *Ty = Contribution->getType();
+    uint64_t Bytes = DL.getTypeAllocSize(Ty).getFixedValue();
+    uint64_t Alignment = DL.getABITypeAlign(Ty).value();
+    auto Padded = checkedAddUnsigned(ScratchBytes, Alignment - 1);
+    auto Total = Padded ? checkedMulAddUnsigned(
+                              MaxTripCount, Bytes,
+                              *Padded & ~(Alignment - 1))
+                        : std::nullopt;
+    if (!Total || *Total > getReductionFissionMaxScratchBytes() ||
+        !isUIntN(DL.getIndexSizeInBits(DL.getAllocaAddrSpace()) - 1, *Total))
+      return std::nullopt;
+    ScratchBytes = *Total;
+  }
+  return ScratchBytes;
 }
 
 Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
@@ -349,31 +420,91 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     }
   }
 
-  auto MaxTrip =
-      getScalarFissionMaxTripCount(L, SE, cast<IntegerType>(IV->getType()));
-  if (!MaxTrip)
-    return Reject(toString(MaxTrip.takeError()));
-  uint64_t MaxTripCount = *MaxTrip;
   const DataLayout &DL = F->getDataLayout();
-  uint64_t ScratchBytes = 0;
   // Identical contribution values share one slot, without any reassociation.
   MapVector<Value *, AllocaInst *> Scratch;
-  for (const Reduction &R : Reductions) {
-    if (!Scratch.insert({R.Contribution, nullptr}).second)
-      continue;
-    Type *Ty = R.Contribution->getType();
-    uint64_t Bytes = DL.getTypeAllocSize(Ty).getFixedValue();
-    uint64_t Alignment = DL.getABITypeAlign(Ty).value();
-    auto Padded = checkedAddUnsigned(ScratchBytes, Alignment - 1);
-    auto Total = Padded ? checkedMulAddUnsigned(
-                              MaxTripCount, Bytes,
-                              *Padded & ~(Alignment - 1))
-                        : std::nullopt;
-    if (!Total || *Total > getReductionFissionMaxScratchBytes() ||
-        !isUIntN(DL.getIndexSizeInBits(DL.getAllocaAddrSpace()) - 1, *Total))
-      return Reject("scalar-scratch-limit");
-    ScratchBytes = *Total;
+  for (const Reduction &R : Reductions)
+    Scratch.insert({R.Contribution, nullptr});
+  auto StandardTrip =
+      getScalarFissionMaxTripCount(L, SE, cast<IntegerType>(IV->getType()));
+  std::optional<uint64_t> MaxTrip;
+  const SCEV *Witness = getScalarFissionExitWitness(L, SE, IV, Next, Compare);
+  const SCEV *GuardedWitness =
+      Witness ? SE.applyLoopGuards(Witness, &L) : nullptr;
+  // Diagnose the ordinary proof separately, before refining it. In particular,
+  // distinguish an unrecognized induction/CFG/live-out (which never reaches
+  // here), an unavailable/oversized count and the later scratch ceiling.
+  std::string StandardFailure;
+  if (StandardTrip)
+    MaxTrip = *StandardTrip;
+  else
+    StandardFailure = toString(StandardTrip.takeError());
+  ORE.emit([&]() {
+    auto Print = [](const SCEV *S) {
+      std::string Text;
+      raw_string_ostream OS(Text);
+      if (S)
+        OS << *S;
+      else
+        OS << "unavailable";
+      return OS.str();
+    };
+    const SCEV *BTC = SE.getBackedgeTakenCount(&L);
+    const SCEV *GuardedBTC = isa<SCEVCouldNotCompute>(BTC)
+                                 ? nullptr
+                                 : SE.applyLoopGuards(BTC, &L);
+    std::string StandardAdmission = StandardFailure;
+    if (MaxTrip)
+      StandardAdmission = getScalarFissionScratchBytes(*MaxTrip, Scratch, DL)
+                              ? "admitted"
+                              : "scalar-scratch-limit";
+    return OptimizationRemarkAnalysis("vplan-reduction-fission",
+                                      "ScalarFissionBound", L.getStartLoc(),
+                                      Header)
+           << "scalar-IR admission passed; control "
+           << ore::NV("Control", Print(SE.getSCEV(IV)))
+           << "; exact backedges " << ore::NV("Exact", Print(BTC))
+           << "; constant maximum "
+           << ore::NV("ConstantMax",
+                      Print(SE.getConstantMaxBackedgeTakenCount(&L)))
+           << "; guarded exact " << ore::NV("GuardedExact", Print(GuardedBTC))
+           << "; guarded exact unsigned maximum "
+           << ore::NV("GuardedExactMax",
+                      Print(GuardedBTC ? SE.getConstant(SE.getUnsignedRangeMax(
+                                             GuardedBTC))
+                                       : nullptr))
+           << "; ordinary count proof "
+           << ore::NV("OrdinaryCount", MaxTrip ? std::to_string(*MaxTrip)
+                                              : StandardFailure)
+           << "; ordinary admission "
+           << ore::NV("OrdinaryAdmission", StandardAdmission)
+           << "; equality witness " << ore::NV("Witness", Print(Witness))
+           << "; guarded witness "
+           << ore::NV("GuardedWitness", Print(GuardedWitness))
+           << "; witness backedge bound "
+           << ore::NV("WitnessMax",
+                      Print(GuardedWitness
+                                ? SE.getConstant(SE.getUnsignedRangeMax(
+                                      GuardedWitness))
+                                : nullptr));
+  });
+  if (GuardedWitness) {
+    APInt Bound = SE.getUnsignedRangeMax(GuardedWitness);
+    // Widen before adding one: even a wrapping original IV must have a
+    // representable completed count. All accesses use ordinals below it.
+    Bound = Bound.zext(Bound.getBitWidth() + 1) + 1;
+    if (Bound.getActiveBits() <= 64 &&
+        Bound.getActiveBits() <= IV->getType()->getIntegerBitWidth() &&
+        (!MaxTrip || Bound.getZExtValue() < *MaxTrip))
+      MaxTrip = Bound.getZExtValue();
   }
+  if (!MaxTrip)
+    return Reject(StandardFailure);
+  uint64_t MaxTripCount = *MaxTrip;
+  auto ScratchSize = getScalarFissionScratchBytes(MaxTripCount, Scratch, DL);
+  if (!ScratchSize)
+    return Reject("scalar-scratch-limit");
+  uint64_t ScratchBytes = *ScratchSize;
 
   ORE.emit([&]() {
     return OptimizationRemark("vplan-reduction-fission", "Selected",

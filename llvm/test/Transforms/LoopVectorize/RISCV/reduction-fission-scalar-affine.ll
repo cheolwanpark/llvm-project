@@ -1,10 +1,14 @@
+; RUN: opt -passes='loop-simplify,lcssa,print<scalar-evolution>' -disable-output \
+; RUN:   -mtriple=riscv64 -mattr=+v %s 2> %t.scev
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -force-vector-width=4 \
 ; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
 ; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
+; RUN:   -pass-remarks-missed=vplan-reduction-fission -pass-remarks-analysis=vplan-reduction-fission \
 ; RUN:   -S %s -o %t 2> %t.remarks
 ; RUN: FileCheck %s --check-prefix=EVL < %t
 ; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
+; RUN: FileCheck %s --check-prefix=BOUND < %t.remarks
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
 ; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -force-vector-width=4 \
@@ -249,6 +253,7 @@ exit:
   ret void
 }
 
+; BOUND: scalar-affine.c:32:3: scalar-IR admission passed; control {{.*}}; exact backedges {{.*}}; constant maximum {{.*}}; guarded exact {{.*}}; ordinary count proof {{.*}}; ordinary admission {{non-constant-trip-count|trip-count-overflow|scalar-scratch-limit}}; equality witness {{.*}}; guarded witness {{.*}}; witness backedge bound 64
 ; REMARK: scalar-affine.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
 ; REMARK: scalar-affine.c:32:3: scalar-IR fission producer VF 1
 ; REMARK: scalar-affine.c:32:3: scalar-IR fission consumer VF vscale x 4
@@ -354,6 +359,7 @@ exit:
   ret void
 }
 
+; BOUND: scalar-affine.c:42:3: scalar-IR admission passed; control {{.*}}; exact backedges {{.*}}; constant maximum {{.*}}; guarded exact {{.*}}; ordinary count proof {{.*}}; ordinary admission {{non-constant-trip-count|trip-count-overflow|scalar-scratch-limit}}; equality witness {{.*}}; guarded witness {{.*}}; witness backedge bound 64
 ; REMARK: scalar-affine.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
 ; REMARK: scalar-affine.c:42:3: scalar-IR fission producer VF 1
 ; REMARK: scalar-affine.c:42:3: scalar-IR fission consumer VF vscale x 4
@@ -460,6 +466,7 @@ exit:
   ret void
 }
 
+; BOUND: scalar-affine.c:52:3: scalar-IR admission passed; control {{.*}}; exact backedges {{.*}}; constant maximum {{.*}}; guarded exact {{.*}}; ordinary count proof {{.*}}; ordinary admission {{non-constant-trip-count|trip-count-overflow|scalar-scratch-limit}}; equality witness {{.*}}; guarded witness {{.*}}; witness backedge bound 64
 ; REMARK: scalar-affine.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
 ; REMARK: scalar-affine.c:52:3: scalar-IR fission producer VF 1
 ; REMARK: scalar-affine.c:52:3: scalar-IR fission consumer VF vscale x 4
@@ -565,6 +572,7 @@ exit:
   ret void
 }
 
+; BOUND: scalar-affine.c:62:3: scalar-IR admission passed; control {{.*}}; exact backedges {{.*}}; constant maximum {{.*}}; guarded exact {{.*}}; ordinary count proof {{.*}}; ordinary admission {{non-constant-trip-count|trip-count-overflow|scalar-scratch-limit}}; equality witness {{.*}}; guarded witness {{.*}}; witness backedge bound 64
 ; REMARK: scalar-affine.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
 ; REMARK: scalar-affine.c:62:3: scalar-IR fission producer VF 1
 ; REMARK: scalar-affine.c:62:3: scalar-IR fission consumer VF vscale x 4
@@ -761,6 +769,7 @@ exit:
   ret void
 }
 
+; BOUND: scalar-affine.c:82:3: scalar-IR admission passed; control {{.*}}; exact backedges {{.*}}; constant maximum {{.*}}; guarded exact {{.*}}; ordinary count proof {{.*}}; ordinary admission {{non-constant-trip-count|trip-count-overflow|scalar-scratch-limit}}; equality witness {{.*}}; guarded witness {{.*}}; witness backedge bound 64
 ; REMARK: scalar-affine.c:82:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
 ; REMARK: scalar-affine.c:82:3: scalar-IR fission producer VF 1
 ; REMARK: scalar-affine.c:82:3: scalar-IR fission consumer VF vscale x 4
@@ -1071,6 +1080,416 @@ exit:
   ret void
 }
 
+; Analogous modular relational controls: equality at n-1 is only an upper
+; bound on backedges. Depending on the start, comparison signedness and
+; wrapping, these execute fewer than n iterations. The consumer MUST use
+; the actual completed count, never n or the equality witness. Original
+; arithmetic has no nowrap flags. Host comparisons include the early exits.
+
+; REMARK: scalar-affine.c:112:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
+; REMARK: scalar-affine.c:112:3: scalar-IR fission producer VF 1
+; REMARK: scalar-affine.c:112:3: scalar-IR fission consumer VF vscale x 4
+; SCALAR-LABEL: define void @affine_unsigned_early(
+; SCALAR: alloca [65 x i32]
+; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
+; SCALAR: %next = add i64 %iv, 3
+; SCALAR: %done = icmp ult i64 %next, %limit
+; SCALAR: scalar.fission.consumer.ph:
+; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
+; SCALAR: ret void
+; EVL-LABEL: define void @affine_unsigned_early(
+; EVL: alloca [65 x i32]
+; EVL: %fission.ordinal = phi i64 [ 0, %preheader ]
+; EVL: %next = add i64 %iv, 3
+; EVL: %done = icmp ult i64 %next, %limit
+; EVL: scalar.fission.consumer.ph:
+; EVL: vector.body:
+; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
+; EVL: ret void
+; TAIL-LABEL: define void @affine_unsigned_early(
+; TAIL: alloca [65 x i32]
+; TAIL: %fission.ordinal = phi i64 [ 0, %preheader ]
+; TAIL: %next = add i64 %iv, 3
+; TAIL: %done = icmp ult i64 %next, %limit
+; TAIL: scalar.fission.consumer.ph:
+; TAIL: vector.body:
+; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
+; TAIL: ret void
+define void @affine_unsigned_early(ptr readonly %a, ptr readonly %fp, ptr %out,
+                            ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !26 {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %enter = and i1 %valid, %nonzero
+  %fstart = fptrunc double %start to float
+  br i1 %enter, label %preheader, label %exit
+preheader:
+  %span = mul i64 %n, 3
+  %limit = add i64 %begin, %span
+  br label %loop, !dbg !27
+loop:
+  %iv = phi i64 [%begin, %preheader], [%next, %latch]
+  %r0 = phi i32 [17, %preheader], [%u0, %latch]
+  %r1 = phi i32 [-7, %preheader], [%u1, %latch]
+  %rd = phi double [%start, %preheader], [%ud, %latch]
+  %rf = phi float [%fstart, %preheader], [%uf, %latch]
+  %distance = sub i64 %iv, %begin
+  %index = udiv i64 %distance, 3
+  %p = getelementptr i32, ptr %a, i64 %index
+  %x = load i32, ptr %p, align 4
+  %choose = icmp ne i32 %x, 0
+  br i1 %choose, label %left, label %right, !dbg !27
+left:
+  %q = sdiv i32 840, %x
+  %lc = call i32 @scalar_helper(i32 %q)
+  %ld = sitofp i32 %q to double
+  br label %first.merge
+right:
+  %dp = getelementptr double, ptr %fp, i64 %index
+  %dx = load double, ptr %dp, align 8
+  %rc = fmul double %dx, 3.0
+  br label %first.merge
+first.merge:
+  %first.c = phi i32 [%lc, %left], [17, %right]
+  %first.d = phi double [%ld, %left], [%rc, %right]
+  %parity = and i64 %index, 1
+  %second = icmp ne i64 %parity, 0
+  br i1 %second, label %positive, label %negative
+positive:
+  %pc = add i32 %first.c, 23
+  %pd = fmul double %first.d, 0.5
+  br label %latch
+negative:
+  %nc = sub i32 %first.c, 9
+  %nd = fmul double %first.d, -1.0
+  br label %latch
+latch:
+  %c = phi i32 [%pc, %positive], [%nc, %negative]
+  %dc = phi double [%pd, %positive], [%nd, %negative]
+  %fc = fptrunc double %dc to float
+  %u0 = add i32 %r0, %c
+  %u1 = add i32 %c, %r1
+  %ud = fadd double %rd, %dc
+  %uf = fadd float %rf, %fc
+  %next = add i64 %iv, 3
+  %done = icmp ult i64 %next, %limit
+  br i1 %done, label %loop, label %exit, !dbg !27
+exit:
+  %v0 = phi i32 [17, %entry], [%u0, %latch]
+  %v1 = phi i32 [-7, %entry], [%u1, %latch]
+  %vd = phi double [%start, %entry], [%ud, %latch]
+  %vf = phi float [%fstart, %entry], [%uf, %latch]
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %v0, ptr %out
+  store i32 %v1, ptr %o1
+  store double %vd, ptr %dout
+  store float %vf, ptr %fout
+  ret void
+}
+
+; REMARK: scalar-affine.c:122:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
+; REMARK: scalar-affine.c:122:3: scalar-IR fission producer VF 1
+; REMARK: scalar-affine.c:122:3: scalar-IR fission consumer VF vscale x 4
+; SCALAR-LABEL: define void @affine_signed_early(
+; SCALAR: alloca [65 x i32]
+; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
+; SCALAR: %next = add i64 %iv, 3
+; SCALAR: %done = icmp slt i64 %next, %limit
+; SCALAR: scalar.fission.consumer.ph:
+; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
+; SCALAR: ret void
+; EVL-LABEL: define void @affine_signed_early(
+; EVL: alloca [65 x i32]
+; EVL: %fission.ordinal = phi i64 [ 0, %preheader ]
+; EVL: %next = add i64 %iv, 3
+; EVL: %done = icmp slt i64 %next, %limit
+; EVL: scalar.fission.consumer.ph:
+; EVL: vector.body:
+; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
+; EVL: ret void
+; TAIL-LABEL: define void @affine_signed_early(
+; TAIL: alloca [65 x i32]
+; TAIL: %fission.ordinal = phi i64 [ 0, %preheader ]
+; TAIL: %next = add i64 %iv, 3
+; TAIL: %done = icmp slt i64 %next, %limit
+; TAIL: scalar.fission.consumer.ph:
+; TAIL: vector.body:
+; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
+; TAIL: ret void
+define void @affine_signed_early(ptr readonly %a, ptr readonly %fp, ptr %out,
+                            ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !28 {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %enter = and i1 %valid, %nonzero
+  %fstart = fptrunc double %start to float
+  br i1 %enter, label %preheader, label %exit
+preheader:
+  %span = mul i64 %n, 3
+  %limit = add i64 %begin, %span
+  br label %loop, !dbg !29
+loop:
+  %iv = phi i64 [%begin, %preheader], [%next, %latch]
+  %r0 = phi i32 [17, %preheader], [%u0, %latch]
+  %r1 = phi i32 [-7, %preheader], [%u1, %latch]
+  %rd = phi double [%start, %preheader], [%ud, %latch]
+  %rf = phi float [%fstart, %preheader], [%uf, %latch]
+  %distance = sub i64 %iv, %begin
+  %index = udiv i64 %distance, 3
+  %p = getelementptr i32, ptr %a, i64 %index
+  %x = load i32, ptr %p, align 4
+  %choose = icmp ne i32 %x, 0
+  br i1 %choose, label %left, label %right, !dbg !29
+left:
+  %q = sdiv i32 840, %x
+  %lc = call i32 @scalar_helper(i32 %q)
+  %ld = sitofp i32 %q to double
+  br label %first.merge
+right:
+  %dp = getelementptr double, ptr %fp, i64 %index
+  %dx = load double, ptr %dp, align 8
+  %rc = fmul double %dx, 3.0
+  br label %first.merge
+first.merge:
+  %first.c = phi i32 [%lc, %left], [17, %right]
+  %first.d = phi double [%ld, %left], [%rc, %right]
+  %parity = and i64 %index, 1
+  %second = icmp ne i64 %parity, 0
+  br i1 %second, label %positive, label %negative
+positive:
+  %pc = add i32 %first.c, 23
+  %pd = fmul double %first.d, 0.5
+  br label %latch
+negative:
+  %nc = sub i32 %first.c, 9
+  %nd = fmul double %first.d, -1.0
+  br label %latch
+latch:
+  %c = phi i32 [%pc, %positive], [%nc, %negative]
+  %dc = phi double [%pd, %positive], [%nd, %negative]
+  %fc = fptrunc double %dc to float
+  %u0 = add i32 %r0, %c
+  %u1 = add i32 %c, %r1
+  %ud = fadd double %rd, %dc
+  %uf = fadd float %rf, %fc
+  %next = add i64 %iv, 3
+  %done = icmp slt i64 %next, %limit
+  br i1 %done, label %loop, label %exit, !dbg !29
+exit:
+  %v0 = phi i32 [17, %entry], [%u0, %latch]
+  %v1 = phi i32 [-7, %entry], [%u1, %latch]
+  %vd = phi double [%start, %entry], [%ud, %latch]
+  %vf = phi float [%fstart, %entry], [%uf, %latch]
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %v0, ptr %out
+  store i32 %v1, ptr %o1
+  store double %vd, ptr %dout
+  store float %vf, ptr %fout
+  ret void
+}
+
+; REMARK: scalar-affine.c:132:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
+; REMARK: scalar-affine.c:132:3: scalar-IR fission producer VF 1
+; REMARK: scalar-affine.c:132:3: scalar-IR fission consumer VF vscale x 4
+; SCALAR-LABEL: define void @affine_down_early(
+; SCALAR: alloca [65 x i32]
+; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
+; SCALAR: %next = sub i64 %iv, 3
+; SCALAR: %done = icmp ugt i64 %next, %limit
+; SCALAR: scalar.fission.consumer.ph:
+; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
+; SCALAR: ret void
+; EVL-LABEL: define void @affine_down_early(
+; EVL: alloca [65 x i32]
+; EVL: %fission.ordinal = phi i64 [ 0, %preheader ]
+; EVL: %next = sub i64 %iv, 3
+; EVL: %done = icmp ugt i64 %next, %limit
+; EVL: scalar.fission.consumer.ph:
+; EVL: vector.body:
+; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
+; EVL: ret void
+; TAIL-LABEL: define void @affine_down_early(
+; TAIL: alloca [65 x i32]
+; TAIL: %fission.ordinal = phi i64 [ 0, %preheader ]
+; TAIL: %next = sub i64 %iv, 3
+; TAIL: %done = icmp ugt i64 %next, %limit
+; TAIL: scalar.fission.consumer.ph:
+; TAIL: vector.body:
+; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
+; TAIL: ret void
+define void @affine_down_early(ptr readonly %a, ptr readonly %fp, ptr %out,
+                            ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !30 {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %enter = and i1 %valid, %nonzero
+  %fstart = fptrunc double %start to float
+  br i1 %enter, label %preheader, label %exit
+preheader:
+  %span = mul i64 %n, 3
+  %limit = sub i64 %begin, %span
+  br label %loop, !dbg !31
+loop:
+  %iv = phi i64 [%begin, %preheader], [%next, %latch]
+  %r0 = phi i32 [17, %preheader], [%u0, %latch]
+  %r1 = phi i32 [-7, %preheader], [%u1, %latch]
+  %rd = phi double [%start, %preheader], [%ud, %latch]
+  %rf = phi float [%fstart, %preheader], [%uf, %latch]
+  %distance = sub i64 %begin, %iv
+  %index = udiv i64 %distance, 3
+  %p = getelementptr i32, ptr %a, i64 %index
+  %x = load i32, ptr %p, align 4
+  %choose = icmp ne i32 %x, 0
+  br i1 %choose, label %left, label %right, !dbg !31
+left:
+  %q = sdiv i32 840, %x
+  %lc = call i32 @scalar_helper(i32 %q)
+  %ld = sitofp i32 %q to double
+  br label %first.merge
+right:
+  %dp = getelementptr double, ptr %fp, i64 %index
+  %dx = load double, ptr %dp, align 8
+  %rc = fmul double %dx, 3.0
+  br label %first.merge
+first.merge:
+  %first.c = phi i32 [%lc, %left], [17, %right]
+  %first.d = phi double [%ld, %left], [%rc, %right]
+  %parity = and i64 %index, 1
+  %second = icmp ne i64 %parity, 0
+  br i1 %second, label %positive, label %negative
+positive:
+  %pc = add i32 %first.c, 23
+  %pd = fmul double %first.d, 0.5
+  br label %latch
+negative:
+  %nc = sub i32 %first.c, 9
+  %nd = fmul double %first.d, -1.0
+  br label %latch
+latch:
+  %c = phi i32 [%pc, %positive], [%nc, %negative]
+  %dc = phi double [%pd, %positive], [%nd, %negative]
+  %fc = fptrunc double %dc to float
+  %u0 = add i32 %r0, %c
+  %u1 = add i32 %c, %r1
+  %ud = fadd double %rd, %dc
+  %uf = fadd float %rf, %fc
+  %next = sub i64 %iv, 3
+  %done = icmp ugt i64 %next, %limit
+  br i1 %done, label %loop, label %exit, !dbg !31
+exit:
+  %v0 = phi i32 [17, %entry], [%u0, %latch]
+  %v1 = phi i32 [-7, %entry], [%u1, %latch]
+  %vd = phi double [%start, %entry], [%ud, %latch]
+  %vf = phi float [%fstart, %entry], [%uf, %latch]
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %v0, ptr %out
+  store i32 %v1, ptr %o1
+  store double %vd, ptr %dout
+  store float %vf, ptr %fout
+  ret void
+}
+
+; REMARK: scalar-affine.c:142:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
+; REMARK: scalar-affine.c:142:3: scalar-IR fission producer VF 1
+; REMARK: scalar-affine.c:142:3: scalar-IR fission consumer VF vscale x 4
+; SCALAR-LABEL: define void @affine_signed_down_early(
+; SCALAR: alloca [65 x i32]
+; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
+; SCALAR: %next = sub i64 %iv, 3
+; SCALAR: %done = icmp sgt i64 %next, %limit
+; SCALAR: scalar.fission.consumer.ph:
+; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
+; SCALAR: ret void
+; EVL-LABEL: define void @affine_signed_down_early(
+; EVL: alloca [65 x i32]
+; EVL: %fission.ordinal = phi i64 [ 0, %preheader ]
+; EVL: %next = sub i64 %iv, 3
+; EVL: %done = icmp sgt i64 %next, %limit
+; EVL: scalar.fission.consumer.ph:
+; EVL: vector.body:
+; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
+; EVL: ret void
+; TAIL-LABEL: define void @affine_signed_down_early(
+; TAIL: alloca [65 x i32]
+; TAIL: %fission.ordinal = phi i64 [ 0, %preheader ]
+; TAIL: %next = sub i64 %iv, 3
+; TAIL: %done = icmp sgt i64 %next, %limit
+; TAIL: scalar.fission.consumer.ph:
+; TAIL: vector.body:
+; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
+; TAIL: ret void
+define void @affine_signed_down_early(ptr readonly %a, ptr readonly %fp, ptr %out,
+                            ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !32 {
+entry:
+  %valid = icmp ule i64 %n, 65
+  %nonzero = icmp ne i64 %n, 0
+  %enter = and i1 %valid, %nonzero
+  %fstart = fptrunc double %start to float
+  br i1 %enter, label %preheader, label %exit
+preheader:
+  %span = mul i64 %n, 3
+  %limit = sub i64 %begin, %span
+  br label %loop, !dbg !33
+loop:
+  %iv = phi i64 [%begin, %preheader], [%next, %latch]
+  %r0 = phi i32 [17, %preheader], [%u0, %latch]
+  %r1 = phi i32 [-7, %preheader], [%u1, %latch]
+  %rd = phi double [%start, %preheader], [%ud, %latch]
+  %rf = phi float [%fstart, %preheader], [%uf, %latch]
+  %distance = sub i64 %begin, %iv
+  %index = udiv i64 %distance, 3
+  %p = getelementptr i32, ptr %a, i64 %index
+  %x = load i32, ptr %p, align 4
+  %choose = icmp ne i32 %x, 0
+  br i1 %choose, label %left, label %right, !dbg !33
+left:
+  %q = sdiv i32 840, %x
+  %lc = call i32 @scalar_helper(i32 %q)
+  %ld = sitofp i32 %q to double
+  br label %first.merge
+right:
+  %dp = getelementptr double, ptr %fp, i64 %index
+  %dx = load double, ptr %dp, align 8
+  %rc = fmul double %dx, 3.0
+  br label %first.merge
+first.merge:
+  %first.c = phi i32 [%lc, %left], [17, %right]
+  %first.d = phi double [%ld, %left], [%rc, %right]
+  %parity = and i64 %index, 1
+  %second = icmp ne i64 %parity, 0
+  br i1 %second, label %positive, label %negative
+positive:
+  %pc = add i32 %first.c, 23
+  %pd = fmul double %first.d, 0.5
+  br label %latch
+negative:
+  %nc = sub i32 %first.c, 9
+  %nd = fmul double %first.d, -1.0
+  br label %latch
+latch:
+  %c = phi i32 [%pc, %positive], [%nc, %negative]
+  %dc = phi double [%pd, %positive], [%nd, %negative]
+  %fc = fptrunc double %dc to float
+  %u0 = add i32 %r0, %c
+  %u1 = add i32 %c, %r1
+  %ud = fadd double %rd, %dc
+  %uf = fadd float %rf, %fc
+  %next = sub i64 %iv, 3
+  %done = icmp sgt i64 %next, %limit
+  br i1 %done, label %loop, label %exit, !dbg !33
+exit:
+  %v0 = phi i32 [17, %entry], [%u0, %latch]
+  %v1 = phi i32 [-7, %entry], [%u1, %latch]
+  %vd = phi double [%start, %entry], [%ud, %latch]
+  %vf = phi float [%fstart, %entry], [%uf, %latch]
+  %o1 = getelementptr i32, ptr %out, i64 1
+  store i32 %v0, ptr %out
+  store i32 %v1, ptr %o1
+  store double %vd, ptr %dout
+  store float %vf, ptr %fout
+  ret void
+}
+
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!2, !3}
 !0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: "test", isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly)
@@ -1099,3 +1518,11 @@ exit:
 !23 = !DILocation(line: 92, column: 3, scope: !22)
 !24 = distinct !DISubprogram(name: "affine_current", scope: !1, file: !1, line: 100, type: !4, scopeLine: 100, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
 !25 = !DILocation(line: 102, column: 3, scope: !24)
+!26 = distinct !DISubprogram(name: "affine_unsigned_early", scope: !1, file: !1, line: 110, type: !4, scopeLine: 110, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!27 = !DILocation(line: 112, column: 3, scope: !26)
+!28 = distinct !DISubprogram(name: "affine_signed_early", scope: !1, file: !1, line: 120, type: !4, scopeLine: 120, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!29 = !DILocation(line: 122, column: 3, scope: !28)
+!30 = distinct !DISubprogram(name: "affine_down_early", scope: !1, file: !1, line: 130, type: !4, scopeLine: 130, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!31 = !DILocation(line: 132, column: 3, scope: !30)
+!32 = distinct !DISubprogram(name: "affine_signed_down_early", scope: !1, file: !1, line: 140, type: !4, scopeLine: 140, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!33 = !DILocation(line: 142, column: 3, scope: !32)

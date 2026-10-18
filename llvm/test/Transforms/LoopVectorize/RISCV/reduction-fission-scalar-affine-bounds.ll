@@ -231,6 +231,180 @@ exit:
   ret i32 %result
 }
 
+; Relational analogues retain the original equality boundary fixtures above.
+; CHECK-LABEL: define i32 @affine_relational_limit(
+; CHECK: alloca [16384 x i32]
+; CHECK: %fission.ordinal = phi i32 [ 0, %preheader ]
+; CHECK: %done = icmp ult i32 %next, 49175
+; CHECK: scalar.fission.consumer.ph:
+; CHECK: scalar.fission.consumer.body:
+; REMARK: scalar-affine-bounds.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 16384, scratch bytes 65536
+; CHECK: ret i32
+; TINY-LABEL: define i32 @affine_relational_limit(
+; TINY: ret i32
+define i32 @affine_relational_limit(i32 %cutoff) !dbg !16 {
+entry:
+  br label %preheader
+preheader:
+  br label %loop, !dbg !17
+loop:
+  %iv = phi i32 [23, %preheader], [%next, %latch]
+  %sum = phi i32 [17, %preheader], [%update, %latch]
+  %distance = sub nuw i32 %iv, 23
+  %wide = udiv i32 %distance, 3
+  %choose = icmp ult i32 %wide, %cutoff
+  br i1 %choose, label %left, label %first.merge
+left:
+  %lc = add i32 %wide, 3
+  br label %first.merge
+first.merge:
+  %first = phi i32 [%wide, %loop], [%lc, %left]
+  %bit = and i32 %wide, 1
+  %second = icmp ne i32 %bit, 0
+  br i1 %second, label %right, label %latch
+right:
+  %rc = xor i32 %first, 7
+  br label %latch
+latch:
+  %c = phi i32 [%first, %first.merge], [%rc, %right]
+  %update = add i32 %sum, %c
+  %next = add i32 %iv, 3
+  %done = icmp ult i32 %next, 49175
+  br i1 %done, label %loop, label %exit, !dbg !17
+exit:
+  %result = phi i32 [%update, %latch]
+  ret i32 %result
+}
+
+; CHECK-LABEL: define i32 @affine_relational_over_limit(
+; CHECK-NOT: scalar.fission
+; CHECK: %done = icmp ult i32 %next, 49178
+; REMARK: scalar-affine-bounds.c:72:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; CHECK: ret i32
+; TINY-LABEL: define i32 @affine_relational_over_limit(
+; TINY: ret i32
+define i32 @affine_relational_over_limit(i32 %cutoff) !dbg !18 {
+entry:
+  br label %preheader
+preheader:
+  br label %loop, !dbg !19
+loop:
+  %iv = phi i32 [23, %preheader], [%next, %latch]
+  %sum = phi i32 [17, %preheader], [%update, %latch]
+  %distance = sub nuw i32 %iv, 23
+  %wide = udiv i32 %distance, 3
+  %choose = icmp ult i32 %wide, %cutoff
+  br i1 %choose, label %left, label %first.merge
+left:
+  %lc = add i32 %wide, 3
+  br label %first.merge
+first.merge:
+  %first = phi i32 [%wide, %loop], [%lc, %left]
+  %bit = and i32 %wide, 1
+  %second = icmp ne i32 %bit, 0
+  br i1 %second, label %right, label %latch
+right:
+  %rc = xor i32 %first, 7
+  br label %latch
+latch:
+  %c = phi i32 [%first, %first.merge], [%rc, %right]
+  %update = add i32 %sum, %c
+  %next = add i32 %iv, 3
+  %done = icmp ult i32 %next, 49178
+  br i1 %done, label %loop, label %exit, !dbg !19
+exit:
+  %result = phi i32 [%update, %latch]
+  ret i32 %result
+}
+
+; Relational narrow counters: 255 completed trips fit; 256 do not.
+; CHECK-LABEL: define i32 @affine_relational_i8_max(
+; CHECK: alloca [255 x i32]
+; CHECK: %fission.ordinal = phi i8 [ 0, %preheader ]
+; CHECK: %done = icmp ult i8 %next, -1
+; CHECK: %fission.completed.count = phi i8 [ %fission.completed, %latch ]
+; CHECK: scalar.fission.consumer.body:
+; REMARK: scalar-affine-bounds.c:82:3: split scalar-IR reduction loop; {{.*}}scratch capacity 255, scratch bytes 1020
+; CHECK: ret i32
+; TINY-LABEL: define i32 @affine_relational_i8_max(
+; TINY: ret i32
+define i32 @affine_relational_i8_max(i32 %cutoff) !dbg !20 {
+entry:
+  br label %preheader
+preheader:
+  br label %loop, !dbg !21
+loop:
+  %iv = phi i8 [0, %preheader], [%next, %latch]
+  %sum = phi i32 [17, %preheader], [%update, %latch]
+  %distance = sub i8 %iv, 0
+  %wide = zext i8 %distance to i32
+  %choose = icmp ult i32 %wide, %cutoff
+  br i1 %choose, label %left, label %first.merge
+left:
+  %lc = add i32 %wide, 3
+  br label %first.merge
+first.merge:
+  %first = phi i32 [%wide, %loop], [%lc, %left]
+  %bit = and i32 %wide, 1
+  %second = icmp ne i32 %bit, 0
+  br i1 %second, label %right, label %latch
+right:
+  %rc = xor i32 %first, 7
+  br label %latch
+latch:
+  %c = phi i32 [%first, %first.merge], [%rc, %right]
+  %update = add i32 %sum, %c
+  %next = add i8 %iv, 1
+  %done = icmp ult i8 %next, -1
+  br i1 %done, label %loop, label %exit, !dbg !21
+exit:
+  %result = phi i32 [%update, %latch]
+  ret i32 %result
+}
+
+; CHECK-LABEL: define i32 @affine_relational_i8_overflow(
+; CHECK-NOT: scalar.fission
+; CHECK: %done = icmp ult i8 %iv, %limit
+; REMARK: scalar-affine-bounds.c:92:3: scalar-IR reduction fission rejected: trip-count-overflow
+; CHECK: ret i32
+; TINY-LABEL: define i32 @affine_relational_i8_overflow(
+; TINY: ret i32
+define i32 @affine_relational_i8_overflow(i32 %cutoff) !dbg !22 {
+entry:
+  br label %preheader
+preheader:
+  %begin = trunc i32 %cutoff to i8
+  %limit = add i8 %begin, -1
+  br label %loop, !dbg !23
+loop:
+  %iv = phi i8 [%begin, %preheader], [%next, %latch]
+  %sum = phi i32 [17, %preheader], [%update, %latch]
+  %distance = sub i8 %iv, %begin
+  %wide = zext i8 %distance to i32
+  %choose = icmp ult i32 %wide, %cutoff
+  br i1 %choose, label %left, label %first.merge
+left:
+  %lc = add i32 %wide, 3
+  br label %first.merge
+first.merge:
+  %first = phi i32 [%wide, %loop], [%lc, %left]
+  %bit = and i32 %wide, 1
+  %second = icmp ne i32 %bit, 0
+  br i1 %second, label %right, label %latch
+right:
+  %rc = xor i32 %first, 7
+  br label %latch
+latch:
+  %c = phi i32 [%first, %first.merge], [%rc, %right]
+  %update = add i32 %sum, %c
+  %next = add i8 %iv, 1
+  %done = icmp ult i8 %iv, %limit
+  br i1 %done, label %loop, label %exit, !dbg !23
+exit:
+  %result = phi i32 [%update, %latch]
+  ret i32 %result
+}
+
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!2, !3}
 !0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: "test", isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly)
@@ -249,3 +423,11 @@ exit:
 !13 = !DILocation(line: 42, column: 3, scope: !12)
 !14 = distinct !DISubprogram(name: "affine_over_limit", scope: !1, file: !1, line: 50, type: !4, scopeLine: 50, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
 !15 = !DILocation(line: 52, column: 3, scope: !14)
+!16 = distinct !DISubprogram(name: "affine_relational_limit", scope: !1, file: !1, line: 60, type: !4, scopeLine: 60, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!17 = !DILocation(line: 62, column: 3, scope: !16)
+!18 = distinct !DISubprogram(name: "affine_relational_over_limit", scope: !1, file: !1, line: 70, type: !4, scopeLine: 70, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!19 = !DILocation(line: 72, column: 3, scope: !18)
+!20 = distinct !DISubprogram(name: "affine_relational_i8_max", scope: !1, file: !1, line: 80, type: !4, scopeLine: 80, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!21 = !DILocation(line: 82, column: 3, scope: !20)
+!22 = distinct !DISubprogram(name: "affine_relational_i8_overflow", scope: !1, file: !1, line: 90, type: !4, scopeLine: 90, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0)
+!23 = !DILocation(line: 92, column: 3, scope: !22)

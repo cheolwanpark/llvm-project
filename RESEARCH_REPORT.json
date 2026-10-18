@@ -1,13 +1,14 @@
 {
-  "task_id": "t000019",
-  "base_revision": "e3a9dc640ed17640d7d1de4dd0f82adb05a9baf4",
-  "hypothesis": "Bounded scalar producers whose integer control induction starts away from zero, starts at a runtime invariant, advances by a constant nonunit step, descends, wraps, or uses a relational/swapped exit can be split without changing their control. An independent ordinal separates scratch/consumer indexing from the original IV. This extends the accepted branch-only acyclic scalar path before ordinary vectorization legality, retaining independently chosen stage VFs and no new profitability model, pressure/depth/reduction-count threshold or requirement that the original loop be vectorizable.",
-  "semantics": "Identify the one control PHI directly compared (as either operand, before or after its increment) with an invariant in the unique exiting latch. Ordinary InductionDescriptor::isInductionPHI, using ScalarEvolution rather than predicated SE and no assumptions, must recognize an integer affine recurrence for this loop with invariant start, constant nonzero step and a binary backedge value. Other header PHIs still pass the unchanged integer-add / ordered float-or-double-add reduction recognizer and use restrictions. Pointer/FP controls, variable/zero steps and nonlinear recurrences do not acquire support. The existing unique-latch, simplify-form, dedicated-exit, LCSSA and branch-only DAG checks remain. Every producer iteration therefore reaches the latch exactly once. For a noncanonical unconditional producer, insert ordinal=0 in the header, increment once at the latch, store distinct contribution values at ordinal, and export the completed value through a single-input PHI in the dedicated producer exit / consumer preheader. The consumer starts at zero, adds one and compares with that export, so it performs exactly N ordered updates, independent of original start, stride, predicate, comparison operand order or branch polarity. Preserve the original producer IV, flags, compare, branch polarity and entry guards; only redirect its exiting edge. Entry bypasses cannot reach the consumer. The old zero/one equality case remains a small proven equivalent: its original IV is already the ordinal and its invariant equality bound is the completed count. Only that canonical case clones the original induction/control for the consumer. Conditional compaction retains exactly the existing separate single-triangle/diamond participation proof, shared arm and counter; P<=N values are stored in original participant order and exactly P are consumed. P=0 still exports the starts without any reduction arithmetic or inactive operation. No extra full-iteration ordinal is needed for compaction. The scalar path bounds backedges by ordinary SE's constant maximum and, when an exact unpredicated count is available, also by its unsigned range after SE.applyLoopGuards applies only existing entry guards. It uses the smaller proven bound, widens before adding one, and checks the completed count fits both uint64_t and the original integer counter type. The range refinement preserves runtime-start/end correlation that relational constant-maximum analysis can lose, without adding any predicate or emitted guard. It neither constructs nor expands a runtime trip-count expression and no longer unnecessarily requires expansion safety for an expression it never emits. For all defined executions N<=M; before a store 0<=ordinal<N<=M, and completed<=M fits the count type, proving each added nuw increment and count export. Checked allocation-size multiplication, alignment addition and signed pointer-index ceiling prove the casts are value-preserving and every scratch GEP remains within its constant array. Narrow count 256 in i8 rejects even though the original control may wrap. All rejections precede mutation. Reduction state use restrictions continue to prohibit influence on producer control/contributions or observations of partial reductions. Other live-outs, real memory effects, volatile/atomic accesses, unsafe calls and strictfp/constrained FP remain rejected. Contributions and calls remain on their original paths, with no rereads or speculative evaluation. Reduction updates are cloned with flags and FP operand/iteration order intact; the separate fission FP-reordering option adds no relaxation to this path. Independent ordinary LV may choose scalar, vector and tail stages afterwards. Executable verification is requested, not claimed run: ten exact-source-location positive targets are checked against their original control/flags/edges and scratch addresses; actual transformed scalar-remainder consumers are executed against untouched original IR and independent C formulas. Non-NaN FP bits (including signed zero), NaN classification, shared contributions, null inactive FP inputs, inactive zero divisors, negative divisors, aliases, canaries, input preservation, scratch reuse, exact producer/header/latch/participant/vector/tail counts and enclosing-loop future-row dependences are required. Original control N=0..65 plus 66/UINT64_MAX bypasses and compact P=0..65 are exercised; runtime starts include INT64_MIN/-1000/-33/-1/0/31/INT64_MAX, including an unmasked modular-control case. One and two ordinary vectorizer invocations, both fission FP-option settings and fixed host vscales 1/2/4/8/32 are requested. Three further actual scalar-stage boundary cases execute exactly 1,255,16384 trips after one and two LV invocations against original IR and independent scalar formulas. Default EVL/VP and uninstrumented remainder IR receive RVV machine verification only. The checker accepts n as an equivalent affine consumer count only for fixtures whose entire original entry/control arithmetic is checked and proves N=n; compact control remains exclusively tied to its proven P exports.",
-  "costs": "Let M be the unconditionally proven maximum trip count, N the actual producer iterations, P the actual compact participants, and S the summed allocation sizes of distinct contribution SSA values. Bounded static scratch is M*S plus ABI alignment accounting, unchanged checked uint64/pointer-index arithmetic and the default 65536-byte per-candidate ceiling. It is allocated in the function entry and can reserve stack even on an entry bypass. Nine mixed affine fixtures have four reductions sharing three arrays (65*i32,65*double,65*float), 1044 accounted bytes including 4 padding bytes. Logical scratch stores=16*N bytes and loads=16*N bytes (32*N total), or 16*P in each direction for the compact fixture. The enclosing fixture uses 784 accounted bytes (65*i32,65*double plus 4 padding bytes), reused per row, with 12*N bytes in each direction per row, not capacity multiplied by row count. Capacity boundary cases reserve 4/1020/65536 bytes for 1/255/16384 i32 contributions and logically transfer 8*N bytes total, including 131072 bytes at the full default capacity. A new noncanonical unconditional producer adds one integer PHI and one scalar add per iteration plus one LCSSA count PHI. The consumer uses one zero-based PHI, one add, one equality test and one branch per scalar iteration, just as an ordinary counted consumer; it does not clone the original nonzero/strided control. The old canonical equality path adds no producer counter. Compaction retains one count add per participant, header/latch merge PHIs, count export and the existing P=0 guard; it adds no second ordinal. There are no additional original-input rereads, duplicated producer operations, recomputed contributions, mask arrays, alias/SCEV guards, loop versioning, dynamic allocation or unbounded storage. Existing normal-LV vector/tail guards remain. Compile-time work is one O(H) header-PHI scan with direct two-operand control matching and the existing unconditional induction/SCEV analyses; a small maximum-count helper with an optional existing-loop-guard rewrite/range query replaces scalar use of the exact-trip expansion analysis. It reuses LLVM's existing bounded guard collection and SCEV range machinery rather than adding a solver. Existing O(B+E)-time/O(B)-space CFG admission and instruction/use scans and full dominator recalculation remain. No path enumeration, generalized dependence machinery or profitability model is introduced. Regression fixtures and validation probes increase test cost only. Physical stack layout/cache traffic, register pressure, RVV execution and speedup have not been measured.",
+  "task_id": "t000022",
+  "base_revision": "5008d91e458e775ebee3688aec06a78e4ae4a643",
+  "hypothesis": "Strict signed/unsigned relational scalar reductions with an affine control and an invariant endpoint start+step*span can be split when ordinary relational SCEV trip formulas are unavailable or too conservative. A small equality-witness proof preserves start/end correlation and works for ascending, descending and wrapping controls, including enclosing-loop reuse. This is a legality/storage proof extension before ordinary LV, with independently selected stage VFs and no profitability, pressure, depth, reduction-count or original-vectorizability requirement.",
+  "semantics": "The existing induction recognition, unique exiting latch, acyclic branch CFG, simplify-form, dedicated exits, LCSSA, reduction-use/feedback, participation, live-out, call/effect, alias and strict/constrained-FP checks remain. Normalize only the analysis predicate for branch polarity; require its continuation predicate to be strict SLT/SGT/ULT/UGT, so equality exits irrespective of operand order. For the admitted integer affine IV {S,+,K}, subtract S from the invariant comparison operand. Recover span only from the identical constant SCEV factor K (or the unit-stride identity); there is no integer division, modular solver, search or inferred nowrap requirement. If the latch compares the backedge value, witness=span-1; if it compares the current IV, witness=span. Evaluate the actual compared addrec at this witness and require its modular difference from the original endpoint to fold to zero. Thus, on every defined execution that reaches that ordinal, the actual original branch exits there. Earlier exits, including those caused by signed/unsigned wrapping order, are allowed: N<=witness+1, never N=witness+1 by assumption. Apply only LLVM existing loop-entry guards to the witness, range-bound it, widen before adding one, and require the completed count to fit uint64 and the original IV type. Take the smaller of this unconditional bound and the existing ordinary count proof. The unchanged checked byte/alignment multiplication and signed alloca-pointer-index ceiling prove every scratch access and counter cast. A private ordinal stores at 0<=i<N<=M and its nuw increment exports actual N through LCSSA. The unchanged consumer performs exactly N ordered updates. Compact participation retains its separate counter, original participation paths/order, P<=N bound and P=0 guard; no fabricated zero contribution is added. All producer arithmetic, flags, comparison operands, branch polarity, guards and operations remain in their original blocks; only the exiting edge is redirected as before. Contributions are computed once without rereads or speculation. Ordered FP updates are cloned with original flags/operand order; the explicit fission FP-reordering option adds no relaxation on this scalar path. Enclosing rows retain their real carries, final stores and future-input aliases, reusing entry-allocated scratch after each consumer. Executable validation is requested against untouched original IR and independent C formulas after one and two ordinary LV invocations. Four new modular relational functions use independent unsigned-C control counting (signed order via sign-bit xor) and require earlier-than-witness exits, full-capacity executions, exact producer/header/latch/consumer counts and nonzero vector/tail visits for every comparison class. Their checker cannot substitute n for the completed count. All original affine, compact, acyclic, canonical and VPlan execution assertions are retained.",
+  "costs": "No new runtime instructions relative to t000019: the change only proves finite storage bounds; existing private ordinal/completed and compact counters and consumer remain unchanged. Relative to canonical pre-affine splitting, a noncanonical producer has one ordinal PHI, one nuw add per original iteration and one completed-count export; the consumer has a zero-based PHI/add/equality branch. Compaction has one increment per participant, latch merges/count export and the existing empty guard, without a second full-trip ordinal. For maximum M, actual N and compact P, scratch is M times the sum of unique contribution allocation sizes plus ABI padding, statically allocated in function entry even on a bypass, capped at the unchanged default 65536 bytes per candidate and signed pointer-index ceiling. Each mixed affine fixture shares three arrays across four reductions: 65*i32 + 65*double + 65*float = 1044 accounted bytes including 4 padding bytes; logical stores and loads are each 16*N bytes, or 16*P for compaction. The enclosing loop reuses 784 accounted bytes (65*i32 + 65*double plus padding), with 12*N stores and 12*N loads per row, without multiplying capacity by rows. Scalar boundary executions reserve 4/1020/65536 bytes for 1/255/16384 i32 contributions and transfer 8*N logical bytes total (131072 at full capacity); new relational analogues execute capacities 255 and 16384 too. There are no original-input rereads, duplicated producer operations, contribution recomputation, mask arrays, new guards, alias/SCEV versioning, dynamic allocation or unbounded storage. Compile-time additions are a direct predicate/factor scan, a few standard SCEV algebra queries, one affine evaluateAtIteration equality check and the existing bounded guard-rewrite/range machinery. Scratch planning arithmetic was extracted verbatim into one shared helper to diagnose the original scratch rejection without a second implementation. Analysis remarks record the ordinary count/admission outcome separately from the new witness; when remarks are enabled this also computes the old scratch plan for diagnostic purposes. Existing O(B+E) CFG admission and scans/DT recalculation remain. No general proof engine or profitability model was introduced. Test additions and retained failure stdin/commands affect validation only. Physical traffic, stack layout, register pressure, RVV execution and performance are unmeasured.",
   "tests": [
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-bounds.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-reject.ll",
@@ -17,41 +18,103 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-ir-reject.ll",
     "llvm/test/Other/reduction-fission-execution-checker.test"
   ],
-  "limitations": "The worker did not build LLVM, run a compiler (including host compilation), execute lit/unit/checker/try.sh tests or run target code. Only source/evidence reading, file generation/edits and read-only diff/whitespace review were performed. Fresh harness compilation and every requested check are pending; historical accepted-head results do not validate this revision. No original-corpus coverage gain, direction maturity or performance improvement is claimed. Unconditional bounds depend on ordinary LLVM SCEV proof strength; a finite loop that needs predicates/runtime checks, a bound too wide for the original count type, the scratch/pointer-index ceilings, or a direct-latch comparison shape the recognizer does not support still rejects. Only one integer affine control is distinguished; additional non-reduction recurrences, pointer/FP inductions, arbitrary recurrences, early exits, internal cycles, switches, unsafe calls/effects, unsupported live-outs, distinct/incompatible participation streams and strict/constrained FP are not broadened. The ordinary loop worklist generally remains innermost. Scratch remains full-trip, untiled and capped per candidate rather than across a whole function. Fixture-specific structural/provenance assertions are not a general IR equivalence solver. Host fixed-vscale scalar-remainder execution is not RVV target execution. EVL/VP is machine-verified code generation only. No benchmarks, frozen corpus, harness, other worktree, common build checkout, compiler binaries or Git index/history/refs were changed, and no unfinished d2 work was integrated.",
-  "test_expectations": "No existing correctness or diagnostic expectation was removed or weakened, and no previously rejected fixture was rewritten into a positive. The previously unsupported affine-control class is represented by new positive fixtures, with new unproved/feedback/effect/live-out/participation/zero-step/variable-step/nonlinear/pointer/FP/strictfp rejection siblings. Old canonical equality, acyclic and compact assertions remain. Scalar-only RUNs include enormous existing reduction/chain/pressure heuristic options to demonstrate those are not prerequisites. The affine i8 maximum deliberately permits wrapping original control while preserving all flags; only its private count must not wrap. Its 256-trip sibling intentionally rejects trip-count-overflow and retains its original loop. Exact source-location Selected and producer/consumer VF remarks are required at scalar-affine.c:{12,22,32,42,52,62,72,82,92,102}:3, not another function or inner/helper loop. New reject and boundary remarks have their own exact original-loop locations. ScalarEvolution during ordinary LV may replace a completed ordinal's count by the equivalent n or by a single-input latch LCSSA forwarding PHI; the new checker verifies original control, actual count export and the exact affine equivalence before accepting those names. Compaction's separate P count/result provenance assertions are unchanged.",
+  "limitations": "The worker did not build LLVM, run any compiler (including a host compiler), execute lit, VectorizeTests, the execution checker, try.sh or target code. Read-only source/diff/log inspection, fixture generation and whitespace review are not fresh validation. The frozen t000019 failure log contains neither missed remarks nor printed SCEVs, so its exact per-function bound/scratch rejection is not claimed observed: the new mandatory diagnostic RUN and ScalarFissionBound remarks are requested to determine and retain it. No callable live harness diagnostic interface was available to the worker; compiler diagnostics are requested only through this report and lit RUNs. The new proof intentionally covers a syntactically recoverable constant SCEV factor and strict continuation comparisons that exit on equality; non-strict continuation, an unreachable equality lattice, a missing unconditional span bound, count overflow or scratch overflow gets no exemption. The ordinary proof remains available for other already-supported shapes. A different but equivalent factorization may remain unproved. This does not broaden arbitrary/pointer/FP inductions, extra recurrences, early exits, internal cycles, unsupported live-outs, independent participation streams, side effects, unsafe calls or strictfp/constrained FP. Scratch remains untiled, full-trip and capped per loop rather than per function. Host fixed-vscale scalar-remainder execution and RVV machine-verified EVL/code generation are separate evidence; neither is RVV target execution or measured speedup. No new corpus selection, direction maturity or speedup is claimed. Benchmarks, harness, other/common worktrees, binaries and Git index/history/refs were not modified; unfinished d2 work was not integrated.",
+  "test_expectations": "All ten original affine positive definitions and their EVL/repeated-LV/tail/scalar/remarks assertions are retained, especially unsigned/signed ascending, unsigned/signed descending and enclosing reuse. No relational loop was rewritten to equality or given fixture-only assumptions. Four additional modular relational definitions at scalar-affine.c:112/122/132/142:3 have no nowrap flags and may exit earlier than n. Original fixtures keep every prior trial/start combination; only these new variants use the expanded boundary starts. Independent C formulas use the separately counted actual iterations. Per-control assertions require both early and full-capacity execution plus actual vector/tail visits. New relational boundary positives/rejections coexist with every original equality/narrow/capacity fixture. New unsafe siblings reject equality-continuation nontermination, an unreachable strict-comparison equality and an unbounded witness. Analysis BOUND checks for the five previously failing original locations require earlier legality admission to pass, the ordinary proof to reject (count availability/representability or scratch), and the new witness backedge bound to be 64. These are new diagnostic assertions, not a relaxation of existing correctness checks. All existing FP/compact alias/canary/source-location/stage VF/scratch assertions remain. Failure commands, captured stderr/stdout and supplied compiler stdin are retained by the execution checker when the harness supplies its persistent work directory.",
   "evidence_read": [
-    "harness/BENCHMARKS_ANALYSIS.md: all 117 frozen original inputs, strict versus explicitly reordered policy separation, prior 234 successful compilations with no fission selections, exact target-location attribution, hypotheses for scalar pre-legality splitting, and semantic cautions about added zero arithmetic/errno/FP assumptions.",
-    "Current accepted RESEARCH_REPORT.json and immutable diffs/t000015.patch (compiler DAG/reduction admission change and regression/checker context) and diffs/t000017.patch (loop-start metadata repair). Relevant accepted source, original fixtures, checker/C harness, LoopVectorize worklist/LCSSA integration, InductionDescriptor implementation and ScalarEvolution maximum-count contract were read.",
-    "jobs/t000017/000002-build/result.json and builds/t000017/lit.log/execution.log: accepted base e3a9dc640ed17640d7d1de4dd0f82adb05a9baf4 compiled, 40/40 lit files, VectorizeTests and 453956 host comparisons passed. Historical evidence only.",
-    "Read all 234 frozen evaluations/t000017/primary/*/{strict,reordered}/result.json documents: each policy has 117 zero exit codes, 91 rejected and 26 no_decision targets, and zero Selected originals. Exact-target scalar rejections per policy include 28 scalar-unsupported-exit, 31 scalar-unsupported-cfg, 12 scalar-unsupported-recurrence and 10 scalar-unsafe-call. These independent barriers do not establish how many originals this extension will admit.",
-    "Exact-location examples retain independent barriers: VMAF 3237:1 has scalar-unsupported-exit and VPlan non-constant-trip-count; igraph 163:9 has scalar-unsafe-call. The ESPResSo pair exact target likewise retains a VPlan non-constant-trip-count barrier. No benchmark names or fixture ranges are used by the transformation.",
-    "ScalarEvolution.cpp computeMaxBECountForLT/howManyLessThans/howManyGreaterThans, applyLoopGuards and its public contract: independent Start/End range maxima can lose correlation; the exact unpredicated count under existing guards supplies a smaller sound bound without IR expansion. This motivated the optional standard-analysis refinement.",
-    "Frozen builds/t000017/execution/scalar-acyclic_ordered_scalar-remainder_lv1.rvv.ll: inspected actual scratch GEP naming/debug metadata and FP literal printing. The new retained-instruction checker normalizes only the fixture's exactly representable dyadic decimal/scientific literal spellings, while comparing the full opcode, flags and operand order. No FP contract or executable comparison is changed by this serialization handling."
+    "Task t000022 and tasks/t000019.json including its revise review, immutable diffs/t000019.patch, inherited report and corresponding current compiler/fixture/checker/C-harness source.",
+    "builds/t000019/lit.log and task build result: compilation succeeded, 42/43 lit files passed, affine positive file failed at its first EVL FileCheck. affine_unsigned, affine_signed, affine_down and affine_signed_down lacked consumer stages; affine_enclosing lacked scratch allocation. Later positive RUNs, unit tests, executable comparisons and primary evaluation were not reached. This does not validate the semantic extension.",
+    "Read-only inspection of the remaining common-build t000019 positive output and success-only remarks found selections only at 12/22/72/92/102:3, consistent with the frozen log; those non-frozen residual files are corroboration only, not acceptance evidence. The old command did not enable missed/analysis remarks, so no precise rejection/SCEV observation is fabricated.",
+    "ScalarReductionFission.cpp admission order; InductionDescriptor::isInductionPHI and ScalarEvolution createSimpleAffineAddRec/createAddRecFromPHI, isAddRecNeverPoison, howManyLessThans/howManyGreaterThans, constant-max and guard rewriter implementations. Standard SCEV may discard subtraction nowrap information and lose relational start/end correlation. This motivated an equality identity rather than another relational/no-overflow solver.",
+    "Frozen harness/BENCHMARKS_ANALYSIS.md: immutable 117 inputs, exact-target source attribution, strict versus explicitly reordered policies, scalar pre-legality hypotheses, no errno/extra-zero or numerical-contract shortcuts, and code generation versus execution/performance distinctions.",
+    "Re-read all 234 individual frozen evaluations/t000017/primary result JSONs and the summary: exit codes all zero, original-target selections zero, per policy 91 rejected/26 no_decision. Exact-target scalar reasons per policy include 28 unsupported-exit, 31 unsupported-cfg, 12 unsupported-recurrence and 10 unsafe-call. These independent barriers do not establish new coverage for this patch."
   ],
   "prior_validation": {
-    "task_id": "t000017",
-    "revision": "e3a9dc640ed17640d7d1de4dd0f82adb05a9baf4",
+    "task_id": "t000019",
+    "revision": "5008d91e458e775ebee3688aec06a78e4ae4a643",
     "compilation_exit_code": 0,
-    "lit_passed_files": 40,
-    "unit_tests": "VectorizeTests passed",
-    "host_comparisons": 453956,
-    "primary_compilations": 234,
-    "primary_exit_codes_all_zero": true,
-    "selected_original_targets": {
-      "strict": 0,
-      "reordered": 0
-    },
-    "this_revision_validated": false
+    "lit_exit_code": 1,
+    "lit_passed_files": 42,
+    "lit_total_files": 43,
+    "failed_files": [
+      "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll"
+    ],
+    "later_checks_reached": false,
+    "this_revision_validated": false,
+    "accepted_ancestor": "e3a9dc640ed17640d7d1de4dd0f82adb05a9baf4"
+  },
+  "diagnosis": {
+    "status": "source diagnosis with compiler confirmation requested, not worker-observed compiler diagnostics",
+    "observed_failure": "Missing scalar fission stages at five original locations in the first EVL output; the failed command enabled only success remarks.",
+    "admission_audit": "All five have a directly compared integer affine induction, one exiting latch, the accepted branch-only acyclic CFG, no extra control live-out, admitted reduction recurrence uses and safe retained producer operations. Their original exit phi exports are reductions only. No admission check is changed. New BOUND remarks run only after these checks, so a failure earlier in the path remains a distinct exact-location Rejected result.",
+    "bound_audit": "Ordinary getBackedgeTakenCount/constant maximum/guarded exact range and scratch checking are replayed separately by ScalarFissionBound before refining the bound. OrdinaryAdmission prints the exact earlier outcome, including scalar-scratch-limit when a finite ordinary bound exceeds capacity. This avoids assuming getScalarFissionMaxTripCount itself is the rejecting return. The five source-derived expressions below are mathematical SCEV normal forms, not claims about previously printed SCEV syntax/flags.",
+    "functions": [
+      {
+        "name": "affine_unsigned",
+        "location": "scalar-affine.c:32:3",
+        "iv": "{9,+,3}",
+        "tested": "{12,+,3}",
+        "endpoint": "9+3*n",
+        "guards": "1<=u n<=65; branch conjunction in entry",
+        "witness": "n-1",
+        "requested_max_backedges": 64,
+        "requested_scratch_bytes": 1044
+      },
+      {
+        "name": "affine_signed",
+        "location": "scalar-affine.c:42:3",
+        "iv": "{O,+,2}, O=(begin or -32)",
+        "tested": "{O+2,+,2}",
+        "endpoint": "O+2*n",
+        "guards": "1<=u n<=65; O in [-32,-1] from IR",
+        "witness": "n-1",
+        "requested_max_backedges": 64,
+        "requested_scratch_bytes": 1044
+      },
+      {
+        "name": "affine_down",
+        "location": "scalar-affine.c:52:3",
+        "iv": "{201,+,-3}",
+        "tested": "{198,+,-3}",
+        "endpoint": "201-3*n",
+        "guards": "1<=u n<=65; original sub nuw nsw retained",
+        "witness": "n-1",
+        "requested_max_backedges": 64,
+        "requested_scratch_bytes": 1044
+      },
+      {
+        "name": "affine_signed_down",
+        "location": "scalar-affine.c:62:3",
+        "iv": "{O,+,-2}, O=(begin and 31)-17",
+        "tested": "{O-2,+,-2}",
+        "endpoint": "O-2*n",
+        "guards": "1<=u n<=65; O in [-17,14]; original inverse branch/swapped compare retained",
+        "witness": "n-1",
+        "requested_max_backedges": 64,
+        "requested_scratch_bytes": 1044
+      },
+      {
+        "name": "affine_enclosing",
+        "location": "scalar-affine.c:82:3",
+        "iv": "{O,+,2}, O=row+5 for enclosing row",
+        "tested": "{O+2,+,2}",
+        "endpoint": "O+2*n",
+        "guards": "entry conjunction dominates inner loop: 1<=u n<=65, 1<=u rows<=4; outer carries/stores remain",
+        "witness": "n-1 after cancellation of the shared outer recurrence",
+        "requested_max_backedges": 64,
+        "requested_scratch_bytes": 784
+      }
+    ],
+    "required_confirmation": "Retain %t.scev, full %t and %t.remarks from the positive test before FileCheck. For each of the five, record raw control/exact/constant-max/guarded-exact/range expressions, OrdinaryCount, OrdinaryAdmission, guarded witness, final Selected and both stage VFs. If admission or witness folding differs, treat the mandatory failure as a blocker and retain all artifacts; do not relax a positive or correctness assertion."
   },
   "validation_requested": {
-    "task_id": "t000019",
+    "task_id": "t000022",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
       "required": true,
       "snapshot": "this worktree after harness freeze",
       "agent_compilation": false,
-      "base_revision": "e3a9dc640ed17640d7d1de4dd0f82adb05a9baf4",
+      "base_revision": "5008d91e458e775ebee3688aec06a78e4ae4a643",
       "prior_build_is_not_acceptance": true
     },
     "lit": {
@@ -60,6 +123,7 @@
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-bounds.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-relational-reject.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-bounds.ll",
         "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-reject.ll",
@@ -81,7 +145,10 @@
         "repeated LV default EVL",
         "scalar remainder",
         "scalar-only affine capacities and overflow/ceiling rejections",
-        "exact source-location remarks"
+        "exact source-location remarks",
+        "original scalar-evolution print %t.scev before transformations",
+        "full admission/count/scratch/witness analysis remarks before FileCheck",
+        "all original and new modular relational/control and capacity outputs"
       ],
       "retain_unchanged_native_cycle_rejection": true
     },
@@ -120,12 +187,18 @@
         "affine_compact",
         "affine_enclosing",
         "affine_wrap",
-        "affine_current"
+        "affine_current",
+        "affine_unsigned_early",
+        "affine_signed_early",
+        "affine_down_early",
+        "affine_signed_down_early"
       ],
       "new_scalar_capacity_functions": {
         "affine_one": 1,
         "affine_i8_max": 255,
-        "affine_default_limit": 16384
+        "affine_default_limit": 16384,
+        "affine_relational_limit": 16384,
+        "affine_relational_i8_max": 255
       },
       "requirements": [
         "Actual transformed producer/control and vector/scalar-tail execution, never ordinary original-loop vectorization as a substitute",
@@ -136,9 +209,14 @@
         "Integer/non-NaN FP bits and signed zero, NaNs by classification; cancellation, subnormals, infinities, inactive invalid operands, negative divisors, preserved inputs, canaries and repeated scratch reuse",
         "Both actual vector and nonzero tail execution somewhere in the affine matrix are mandatory",
         "Full scratch capacity comparisons at 1,255,16384 trips; retain i8 256-trip overflow and scratch ceiling rejection correctness",
-        "Keep all existing canonical, diamond, compact, acyclic, boundary and VPlan comparisons and assertions"
+        "Keep all existing canonical, diamond, compact, acyclic, boundary and VPlan comparisons and assertions",
+        "Retain every existing case/trial and correctness assertion; original affine begins remain Trial%7",
+        "Four modular relational controls must demonstrate earlier-than-witness exits and full 65-trip execution, exact actual N rather than span, and nonzero vector and tail visits per class",
+        "New relational scalar boundary execution: full 255 and 16384 trips; retain current-IV i8 256-trip rejection and 16385-slot scratch rejection",
+        "Retain commands.jsonl, failed-command.json, failed-command.stdin and the complete persistent work directory on failure"
       ],
-      "comparison_status": "pending independent harness"
+      "comparison_status": "pending independent harness",
+      "persistent_work_dir_required": true
     },
     "rvv_machine_verification": {
       "required": true,
@@ -147,7 +225,9 @@
         "default EVL/VP",
         "scalar remainder",
         "one and two ordinary LV invocations",
-        "scalar capacity boundaries"
+        "scalar capacity boundaries",
+        "four modular strict relational controls",
+        "relational i8 and full scratch capacity analogues"
       ],
       "instrumentation": false,
       "target_execution": false,
@@ -160,7 +240,7 @@
       "compilations": 234,
       "policies": [
         "strict",
-        "FP-reordered"
+        "reordered"
       ],
       "immutable_inputs": true,
       "no_source_rewrites": true,
@@ -174,7 +254,8 @@
         "exact original-loop Selected/Rejected records and reasons",
         "exact original-loop producer/consumer VF and scratch capacity/bytes evidence",
         "other inner/helper records separately"
-      ]
+      ],
+      "reordered_contract": "Only the existing explicitly enabled fission FP-reordering policy; no extra fast-math or errno flags."
     },
     "artifact_requests": [
       {
@@ -194,7 +275,11 @@
           "uninstrumented RVV IR and verified assembly",
           "host probe IR before/after fixed-vscale specialization",
           "comparison and exact visit-count failures",
-          "command and stderr"
+          "command and stderr",
+          "commands.jsonl",
+          "failed-command.json",
+          "failed-command.stdin",
+          "persistent execution work directory even on failure"
         ]
       },
       {
@@ -206,9 +291,76 @@
           "input hashes",
           "separate stage VF/scratch versus other activity"
         ]
+      },
+      {
+        "kind": "affine_admission_diagnostics",
+        "required": true,
+        "retain": [
+          "%t.scev",
+          "%t",
+          "%t.remarks",
+          "ScalarFissionBound all fields at each original location",
+          "every later scalar/repeat/tail RUN and machine-verifier artifact"
+        ]
       }
     ],
-    "acceptance": "Pending fresh compilation, all mandatory lit files and RUNs, VectorizeTests, all old/new executable comparisons, RVV machine verification and 234 immutable primary compilations. Crashes, incorrect transformations and mandatory failures are blockers; absent measured speedup is not a veto."
+    "acceptance": "Pending a fresh harness build, exact five-loop diagnostic confirmation, every mandatory lit file and RUN line, VectorizeTests, all existing/new original-IR and independent-reference comparisons after one/two LV invocations, RVV machine verification and all 234 immutable primary corpus compilations. No acceptance from old build success. Mandatory failures, compiler crashes or wrong results block acceptance; no measured speedup is not a veto.",
+    "diagnostics": {
+      "required": true,
+      "worker_executed": false,
+      "base_revision": "5008d91e458e775ebee3688aec06a78e4ae4a643",
+      "contract": "Mandatory RUNs in scalar-affine.ll request opt diagnostics through the harness; no worker compiler invocation.",
+      "commands": [
+        {
+          "tool": "opt",
+          "args": [
+            "-passes=loop-simplify,lcssa,print<scalar-evolution>",
+            "-disable-output",
+            "-mtriple=riscv64",
+            "-mattr=+v",
+            "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll"
+          ],
+          "stderr_artifact": "%t.scev",
+          "before_any_FileCheck": true
+        },
+        {
+          "tool": "opt",
+          "args": [
+            "-passes=loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>",
+            "-verify-each",
+            "-mtriple=riscv64",
+            "-mattr=+v",
+            "-force-vector-interleave=1",
+            "-force-vector-width=4",
+            "-scalable-vectorization=always",
+            "-hints-allow-reordering=false",
+            "-enable-vplan-reduction-fission",
+            "-pass-remarks=vplan-reduction-fission",
+            "-pass-remarks-missed=vplan-reduction-fission",
+            "-pass-remarks-analysis=vplan-reduction-fission",
+            "-S",
+            "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-affine.ll"
+          ],
+          "ir_artifact": "%t",
+          "stderr_artifact": "%t.remarks",
+          "before_any_FileCheck": true
+        }
+      ],
+      "original_admission_replay": "ScalarFissionBound emits the unchanged ordinary helper outcome and the same scratch ceiling before applying the new certificate, only after every earlier admission check passes.",
+      "locations": [
+        "scalar-affine.c:32:3",
+        "scalar-affine.c:42:3",
+        "scalar-affine.c:52:3",
+        "scalar-affine.c:62:3",
+        "scalar-affine.c:82:3"
+      ],
+      "must_preserve_on_failure": [
+        "all command arguments and exit codes",
+        "complete original and transformed IR",
+        "raw SCEV print and every analysis/Selected/Rejected/stage VF remark",
+        "full FileCheck input, not its truncated log excerpt"
+      ]
+    }
   },
-  "future_work": "Review the frozen compiler/test/execution/primary results before changing expectations or claiming coverage. Preserve any failing command, full IR, remarks and count mismatch. Predicate-dependent bounds, additional affine-IV use shapes, independent participation streams, bounded internal producer loops, outer-loop worklist changes, whole-function scratch caps/tiling and real RVV execution/performance remain separate work. Combine d1/d2 only after independently accepted mature heads; this task does not integrate d2."
+  "future_work": "Review fresh frozen diagnostics and every mandatory outcome before accepting or claiming completion of the affine direction. If SCEV identity normalization differs, retain the exact actual expressions and repair the narrow proof rather than changing original positive controls or semantic assertions. Broader non-strict/non-lattice relational bounds, correlated controls without a direct constant factor, bounded producer cycles, additional participation streams, whole-function scratch limits/tiling and real RVV execution/performance remain separate tasks. Combine mature heads only after independent acceptance; this task does not integrate d2."
 }

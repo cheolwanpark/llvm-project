@@ -23,11 +23,25 @@ import tempfile
 from pathlib import Path
 
 
+command_log_dir = None
+
+
 def run(command, **kwargs):
-    return subprocess.run(
-        [str(arg) for arg in command], check=True, text=True, capture_output=True,
-        **kwargs
-    )
+    command = [str(arg) for arg in command]
+    if command_log_dir:
+        with (command_log_dir / 'commands.jsonl').open('a') as log:
+            log.write(json.dumps({'command': command}) + '\n')
+    try:
+        return subprocess.run(command, check=True, text=True, capture_output=True, **kwargs)
+    except subprocess.CalledProcessError as error:
+        if command_log_dir:
+            (command_log_dir / 'failed-command.json').write_text(json.dumps({
+                'command': command, 'exit_code': error.returncode,
+                'stdout': error.stdout, 'stderr': error.stderr,
+            }, indent=2) + '\n')
+            if 'input' in kwargs:
+                (command_log_dir / 'failed-command.stdin').write_text(kwargs['input'])
+        raise
 
 
 def specialize(ir, scale):
@@ -471,11 +485,13 @@ def check_affine_function(ir, source, name, evl, probe=False):
         assert '%fission.completed = add nuw i64 %fission.ordinal, 1' in producer, body
         assert re.search(r'^  %fission.completed.count = phi i64 '
                          r'\[ %fission.completed, %latch \]', consumer, re.M), body
-        # SE may evaluate this affine ordinal at its original loop's exit as
-        # n. Each fixture's preserved entry/control arithmetic proves exactly
-        # n iterations. Unlike compact P, n is an equivalent count here. Other
-        # accepted aliases must be single-input exports on the latch edge.
-        counts = ['%n', '%fission.completed', '%fission.completed.count']
+        # For the original fixtures, the preserved arithmetic proves N=n and
+        # SE may use n as the exit value of the ordinal. The modular relational
+        # siblings may exit earlier and must use the actual completed count.
+        # Other accepted aliases must be single-input exports on the latch edge.
+        counts = ['%fission.completed', '%fission.completed.count']
+        if not name.endswith('_early'):
+            counts.append('%n')
         for value, incoming in re.findall(
                 r'^  (%[-\w.$]+) = phi i64 \[ (%[-\w.$]+), %latch \](?:, ![^\n]*)?$',
                 consumer, re.M):
@@ -523,6 +539,8 @@ def host_ir(ir):
 
 
 def check(args, work):
+    global command_log_dir
+    command_log_dir = work
     root = Path(__file__).resolve().parents[2]
     tests = root / 'llvm/test/Transforms/LoopVectorize/RISCV'
     opt, llc = (args.build_dir / 'bin' / name for name in ('opt', 'llc'))
@@ -623,7 +641,9 @@ def check(args, work):
         ('scalar-affine', ['affine_const', 'affine_runtime', 'affine_unsigned',
                            'affine_signed', 'affine_down', 'affine_signed_down',
                            'affine_compact', 'affine_enclosing', 'affine_wrap',
-                           'affine_current'], 'scalar-affine.c:12:3'),
+                           'affine_current', 'affine_unsigned_early',
+                           'affine_signed_early', 'affine_down_early',
+                           'affine_signed_down_early'], 'scalar-affine.c:12:3'),
     ]:
         source = keep_functions((tests / f'reduction-fission-{fixture}.ll').read_text(),
                                 functions)
@@ -690,7 +710,7 @@ def check(args, work):
                             assert (f'scalar-acyclic.c:{loc}: scalar-IR fission {stage} VF {vf}'
                                     in result.stderr), result.stderr
                 if fixture == 'scalar-affine':
-                    for line in range(12, 103, 10):
+                    for line in range(12, 143, 10):
                         size = 784 if line == 82 else 1044
                         assert re.search(
                             rf'scalar-affine.c:{line}:3: split scalar-IR reduction loop;[^\n]*'
@@ -741,9 +761,11 @@ def check(args, work):
                         fixed = fixed.replace(f'@{function}(', f'@{name}(')
                         if function.startswith('affine_') and function != 'affine_enclosing':
                             declarations.append(f'extern AffineFn {name};')
+                            control = {'affine_unsigned_early': 1, 'affine_signed_early': 2,
+                                       'affine_down_early': 3, 'affine_signed_down_early': 4}.get(function, 0)
                             affine_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}, '
                                                f'{str(function == "affine_signed_down").lower()}, '
-                                               f'{str(function == "affine_compact").lower()}}}')
+                                               f'{str(function == "affine_compact").lower()}, {control}}}')
                         elif function in ('compact_triangle', 'compact_diamond'):
                             declarations.append(f'extern ScalarMixedFn {name};')
                             compact_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}}}')
@@ -798,7 +820,9 @@ def check(args, work):
         ('scalar-acyclic', [('acyclic_one', 1), ('acyclic_i8_max', 255),
                             ('acyclic_default_limit', 16384)]),
         ('scalar-affine', [('affine_one', 1), ('affine_i8_max', 255),
-                           ('affine_default_limit', 16384)]),
+                           ('affine_default_limit', 16384),
+                           ('affine_relational_limit', 16384),
+                           ('affine_relational_i8_max', 255)]),
     ]:
         source = keep_functions((tests / f'reduction-fission-{fixture}-bounds.ll').read_text(),
                                 [name for name, _ in bounds])
@@ -936,6 +960,11 @@ def check(args, work):
         'acyclic_counts': list(range(66)) + [66, 2**64 - 1],
         'affine_counts': list(range(66)) + [66, 2**64 - 1],
         'affine_compact_participants': list(range(66)),
+        'affine_modular_relational_controls': ['unsigned ascending', 'signed ascending',
+                                              'unsigned descending', 'signed descending'],
+        'affine_modular_requirements': 'early exits and full capacity, nonzero actual '
+                                      'vector and tail visits for each control; actual '
+                                      'completed counts rather than equality witnesses',
         'affine_comparison': 'original IR and independent formulas, exact producer/latch/'
                              'participant/vector/tail visits, signed zero, inactive invalid '
                              'operands, canaries, aliases, runtime starts, enclosing reuse; '

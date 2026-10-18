@@ -100,6 +100,7 @@ static const struct {
   AffineFn *Fn, *Reference;
   unsigned VectorLanes;
   bool Nested, Compact;
+  unsigned Control;
 } Affine[] = {@AFFINE@};
 static const struct {
   const char *Name;
@@ -209,6 +210,28 @@ static void reference_acyclic(bool Nested, const uint32_t *A, const double *D,
   Out[1] = S1;
   *Dout = DS;
   *Fout = FS;
+}
+
+// Count the original modular relational control independently of reductions.
+// Flipping the sign bit maps signed ordering to unsigned ordering, avoiding
+// signed C overflow or implementation-defined out-of-range signed conversions.
+static unsigned reference_affine_count(unsigned Control, uint64_t N,
+                                        int64_t Begin) {
+  if (!N || N > 65) return 0;
+  if (!Control) return (unsigned)N;
+  bool Down = Control >= 3, Signed = Control == 2 || Control == 4;
+  uint64_t IV = (uint64_t)Begin;
+  uint64_t Limit = Down ? IV - 3 * N : IV + 3 * N;
+  for (unsigned Count = 1; Count <= N; ++Count) {
+    IV = Down ? IV - 3 : IV + 3;
+    uint64_t L = IV, R = Limit;
+    if (Signed) {
+      L ^= UINT64_C(1) << 63;
+      R ^= UINT64_C(1) << 63;
+    }
+    if (!(Down ? L > R : L < R)) return Count;
+  }
+  abort(); // Equality at N is a mandatory upper bound, not the actual count.
 }
 
 static void reference_affine_compact(const uint32_t *A, const double *D,
@@ -580,14 +603,24 @@ int main(void) {
         Runs += 2;
       }
   unsigned AffineVectorRuns = 0, AffineTailRuns = 0;
+  unsigned AffineEarlyRuns[5] = {0}, AffineFullRuns[5] = {0};
+  unsigned AffineControlVectors[5] = {0}, AffineControlTails[5] = {0};
   for (unsigned C = 0; C < sizeof(Affine) / sizeof(*Affine); ++C)
     for (unsigned K = 0; K < (Affine[C].Compact ? 134u : 68u); ++K)
       for (unsigned Trial = 0; Trial < 16; ++Trial) {
         uint64_t N = K >= 68 ? 65 : K == 67 ? UINT64_MAX : K;
         bool Enter = N && N <= 65, NeedsD = false;
         unsigned P = 0;
-        const int64_t Begins[] = {INT64_MIN, -1000, -33, -1, 0, 31, INT64_MAX};
-        int64_t Begin = Begins[Trial % 7];
+        const int64_t Begins[] = {INT64_MIN, -1000, -33, -1, 0, 31, INT64_MAX,
+                                  INT64_MIN + 31, INT64_MAX - 31, -2, -3, 1,
+                                  INT64_MIN + 1, INT64_MAX - 1};
+        unsigned BeginCases = Affine[C].Control ? sizeof(Begins) / sizeof(*Begins) : 7;
+        int64_t Begin = Begins[Trial % BeginCases];
+        unsigned ActualN = reference_affine_count(Affine[C].Control, N, Begin);
+        if (Enter) {
+          AffineEarlyRuns[Affine[C].Control] += ActualN < N;
+          AffineFullRuns[Affine[C].Control] += ActualN == N && N == 65;
+        }
         double Start = Trial % 2 ? 3.5 : -0.0;
         for (unsigned I = 0; I < 66; ++I) {
           bool Active = K >= 68 ? (I * 7 + Trial) % 65 < K - 68 :
@@ -598,7 +631,7 @@ int main(void) {
           int32_t Divisor = I % 29 + 1;
           if (Trial >= 8) Divisor = -Divisor;
           Input[I] = Active ? (uint32_t)Divisor : 0;
-          if (Enter && I < N) {
+          if (I < ActualN) {
             if (Affine[C].Compact ? Active : !Active) NeedsD = true;
             if (!Affine[C].Compact || Active) ++P;
           }
@@ -630,7 +663,7 @@ int main(void) {
         if (Affine[C].Compact)
           reference_affine_compact(A, D, Formula, &FormulaD, &FormulaF, N, Start);
         else
-          reference_acyclic(Affine[C].Nested, A, D, Formula, &FormulaD, &FormulaF, N, Start);
+          reference_acyclic(Affine[C].Nested, A, D, Formula, &FormulaD, &FormulaF, ActualN, Start);
         if (memcmp(Formula, RefOut + 1, sizeof(Formula)) ||
             !compact_doubles_equal(&FormulaD, ExpectedD + 1, 1) ||
             !compact_floats_equal(&FormulaF, ExpectedF + 1, 1))
@@ -639,13 +672,15 @@ int main(void) {
         ScalarVectorVisits = ScalarTailVisits = 0;
         Affine[C].Fn(A, D, Out + 1, ActualD + 1, ActualF + 1, N, Start, Begin);
         unsigned Lanes = Affine[C].VectorLanes;
-        if (AcyclicIterations != (Enter ? N : 0) ||
-            AcyclicLatches != (Enter ? N : 0) ||
+        if (AcyclicIterations != ActualN ||
+            AcyclicLatches != ActualN ||
             (Affine[C].Compact && CompactParticipants != P) ||
             ScalarVectorVisits != P / Lanes || ScalarTailVisits != P % Lanes)
           fail(Affine[C].Name, (unsigned)N, Trial, "affine exact producer/control/participant/vector/tail counts");
         AffineVectorRuns += ScalarVectorVisits != 0;
         AffineTailRuns += ScalarTailVisits != 0;
+        AffineControlVectors[Affine[C].Control] += ScalarVectorVisits != 0;
+        AffineControlTails[Affine[C].Control] += ScalarTailVisits != 0;
         if (memcmp(Out, RefOut, sizeof(Out)) ||
             !compact_doubles_equal(ActualD, ExpectedD, 3) ||
             !compact_floats_equal(ActualF, ExpectedF, 3) ||
@@ -668,7 +703,7 @@ int main(void) {
                                     FormulaAlias, FormulaDAlias, &FormulaF, N, Start);
         else
           reference_acyclic(Affine[C].Nested, FormulaAlias, NeedsD ? FormulaDAlias : NULL,
-                              FormulaAlias, FormulaDAlias, &FormulaF, N, Start);
+                              FormulaAlias, FormulaDAlias, &FormulaF, ActualN, Start);
         if (memcmp(FormulaAlias, RefAlias, sizeof(RefAlias)) ||
             !compact_doubles_equal(FormulaDAlias, RefDAlias, 66) ||
             !compact_floats_equal(&FormulaF, ExpectedF + 1, 1))
@@ -676,8 +711,8 @@ int main(void) {
         AcyclicIterations = AcyclicLatches = CompactParticipants = 0;
         ScalarVectorVisits = ScalarTailVisits = 0;
         Affine[C].Fn(Alias, NeedsD ? DAlias : NULL, Alias, DAlias, ActualF + 1, N, Start, Begin);
-        if (AcyclicIterations != (Enter ? N : 0) ||
-            AcyclicLatches != (Enter ? N : 0) ||
+        if (AcyclicIterations != ActualN ||
+            AcyclicLatches != ActualN ||
             (Affine[C].Compact && CompactParticipants != P) ||
             ScalarVectorVisits != P / Lanes || ScalarTailVisits != P % Lanes ||
             memcmp(Alias, RefAlias, sizeof(Alias)) ||
@@ -688,6 +723,11 @@ int main(void) {
       }
   if (!AffineVectorRuns || !AffineTailRuns)
     fail("affine matrix", 65, 0, "actual vector and remainder paths both required");
+  for (unsigned Control = 1; Control <= 4; ++Control)
+    if (!AffineEarlyRuns[Control] || !AffineFullRuns[Control] ||
+        !AffineControlVectors[Control] || !AffineControlTails[Control])
+      fail("affine modular controls", 65, Control,
+           "early exit, full capacity, vector and tail execution required per control");
   for (unsigned C = 0; C < sizeof(ScalarConstants) / sizeof(*ScalarConstants); ++C)
     for (unsigned Trial = 0; Trial < 200; ++Trial) {
       uint32_t X = random_value();
