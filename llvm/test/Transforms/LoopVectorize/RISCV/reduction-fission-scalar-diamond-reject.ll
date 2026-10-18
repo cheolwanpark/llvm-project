@@ -12,7 +12,7 @@
 ;
 ; These are independent semantic/CFG rejections, not profitability decisions.
 ; Incompatible participation, early exits, cycles and partial-state live-outs
-; remain outside the small producer triangle/diamond contract.
+; remain outside the supported reduction/participation contract.
 
 declare i32 @readonly_call(i32) memory(read) nounwind willreturn speculatable
 declare i32 @effect_call(i32) nounwind willreturn
@@ -246,42 +246,7 @@ bypass:
 }
 
 
-; Both arms must reach the latch directly.
-; CHECK-LABEL: define i32 @reject_arm_cross_edge(
-; CHECK: ret i32
-define i32 @reject_arm_cross_edge(ptr %a, i64 %n) {
-entry:
-  %valid = icmp ule i64 %n, 65
-  %nonzero = icmp ne i64 %n, 0
-  %enter = and i1 %valid, %nonzero
-  br i1 %enter, label %preheader, label %bypass
-preheader:
-  br label %loop
-loop:
-  %iv = phi i64 [0, %preheader], [%next, %latch]
-  %sum = phi i32 [19, %preheader], [%update, %latch]
-  %p = getelementptr i32, ptr %a, i64 %iv
-  %x = load i32, ptr %p, align 4
-  %choose = icmp ne i32 %x, 0
-  br i1 %choose, label %left, label %right
-left:
-  %lc = mul i32 %x, 3
-  br label %right
-right:
-  %rc = xor i32 %x, 7
-  br label %latch
-latch:
-  %c = phi i32 [%rc, %right]
-  %update = add i32 %sum, %c
-  %next = add nuw i64 %iv, 1
-  %done = icmp eq i64 %next, %n
-  br i1 %done, label %exit, label %loop
-exit:
-  ret i32 %update
-bypass:
-  ret i32 19
-}
-
+; The former arm-cross-edge case is positive in scalar-acyclic.ll.
 
 ; Writes in either arm are observable effects.
 ; CHECK-LABEL: define i32 @reject_arm_store(

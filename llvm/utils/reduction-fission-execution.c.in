@@ -38,6 +38,8 @@ extern ScalarNestedFn ref_scalar_diamond_nested;
 extern ScalarMixedFn ref_compact_triangle, ref_compact_diamond;
 extern ScalarSumFn ref_compact_integer;
 extern ScalarNestedFn ref_compact_nested;
+extern ScalarMixedFn ref_acyclic_serial, ref_acyclic_nested, ref_acyclic_three_way;
+extern ScalarNestedFn ref_acyclic_enclosing;
 @DECLARATIONS@
 
 static const struct {
@@ -78,7 +80,19 @@ static const struct {
   ScalarNestedFn *Fn, *Reference;
   unsigned VectorLanes;
   bool ProbeTail;
+  bool ProbeProducer;
 } ScalarNested[] = {@SCALAR_NESTED@};
+static const struct {
+  const char *Name;
+  ScalarMixedFn *Fn, *Reference;
+  unsigned VectorLanes;
+  bool Nested;
+} Acyclic[] = {@ACYCLIC@};
+static const struct {
+  const char *Name;
+  ScalarConstantFn *Fn, *Reference;
+  unsigned Count;
+} AcyclicBounds[] = {@ACYCLIC_BOUNDS@};
 static const struct {
   const char *Name;
   ScalarMixedFn *Fn, *Reference;
@@ -105,10 +119,13 @@ uint32_t scalar_helper(uint32_t X) {
 
 static unsigned ScalarVectorVisits, ScalarVectorRuns, ScalarTailVisits;
 static unsigned CompactIterations, CompactParticipants;
+static unsigned AcyclicIterations, AcyclicLatches;
 void record_scalar_consumer_vector(void) { ++ScalarVectorVisits; }
 void record_scalar_consumer_tail(void) { ++ScalarTailVisits; }
 void record_compact_iteration(void) { ++CompactIterations; }
 void record_compact_participant(void) { ++CompactParticipants; }
+void record_acyclic_iteration(void) { ++AcyclicIterations; }
+void record_acyclic_latch(void) { ++AcyclicLatches; }
 
 static void reset_compact_probes(void) {
   ScalarVectorVisits = ScalarTailVisits = 0;
@@ -134,6 +151,86 @@ static void check_compact_probes(const char *Name, unsigned N, unsigned Trial,
       ScalarVectorVisits != VectorVisits || ScalarTailVisits != TailVisits)
     fail(Name, N, Trial, "compact producer/participant/vector/tail visit mismatch");
   ScalarVectorRuns += ScalarVectorVisits != 0;
+}
+
+static void check_acyclic_probes(const char *Name, unsigned N, unsigned Trial,
+                                unsigned Rows, unsigned Lanes) {
+  if (AcyclicIterations != Rows * N || AcyclicLatches != Rows * N ||
+      ScalarVectorVisits != Rows * (N / Lanes) ||
+      ScalarTailVisits != Rows * (N % Lanes))
+    fail(Name, N, Trial, "acyclic producer/latch/vector/tail visit mismatch");
+}
+
+// Independent scalar formulas as well as the separately compiled original IR.
+// Unsigned arithmetic models LLVM's wrapping adds; division is signed. FP
+// operations retain their original iteration order, grouping and operand order.
+static void reference_acyclic(bool Nested, const uint32_t *A, const double *D,
+                              uint32_t *Out, double *Dout, float *Fout,
+                              uint64_t N, double Start) {
+  uint32_t S0 = 17, S1 = (uint32_t)-7;
+  double DS = Start;
+  float FS = (float)Start;
+  if (N && N <= 65)
+    for (unsigned I = 0; I < N; ++I) {
+      uint32_t C;
+      double DC;
+      if (A[I]) {
+        int32_t Q = 840 / (int32_t)A[I];
+        C = scalar_helper((uint32_t)Q);
+        DC = (double)Q;
+      } else {
+        C = 17;
+        DC = D[I] * 3.0;
+      }
+      if (!Nested || A[I]) {
+        if (Nested ? (A[I] & 2) != 0 : (I & 1) != 0) {
+          C += 23;
+          DC *= 0.5;
+        } else {
+          C -= 9;
+          DC *= -1.0;
+        }
+      }
+      float FC = (float)DC;
+      S0 = S0 + C;
+      S1 = C + S1;
+      DS = DS + DC;
+      FS = FS + FC;
+    }
+  Out[0] = S0;
+  Out[1] = S1;
+  *Dout = DS;
+  *Fout = FS;
+}
+
+static void reference_acyclic_enclosing(const uint32_t *A, const double *D,
+                                        uint32_t *Out, double *Dout,
+                                        uint64_t Rows, uint64_t N, double Start) {
+  uint32_t S = 19;
+  double DS = Start;
+  if (!Rows || Rows > 4 || !N || N > 65)
+    return;
+  for (unsigned R = 0; R < Rows; ++R) {
+    for (unsigned I = 0; I < N; ++I) {
+      uint32_t X = A[65 * R + I], Salted = X ^ R, C;
+      double DC;
+      if (X & 1) {
+        C = scalar_helper(Salted);
+        DC = D[65 * R + I] * 3.0;
+      } else {
+        C = 0u - Salted;
+        DC = (double)(int32_t)C;
+      }
+      if (I & 1) {
+        C ^= 37;
+        DC *= 0.5;
+      }
+      S += C;
+      DS += DC;
+    }
+    Out[R] = S;
+    Dout[R] = DS;
+  }
 }
 
 // Count using the actual participation predicates. Simulate only integer row
@@ -376,6 +473,82 @@ int main(void) {
           fail(ScalarDiamond[C].Name, (unsigned)N, Trial, "diamond alias mismatch");
         Runs += 2;
       }
+  for (unsigned C = 0; C < sizeof(Acyclic) / sizeof(*Acyclic); ++C)
+    for (unsigned K = 0; K < 68; ++K)
+      for (unsigned Trial = 0; Trial < 16; ++Trial) {
+        uint64_t N = K <= 66 ? K : UINT64_MAX;
+        bool Enter = N && N <= 65, NeedsD = false;
+        for (unsigned I = 0; I < 66; ++I) {
+          // All divide, all load, alternating in both phases, runs, sparse,
+          // random; nonzero values exercise both inner nested branches.
+          unsigned Pattern = Trial % 8;
+          bool Divide = Pattern == 0 ? true : Pattern == 1 ? false :
+                        Pattern == 2 ? I % 2 : Pattern == 3 ? !(I % 2) :
+                        Pattern == 4 ? (I / 7) % 2 : Pattern == 5 ? I % 13 :
+                        random_value() % 2;
+          int32_t Denominator = (int32_t)(I % 29 + 1);
+          if (Trial >= 8) Denominator = -Denominator;
+          Input[I] = Divide ? (uint32_t)Denominator : 0;
+          if (Enter && I < N && !Divide) NeedsD = true;
+          switch (Trial / 2) {
+          case 0: FPInput[I] = -0.0; break;
+          case 1: FPInput[I] = (double[]){1e16, 1.0, -1e16, 0.0}[I % 4]; break;
+          case 2: FPInput[I] = INFINITY; break;
+          case 3: FPInput[I] = -INFINITY; break;
+          case 4: FPInput[I] = NAN; break;
+          case 5: FPInput[I] = 0x1p-1074; break;
+          case 6: FPInput[I] = 0x1p-149; break;
+          default: FPInput[I] = (double)(int32_t)random_value() / 1024.0; break;
+          }
+        }
+        uint32_t SavedInput[66];
+        double SavedD[66];
+        memcpy(SavedInput, Input, sizeof(SavedInput));
+        memcpy(SavedD, FPInput, sizeof(SavedD));
+        const uint32_t *A = Enter ? Input : NULL;
+        const double *D = NeedsD ? FPInput : NULL;
+        double Start = Trial % 2 ? 3.5 : -0.0;
+        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        double ActualD[3] = {19.5, 7.0, 3.25}, ExpectedD[3] = {19.5, 7.0, 3.25};
+        float ActualF[3] = {19.5f, 7.0f, 3.25f}, ExpectedF[3] = {19.5f, 7.0f, 3.25f};
+        Acyclic[C].Reference(A, D, RefOut + 1, ExpectedD + 1, ExpectedF + 1, N, Start);
+        uint32_t Formula[2];
+        double FormulaD;
+        float FormulaF;
+        reference_acyclic(Acyclic[C].Nested, A, D, Formula, &FormulaD, &FormulaF, N, Start);
+        if (memcmp(Formula, RefOut + 1, sizeof(Formula)) ||
+            !compact_doubles_equal(&FormulaD, ExpectedD + 1, 1) ||
+            !compact_floats_equal(&FormulaF, ExpectedF + 1, 1))
+          fail(Acyclic[C].Name, (unsigned)N, Trial, "original IR / independent scalar formula mismatch");
+        AcyclicIterations = AcyclicLatches = ScalarVectorVisits = ScalarTailVisits = 0;
+        Acyclic[C].Fn(A, D, Out + 1, ActualD + 1, ActualF + 1, N, Start);
+        check_acyclic_probes(Acyclic[C].Name, Enter ? N : 0, Trial, 1, Acyclic[C].VectorLanes);
+        ScalarVectorRuns += ScalarVectorVisits != 0;
+        if (memcmp(Out, RefOut, sizeof(Out)) ||
+            !compact_doubles_equal(ActualD, ExpectedD, 3) ||
+            !compact_floats_equal(ActualF, ExpectedF, 3) ||
+            memcmp(Input, SavedInput, sizeof(SavedInput)) ||
+            memcmp(FPInput, SavedD, sizeof(SavedD)))
+          fail(Acyclic[C].Name, (unsigned)N, Trial, "acyclic result, ordered FP, canary or input mismatch");
+        // Final writes can alias both producer inputs. Repeated calls also
+        // overwrite every used scratch element after a different branch path.
+        uint32_t Alias[66], RefAlias[66];
+        double DAlias[66], RefDAlias[66];
+        memcpy(Alias, Input, sizeof(Alias));
+        memcpy(RefAlias, Input, sizeof(RefAlias));
+        memcpy(DAlias, FPInput, sizeof(DAlias));
+        memcpy(RefDAlias, FPInput, sizeof(RefDAlias));
+        Acyclic[C].Reference(RefAlias, NeedsD ? RefDAlias : NULL, RefAlias,
+                             RefDAlias, ExpectedF + 1, N, Start);
+        AcyclicIterations = AcyclicLatches = ScalarVectorVisits = ScalarTailVisits = 0;
+        Acyclic[C].Fn(Alias, NeedsD ? DAlias : NULL, Alias, DAlias, ActualF + 1, N, Start);
+        check_acyclic_probes(Acyclic[C].Name, Enter ? N : 0, Trial, 1, Acyclic[C].VectorLanes);
+        if (memcmp(Alias, RefAlias, sizeof(Alias)) ||
+            !compact_doubles_equal(DAlias, RefDAlias, 66) ||
+            !compact_floats_equal(ActualF, ExpectedF, 3))
+          fail(Acyclic[C].Name, (unsigned)N, Trial, "acyclic alias or scratch reuse mismatch");
+        Runs += 2;
+      }
   for (unsigned C = 0; C < sizeof(ScalarConstants) / sizeof(*ScalarConstants); ++C)
     for (unsigned Trial = 0; Trial < 200; ++Trial) {
       uint32_t X = random_value();
@@ -387,6 +560,25 @@ int main(void) {
       ScalarVectorRuns += ScalarVectorVisits != 0;
       ++Runs;
     }
+  for (unsigned C = 0; C < sizeof(AcyclicBounds) / sizeof(*AcyclicBounds); ++C)
+    for (unsigned Trial = 0; Trial < 16; ++Trial) {
+      unsigned N = AcyclicBounds[C].Count;
+      uint32_t Cutoff = Trial == 0 ? 0 : Trial == 1 ? 1 : Trial == 2 ? N / 2 :
+                        Trial == 3 ? N : Trial == 4 ? N + 1 : random_value();
+      uint32_t Formula = 17;
+      for (unsigned I = 0; I < N; ++I) {
+        uint32_t First = I < Cutoff ? I + 3 : I;
+        Formula += (I & 1) ? (First ^ 7) : First;
+      }
+      uint32_t Expected = AcyclicBounds[C].Reference(Cutoff);
+      AcyclicIterations = AcyclicLatches = ScalarVectorVisits = ScalarTailVisits = 0;
+      uint32_t Actual = AcyclicBounds[C].Fn(Cutoff);
+      if (Actual != Expected || Actual != Formula ||
+          AcyclicIterations != N || AcyclicLatches != N ||
+          ScalarTailVisits != N || ScalarVectorVisits)
+        fail(AcyclicBounds[C].Name, N, Trial, "acyclic capacity/index boundary mismatch");
+      ++Runs;
+    }
   static const uint64_t RowCounts[] = {0, 1, 2, 4, 5, UINT64_MAX};
   for (unsigned C = 0; C < sizeof(ScalarNested) / sizeof(*ScalarNested); ++C)
     for (unsigned R = 0; R < sizeof(RowCounts) / sizeof(*RowCounts); ++R)
@@ -395,8 +587,16 @@ int main(void) {
           uint64_t Rows = RowCounts[R], N = ScalarCounts[K];
           bool Enter = Rows && Rows <= 4 && N && N <= 65;
           double Start = Trial % 8 == 2 ? -0.0 : Trial % 8 == 3 ? 1.0 : 3.5;
-          for (unsigned I = 0; I < 1026; ++I) Input[I] = random_value();
+          for (unsigned I = 0; I < 1026; ++I) {
+            Input[I] = random_value();
+            if (ScalarNested[C].ProbeProducer && Trial < 2)
+              Input[I] = (Input[I] & ~1u) | Trial;
+          }
           fill_fp(FPInput, 1026, Trial);
+          uint32_t SavedInput[1026];
+          double SavedD[1026];
+          memcpy(SavedInput, Input, sizeof(SavedInput));
+          memcpy(SavedD, FPInput, sizeof(SavedD));
           for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
           for (unsigned I = 0; I < 7; ++I) Result[I] = RefResult[I] = I + 0.25;
           // With rejected row/inner guards even the output pointers may be
@@ -404,11 +604,31 @@ int main(void) {
           ScalarNested[C].Reference(Enter ? Input : NULL, Enter ? FPInput : NULL,
                                     Enter ? RefOut + 1 : NULL,
                                     Enter ? RefResult + 1 : NULL, Rows, N, Start);
+          if (ScalarNested[C].ProbeProducer) {
+            uint32_t Formula[10];
+            double FormulaD[7];
+            memcpy(Formula, Out, sizeof(Formula));
+            memcpy(FormulaD, Result, sizeof(FormulaD));
+            reference_acyclic_enclosing(Enter ? Input : NULL, Enter ? FPInput : NULL,
+                                         Enter ? Formula + 1 : NULL,
+                                         Enter ? FormulaD + 1 : NULL, Rows, N, Start);
+            if (memcmp(Formula, RefOut, sizeof(Formula)) ||
+                !compact_doubles_equal(FormulaD, RefResult, 7))
+              fail(ScalarNested[C].Name, (unsigned)N, Trial, "enclosing independent formula mismatch");
+          }
           ScalarVectorVisits = 0;
           ScalarTailVisits = 0;
+          AcyclicIterations = AcyclicLatches = 0;
           ScalarNested[C].Fn(Enter ? Input : NULL, Enter ? FPInput : NULL,
                              Enter ? Out + 1 : NULL, Enter ? Result + 1 : NULL,
                              Rows, N, Start);
+          if (ScalarNested[C].ProbeProducer) {
+            check_acyclic_probes(ScalarNested[C].Name, Enter ? N : 0, Trial,
+                                  Enter ? Rows : 0, ScalarNested[C].VectorLanes);
+            if (memcmp(Input, SavedInput, sizeof(SavedInput)) ||
+                memcmp(FPInput, SavedD, sizeof(SavedD)))
+              fail(ScalarNested[C].Name, (unsigned)N, Trial, "enclosing producer changed inputs");
+          }
           if (!Enter && ScalarVectorVisits)
             fail(ScalarNested[C].Name, (unsigned)N, Trial,
                  "nested entry guard entered consumer");
@@ -441,7 +661,22 @@ int main(void) {
           memcpy(RefDAlias, FPInput, sizeof(RefDAlias));
           ScalarNested[C].Reference(RefAlias, RefDAlias, RefAlias + 65, RefDAlias + 65,
                                     Rows, N, Start);
+          if (ScalarNested[C].ProbeProducer) {
+            uint32_t FormulaAlias[262];
+            double FormulaD[262];
+            memcpy(FormulaAlias, SavedInput, sizeof(FormulaAlias));
+            memcpy(FormulaD, SavedD, sizeof(FormulaD));
+            reference_acyclic_enclosing(FormulaAlias, FormulaD, FormulaAlias + 65,
+                                         FormulaD + 65, Rows, N, Start);
+            if (memcmp(FormulaAlias, RefAlias, sizeof(FormulaAlias)) ||
+                !compact_doubles_equal(FormulaD, RefDAlias, 262))
+              fail(ScalarNested[C].Name, (unsigned)N, Trial, "enclosing independent alias formula mismatch");
+          }
+          AcyclicIterations = AcyclicLatches = ScalarVectorVisits = ScalarTailVisits = 0;
           ScalarNested[C].Fn(Alias, DAlias, Alias + 65, DAlias + 65, Rows, N, Start);
+          if (ScalarNested[C].ProbeProducer)
+            check_acyclic_probes(ScalarNested[C].Name, Enter ? N : 0, Trial,
+                                  Enter ? Rows : 0, ScalarNested[C].VectorLanes);
           if (memcmp(Alias, RefAlias, sizeof(Alias)) ||
               memcmp(DAlias, RefDAlias, sizeof(DAlias)))
             fail(ScalarNested[C].Name, (unsigned)N, Trial,
@@ -593,5 +828,7 @@ int main(void) {
          ScalarVectorRuns);
   printf("Compact streams: exact integer/non-NaN FP bits; NaNs by classification; "
          "exact producer/participant/vector/tail counts\n");
+  printf("Acyclic producers: original IR and independent scalar references; "
+         "exact producer/latch/vector/tail counts and capacity boundaries\n");
   return 0;
 }

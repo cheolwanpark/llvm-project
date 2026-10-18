@@ -1,41 +1,116 @@
 {
-  "hypothesis": "The bounded conditional triangle/diamond compaction transformation is unchanged. Repeated LV legitimately closes the first LV trip-count and ordered-FP result uses in SSA. Checking exact single-input forwarding PHIs, their incoming values/edges and resulting control/result operands repairs false negatives without admitting arbitrary suffixes, original-trip bounds or unrelated results. No new legality, profitability, vectorizability or numerical prerequisite is introduced.",
-  "semantics": "ScalarReductionFission.cpp starts a participant counter at zero, increments once on the common update arm and merges unchanged/advanced counts at the unique latch. Before iteration i, 0<=count<=i; each store indexes count<N<=M and final P<=N fits the checked IV/capacity. The guard has only the latch as predecessor. Its original count PHI is exactly [merge,latch], so merge and count both denote P on all consumer invocations. Single-LV SCEV expansion uses merge as AVL seed. The immutable t000010 failure dump shows repeated LV instead using fission.participating.merge.lcssa. At exact base revision 5eba181f460dad516650c558c550e984b6b4b914, LoopVectorizePass::runImpl forms LCSSA recursively before processLoop. LCSSA.cpp inserts I.name+.lcssa at the start of a dominated exit, adds I for every real predecessor and rewrites outside-loop uses; PHI uses are located on incoming edges. Therefore count retains [merge,latch] while the AVL use on vector.ph is rewritten through a new guard PHI: fission.participating.merge.lcssa = phi i64 [merge,latch]. The latch dominates the guard, the only entry to consumer.ph and then vector.ph, so forwarded P dominates the AVL incoming edge. This definition is source-derived, not observed in a recovered full repeated-LV dump; that missing artifact is requested below. The same immutable LCSSA algorithm forwards ordered double/float results through middle.block PHIs [actual reduction result,vector.body] and rewrites their nonempty result-join operands. Integer scalar reductions are computed in middle.block, outside the vector loop, and remain direct. Separate ONCE/REPEAT FileCheck prefixes capture these exact relationships before connecting them to AVL and result PHIs. Common checks retain all three VP loads and both ordered FP reductions using one EVL, AVL-=EVL until zero, both integer results and every unchanged empty-stream start. The checker accepts only merge, its original count export and the exact demonstrated guard merge.lcssa PHI after checking recurrence, inputs and real single-entry branches. FP results may be direct or pass through exactly one middle.block PHI from the actual reduction on vector.body. No recursive equivalence analysis is added. Scalar-remainder minimum-iteration, rounding, vector completion, tail bypass, termination, active-length, result-start and branch checks remain. Original branches/operations, participant order, add flags/operand order, P=0 starts without arithmetic or scratch loads, inactive operands, alias behavior, masks/tails/live-outs and nested scratch reuse remain under the previous transformation contract. Strictfp/constrained FP and unsafe effects/calls remain rejected; both fission FP-option settings retain ordered behavior on this early path. Actual transformed producer/vector/tail execution must be compared to original scalar references with exact N/P/vector/tail probes. Parser fixtures supplement DOM/LI/SE verification and executable comparisons; they are not semantic execution tests.",
-  "costs": "Let M be the proven maximum original trip count, P the participating count, and S the sum of allocation sizes of distinct contribution SSA values. Scratch capacity remains M*S plus existing ABI alignment padding, checked with unsigned overflow/index bounds and the existing 65536-byte default per-candidate ceiling. It does not shrink with P, is allocated statically in function entry, and can occupy frame space even on guarded bypass. Logical scratch traffic is P*S stores plus P*S loads, with no per-iteration mask/index arrays. The two mixed fixtures have four accumulators but one 65*i32, one 65*double and one 65*float array: 1044 accounted bytes including 4 padding bytes, and 32*P traffic bytes. The two i64 sums share one slot: 520 bytes and 16*P traffic. Nested i32/double uses 784 accounted bytes including 4 padding bytes, reused each row, and 24*sum(P_row) logical traffic; capacity does not multiply by Rows. Default-limit tests admit 16384 i32 slots (65536 bytes) and reject 16385 (65540); i8 capacity 255 is representable while 256 original trips are rejected. Real frame padding/cache traffic are not measured. Original input loads/helper calls execute once on their original branches, with zero new original-input rereads, contribution recomputation or duplicated producer operations. Counter overhead is one carried index PHI and latch merge per original iteration plus one nuw increment per participant, using existing producer control with no new per-iteration branch. Added consumer control runs P iterations, plus one zero-count guard per producer completion, a consumer preheader, dedicated loop exit and initial/result join. Normal LV may add its own independent vector/tail guards. There are no new alias/SCEV guards, full-trip masks, dynamic/unbounded allocations, general compaction machinery or profitability model. Analysis is linear in instructions/uses plus fixed CFG checks and existing SCEV analysis; emission uses distinct-contribution/export maps and the existing full-function dominator recalculation. Host-only probes perturb the test executable and are excluded from RVV codegen inputs. This repair changes no compiler emission or runtime costs. It adds only a bounded fixture-specific provenance check over printed SSA definitions, entry branches and control/result operands, plus parser fixtures; there is no recursive equivalence solver, new guard, scratch allocation, reread, duplication, recomputation, storage machinery or profitability model.",
+  "task_id": "t000015",
+  "base_revision": "16d3d9df9d01e0a24000ccf672293ddff87d1fde",
+  "hypothesis": "Bounded canonical loops with serial, nested, asymmetric or cross-edge branch-only producers can be split before original-loop vectorization legality when their integer-add or ordered float/double-add recurrences update unconditionally at the unique latch. A linear acyclic-CFG proof admits these producers without if-conversion or a VPlan for the original loop. The producer can remain scalar while ordinary LV independently selects the consumer VF. Single-block, single triangle/diamond and narrow compact-participation support are retained. There is no new profitability model, pressure/chain-depth/reduction-count threshold, numerical relaxation or original-loop vectorizability prerequisite.",
+  "semantics": "For multiblock loops, hasAcyclicProducerCFG requires a unique exiting latch and BranchInst terminators. All non-latch successor edges must stay in the loop and cannot target its header. It counts incoming edges with the latch backedge/exit excluded, then performs an iterative Kahn traversal seeded only by the header. Visiting every loop block proves both reachability and absence of internal cycles. Every non-latch node has a successor in this finite DAG, so the latch is the only sink: every iteration reaches it exactly once. Duplicate successor edges are counted/decremented separately. Single-block loops retain the old fast path and later exit diagnostics. Existing simplify-form, dedicated-exit, LCSSA, unique-exit, canonical-zero/one-IV, invariant equality-bound and finite SCEV trip checks still apply. Newly admitted unconditional updates must reside in the latch; existing narrow header-update cases remain supported. Conditional backedge PHIs require the unchanged single triangle/diamond recognizer before participation analysis, so a two-input merge in a larger serial/nested CFG cannot acquire a counter that assumes one participation arm. All rejections precede mutation. Emission is unchanged: original branches, contribution PHIs, arm-local loads/divisions and safe helper calls remain in place, with distinct available contribution values stored at the latch under the original iteration index. Consumer updates are cloned, preserving add flags, FP operand order and per-reduction iteration order. No inactive zero arithmetic or speculative arm evaluation is introduced. Header/update use restrictions preserve reduction-feedback rejection, and only final reduction results may escape through the original exit. Other live-outs, stores, volatile/atomic accesses, unsupported instructions and unsafe calls remain rejected. Calls still require the explicit direct memory(none), nounwind, willreturn, speculatable and other existing effect contracts; no libm-name or errno assumptions are added. Input/output aliasing and enclosing-loop row stores retain their original producer/consumer sequencing. Ordinary ordered FP is unchanged under both settings of the separate fission FP-reordering option; strictfp functions and constrained FP remain rejected. Executable verification is requested through the extended existing checker, not claimed run. Three mixed acyclic producers and an enclosing-loop producer are compiled both as untouched original scalar IR and actual transformed stages, with independent C scalar formulas as a second reference. The checker verifies exact source-location Selected, producer VF 1, consumer VF vscale x 4, capacity/bytes, preserved producer edges/PHIs and arm-local operations, shared slots and ordered consumer reductions. Host-only probes are inserted after PHIs in exact producer header, latch, vector-consumer header and scalar tail. Expected visits are N, N, floor(N/VF), N%VF, summed per row for enclosing loops. Mixed cases exercise every N=0..65, invalid 66/UINT64_MAX, positive/negative nonzero divisors, all-load/all-division (null FP input), alternating phases, runs, sparse/random branches and nested branch combinations. Inputs are preserved, output canaries checked, and repeated/alias invocations compare integer and ordered non-NaN FP bits, signed zero included; NaNs compare by classification without inventing payload guarantees. Enclosing loops use zero/one/four and invalid rows, initial/carry/export state, exact stage visits, independent unaliased/aliased C references and future-row input aliasing. One and two ordinary LV invocations, both FP option settings and vscales 1/2/4/8/32 are covered. Additional actual scalar-stage comparisons execute 1, 255 and 16384 trips, including the full default scratch capacity, against original IR and independent formulas with exact producer/latch/consumer counts. Existing executable cases and correctness assertions are retained.",
+  "costs": "Let M be the proven maximum trip count, N the actual count, and S the sum of allocation sizes of distinct contribution SSA values. Static entry scratch remains M*S plus existing ABI alignment padding, checked by existing unsigned arithmetic, IV representability, pointer-index bounds and the 65536-byte default per-candidate ceiling. It can reserve stack space even on a guarded bypass. Three mixed fixtures each use one 65*i32, one 65*double and one 65*float array for four reductions (shared integer contribution): 1044 accounted bytes including 4 padding bytes; logical stores 16*N bytes and loads 16*N bytes, total 32*N. The enclosing producer uses 784 accounted bytes (65*i32 plus 65*double and 4 padding bytes), reused across rows, with 12*N stores and 12*N loads per row. Capacity does not multiply by row count. Scalar boundary execution uses 4, 1020 and 65536 scratch bytes for M=1,255,16384; tests reject the 256-trip i8 overflow and 16385*i32 byte excess before mutation, and a 3-byte ceiling rejects every fixture in that boundary file. There are zero added original-input rereads, duplicated producer operations or recomputed contributions, no participation/mask arrays for these unconditional streams, and no new per-iteration producer branch or counter. Existing producer iteration guards stay in place; the existing extra consumer loop/control and ordinary LV vector/tail checks remain. There are no new alias or SCEV guards, unbounded/dynamic allocation, path enumeration, if-conversion or generic dependence machinery. The added admission check uses O(B+E) time and O(B) temporary compiler memory (E<=2B for branches), iterative rather than recursive; existing instruction/use scans, SCEV analysis and full-function dominator recalculation are unchanged. Narrow compact recognition remains a separate constant-size check. Host probes/reference formulas increase validation cost only and are excluded from RVV codegen inputs. Physical stack padding/cache traffic, register pressure and speedups have not been measured.",
   "tests": [
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-bounds.ll",
-    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact-reject.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-bounds.ll",
+    "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-reject.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond-reject.ll",
     "llvm/test/Other/reduction-fission-execution-checker.test"
   ],
-  "limitations": "This worker ran no compiler, build, test runner, parser fixture, executable checker or try.sh. Only source/diff/artifact inspection, report editing and git diff --check were performed. Frozen t000010 compiled successfully and passed 36/37 lit files, including the inherited parser test. The first scalar-compact.ll EVL, source-location remark and RVV machine RUNs passed; repeated LV failed two AVL-name expectations. Later RUNs in that file, VectorizeTests, the full host matrix and all 234 corpus compilations did not complete for t000010. All remain pending on this snapshot; no fresh pass claim or complete remaining-failure list is available. Full historical repeated-LV stdout was piped to FileCheck and is absent from the immutable build directory. The log exposes AVL but not the full forwarding/result definitions. Expectations for those definitions derive from immutable LCSSA source and the available single-LV CFG and require full-IR harness confirmation. No compiler defect is identified, so compiler emission is unchanged. The parser handles these fixtures, one i64 counter and one optional guard forwarding PHI; arbitrary PHI/copy/arithmetic chains remain unsupported. Actual executable coverage remains the unchanged scalar-compact.ll inputs and C harness. Fixed-vscale scalar-remainder host execution is not RVV execution; default EVL/VP has IR/RVV machine verification only because host specialization rejects those intrinsics. No RVV hardware/emulator execution or measured speedup is claimed. Transformation support remains one bounded canonical triangle/diamond, a common participation stream and final add exports. Larger CFGs, different streams, mixed/non-add recurrences, partial-state exports, unsafe effects/calls and strict/constrained FP remain unsupported. Scratch is full-trip and bounded per candidate, without tiling or a whole-function cap. No benchmarks, math/errno assumptions, profitability prerequisites or semantics changed.",
+  "limitations": "This worker ran no compiler, build, test runner, executable checker, parser fixture or try.sh. Only source/artifact inspection, file-generation/editing scripts and git diff --check were used. All new expectations and execution comparisons await the harness. Fixed-vscale scalar-remainder host execution is not RVV execution; default EVL/VP has IR/RVV machine verification only and is deliberately not specialized by the host checker. No RVV hardware/emulator execution or measured speedup is claimed. The ordinary loop worklist still generally admits only innermost loops; cyclic producers containing a natural subloop are normally skipped as outer targets. The rejection test additionally uses explicit outer-loop hints/native worklist to exercise the new acyclicity rejection at the original outer source location. This task does not widen that worklist. Newly admitted CFGs must be branch-only DAGs with unconditional latch adds; switches, internal cycles, early exits, header updates in larger CFGs, general conditional/multiple participation streams, non-add recurrences, unsupported live-outs and unsafe effects remain unsupported. Existing strict/constrained-FP rejection is unchanged. Scratch remains full-trip, bounded per candidate and untiled, without a whole-function stack cap. Source matcher/probes are fixture-specific verification, not a general IR proof. No immutable benchmark, harness, other worktree, common build checkout, Git index/history/ref or compiler binary was changed; unfinished d2 work was not integrated. No coverage, maturity or performance improvement on original corpus inputs is claimed before independent results.",
+  "test_expectations": "Intentional change: the old reject_arm_cross_edge function is preserved verbatim as acyclic_cross_edge in the positive scalar-acyclic.ll fixture, with positive scalar/EVL/tail checks. It has one latch predecessor and satisfies the DAG proof; its rejection was solely the old narrow CFG shape restriction. All semantic rejection cases in the old file remain. New larger conditional serial/nested shapes still reject scalar-unsupported-cfg despite a two-input reduction merge. New header-update larger CFGs reject scalar-unsupported-recurrence. Source-location rejection checks cover early exits, reduction-dependent predicates/contributions, update observers, non-reduction live-outs, stores, unsafe calls, switch terminators and larger conditional shapes. The cyclic outer target has a separate native-worklist source-location check because the default worklist visits only its inner natural loop. Eligible original targets can now change from scalar-unsupported-cfg to Selected or a later specific rejection; diagnostic pass/name/location emission is untouched. Single-block exit diagnostics and existing narrow compact behavior are retained. No correctness assertion was removed or weakened.",
   "evidence_read": [
-    "BENCHMARKS_ANALYSIS.md: immutable 117-input corpus, historical strict/reordered compilations and source-location methodology; igraph's extra +0 normalization needs a separate numerical contract, which compact participation avoids.",
-    "Inherited t000007 report: Frozen t000029 igraph candidate/check evidence: self exclusion is a three-block conditional reduction, N=2..4 and P=N-1, not a profitability or spill proof; previous strict and reordered analyses had no selected fission. Remaining call/bound/canonicalization barriers are not assumed solved.",
-    "Inherited t000007 report: Frozen t000011 SEP candidate/check evidence: circular/masked participation must preserve active/masked categories, side-effect flags and multiplication order; overlap==0 is not inactivity, and extra zero arithmetic or 0*NaN is unsafe. Its nested overlap helpers, multiple participation categories, flag recurrence and exp/call contracts exceed this single-arm extension.",
-    "Inherited t000007 report: Immutable t000004/t000006 diffs, base ScalarReductionFission.cpp, caller worklist/analysis invalidation, trip-bound analysis, existing diamond/rejection/ordered tests, execution checker and C harness were inspected. t000006 review accepted revision e42aa5ce368f69b8d31e968fc529eec3feb8e6a9 and records mandatory checks and all primary compilations passing; those historical results do not validate this extension.",
-    "Original benchmarks, harness files, other worktrees, Git index/history/refs and compiler binaries remain untouched.",
-    "Frozen t000007.patch at 619fd4ece2f7f1eaadc5b9f7f5c93d9ec8389b75, task report, builds/t000007/lit.log, progress.json and build job result: compilation succeeded; mandatory lit failed only reduction-fission-scalar-compact.ll, whose first FileCheck RUN expected count but observed merge in compact_triangle and compact_diamond; no later validation was recorded.",
-    "ScalarReductionFission.cpp count/guard/result emission, ScalarEvolution.cpp createNodeForPHI, VPlanTransforms.cpp addExplicitVectorLength, the printed EVL CFG, checker scalar-consumer extraction/probes and unchanged C execution harness were reviewed for SSA identity, dominance and preserved executable coverage.",
-    "Frozen t000006 primary strict result.json files for t000029-igraph-kamada-kawai-3d-hessian and t000011-sep-windowed-pixels retain exact-original-location scalar-unsupported-cfg rejection; they are earlier evidence, not results of this repair.",
-    "Immutable diffs/t000010.patch, builds/t000010/lit.log, progress.json and commands.jsonl: build success; 36/37 lit files pass; repeated-LV AVL is merge.lcssa in triangle/diamond. The first EVL/remark/llc RUNs pass. Later validation is unrecorded.",
-    "git show at exact base 5eba181f460dad516650c558c550e984b6b4b914: LCSSA.cpp formLCSSAForInstructionsImpl creates named exit PHIs with real predecessor inputs and rewrites outside-loop uses; LoopVectorize.cpp runImpl forms LCSSA before processing loops. Unchanged ScalarReductionFission.cpp count/guard/results, ScalarEvolution.cpp createNodeForPHI and VPlanTransforms.cpp AVL setup also inspected.",
-    "Available common-build scalar-compact.ll.tmp is single-LV IR, not an immutable repeated-LV artifact. It corroborates latch->guard->consumer.ph->vector.ph dominance, direct merge AVL, direct vector.body FP results and integer reductions in middle.block. No common checkout/build output was edited.",
-    "Re-read frozen t000006 strict igraph result.json (target 163:9) and SEP result.json (target 8860:7): exact-original-location scalar-unsupported-cfg rejections; SEP helper/inner vectorization is separate evidence. No new corpus selection or performance conclusion follows.",
-    "Unchanged C harness retains all P=0..65, signed-zero/inactive-invalid-operand, alias/canary and nested scratch reuse cases and exact producer/participant/vector/tail checks."
+    "harness/BENCHMARKS_ANALYSIS.md: frozen 117 original inputs, historical strict/reordered evidence, exact-original-location methodology, pre-legality scalar splitting hypotheses and warnings against extra-zero/FP/errno contract changes.",
+    "Immutable diffs/t000012.patch and inherited report: accepted repair of compact-count/result forwarding checks; existing compiler behavior and full compact execution assertions retained.",
+    "Frozen jobs/t000012/000002-build/result.json and builds/t000012/lit.log/execution.log: accepted base build, all 37 lit files, VectorizeTests and existing 227300 host comparisons passed. These historical results do not validate this extension.",
+    "Read all 234 frozen evaluations/t000012/primary/*/{strict,reordered}/result.json files: exit codes all zero, each policy has 91 rejected and 26 no_decision, selected original targets zero. Exact target records contain 96 scalar-unsupported-cfg rejections across both policies, plus independent call/recurrence/exit/live-out and other barriers; this is not a count of newly legal programs.",
+    "Frozen exact-location examples: igraph 163:9 and SWIFT 554:5 reject scalar-unsafe-call, SEP 8860:7 rejects scalar-unsupported-cfg, LibSVM 252:1 rejects scalar-unsupported-instruction. Broader CFG admission does not assume those independent contracts solved.",
+    "ScalarReductionFission.cpp, current caller/worklist and analysis invalidation, original diamond/compact/bounds/rejection fixtures, existing checker/parser tests and C harness were inspected. No d2 integration was read or applied."
   ],
-  "test_expectations": "Intentional changes: single LV uses EVL,ONCE and still requires captured latch merge as AVL seed. Repeated LV uses EVL,REPEAT, captures exact guard merge.lcssa [captured merge,latch], and uses that capture at AVL. Repeated double/float results require captured middle.block PHIs [actual FP reduction,vector.body] feeding nonempty result edges; single-LV results stay direct. Integer results stay tied to their actual scalar reduction calls. Repeated output is saved to %t.repeat and gains RVV machine verification so the harness can retain full IR. All active-length, depletion-to-zero, initial-value and control expectations remain; no wildcard/suffix bound was added. Parser positives retain direct export/merge bounds and both original empty-guard forms, then add the validated guard forwarding form, mixed control bounds and direct/singly forwarded FP result combinations. The synthetic EVL fixture now has two integer reduction definitions/exports, matching its two accumulators; it remains parser-only. The mutation helper now edits only RHS text so corrupting merge inside merge.lcssa does not accidentally rename the definition and hide the intended incoming-value test. Negatives cover wrong incoming values/edges, multiple inputs, wrong/missing definitions or placement, defined/undefined unrelated same-prefix values, original N/full-capacity bounds, broken recurrence/increment/export linkage, extra entry edges, invalid empty guards, changed starts, broken result links, active lengths and vector/tail control. Triangle/diamond/reversed orientation, shared slots, i32/i64/float/double, nested, byte/IV/capacity boundaries and rejection regressions are preserved. The C harness and executable matrix are unchanged: both FP options and fixed vscales 1/2/4/8/32; exact N/P/vector/tail probes; every P=0..65; signed-zero starts; inactive null loads/zero divisors; exceptional FP classification; aliases; canaries; repeated calls; nested scratch reuse. No correctness assertion was removed to pass a test.",
   "validation_requested": {
+    "task_id": "t000015",
     "worker_executed": false,
-    "harness_required": [
-      "Fresh harness build from this worktree snapshot. No agent compilation or test execution occurred.",
-      "Run all mandatory fission lit files, VectorizeTests and every tests path. Run every scalar-compact.ll RUN: EVL,ONCE; EVL,REPEAT; exact-location remarks; DOM/LI/SE and verify-each; single/repeated RVV machine verification; scalar-remainder; scalar-only; capacity limits; disabled/rejection coverage. Earlier successful RUNs do not cover later RUNs.",
-      "Run the complete default check-reduction-fission.py actual-transformed-path matrix at fixed vscales 1,2,4,8,32 under both fission FP-option settings, with all legacy and four compact functions. Require original scalar-reference comparisons through actual producer/vector/tail paths with exact N, P, floor(P/VF), P%VF probes and row-wise sums for nesting. Retain every P=0..65, signed-zero starts, inactive invalid operands, aliases, canaries and nested scratch reuse. Parser positives do not replace execution.",
-      "Retain uninstrumented default EVL/VP and scalar-remainder RVV codegen/machine verification. Fixed-vscale host execution is not RVV target execution; codegen is not measured performance.",
-      "Run all unchanged 117 original benchmarks under strict and FP-reordered primary policies: 234 compilations with original flags and no extra math/errno assumptions. Preserve exact-original-location Selected/Rejected target-loop remarks and separate producer/consumer VF and scratch-capacity/byte evidence. Helper/inner-loop activity is not target success.",
-      "Retain immutable full IR, logs/results and commands, including %t, %t.repeat, %t.tail and remarks. Fulfill artifact_requests before acceptance. Report every remaining crash, invalid IR/analysis, semantic mismatch or mandatory failure; none may be waived. No maturity claim is made before independent acceptance."
-    ],
+    "fresh_build_required": true,
+    "build": {
+      "required": true,
+      "snapshot": "this worktree after harness freeze",
+      "agent_compilation": false
+    },
+    "lit": {
+      "mandatory_fission_suite": true,
+      "changed_and_explicit_paths": [
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-bounds.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-acyclic-reject.ll",
+        "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-diamond-reject.ll",
+        "llvm/test/Other/reduction-fission-execution-checker.test"
+      ],
+      "verify_each": true,
+      "analyses": [
+        "domtree",
+        "loops",
+        "scalar-evolution"
+      ],
+      "retain_full_ir": [
+        "single LV EVL",
+        "repeated LV EVL",
+        "scalar remainder",
+        "scalar-only boundaries",
+        "source-location remarks"
+      ]
+    },
+    "unit_tests": {
+      "required": [
+        "VectorizeTests"
+      ]
+    },
+    "execution": {
+      "required": true,
+      "script": "llvm/utils/check-reduction-fission.py",
+      "harness": "llvm/utils/reduction-fission-execution.c.in",
+      "retain_all_existing_cases": true,
+      "fixed_vscales": [
+        1,
+        2,
+        4,
+        8,
+        32
+      ],
+      "fp_reordering_option_settings": [
+        false,
+        true
+      ],
+      "new_ordinary_lv_invocations": [
+        1,
+        2
+      ],
+      "new_mixed_functions": [
+        "acyclic_serial",
+        "acyclic_nested",
+        "acyclic_three_way"
+      ],
+      "new_enclosing_function": "acyclic_enclosing",
+      "new_scalar_capacity_functions": {
+        "acyclic_one": 1,
+        "acyclic_i8_max": 255,
+        "acyclic_default_limit": 16384
+      },
+      "requirements": [
+        "actual transformed producer/vector/scalar-tail paths",
+        "original scalar IR and independent C reference comparisons",
+        "exact producer/latch/vector/tail visits",
+        "zero/one/maximum and invalid bounds",
+        "input preservation, canaries, aliasing and repeated scratch reuse",
+        "existing compact P=0..65 and signed-zero/inactive-invalid-operand coverage unchanged"
+      ]
+    },
+    "rvv_machine_verification": {
+      "required": true,
+      "target": "riscv64 +v",
+      "policies": [
+        "default EVL/VP",
+        "scalar remainder",
+        "single and repeated LV",
+        "scalar capacity boundaries"
+      ],
+      "instrumentation": false,
+      "target_execution": false,
+      "speedup_measurement": false
+    },
     "primary_corpus": {
       "inputs": 117,
       "compilations": 234,
@@ -43,56 +118,23 @@
         "strict",
         "fp-reordered"
       ],
-      "supplementary_math_or_errno_flags": []
-    },
-    "acceptance": "Compiler failures, crashes, invalid IR/analyses, semantic mismatches or mandatory test failures veto acceptance. Preserve exact original target-loop Selected/Rejected attribution and separate producer/consumer VF and scratch evidence. No measured speedup is required or claimed.",
-    "task_id": "t000012",
-    "fresh_build_required": true,
-    "fixed_vscales": [
-      1,
-      2,
-      4,
-      8,
-      32
-    ],
-    "fp_reordering_option_settings": [
-      false,
-      true
-    ]
-  },
-  "future_work": "Confirm full repeated-LV IR, complete every mandatory check and primary corpus compilation, and investigate later failures against actual SSA evidence without broadening accepted bounds or relaxing semantics. Independent acceptance of the full conditional transformation and generality evidence is required for maturity. Multiple streams, longer CFGs, non-add/flag recurrences, bounded tiling and EVL execution need separate legality/executable evidence. Real RVV execution and performance remain future measurements.",
-  "prior_validation": {
-    "task_id": "t000010",
-    "revision": "5eba181f460dad516650c558c550e984b6b4b914",
-    "compile_exit_code": 0,
-    "lit_passed": 36,
-    "lit_failed": [
-      "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll"
-    ],
-    "passed_RUNs_before_failure": [
-      "single-LV EVL FileCheck",
-      "source-location REMARK FileCheck",
-      "single-LV RVV machine verification"
-    ],
-    "failure": "Repeated-LV triangle/diamond AVL uses merge.lcssa rather than captured merge. Full repeated-LV stdout was not retained in immutable build directory.",
-    "subsequent_mandatory_validation_completed": false,
-    "fresh_snapshot_results": "pending harness; no worker tests"
-  },
-  "artifact_requests": [
-    {
-      "task_id": "t000012",
-      "historical_revision": "5eba181f460dad516650c558c550e984b6b4b914",
-      "historical_task": "t000010",
-      "missing_artifact": "Full repeated-LV stdout for scalar-compact.ll, including triangle/diamond guard, AVL, middle.block and result exports.",
-      "request": "Harness: recover any retained historical full repeated-LV IR. If absent, retain full %t.repeat from the fresh mandatory RUN (compiler emission is unchanged) and confirm each source-derived PHI, incoming-edge and dominance expectation. Also retain single-LV and scalar-remainder IR for comparison.",
-      "fixture": "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-scalar-compact.ll",
-      "pipeline": "loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>",
-      "required_links": [
-        "guard: merge.lcssa = phi i64 [merge,latch]; original count export remains [merge,latch]",
-        "vector.body: AVL incoming on vector.ph uses exactly captured guard forwarding PHI",
-        "middle.block: double/float PHIs have exactly [actual ordered reduction result,vector.body]",
-        "consumer.exit: unchanged empty starts; actual integer and proven forwarded FP results on consumer.loopexit"
+      "immutable_original_inputs": true,
+      "runner": "tests/try.sh via harness",
+      "supplementary_math_or_errno_flags": [],
+      "required_evidence": [
+        "exact original target-loop Selected/Rejected source location",
+        "producer and consumer VFs at that same original location",
+        "scratch capacity and bytes",
+        "separate helper/inner-loop activity from original target success"
       ]
-    }
-  ]
+    },
+    "harness_required": [
+      "Fresh harness build; all mandatory fission lit tests and explicit paths; VectorizeTests.",
+      "Full existing and extended executable comparison matrix. Retain uninstrumented RVV machine verification and instrumented host IR/logs separately.",
+      "All 234 immutable primary corpus compilations with existing policies and flags. Preserve exact-location decisions, stage VF and scratch evidence.",
+      "Retain full IR, commands, remarks and failures in immutable results. Compiler crash, invalid IR/analysis, semantic mismatch or mandatory failure vetoes acceptance; lack of measured speedup does not."
+    ],
+    "acceptance": "Pending independent harness acceptance; no agent test or maturity claim."
+  },
+  "future_work": "Review fresh immutable build, mandatory-test, execution and corpus results. Investigate every failure against actual IR before changing expectations. Broader outer-loop scheduling, bounded internal producer loops, switch support, distinct conditional streams, tiling/whole-function scratch limits and RVV execution/performance are separate future work. Do not combine with d2 before independent accepted generality evidence for both mature heads."
 }

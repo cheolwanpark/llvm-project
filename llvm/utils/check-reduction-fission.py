@@ -217,6 +217,60 @@ def check_scalar_function(ir, name, evl, probe=False, fixed_narrow=False):
     body = function_definition(ir, name)
     producer, consumer = scalar_consumer(body, name)
     compact = name.startswith('compact_')
+    acyclic = name in ('acyclic_serial', 'acyclic_nested', 'acyclic_three_way', 'acyclic_enclosing')
+    if acyclic:
+        enclosing = name == 'acyclic_enclosing'
+        assert producer.count('call i32 @scalar_helper(') == 1, producer
+        assert producer.count('load i32,') == 1, producer
+        assert producer.count('load double,') == 1, producer
+        assert '<vscale x' not in producer and 'fadd ' not in producer, producer
+        assert body.count('alloca [65 x i32]') == 1, body
+        assert body.count('alloca [65 x double]') == 1, body
+        assert body.count('alloca [65 x float]') == (0 if enclosing else 1), body
+        # Compare all retained producer edges and contribution PHIs to the
+        # original fixture. Neither block order nor debug metadata IDs matter.
+        source = (Path(__file__).resolve().parents[1] /
+                  'test/Transforms/LoopVectorize/RISCV/'
+                  'reduction-fission-scalar-acyclic.ll').read_text()
+        original = function_definition(source, name)
+
+        def blocks(text):
+            return dict(re.findall(r'^([-\w.$]+):[^\n]*\n(.*?)'
+                                   r'(?=^[-\w.$]+:|^}|\Z)', text, re.M | re.S))
+
+        before, after = blocks(original), blocks(producer)
+        header = 'inner' if enclosing else 'loop'
+        labels = list(before)
+        labels = labels[labels.index(header):labels.index('latch') + 1]
+        def normalize(line):
+            return re.sub(r'\s+', '', line.split(', !')[0])
+        for label in labels:
+            assert label in after, producer
+            if label != 'latch':
+                edge = re.search(r'^  br [^\n]+', before[label], re.M)[0]
+                assert normalize(edge) in normalize(after[label]), (name, label, producer)
+            for phi in re.findall(r'^  %(?:first\.[cd]|inner\.[cd]|c|dc) = phi [^\n]+',
+                                  before[label], re.M):
+                assert normalize(phi) in normalize(after[label]), (name, label, producer)
+        assert re.search(r'br i1 %done, label %scalar\.fission\.consumer\.ph, '
+                         rf'label %{header}\b', after['latch']), producer
+        assert after['latch'].count('store i32 %c,') == 1, producer
+        assert after['latch'].count('store double %dc,') == 1, producer
+        assert sum(block.count('store ') for label, block in after.items()
+                   if label in labels and label != 'latch') == 0, producer
+        if not enclosing:
+            assert 'sdiv i32 840, %x' in after['left'], producer
+            assert producer.count('sdiv ') == 1, producer
+            assert 'load double, ptr %dp' in after['right'], producer
+            assert producer.count('load double') == 1, producer
+            assert after['latch'].count('store float %fc,') == 1, producer
+        # The unconditional stream contains exactly N values, including tails.
+        if evl:
+            assert re.search(r'%avl = phi i64 \[ %n, %vector\.ph \]', consumer), consumer
+        else:
+            assert '%min.iters.check = icmp ult i64 %n,' in consumer, consumer
+            assert '%n.mod.vf = urem i64 %n,' in consumer, consumer
+            assert '%fission.consumer.done = icmp eq i64 %fission.consumer.next, %n' in consumer, consumer
     if name in ('scalar_helper_sum', 'scalar_mixed', 'scalar_nested',
                 'scalar_diamond', 'scalar_diamond_nested',
                 'compact_triangle', 'compact_diamond', 'compact_nested'):
@@ -270,16 +324,18 @@ def check_scalar_function(ir, name, evl, probe=False, fixed_narrow=False):
     # constant/one-iteration loop is allowed to leave its consumer scalar.
     vectorized = name in ('scalar_helper_sum', 'arithmetic_sum', 'scalar_mixed',
                           'scalar_nested', 'scalar_diamond',
-                          'diamond_arithmetic', 'scalar_diamond_nested') or compact or fixed_narrow
+                          'diamond_arithmetic', 'scalar_diamond_nested') or compact or acyclic or fixed_narrow
     if vectorized:
         vector = re.search(r'^vector\.body[^:]*:[^\n]*\n(.*?)(?=^[\w.$-]+:|^})',
                            consumer, re.M | re.S)
         assert vector, f'@{name}: missing vector consumer\n{consumer}'
         if name in ('scalar_mixed', 'scalar_nested', 'scalar_diamond',
                     'scalar_diamond_nested', 'compact_triangle', 'compact_diamond',
-                    'compact_nested'):
+                    'compact_nested', 'acyclic_serial', 'acyclic_nested', 'acyclic_three_way',
+                    'acyclic_enclosing'):
             types = [('double', 'f64')]
-            if name in ('scalar_mixed', 'scalar_diamond', 'compact_triangle', 'compact_diamond'):
+            if name in ('scalar_mixed', 'scalar_diamond', 'compact_triangle', 'compact_diamond',
+                        'acyclic_serial', 'acyclic_nested', 'acyclic_three_way'):
                 types.append(('float', 'f32'))
             for ty, suffix in types:
                 intrinsic = r'vp\.reduce' if evl else r'vector\.reduce'
@@ -298,7 +354,8 @@ def check_scalar_function(ir, name, evl, probe=False, fixed_narrow=False):
                 assert 'scalar.fission.consumer.body:' in consumer, consumer
             lanes = '4' if fixed_narrow else 'vscale x 4'
             assert f'load <{lanes} x' in vector[0], consumer
-        if name in ('scalar_mixed', 'scalar_diamond', 'compact_triangle', 'compact_diamond'):
+        if name in ('scalar_mixed', 'scalar_diamond', 'compact_triangle', 'compact_diamond',
+                    'acyclic_serial', 'acyclic_nested', 'acyclic_three_way'):
             loads = (r'call <vscale x 4 x i32> @llvm\.vp\.load\.' if evl
                      else r'load <vscale x 4 x i32>')
             assert len(re.findall(loads, vector[0])) == 1, consumer
@@ -310,12 +367,20 @@ def check_scalar_function(ir, name, evl, probe=False, fixed_narrow=False):
                 r'\1  call void @record_scalar_consumer_vector()\n',
                 consumer, count=1, flags=re.M)
             assert probes == 1, f'@{name}: missing vector-consumer probe site'
-            if name in ('scalar_diamond', 'scalar_diamond_nested') or compact:
+            if name in ('scalar_diamond', 'scalar_diamond_nested') or compact or acyclic:
                 instrumented, tails = re.subn(
                     r'(^scalar\.fission\.consumer\.body:[^\n]*\n(?:[^\n]* = phi [^\n]*\n)*)',
                     r'\1  call void @record_scalar_consumer_tail()\n',
                     instrumented, count=1, flags=re.M)
                 assert tails == 1, f'@{name}: missing scalar-tail probe site'
+            if acyclic:
+                for label, recorder in [(header, 'iteration'), ('latch', 'latch')]:
+                    producer, visits = re.subn(
+                        rf'(^{label}:[^\n]*\n(?:[^\n]* = phi [^\n]*\n)*)',
+                        rf'\1  call void @record_acyclic_{recorder}()\n',
+                        producer, count=1, flags=re.M)
+                    assert visits == 1, f'@{name}: missing producer {label} probe'
+                return producer + 'scalar.fission.consumer.ph:\n' + instrumented
             if compact:
                 producer, visits = re.subn(
                     r'(^left:[^\n]*\n(?:[^\n]* = phi [^\n]*\n)*)',
@@ -351,6 +416,8 @@ def check(args, work):
     declarations, combined_rows, induction_rows, fp_rows = [], [], [], []
     scalar_rows, mixed_rows, constant_rows, nested_rows, diamond_rows = [], [], [], [], []
     compact_rows, compact_integer_rows, compact_nested_rows = [], [], []
+    acyclic_rows = []
+    acyclic_bound_rows = []
     common = [
         '-passes=loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>',
         '-verify-each', '-mtriple=riscv64', '-mattr=+v',
@@ -435,6 +502,8 @@ def check(args, work):
                             'scalar_diamond_nested'], 'scalar-diamond.c:32:7'),
         ('scalar-compact', ['compact_triangle', 'compact_diamond',
                             'compact_integer', 'compact_nested'], 'scalar-compact.c:12:3'),
+        ('scalar-acyclic', ['acyclic_serial', 'acyclic_nested', 'acyclic_three_way',
+                            'acyclic_enclosing'], 'scalar-acyclic.c:12:3'),
     ]:
         source = keep_functions((tests / f'reduction-fission-{fixture}.ll').read_text(),
                                 functions)
@@ -445,16 +514,23 @@ def check(args, work):
         # The early path retains ordered FP independently of the separate
         # VPlan reassociation option. Exercise both option settings and keep
         # the default EVL artifact distinct from scalar-tail host execution.
-        for relaxed in (False, True):
+        for relaxed, repeats in [(r, n) for r in (False, True)
+                                 for n in ((1, 2) if fixture == 'scalar-acyclic' else (1,))]:
             for tail_policy in ('default-evl', 'scalar-remainder'):
                 evl = tail_policy == 'default-evl'
                 options = flags + (['-vplan-reduction-fission-allow-fp-reordering']
                                    if relaxed else [])
+                if repeats == 2:
+                    options = [option.replace('-passes=loop-vectorize,',
+                                              '-passes=loop-vectorize,loop-vectorize,')
+                               for option in options]
                 if not evl:
                     options += ['-tail-folding-policy=dont-fold-tail',
                                 '-enable-epilogue-vectorization=false']
                 result = run([opt, *options], input=source)
                 tag = f'{fixture}_{"option_on" if relaxed else "ordered"}_{tail_policy}'
+                if fixture == 'scalar-acyclic':
+                    tag += f'_lv{repeats}'
                 (work / f'{tag}.remarks').write_text(result.stderr)
                 (work / f'{tag}.rvv.ll').write_text(result.stdout)
                 assert result.stderr.count('split scalar-IR reduction loop;') == len(functions), result.stderr
@@ -481,6 +557,14 @@ def check(args, work):
                         assert (f'scalar-compact.c:{loc}: scalar-IR fission consumer VF '
                                 'vscale x 4') in result.stderr, result.stderr
                         assert f'scalar-compact.c:{loc}: scalar-IR fission producer VF ' in result.stderr
+                if fixture == 'scalar-acyclic':
+                    for loc, size in [('12:3', 1044), ('22:5', 1044), ('42:9', 1044), ('32:7', 784)]:
+                        assert re.search(
+                            rf'scalar-acyclic.c:{loc}: split scalar-IR reduction loop;[^\n]*'
+                            rf'scratch capacity 65, scratch bytes {size}\b', result.stderr), result.stderr
+                        for stage, vf in [('producer', '1'), ('consumer', 'vscale x 4')]:
+                            assert (f'scalar-acyclic.c:{loc}: scalar-IR fission {stage} VF {vf}'
+                                    in result.stderr), result.stderr
                 assert not re.search(r'\b(?:fadd|call)\s+[^\n]*\breassoc\b', result.stdout), result.stdout
                 instrumented = result.stdout
                 for function in functions:
@@ -493,6 +577,7 @@ def check(args, work):
                      '-o', str(work / f'{tag}.s')], input=result.stdout)
                 if evl:
                     records.append({'fixture': fixture, 'fp_reordering_option': relaxed,
+                                    'loop_vectorize_invocations': repeats,
                                     'tail_policy': tail_policy,
                                     'validation': 'RVV codegen and machine verification only',
                                     'executed': False, 'options': options,
@@ -500,15 +585,20 @@ def check(args, work):
                     print(f'RVV codegen verified {tag} (not executed)', flush=True)
                     continue
                 instrumented += '\ndeclare void @record_scalar_consumer_vector()\n'
-                if fixture in ('scalar-diamond', 'scalar-compact'):
+                if fixture in ('scalar-diamond', 'scalar-compact', 'scalar-acyclic'):
                     instrumented += '\ndeclare void @record_scalar_consumer_tail()\n'
                 if fixture == 'scalar-compact':
                     instrumented += ('\ndeclare void @record_compact_participant()\n'
                                      'declare void @record_compact_iteration()\n')
+                if fixture == 'scalar-acyclic':
+                    instrumented += ('\ndeclare void @record_acyclic_iteration()\n'
+                                     'declare void @record_acyclic_latch()\n')
                 for scale in args.vscales:
                     fixed = specialize(instrumented, scale)
                     for function in functions:
                         name = f'{function}_{"option_on" if relaxed else "o"}_s{scale}'
+                        if fixture == 'scalar-acyclic':
+                            name += f'_lv{repeats}'
                         fixed = fixed.replace(f'@{function}(', f'@{name}(')
                         if function in ('compact_triangle', 'compact_diamond'):
                             declarations.append(f'extern ScalarMixedFn {name};')
@@ -529,25 +619,87 @@ def check(args, work):
                         elif function == 'scalar_diamond':
                             declarations.append(f'extern ScalarMixedFn {name};')
                             diamond_rows.append(f'{{"{name}", {name}, {4 * scale}}}')
-                        elif function in ('scalar_nested', 'scalar_diamond_nested'):
+                        elif function in ('acyclic_serial', 'acyclic_nested', 'acyclic_three_way'):
+                            declarations.append(f'extern ScalarMixedFn {name};')
+                            acyclic_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}, '
+                                                f'{str(function != "acyclic_serial").lower()}}}')
+                        elif function in ('scalar_nested', 'scalar_diamond_nested', 'acyclic_enclosing'):
                             declarations.append(f'extern ScalarNestedFn {name};')
                             nested_rows.append(f'{{"{name}", {name}, ref_{function}, {4 * scale}, '
-                                               f'{str(function == "scalar_diamond_nested").lower()}}}')
+                                               f'{str(function != "scalar_nested").lower()}, '
+                                               f'{str(function == "acyclic_enclosing").lower()}}}')
                         else:
                             declarations.append(f'extern ScalarConstantFn {name};')
                             constant_rows.append(f'{{"{name}", {name}, ref_{function}, false}}')
                     compile_ir(f'{tag}_s{scale}', fixed)
                     records.append({'fixture': fixture, 'fp_reordering_option': relaxed,
+                                    'loop_vectorize_invocations': repeats,
                                     'tail_policy': tail_policy,
                                     'comparison': ('exact integer/non-NaN FP bits; NaN classification'
-                                                   if fixture == 'scalar-compact' else
+                                                   if fixture in ('scalar-compact', 'scalar-acyclic') else
                                                    'exact, including ordered FP'),
                                     'vector_execution': 'host-only consumer entry probe',
-                                    'scalar_tail_probe': fixture in ('scalar-diamond', 'scalar-compact'),
+                                    'scalar_tail_probe': fixture in ('scalar-diamond', 'scalar-compact', 'scalar-acyclic'),
                                     'producer_iteration_and_participant_probes': fixture == 'scalar-compact',
+                                    'producer_iteration_and_latch_probes': fixture == 'scalar-acyclic',
                                     'vscale': scale, 'options': options,
                                     'selection_remarks': result.stderr})
                     print(f'Built host scalar-tail variant {tag}, vscale={scale}', flush=True)
+
+    # Execute the actual split at the representable IV and default scratch
+    # ceilings too. These are deliberately scalar stages; the mixed acyclic
+    # fixtures above separately prove vector and tail execution.
+    bounds = [('acyclic_one', 1), ('acyclic_i8_max', 255), ('acyclic_default_limit', 16384)]
+    source = keep_functions((tests / 'reduction-fission-scalar-acyclic-bounds.ll').read_text(),
+                            [name for name, _ in bounds])
+    reference = source
+    for function, _ in bounds:
+        reference = reference.replace(f'@{function}(', f'@ref_{function}(')
+    compile_ir('reference_scalar_acyclic_bounds', reference)
+    for relaxed in (False, True):
+        options = [flag for flag in common if flag != '-enable-scalar-reduction-fission=false'
+                   and flag != '-force-vector-interleave=1']
+        options += ['-force-vector-width=1', '-force-vector-interleave=0',
+                    '-force-target-max-scalar-interleave=1', '-scalable-vectorization=off']
+        if relaxed:
+            options += ['-vplan-reduction-fission-allow-fp-reordering']
+        result = run([opt, *options], input=source)
+        tag = f'scalar_acyclic_bounds_{"option_on" if relaxed else "ordered"}'
+        (work / f'{tag}.remarks').write_text(result.stderr)
+        (work / f'{tag}.rvv.ll').write_text(result.stdout)
+        assert result.stderr.count('split scalar-IR reduction loop;') == len(bounds), result.stderr
+        run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
+             '-o', str(work / f'{tag}.s')], input=result.stdout)
+        instrumented = result.stdout
+        for function, count in bounds:
+            body = function_definition(result.stdout, function)
+            producer, consumer = scalar_consumer(body, function)
+            assert body.count(f'alloca [{count} x i32]') == 1, body
+            assert '<vscale x' not in body and 'vector.body:' not in body, body
+            assert 'store i32 %c,' in producer, body
+            for label, recorder in [('loop', 'acyclic_iteration'), ('latch', 'acyclic_latch')]:
+                producer, visits = re.subn(
+                    rf'(^{label}:[^\n]*\n(?:[^\n]* = phi [^\n]*\n)*)',
+                    rf'\1  call void @record_{recorder}()\n', producer, count=1, flags=re.M)
+                assert visits == 1, body
+            consumer, visits = re.subn(
+                r'(^scalar\.fission\.consumer\.body:[^\n]*\n(?:[^\n]* = phi [^\n]*\n)*)',
+                r'\1  call void @record_scalar_consumer_tail()\n', consumer, count=1, flags=re.M)
+            assert visits == 1, body
+            instrumented = instrumented.replace(
+                body, producer + 'scalar.fission.consumer.ph:\n' + consumer, 1)
+            name = f'{function}_{tag}'
+            instrumented = instrumented.replace(f'@{function}(', f'@{name}(')
+            declarations.append(f'extern ScalarConstantFn {name}, ref_{function};')
+            acyclic_bound_rows.append(f'{{"{name}", {name}, ref_{function}, {count}}}')
+        instrumented += ('\ndeclare void @record_acyclic_iteration()\n'
+                         'declare void @record_acyclic_latch()\n'
+                         'declare void @record_scalar_consumer_tail()\n')
+        compile_ir(tag, instrumented)
+        records.append({'fixture': 'scalar-acyclic-bounds', 'fp_reordering_option': relaxed,
+                        'comparison': 'original scalar IR and independent C formula, exact integer',
+                        'producer_latch_consumer_counts': [1, 255, 16384],
+                        'options': options, 'selection_remarks': result.stderr})
 
     # The scalable vectorizer can conservatively retain a scalar consumer for
     # the i8 IV. Also exercise its supported fixed VF=4 consumer, with an entry
@@ -590,7 +742,8 @@ def check(args, work):
                       ('SCALAR_CONSTANTS', constant_rows),
                       ('SCALAR_NESTED', nested_rows), ('SCALAR_DIAMOND', diamond_rows),
                       ('COMPACT', compact_rows), ('COMPACT_INTEGER', compact_integer_rows),
-                      ('COMPACT_NESTED', compact_nested_rows)]:
+                      ('COMPACT_NESTED', compact_nested_rows), ('ACYCLIC', acyclic_rows),
+                      ('ACYCLIC_BOUNDS', acyclic_bound_rows)]:
         harness = harness.replace(f'@{key}@', '\n'.join(rows) if key == 'DECLARATIONS'
                                    else ',\n'.join(rows))
     harness_path = work / 'harness.c'
@@ -617,6 +770,10 @@ def check(args, work):
                           'and scalar-tail counts; per-row counts for nests and aliases',
         'compact_fp_comparison': 'bitwise for all non-NaN results, including signed zero; '
                                  'NaN classification without payload assumptions',
+        'acyclic_counts': list(range(66)) + [66, 2**64 - 1],
+        'acyclic_comparison': 'original scalar IR and independent C scalar formulas; '
+                              'exact producer/latch/vector/tail counts; unchanged inputs, '
+                              'canaries, aliases, enclosing-loop scratch reuse and repeated LV',
         'scalar_ir_host_tail_policy': 'dont-fold-tail, scalar remainder',
         'scalar_ir_default_evl': 'RVV codegen/machine verification only, not executed',
         'comparison': {

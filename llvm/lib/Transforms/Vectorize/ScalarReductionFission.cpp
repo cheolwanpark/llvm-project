@@ -48,10 +48,9 @@ StringRef llvm::getScalarReductionFissionStage(const Loop &L) {
   return {};
 }
 
-// Accept one triangle/diamond, not general if-conversion. Every path visits
-// the latch exactly once per iteration. Keeping these blocks in place preserves
-// arm-local loads/arithmetic, including operations unsafe on the other arm.
-static bool hasSupportedProducerCFG(const Loop &L, BasicBlock *Latch) {
+// Compact participation needs exactly one update arm and a two-input latch
+// merge. Do not extend this recognition when admitting larger producer CFGs.
+static bool hasSingleDiamondProducerCFG(const Loop &L, BasicBlock *Latch) {
   BasicBlock *Header = L.getHeader();
   if (L.getNumBlocks() == 1)
     return Latch == Header;
@@ -80,6 +79,41 @@ static bool hasSupportedProducerCFG(const Loop &L, BasicBlock *Latch) {
   return L.getExitingBlock() == Latch;
 }
 
+// Remove the latch's backedge/exit and require an acyclic branch-only graph.
+// Every other successor stays in the loop, so the latch is the only possible
+// sink. Processing every block from the header proves that every iteration
+// reaches it exactly once. This includes serial/nested/asymmetric diamonds,
+// without if-conversion, path enumeration or moving arm-local operations.
+static bool hasAcyclicProducerCFG(const Loop &L, BasicBlock *Latch) {
+  // Preserve the existing single-block path and its later exit diagnostics.
+  if (L.getNumBlocks() == 1)
+    return Latch == L.getHeader();
+  if (!Latch || L.getExitingBlock() != Latch)
+    return false;
+  DenseMap<BasicBlock *, unsigned> IncomingEdges;
+  for (BasicBlock *BB : L.blocks()) {
+    if (!isa<BranchInst>(BB->getTerminator()))
+      return false;
+    if (BB == Latch)
+      continue;
+    for (BasicBlock *Succ : successors(BB)) {
+      if (!L.contains(Succ) || Succ == L.getHeader())
+        return false;
+      ++IncomingEdges[Succ];
+    }
+  }
+  SmallVector<BasicBlock *, 8> Ready{L.getHeader()};
+  for (unsigned I = 0; I != Ready.size(); ++I) {
+    BasicBlock *BB = Ready[I];
+    if (BB == Latch)
+      continue;
+    for (BasicBlock *Succ : successors(BB))
+      if (--IncomingEdges[Succ] == 0)
+        Ready.push_back(Succ);
+  }
+  return Ready.size() == L.getNumBlocks();
+}
+
 Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                      ScalarEvolution &SE,
                                      OptimizationRemarkEmitter &ORE) {
@@ -100,7 +134,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   };
 
   BasicBlock *Latch = L.getLoopLatch();
-  if (!hasSupportedProducerCFG(L, Latch) || !L.isLoopSimplifyForm() ||
+  if (!hasAcyclicProducerCFG(L, Latch) || !L.isLoopSimplifyForm() ||
       !L.hasDedicatedExits() || !L.isLCSSAForm(DT))
     return Reject("scalar-unsupported-cfg");
   if (F->hasFnAttribute(Attribute::StrictFP))
@@ -136,6 +170,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   SmallVector<Reduction, 4> Reductions;
   SmallPtrSet<Instruction *, 8> ReductionInsts;
   BasicBlock *ParticipationArm = nullptr;
+  bool SingleDiamond = hasSingleDiamondProducerCFG(L, Latch);
   for (PHINode &Phi : Header->phis()) {
     if (&Phi == IV)
       continue;
@@ -143,6 +178,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     auto *Merge = dyn_cast<PHINode>(Backedge);
     BinaryOperator *Update = nullptr;
     if (Merge) {
+      if (!SingleDiamond)
+        return Reject("scalar-unsupported-cfg");
       if (Merge->getParent() != Latch || Merge->getNumIncomingValues() != 2)
         return Reject("scalar-unsupported-recurrence");
       int Bypass = Merge->getIncomingValue(0) == &Phi ? 0 : 1;
@@ -162,7 +199,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     } else {
       Update = dyn_cast<BinaryOperator>(Backedge);
       if (!Update ||
-          (Update->getParent() != Header && Update->getParent() != Latch) ||
+          (Update->getParent() != Latch &&
+           !(SingleDiamond && Update->getParent() == Header)) ||
           !Phi.hasOneUse() || *Phi.user_begin() != Update)
         return Reject("scalar-unsupported-recurrence");
     }
