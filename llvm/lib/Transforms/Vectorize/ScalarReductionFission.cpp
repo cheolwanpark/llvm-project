@@ -16,9 +16,11 @@
 #include "VPlanReductionFission.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
+#include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
@@ -26,7 +28,9 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Errc.h"
 #include "llvm/Support/MathExtras.h"
+#include <algorithm>
 
 using namespace llvm;
 
@@ -114,6 +118,41 @@ static bool hasAcyclicProducerCFG(const Loop &L, BasicBlock *Latch) {
   return Ready.size() == L.getNumBlocks();
 }
 
+// Scalar emission counts completed iterations; it never expands a trip-count
+// expression. Use ordinary SE, without predicates or runtime versioning, only
+// to bound storage and prove that the private counters cannot wrap.
+static Expected<uint64_t>
+getScalarFissionMaxTripCount(Loop &L, ScalarEvolution &SE, IntegerType *CountTy) {
+  const SCEV *BTC = SE.getBackedgeTakenCount(&L);
+  auto *MaxBTC =
+      dyn_cast<SCEVConstant>(SE.getConstantMaxBackedgeTakenCount(&L));
+  const SCEV *GuardedBTC =
+      isa<SCEVCouldNotCompute>(BTC) ? nullptr : SE.applyLoopGuards(BTC, &L);
+  if (!MaxBTC && !GuardedBTC)
+    return createStringError(errc::invalid_argument, "non-constant-trip-count");
+  APInt MaxBackedges = MaxBTC ? MaxBTC->getAPInt()
+                             : SE.getUnsignedRangeMax(GuardedBTC);
+  if (MaxBTC && GuardedBTC) {
+    // Relational exit analysis can lose the correlation between a runtime
+    // start and end in its constant maximum. The exact count's range, under
+    // existing entry guards, is an equally unconditional storage bound. This
+    // rewrites only an analysis expression; no guard or expression is emitted.
+    APInt RangeMax = SE.getUnsignedRangeMax(GuardedBTC);
+    unsigned Width = std::max(MaxBackedges.getBitWidth(), RangeMax.getBitWidth());
+    MaxBackedges = APIntOps::umin(MaxBackedges.zextOrTrunc(Width),
+                                RangeMax.zextOrTrunc(Width));
+  }
+  if (MaxBackedges.isAllOnes() && MaxBackedges.getBitWidth() >= 64 &&
+      !isa<SCEVConstant>(BTC))
+    return createStringError(errc::invalid_argument, "non-constant-trip-count");
+  APInt MaxTC = MaxBackedges.zext(MaxBackedges.getBitWidth() + 1);
+  ++MaxTC;
+  if (MaxTC.getActiveBits() > 64 ||
+      MaxTC.getActiveBits() > CountTy->getBitWidth())
+    return createStringError(errc::invalid_argument, "trip-count-overflow");
+  return MaxTC.getZExtValue();
+}
+
 Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                      ScalarEvolution &SE,
                                      OptimizationRemarkEmitter &ORE) {
@@ -141,22 +180,48 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     return Reject("scalar-strict-fp");
   auto *Branch = dyn_cast<BranchInst>(Latch->getTerminator());
   BasicBlock *Exit = L.getUniqueExitBlock();
-  PHINode *IV = L.getCanonicalInductionVariable();
-  if (!Branch || !Branch->isConditional() || !Exit || !IV ||
+  if (!Branch || !Branch->isConditional() || !Exit ||
       !((Branch->getSuccessor(0) == Header && Branch->getSuccessor(1) == Exit) ||
         (Branch->getSuccessor(1) == Header && Branch->getSuccessor(0) == Exit)))
     return Reject("scalar-unsupported-exit");
   BasicBlock *Preheader = L.getLoopPreheader();
-  auto *Next = dyn_cast<BinaryOperator>(IV->getIncomingValueForBlock(Latch));
   auto *Compare = dyn_cast<ICmpInst>(Branch->getCondition());
-  // Reuse the original invariant bound and exit test rather than speculatively
-  // expanding a new SCEV expression. A canonical IV starts at zero and adds one.
-  if (!Next || !Compare ||
-      (Compare->getPredicate() != ICmpInst::ICMP_EQ &&
-       Compare->getPredicate() != ICmpInst::ICMP_NE) ||
-      Compare->getOperand(0) != Next ||
-      !L.isLoopInvariant(Compare->getOperand(1)))
+  if (!Compare)
     return Reject("scalar-unsupported-exit");
+  // Identify the control recurrence independently of the reduction PHIs.
+  // Only a direct comparison of this IV (or its backedge value) against an
+  // invariant is admitted. SE must recognize an integer affine induction with
+  // an invariant start and constant nonzero step, without assumed predicates.
+  PHINode *IV = nullptr;
+  for (PHINode &Phi : Header->phis()) {
+    if (!Phi.getType()->isIntegerTy())
+      continue;
+    Value *Backedge = Phi.getIncomingValueForBlock(Latch);
+    bool ControlsExit = false;
+    for (unsigned Op = 0; Op != 2; ++Op)
+      ControlsExit |= (Compare->getOperand(Op) == &Phi ||
+                       Compare->getOperand(Op) == Backedge) &&
+                      L.isLoopInvariant(Compare->getOperand(1 - Op));
+    if (!ControlsExit)
+      continue;
+    InductionDescriptor ID;
+    if (!InductionDescriptor::isInductionPHI(&Phi, &L, &SE, ID) ||
+        ID.getKind() != InductionDescriptor::IK_IntInduction ||
+        !ID.getConstIntStepValue() || ID.getConstIntStepValue()->isZero() ||
+        !ID.getInductionBinOp() || !L.isLoopInvariant(ID.getStartValue()) || IV)
+      return Reject("scalar-unsupported-exit");
+    IV = &Phi;
+  }
+  if (!IV)
+    return Reject("scalar-unsupported-exit");
+  auto *Next = cast<BinaryOperator>(IV->getIncomingValueForBlock(Latch));
+  // Keep the existing zero/one equality case small: its IV already is the
+  // ordinal and the invariant equality bound is the completed count. All other
+  // controls keep their original arithmetic/flags, predicate and polarity only
+  // in the producer; the consumer never clones a noncanonical induction.
+  bool CanonicalCount = L.getCanonicalInductionVariable() == IV &&
+                        Compare->isEquality() &&
+                        Compare->getOperand(0) == Next;
   struct Reduction {
     PHINode *Phi;
     BinaryOperator *Update;
@@ -284,9 +349,11 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     }
   }
 
-  auto Trip = analyzeFissionTripCount(L, SE, cast<IntegerType>(IV->getType()));
-  if (!Trip)
-    return Reject(toString(Trip.takeError()));
+  auto MaxTrip =
+      getScalarFissionMaxTripCount(L, SE, cast<IntegerType>(IV->getType()));
+  if (!MaxTrip)
+    return Reject(toString(MaxTrip.takeError()));
+  uint64_t MaxTripCount = *MaxTrip;
   const DataLayout &DL = F->getDataLayout();
   uint64_t ScratchBytes = 0;
   // Identical contribution values share one slot, without any reassociation.
@@ -299,7 +366,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     uint64_t Alignment = DL.getABITypeAlign(Ty).value();
     auto Padded = checkedAddUnsigned(ScratchBytes, Alignment - 1);
     auto Total = Padded ? checkedMulAddUnsigned(
-                              Trip->MaxTripCount, Bytes,
+                              MaxTripCount, Bytes,
                               *Padded & ~(Alignment - 1))
                         : std::nullopt;
     if (!Total || *Total > getReductionFissionMaxScratchBytes() ||
@@ -314,7 +381,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
            << "split " << ore::NV("Path", "scalar-IR")
            << " reduction loop; stage VFs selected independently "
               "by normal vectorization; scratch capacity "
-           << ore::NV("MaxTripCount", Trip->MaxTripCount) << ", scratch bytes "
+           << ore::NV("MaxTripCount", MaxTripCount) << ", scratch bytes "
            << ore::NV("ScratchBytes", ScratchBytes);
   });
 
@@ -363,8 +430,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     // Before original iteration i, 0 <= count <= i. An update stores at count
     // then increments once; a bypass retains count. Thus every store index is
     // < N <= MaxTripCount and the final count P <= N fits the original IV type
-    // (analyzeFissionTripCount checks representability). Full-trip allocation
-    // and the checked byte/index ceiling above also bound every compact GEP.
+    // (getScalarFissionMaxTripCount checks representability). Full-trip
+    // allocation and the checked byte/index ceiling bound every compact GEP.
     auto *Count = PHINode::Create(IV->getType(), 2, "fission.participating",
                                  &*Header->begin());
     Count->addIncoming(ConstantInt::get(IV->getType(), 0), Preheader);
@@ -386,6 +453,27 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     Value *Empty = GuardBuilder.CreateICmpEQ(
         CountExport, ConstantInt::get(IV->getType(), 0), "fission.empty");
     GuardBuilder.CreateCondBr(Empty, ConsumerExit, ConsumerPH);
+  } else if (!CanonicalCount) {
+    // Before iteration i, ordinal == i. The DAG proof gives exactly one
+    // increment per completed iteration, including the exiting iteration.
+    // 1 <= N <= MaxTripCount fits CountTy, so ordinal+1 is nuw, and every store
+    // uses 0 <= ordinal < N. The checked byte/pointer-index ceiling bounds all
+    // casts and inbounds GEPs. Entry bypasses never enter this consumer.
+    auto *Ordinal = PHINode::Create(IV->getType(), 2, "fission.ordinal",
+                                   &*Header->begin());
+    Ordinal->addIncoming(ConstantInt::get(IV->getType(), 0), Preheader);
+    IRBuilder<> LatchBuilder(Branch);
+    Value *Completed = LatchBuilder.CreateAdd(
+        Ordinal, ConstantInt::get(IV->getType(), 1), "fission.completed",
+        /*HasNUW=*/true);
+    Ordinal->addIncoming(Completed, Latch);
+    ProducerIndex = Ordinal;
+    // A dedicated single-edge producer exit provides valid LCSSA without
+    // expanding (or speculating) the original trip expression.
+    auto *CountExport = PHINode::Create(
+        IV->getType(), 1, "fission.completed.count", &*ConsumerPH->begin());
+    CountExport->addIncoming(Completed, Latch);
+    ConsumerCount = CountExport;
   }
   // Unconditional merged contributions are available at the latch. Compact
   // contributions stay in their original arm; no inactive operation is moved.
@@ -393,7 +481,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                   ? ParticipationArm->getTerminator()
                                   : Branch);
   for (auto &[Contribution, Slot] : Scratch) {
-    auto *Array = ArrayType::get(Contribution->getType(), Trip->MaxTripCount);
+    auto *Array = ArrayType::get(Contribution->getType(), MaxTripCount);
     Slot = EntryBuilder.CreateAlloca(Array, DL.getAllocaAddrSpace(), nullptr,
                                     "scalar.fission.scratch");
     Value *Index = ProducerBuilder.CreateZExtOrTrunc(
@@ -451,10 +539,18 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
         Export.setIncomingValue(Index, Update);
   }
   // The compact consumer iterates exactly P times in original participation
-  // order. Otherwise clone the original induction/control, including flags.
-  Instruction *ConsumerNext = Next->clone();
-  ConsumerNext->replaceUsesOfWith(IV, ConsumerIV);
-  B.Insert(ConsumerNext, "fission.consumer.next");
+  // order. Noncanonical producers use an independent zero/one consumer,
+  // consuming exactly their exported number of completed iterations.
+  Value *ConsumerNext;
+  if (CanonicalCount) {
+    Instruction *ClonedNext = Next->clone();
+    ClonedNext->replaceUsesOfWith(IV, ConsumerIV);
+    B.Insert(ClonedNext, "fission.consumer.next");
+    ConsumerNext = ClonedNext;
+  } else {
+    ConsumerNext = B.CreateAdd(ConsumerIV, ConstantInt::get(IV->getType(), 1),
+                               "fission.consumer.next", /*HasNUW=*/true);
+  }
   ConsumerIV->addIncoming(ConsumerNext, ConsumerBody);
   if (ParticipationArm) {
     Value *More = B.CreateICmpNE(ConsumerNext, ConsumerCount,
@@ -462,6 +558,10 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     B.CreateCondBr(More, ConsumerBody, ConsumerLoopExit);
     BranchInst::Create(ConsumerExit, ConsumerLoopExit);
     BranchInst::Create(Exit, ConsumerExit);
+  } else if (!CanonicalCount) {
+    Value *More = B.CreateICmpNE(ConsumerNext, ConsumerCount,
+                               "fission.consumer.more");
+    B.CreateCondBr(More, ConsumerBody, Exit);
   } else {
     Instruction *Done = Compare->clone();
     Done->setOperand(0, ConsumerNext);

@@ -25,6 +25,8 @@ typedef void ScalarMixedFn(const uint32_t *, const double *, uint32_t *,
 typedef uint32_t ScalarConstantFn(uint32_t);
 typedef void ScalarNestedFn(const uint32_t *, const double *, uint32_t *,
                             double *, uint64_t, uint64_t, double);
+typedef void AffineFn(const uint32_t *, const double *, uint32_t *, double *,
+                      float *, uint64_t, double, int64_t);
 extern CombinedFn ref_combined;
 extern InductionFn ref_induction, ref_negative_step, ref_truncated;
 extern FPFn ref_fp_reordering;
@@ -93,6 +95,12 @@ static const struct {
   ScalarConstantFn *Fn, *Reference;
   unsigned Count;
 } AcyclicBounds[] = {@ACYCLIC_BOUNDS@};
+static const struct {
+  const char *Name;
+  AffineFn *Fn, *Reference;
+  unsigned VectorLanes;
+  bool Nested, Compact;
+} Affine[] = {@AFFINE@};
 static const struct {
   const char *Name;
   ScalarMixedFn *Fn, *Reference;
@@ -197,6 +205,28 @@ static void reference_acyclic(bool Nested, const uint32_t *A, const double *D,
       DS = DS + DC;
       FS = FS + FC;
     }
+  Out[0] = S0;
+  Out[1] = S1;
+  *Dout = DS;
+  *Fout = FS;
+}
+
+static void reference_affine_compact(const uint32_t *A, const double *D,
+                                      uint32_t *Out, double *Dout, float *Fout,
+                                      uint64_t N, double Start) {
+  uint32_t S0 = 17, S1 = (uint32_t)-7;
+  double DS = Start;
+  float FS = (float)Start;
+  if (N && N <= 65)
+    for (unsigned I = 0; I < N; ++I)
+      if (A[I]) {
+        uint32_t C = scalar_helper((uint32_t)(840 / (int32_t)A[I]));
+        float FC = (float)D[I];
+        S0 = S0 + C;
+        S1 = C + S1;
+        DS = DS + D[I];
+        FS = FS + FC;
+      }
   Out[0] = S0;
   Out[1] = S1;
   *Dout = DS;
@@ -549,6 +579,115 @@ int main(void) {
           fail(Acyclic[C].Name, (unsigned)N, Trial, "acyclic alias or scratch reuse mismatch");
         Runs += 2;
       }
+  unsigned AffineVectorRuns = 0, AffineTailRuns = 0;
+  for (unsigned C = 0; C < sizeof(Affine) / sizeof(*Affine); ++C)
+    for (unsigned K = 0; K < (Affine[C].Compact ? 134u : 68u); ++K)
+      for (unsigned Trial = 0; Trial < 16; ++Trial) {
+        uint64_t N = K >= 68 ? 65 : K == 67 ? UINT64_MAX : K;
+        bool Enter = N && N <= 65, NeedsD = false;
+        unsigned P = 0;
+        const int64_t Begins[] = {INT64_MIN, -1000, -33, -1, 0, 31, INT64_MAX};
+        int64_t Begin = Begins[Trial % 7];
+        double Start = Trial % 2 ? 3.5 : -0.0;
+        for (unsigned I = 0; I < 66; ++I) {
+          bool Active = K >= 68 ? (I * 7 + Trial) % 65 < K - 68 :
+                        Trial % 8 == 0 ? true : Trial % 8 == 1 ? false :
+                        Trial % 8 == 2 ? I % 2 : Trial % 8 == 3 ? !(I % 2) :
+                        Trial % 8 == 4 ? (I / 7) % 2 : Trial % 8 == 5 ? I % 13 :
+                        random_value() % 2;
+          int32_t Divisor = I % 29 + 1;
+          if (Trial >= 8) Divisor = -Divisor;
+          Input[I] = Active ? (uint32_t)Divisor : 0;
+          if (Enter && I < N) {
+            if (Affine[C].Compact ? Active : !Active) NeedsD = true;
+            if (!Affine[C].Compact || Active) ++P;
+          }
+          switch (Trial / 2) {
+          case 0: FPInput[I] = -0.0; break;
+          case 1: FPInput[I] = (double[]){1e16, 1.0, -1e16, 0.0}[I % 4]; break;
+          case 2: FPInput[I] = INFINITY; break;
+          case 3: FPInput[I] = -INFINITY; break;
+          case 4: FPInput[I] = NAN; break;
+          case 5: FPInput[I] = 0x1p-1074; break;
+          case 6: FPInput[I] = 0x1p-149; break;
+          default: FPInput[I] = (double)(int32_t)random_value() / 1024.0; break;
+          }
+        }
+        uint32_t SavedInput[66];
+        double SavedD[66];
+        memcpy(SavedInput, Input, sizeof(SavedInput));
+        memcpy(SavedD, FPInput, sizeof(SavedD));
+        const uint32_t *A = Enter ? Input : NULL;
+        const double *D = NeedsD ? FPInput : NULL;
+        for (unsigned I = 0; I < 10; ++I) Out[I] = RefOut[I] = random_value();
+        double ActualD[3] = {19.5, 7.0, 3.25}, ExpectedD[3] = {19.5, 7.0, 3.25};
+        float ActualF[3] = {19.5f, 7.0f, 3.25f}, ExpectedF[3] = {19.5f, 7.0f, 3.25f};
+        Affine[C].Reference(A, D, RefOut + 1, ExpectedD + 1, ExpectedF + 1,
+                             N, Start, Begin);
+        uint32_t Formula[2];
+        double FormulaD;
+        float FormulaF;
+        if (Affine[C].Compact)
+          reference_affine_compact(A, D, Formula, &FormulaD, &FormulaF, N, Start);
+        else
+          reference_acyclic(Affine[C].Nested, A, D, Formula, &FormulaD, &FormulaF, N, Start);
+        if (memcmp(Formula, RefOut + 1, sizeof(Formula)) ||
+            !compact_doubles_equal(&FormulaD, ExpectedD + 1, 1) ||
+            !compact_floats_equal(&FormulaF, ExpectedF + 1, 1))
+          fail(Affine[C].Name, (unsigned)N, Trial, "affine original IR / independent formula mismatch");
+        AcyclicIterations = AcyclicLatches = CompactParticipants = 0;
+        ScalarVectorVisits = ScalarTailVisits = 0;
+        Affine[C].Fn(A, D, Out + 1, ActualD + 1, ActualF + 1, N, Start, Begin);
+        unsigned Lanes = Affine[C].VectorLanes;
+        if (AcyclicIterations != (Enter ? N : 0) ||
+            AcyclicLatches != (Enter ? N : 0) ||
+            (Affine[C].Compact && CompactParticipants != P) ||
+            ScalarVectorVisits != P / Lanes || ScalarTailVisits != P % Lanes)
+          fail(Affine[C].Name, (unsigned)N, Trial, "affine exact producer/control/participant/vector/tail counts");
+        AffineVectorRuns += ScalarVectorVisits != 0;
+        AffineTailRuns += ScalarTailVisits != 0;
+        if (memcmp(Out, RefOut, sizeof(Out)) ||
+            !compact_doubles_equal(ActualD, ExpectedD, 3) ||
+            !compact_floats_equal(ActualF, ExpectedF, 3) ||
+            memcmp(Input, SavedInput, sizeof(SavedInput)) ||
+            memcmp(FPInput, SavedD, sizeof(SavedD)))
+          fail(Affine[C].Name, (unsigned)N, Trial, "affine ordered results, signed zero, canaries or inputs");
+        // Repeated scratch use and simultaneous integer/FP output-input alias.
+        uint32_t Alias[66], RefAlias[66], FormulaAlias[66];
+        double DAlias[66], RefDAlias[66], FormulaDAlias[66];
+        memcpy(Alias, Input, sizeof(Alias));
+        memcpy(RefAlias, Input, sizeof(RefAlias));
+        memcpy(FormulaAlias, Input, sizeof(FormulaAlias));
+        memcpy(DAlias, FPInput, sizeof(DAlias));
+        memcpy(RefDAlias, FPInput, sizeof(RefDAlias));
+        memcpy(FormulaDAlias, FPInput, sizeof(FormulaDAlias));
+        Affine[C].Reference(RefAlias, NeedsD ? RefDAlias : NULL, RefAlias,
+                             RefDAlias, ExpectedF + 1, N, Start, Begin);
+        if (Affine[C].Compact)
+          reference_affine_compact(FormulaAlias, NeedsD ? FormulaDAlias : NULL,
+                                    FormulaAlias, FormulaDAlias, &FormulaF, N, Start);
+        else
+          reference_acyclic(Affine[C].Nested, FormulaAlias, NeedsD ? FormulaDAlias : NULL,
+                              FormulaAlias, FormulaDAlias, &FormulaF, N, Start);
+        if (memcmp(FormulaAlias, RefAlias, sizeof(RefAlias)) ||
+            !compact_doubles_equal(FormulaDAlias, RefDAlias, 66) ||
+            !compact_floats_equal(&FormulaF, ExpectedF + 1, 1))
+          fail(Affine[C].Name, (unsigned)N, Trial, "affine independent alias formula mismatch");
+        AcyclicIterations = AcyclicLatches = CompactParticipants = 0;
+        ScalarVectorVisits = ScalarTailVisits = 0;
+        Affine[C].Fn(Alias, NeedsD ? DAlias : NULL, Alias, DAlias, ActualF + 1, N, Start, Begin);
+        if (AcyclicIterations != (Enter ? N : 0) ||
+            AcyclicLatches != (Enter ? N : 0) ||
+            (Affine[C].Compact && CompactParticipants != P) ||
+            ScalarVectorVisits != P / Lanes || ScalarTailVisits != P % Lanes ||
+            memcmp(Alias, RefAlias, sizeof(Alias)) ||
+            !compact_doubles_equal(DAlias, RefDAlias, 66) ||
+            !compact_floats_equal(ActualF, ExpectedF, 3))
+          fail(Affine[C].Name, (unsigned)N, Trial, "affine alias/reuse result or exact stage counts");
+        Runs += 2;
+      }
+  if (!AffineVectorRuns || !AffineTailRuns)
+    fail("affine matrix", 65, 0, "actual vector and remainder paths both required");
   for (unsigned C = 0; C < sizeof(ScalarConstants) / sizeof(*ScalarConstants); ++C)
     for (unsigned Trial = 0; Trial < 200; ++Trial) {
       uint32_t X = random_value();
@@ -830,5 +969,8 @@ int main(void) {
          "exact producer/participant/vector/tail counts\n");
   printf("Acyclic producers: original IR and independent scalar references; "
          "exact producer/latch/vector/tail counts and capacity boundaries\n");
+  printf("Affine controls: %u vector runs and %u tail runs; exact producer/latch/"
+         "participant counts, original IR and independent formulas\n",
+         AffineVectorRuns, AffineTailRuns);
   return 0;
 }
