@@ -256,12 +256,18 @@ static const struct {
   // Only default early-fission sum/XOR dispatch fixtures use this oracle.
   // Omitted fields in every inherited VPlan row remain false.
   bool ScalarDispatch;
+  // Certified unsigned entry is count >= max(VF, Minimum). Minima are
+  // unscaled counts in the guarded stage; VF fields are already scaled. Zero
+  // preserves every inherited VPlan row's width-only entry contract.
+  unsigned ProducerMin, AccumulatorMin, ProducerTailMin, AccumulatorTailMin;
 } InterleaveInts[] = {@INTERLEAVE_INT@};
 static const struct {
   const char *Name;
   unsigned Factor, Outputs, ProducerVF, AccumulatorVF;
   ShortFPFn *Fn, *Reference;
   unsigned ProducerTailVF, AccumulatorTailVF;
+  unsigned ProducerMin, AccumulatorMin, ProducerTailMin, AccumulatorTailMin;
+  bool EntryCertified;
 } InterleaveFP[] = {@INTERLEAVE_FP@};
 static const struct {
   const char *Name;
@@ -506,13 +512,17 @@ static bool compact_floats_equal(const float *A, const float *B, unsigned N) {
 static void check_interleave_entries(const char *Name, unsigned N,
                                      unsigned Trial, unsigned PVF,
                                      unsigned AVF, unsigned PTVF,
-                                     unsigned ATVF) {
+                                     unsigned ATVF, unsigned PMin,
+                                     unsigned AMin, unsigned PTMin,
+                                     unsigned ATMin) {
   unsigned Active = N && N <= 65 ? N : 0;
-  unsigned PR = Active % PVF, AR = Active % AVF;
-  uint64_t TailEntries[] = {PTVF ? PR / PTVF : 0, ATVF ? AR / ATVF : 0};
+  uint64_t PEntries = Active >= PMin ? Active / PVF : 0;
+  uint64_t AEntries = Active >= AMin ? Active / AVF : 0;
+  unsigned PR = Active - PEntries * PVF, AR = Active - AEntries * AVF;
+  uint64_t TailEntries[] = {PTVF && PR >= PTMin ? PR / PTVF : 0,
+                            ATVF && AR >= ATMin ? AR / ATVF : 0};
   uint64_t TailLanes[] = {TailEntries[0] * PTVF, TailEntries[1] * ATVF};
-  uint64_t Expected[] = {Active / PVF, PTVF ? PR % PTVF : PR,
-                        Active / AVF, ATVF ? AR % ATVF : AR};
+  uint64_t Expected[] = {PEntries, PR - TailLanes[0], AEntries, AR - TailLanes[1]};
   if (memcmp(InterleaveEntries, Expected, sizeof(Expected)) ||
       memcmp(InterleaveTailEntries, TailEntries, sizeof(TailEntries)) ||
       memcmp(InterleaveTailLanes, TailLanes, sizeof(TailLanes)) ||
@@ -524,6 +534,23 @@ static void check_interleave_entries(const char *Name, unsigned N,
          "vector/scalar/ordinary-tail entries or participating lanes mismatch");
   OrdinaryTailEntries += InterleaveTailEntries[0] + InterleaveTailEntries[1];
   OrdinaryTailLanes += InterleaveTailLanes[0] + InterleaveTailLanes[1];
+}
+
+// Preserve inherited counts and add the complete finite domain for certified
+// dispatch. This covers either stage's threshold and every VF/remainder
+// boundary even when the two stages use different minima. N=0/66 and larger
+// inherited counts check entry bypass; large vscales can have only scalar work.
+static unsigned interleave_counts(unsigned *Values, const unsigned *Inherited,
+                                  unsigned Size, bool Certified) {
+  memcpy(Values, Inherited, Size * sizeof(*Values));
+  unsigned Count = Size;
+  if (Certified)
+    for (unsigned N = 0; N <= 66; ++N) {
+      bool Found = false;
+      for (unsigned I = 0; I < Count; ++I) Found |= Values[I] == N;
+      if (!Found) Values[Count++] = N;
+    }
+  return Count;
 }
 
 static void dispatch_integer_formula(const uint32_t *A, uint32_t *Out,
@@ -2553,9 +2580,12 @@ int main(void) {
     unsigned DispatchRuns = 0, DispatchAliases = 0, DispatchBypasses = 0;
     uint64_t DispatchEntries[4] = {0};
     uint64_t DispatchOrdinaryEntries[2] = {0}, DispatchOrdinaryLanes[2] = {0};
-    for (unsigned K = 0; K < sizeof(Counts) / sizeof(*Counts); ++K)
+    unsigned Cases[sizeof(Counts) / sizeof(*Counts) + 67];
+    unsigned CaseCount = interleave_counts(Cases, Counts, sizeof(Counts) / sizeof(*Counts),
+                                          InterleaveInts[C].ScalarDispatch);
+    for (unsigned K = 0; K < CaseCount; ++K)
       for (unsigned Trial = 0; Trial < 20; ++Trial) {
-        unsigned N = Counts[K], Factor = InterleaveInts[C].Factor;
+        unsigned N = Cases[K], Factor = InterleaveInts[C].Factor;
         for (unsigned I = 0; I < 65 * Factor; ++I)
           InterleaveInput[I] = random_value();
         const uint32_t *A = guarded_input(
@@ -2575,7 +2605,9 @@ int main(void) {
         check_interleave_entries(
             InterleaveInts[C].Name, N, Trial, InterleaveInts[C].ProducerVF,
             InterleaveInts[C].AccumulatorVF, InterleaveInts[C].ProducerTailVF,
-            InterleaveInts[C].AccumulatorTailVF);
+            InterleaveInts[C].AccumulatorTailVF, InterleaveInts[C].ProducerMin,
+            InterleaveInts[C].AccumulatorMin, InterleaveInts[C].ProducerTailMin,
+            InterleaveInts[C].AccumulatorTailMin);
         if (memcmp(Out, RefOut, sizeof(Out)))
           fail(InterleaveInts[C].Name, N, Trial,
                "interleaved integer result/canary mismatch");
@@ -2610,7 +2642,9 @@ int main(void) {
           check_interleave_entries(
               InterleaveInts[C].Name, N, Trial, InterleaveInts[C].ProducerVF,
               InterleaveInts[C].AccumulatorVF, InterleaveInts[C].ProducerTailVF,
-              InterleaveInts[C].AccumulatorTailVF);
+              InterleaveInts[C].AccumulatorTailVF, InterleaveInts[C].ProducerMin,
+              InterleaveInts[C].AccumulatorMin, InterleaveInts[C].ProducerTailMin,
+              InterleaveInts[C].AccumulatorTailMin);
           if (memcmp(A, AliasReference, N * Factor * sizeof(*A)))
             fail(InterleaveInts[C].Name, N, Trial,
                  "interleaved integer aliased output mismatch");
@@ -2635,8 +2669,10 @@ int main(void) {
       if (!DispatchRuns || !DispatchAliases || !DispatchBypasses ||
           (InterleaveInts[C].ProducerVF > 1 && PT != 1 && !DispatchEntries[1]) ||
           (InterleaveInts[C].AccumulatorVF > 1 && AT != 1 && !DispatchEntries[3]) ||
-          (InterleaveInts[C].ProducerVF <= 65 && !DispatchEntries[0]) ||
-          (InterleaveInts[C].AccumulatorVF <= 65 && !DispatchEntries[2]))
+          (InterleaveInts[C].ProducerVF <= 65 && InterleaveInts[C].ProducerMin <= 65 &&
+           !DispatchEntries[0]) ||
+          (InterleaveInts[C].AccumulatorVF <= 65 && InterleaveInts[C].AccumulatorMin <= 65 &&
+           !DispatchEntries[2]))
         fail(InterleaveInts[C].Name, 0, 0, "missing dispatch execution path");
       printf("Dispatch %s: comparisons=%u aliases=%u bypasses=%u "
              "producer-vector=%llu producer-tail=%llu consumer-vector=%llu consumer-tail=%llu "
@@ -2649,10 +2685,13 @@ int main(void) {
              (unsigned long long)DispatchOrdinaryEntries[1], (unsigned long long)DispatchOrdinaryLanes[1]);
     }
   }
-  for (unsigned C = 0; C < sizeof(InterleaveFP) / sizeof(*InterleaveFP); ++C)
-    for (unsigned K = 0; K < sizeof(Counts) / sizeof(*Counts); ++K)
+  for (unsigned C = 0; C < sizeof(InterleaveFP) / sizeof(*InterleaveFP); ++C) {
+    unsigned Cases[sizeof(Counts) / sizeof(*Counts) + 67];
+    unsigned CaseCount = interleave_counts(Cases, Counts, sizeof(Counts) / sizeof(*Counts),
+                                          InterleaveFP[C].EntryCertified);
+    for (unsigned K = 0; K < CaseCount; ++K)
       for (unsigned Trial = 0; Trial < 20; ++Trial) {
-        unsigned N = Counts[K], Factor = InterleaveFP[C].Factor;
+        unsigned N = Cases[K], Factor = InterleaveFP[C].Factor;
         double Start = Trial % 8 == 2 ? -0.0 : Trial % 8 == 3 ? 1.0 : 3.5;
         fill_fp(InterleaveFPInput, 65 * Factor, Trial);
         const double *A = guarded_input(
@@ -2664,7 +2703,9 @@ int main(void) {
         check_interleave_entries(
             InterleaveFP[C].Name, N, Trial, InterleaveFP[C].ProducerVF,
             InterleaveFP[C].AccumulatorVF, InterleaveFP[C].ProducerTailVF,
-            InterleaveFP[C].AccumulatorTailVF);
+            InterleaveFP[C].AccumulatorTailVF, InterleaveFP[C].ProducerMin,
+            InterleaveFP[C].AccumulatorMin, InterleaveFP[C].ProducerTailMin,
+            InterleaveFP[C].AccumulatorTailMin);
         if (memcmp(Result, RefResult, sizeof(Result)))
           fail(InterleaveFP[C].Name, N, Trial,
                "interleaved ordered FP result/canary mismatch");
@@ -2683,13 +2724,16 @@ int main(void) {
           check_interleave_entries(
               InterleaveFP[C].Name, N, Trial, InterleaveFP[C].ProducerVF,
               InterleaveFP[C].AccumulatorVF, InterleaveFP[C].ProducerTailVF,
-              InterleaveFP[C].AccumulatorTailVF);
+              InterleaveFP[C].AccumulatorTailVF, InterleaveFP[C].ProducerMin,
+              InterleaveFP[C].AccumulatorMin, InterleaveFP[C].ProducerTailMin,
+              InterleaveFP[C].AccumulatorTailMin);
           if (memcmp(A, AliasReference, N * Factor * sizeof(*A)))
             fail(InterleaveFP[C].Name, N, Trial,
                  "interleaved ordered FP aliased output mismatch");
           ++Runs;
         }
       }
+  }
   check_deinterleave_adapter();
   check_exports();
   check_chunks();

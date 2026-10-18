@@ -1,11 +1,11 @@
 {
-  "task_id": "t000052",
+  "task_id": "t000053",
   "direction_id": "d1",
-  "base_revision": "99e64a48251060fae71fcd3de1c64286dbe3eab2",
+  "base_revision": "93edb0cabd3b1a3b6f740d29a6851c7cbcb25392",
   "merge_revision": null,
-  "hypothesis": "Generating ExportFn reference declarations from the same original-to-reference symbol mapping used by the execution rows permits the integrated bounded acyclic/retained-state/final-export matrices to compile and link without substituting their original IR or omitting cases. In particular the state-CFG family now declares ref_state_cfg_serial, ref_state_cfg_nested and ref_state_cfg_affine. This repairs validation only: no compiler transformation, legality, profitability, source rewrite or math assumption changes. The integrated reduction fission and all inherited matrices remain as recorded below.",
-  "semantics": "Reduction recognition is a transactional optional result: a failed scalar candidate can remain in the producer but never changes ParticipationArm or ReductionInsts. Conditional candidates require exactly one nonidentity latch input, an add/fadd defined in that predecessor, an unconditional direct edge to the latch, identity header-PHI values on every bypass, and contribution dominance at the original terminal store point. Every header-PHI use is checked by operand number and incoming edge: only its own accumulator operand and identity bypass operands are allowed. Its update has only its own merge use. Before committing a candidate, every result use must be its own header backedge from the latch or the exact original latch edge of an Exit LCSSA PHI. Thus the first edge from any moved state cannot reach a retained recurrence, predicate, address, contribution or other reduction; no recursive dependence walk or PHI-order assumption is needed. Successful reductions still share one participation arm and are all conditional or all unconditional. Retained PHIs/starts/backedges, merges, arithmetic, flags and branches stay at their original sites and iteration order. Final producer exports retain d2 exact value/edge forwarding and dominance checks, including P=0 and a final inactive iteration. No last-participant substitute, speculative arithmetic, freeze or input reread is introduced. Acyclic branch-only CFG and finite/representable full-trip storage proofs, effect/call/load whitelist, strictfp/constrained-FP rejection, pointer-index ceilings, LCSSA and metadata contracts remain. The counter stores at old P and increments exactly once on the common terminal edge, retaining old P on every bypass; 0<=P<=N<=M bounds all stores and consumer reads. Ordered unconstrained FP clones original update operands/flags and executes exactly the original participating additions; P=0 returns the exact start without adding an identity. Explicit fission FP reordering is tested separately and adds no fast-math/errno assumptions. Chunk scheduling retains d2 canonical single-block, unconditional, zero-start/unit-step, equality-exit restrictions and now explicitly also excludes retained state. All compiler IR mutation still follows every rejection point. Executable verification requests actual original/transformed IR and independent C formulas for three new state/CFG/export interactions, eleven exact historical feedback/export fixtures whose whole-loop outcomes change, and the historical cross-reduction fixture, alongside every inherited matrix. Probes check N/P, all bypasses, vector/tail/empty/zero-entry/final-inactive paths before fixed-vscale host execution; uninstrumented original scalable output is separately RVV machine-verified. Revision t000049 changes no recognition, operand/edge closure or IR schedule. Default dispatch checks now bind the producer XOR and consumer add to their actual scratch values and observable results, account for every emitted loop, and check role metadata and original DILocation on each latch. Source-located selection certificates require exactly four original targets at dispatch.c:10/20/30/50:5 and independently read both stage VFs rather than applying VPlan forced widths to scalar stages. Exact original dispatch definitions are separately renamed/compiled as references. The C oracle computes wrapping uint32 sum and XOR independently, compares the original result/canaries to that formula and the transformed results to the original, including permitted aliased output. Probe counts use actual producer/consumer widths with no VPlan-tail instrumentation on early stages; per-configuration execution names/counters must match all generated early sum/XOR variants. The original VPlan stage and repeated-LV tail certificates remain unchanged and now run on an explicit isolated dispatch matrix under both policies. The ordered overlap and nested compact matrix remain. Serial/nested predicate select mutations remain; affine uses an applicable icmp eq-to-ne mutation and each must fail its intended export-control certificate after construction. New dispatch mutations check actual scratch, output, role, provenance and source-location obligations. The dispatch stage certificate accounts separately for any ordinary vector remainder emitted by follow-up hints, derives its width from its actual scratch access, and retains independent entry/lane counters alongside the four primary scalar/vector counters. Repeated-LV scalar VF-1 revisit remarks are permitted without overwriting the first observed primary stage width; all actual loops still require the original attached role and source location. Revision t000052 removes the manually enumerated ExportFn reference declarations from the C template. Each of the four full-trip export families and the chunk family emits declarations from its actual references mapping before compiling the reference object. A fixture-scoped ABI check requires void, six default-space pointer parameters, two i64 parameters and double, matching ExportFn; the regression independently checks the C typedef and its const/element types. Source and reference definition sets must match the mapping exactly, every mapped reference must have one definition, and its entire definition must equal the original with only mapped global symbols renamed. Missing/duplicate/swapped symbols, wrong ABI, changed bodies and compact-CFG substitution for state-CFG are rejected. The production export_variant emitter shares the actual mapped reference with each C row, uses the same transformed symbol in its definition and declaration, preserves all mode/lane values, and checks the variant ABI before reserving names. The focused test isolates this generator with original fixture bodies; it does not claim transformed-path execution. Mandatory linked execution of the actual transformed IR against those exact originals and independent formulas remains the harness acceptance obligation.",
-  "costs": "No new scratch stream, retained-state array, mask array, runtime alias/SCEV/FP guard, input reread, duplicated producer operation or contribution recomputation is added. Full-trip entry allocations remain capped by the existing 65536-byte option and signed alloca pointer-index ceiling. New mixed interactions reserve [65 x i32], [65 x double], [65 x float]: 260+4 ABI padding+520+260=1044 bytes. Four reductions share three contributions. Logical stores are 16*P bytes and loads 16*P bytes (32*P total); P=0 has no scratch accesses despite full capacity reservation. 1043 rejects and 1044 admits, without compact/retained-state chunking. Seven distinct final producer values use seven scalar forwarding PHIs, including the final conditional state, with no scratch traffic. Historical retained-export cases reserve i32/double streams: 260+4+520=784 bytes; logical stores/loads are each 12*N for unconditional or 12*P for compact cases. Observed accumulators stay scalar and can supply a contribution to a moved independent accumulator without duplication. The dead cross-consumer uses one i32 stream with 260-byte full capacity. Enclosing inherited producers reuse their entry scratch per row. Chunk capacity, carried reductions, global input/local scratch indices, partial chunks and source/VF/traffic remarks remain as in d2; no state carry across chunks is implemented. Production analysis remains direct per-PHI incoming/use scans plus O(B+E) acyclic CFG and existing instruction/effect/export scans, SCEV bounds and dominance queries; one retained-state bit restricts chunking. No general SSA reconstruction, path enumeration, target cost model or new analysis framework is introduced. Validation adds small fixture-scoped retention/order/export certificates and independent formulas, reusing inherited typed compact-count, scalar/vector-result and export proofs. Physical stack layout/traffic, spills, RVV execution and speedup remain unmeasured. Revision t000049: early sum/XOR dispatch reserves one [65 x i32] stream (260 bytes), stores 4*N and loads 4*N logical bytes, with one scalar final XOR forwarding value. 259 bytes rejects retained-state chunking; 260 admits full-trip storage; the existing 519/520 tests retain ordered C=64/B=512 versus full C=65/B=520 behavior and oversized compact rejection. No input reread, producer duplication/recomputation or new runtime guard is added. The only compiler-code change emits the already computed source-located scratch traffic/reread/duplication fields for full-trip and compact schedules as well as chunks, without changing values or transformations. Validation adds fixture-bounded typed result-PHI checks, scratch/result/metadata/source certificates, independent wrapping C formulas and four scalar-stage probes using the inherited AoS counter interface. Default five-vscale matrix has 40 early sum/XOR configurations with 476 calls each (19040 planned comparisons); the explicit isolated VPlan dispatch adds another 19040 calls, preserving all old VPlan checks and ordinary-tail instrumentation. These are planned counts, not observed execution or performance. Ordinary vector remainders, if emitted by the unchanged follow-up hints, use the inherited extra entry/lane counter interface with actual scratch widths; no extra compiler scratch or reread is introduced. Revision t000052 adds no compiler instructions, scratch, traffic, rereads, duplication, recomputation or guards. Original scalar/vector stages and their source/VF/scratch certificates are unchanged. Validation adds linear fixture signature/definition scans and exact text comparisons for 23 reference definitions across five families, plus one small variant emitter replacing the existing declaration/row loop. No LLVM parser, analysis framework or runtime machinery is introduced. The generator regression covers two reference naming schemes and 456 export variant rows; these are generator cases, not numerical comparisons or machine-code measurements.",
+  "hypothesis": "Ordinary LV can choose an entry minimum above the emitted VF, and a later LV invocation can vectorize the entire primary scalar fallback with a separate guard. Certifying each dispatch stage entry, rounded vector count and scalar resume separately makes the execution oracle match actual transformed control flow without changing production scheduling. The shared SSA max(vscale*4,8) in t000052 is one instance of the supported width-or-umax vocabulary, not a special case. Producer/consumer widths and minima can differ. No compiler transformation or math contract changes.",
+  "semantics": "Reduction recognition is a transactional optional result: a failed scalar candidate can remain in the producer but never changes ParticipationArm or ReductionInsts. Conditional candidates require exactly one nonidentity latch input, an add/fadd defined in that predecessor, an unconditional direct edge to the latch, identity header-PHI values on every bypass, and contribution dominance at the original terminal store point. Every header-PHI use is checked by operand number and incoming edge: only its own accumulator operand and identity bypass operands are allowed. Its update has only its own merge use. Before committing a candidate, every result use must be its own header backedge from the latch or the exact original latch edge of an Exit LCSSA PHI. Thus the first edge from any moved state cannot reach a retained recurrence, predicate, address, contribution or other reduction; no recursive dependence walk or PHI-order assumption is needed. Successful reductions still share one participation arm and are all conditional or all unconditional. Retained PHIs/starts/backedges, merges, arithmetic, flags and branches stay at their original sites and iteration order. Final producer exports retain d2 exact value/edge forwarding and dominance checks, including P=0 and a final inactive iteration. No last-participant substitute, speculative arithmetic, freeze or input reread is introduced. Acyclic branch-only CFG and finite/representable full-trip storage proofs, effect/call/load whitelist, strictfp/constrained-FP rejection, pointer-index ceilings, LCSSA and metadata contracts remain. The counter stores at old P and increments exactly once on the common terminal edge, retaining old P on every bypass; 0<=P<=N<=M bounds all stores and consumer reads. Ordered unconstrained FP clones original update operands/flags and executes exactly the original participating additions; P=0 returns the exact start without adding an identity. Explicit fission FP reordering is tested separately and adds no fast-math/errno assumptions. Chunk scheduling retains d2 canonical single-block, unconditional, zero-start/unit-step, equality-exit restrictions and now explicitly also excludes retained state. All compiler IR mutation still follows every rejection point. Executable verification requests actual original/transformed IR and independent C formulas for three new state/CFG/export interactions, eleven exact historical feedback/export fixtures whose whole-loop outcomes change, and the historical cross-reduction fixture, alongside every inherited matrix. Probes check N/P, all bypasses, vector/tail/empty/zero-entry/final-inactive paths before fixed-vscale host execution; uninstrumented original scalable output is separately RVV machine-verified. Revision t000049 changes no recognition, operand/edge closure or IR schedule. Default dispatch checks now bind the producer XOR and consumer add to their actual scratch values and observable results, account for every emitted loop, and check role metadata and original DILocation on each latch. Source-located selection certificates require exactly four original targets at dispatch.c:10/20/30/50:5 and independently read both stage VFs rather than applying VPlan forced widths to scalar stages. Exact original dispatch definitions are separately renamed/compiled as references. The C oracle computes wrapping uint32 sum and XOR independently, compares the original result/canaries to that formula and the transformed results to the original, including permitted aliased output. Probe counts use actual producer/consumer widths with no VPlan-tail instrumentation on early stages; per-configuration execution names/counters must match all generated early sum/XOR variants. The original VPlan stage and repeated-LV tail certificates remain unchanged and now run on an explicit isolated dispatch matrix under both policies. The ordered overlap and nested compact matrix remain. Serial/nested predicate select mutations remain; affine uses an applicable icmp eq-to-ne mutation and each must fail its intended export-control certificate after construction. New dispatch mutations check actual scratch, output, role, provenance and source-location obligations. The dispatch stage certificate accounts separately for any ordinary vector remainder emitted by follow-up hints, derives its width from its actual scratch access, and retains independent entry/lane counters alongside the four primary scalar/vector counters. Repeated-LV scalar VF-1 revisit remarks are permitted without overwriting the first observed primary stage width; all actual loops still require the original attached role and source location. Revision t000052 removes the manually enumerated ExportFn reference declarations from the C template. Each of the four full-trip export families and the chunk family emits declarations from its actual references mapping before compiling the reference object. A fixture-scoped ABI check requires void, six default-space pointer parameters, two i64 parameters and double, matching ExportFn; the regression independently checks the C typedef and its const/element types. Source and reference definition sets must match the mapping exactly, every mapped reference must have one definition, and its entire definition must equal the original with only mapped global symbols renamed. Missing/duplicate/swapped symbols, wrong ABI, changed bodies and compact-CFG substitution for state-CFG are rejected. The production export_variant emitter shares the actual mapped reference with each C row, uses the same transformed symbol in its definition and declaration, preserves all mode/lane values, and checks the variant ABI before reserving names. The focused test isolates this generator with original fixture bodies; it does not claim transformed-path execution. Mandatory linked execution of the actual transformed IR against those exact originals and independent formulas remains the harness acceptance obligation. Revision t000053 adds dispatch_entry_certificates for the scalar-remainder default sum/XOR stages and full-trip ordered overlap. It resolves a threshold in whole-function SSA (including CSE across stages), but independently proves each stage guard and actual branch destinations. Supported thresholds are vscale*actualVF (shl or mul) or unsigned max of that width and one positive u32 constant, in either operand order. It accepts ult N,T / ugt T,N with scalar on true and uge N,T / ule T,N with vector on true. The certificate binds the vector zero-based induction, VF step, urem/sub vector-rounded count, exact equality exit and empty-remainder branch to a scalar PHI that resumes at zero on fallback or at the rounded index after vectors. An optional ordinary vector loop is certified against N minus that primary resume, with its own threshold and width, scratch base plus local index and next scalar resume. It checks bounded/nonzero original entry, predecessor edges, scalar unit induction and N exit; only one PHI-only LCSSA exit forwarding block is allowed. The C oracle takes four independently certified absolute minima in addition to emitted widths. Primary entries are N/VF only when the certified minimum is met; the remainder includes the entire N on primary fallback. Ordinary entries use that remainder and their own minimum; residual scalar entries and exact lane conservation remain mandatory. Expectations never read probes. Width-only zero defaults preserve every inherited VPlan row. The default integer sum/XOR and ordered overlap execute all N=0..66 plus inherited 257/1023/1024/1025 under both policies and LV1/LV2 at vscales 1/2/4/8/32, preserving originals, independent integer formulas, aliases, canaries, guarded inputs and FP comparisons. Explicit isolated VPlan dispatch, EVL codegen-only contracts and every state/CFG/export/chunk certificate remain intact.",
+  "costs": "No new scratch stream, retained-state array, mask array, runtime alias/SCEV/FP guard, input reread, duplicated producer operation or contribution recomputation is added. Full-trip entry allocations remain capped by the existing 65536-byte option and signed alloca pointer-index ceiling. New mixed interactions reserve [65 x i32], [65 x double], [65 x float]: 260+4 ABI padding+520+260=1044 bytes. Four reductions share three contributions. Logical stores are 16*P bytes and loads 16*P bytes (32*P total); P=0 has no scratch accesses despite full capacity reservation. 1043 rejects and 1044 admits, without compact/retained-state chunking. Seven distinct final producer values use seven scalar forwarding PHIs, including the final conditional state, with no scratch traffic. Historical retained-export cases reserve i32/double streams: 260+4+520=784 bytes; logical stores/loads are each 12*N for unconditional or 12*P for compact cases. Observed accumulators stay scalar and can supply a contribution to a moved independent accumulator without duplication. The dead cross-consumer uses one i32 stream with 260-byte full capacity. Enclosing inherited producers reuse their entry scratch per row. Chunk capacity, carried reductions, global input/local scratch indices, partial chunks and source/VF/traffic remarks remain as in d2; no state carry across chunks is implemented. Production analysis remains direct per-PHI incoming/use scans plus O(B+E) acyclic CFG and existing instruction/effect/export scans, SCEV bounds and dominance queries; one retained-state bit restricts chunking. No general SSA reconstruction, path enumeration, target cost model or new analysis framework is introduced. Validation adds small fixture-scoped retention/order/export certificates and independent formulas, reusing inherited typed compact-count, scalar/vector-result and export proofs. Physical stack layout/traffic, spills, RVV execution and speedup remain unmeasured. Revision t000049: early sum/XOR dispatch reserves one [65 x i32] stream (260 bytes), stores 4*N and loads 4*N logical bytes, with one scalar final XOR forwarding value. 259 bytes rejects retained-state chunking; 260 admits full-trip storage; the existing 519/520 tests retain ordered C=64/B=512 versus full C=65/B=520 behavior and oversized compact rejection. No input reread, producer duplication/recomputation or new runtime guard is added. The only compiler-code change emits the already computed source-located scratch traffic/reread/duplication fields for full-trip and compact schedules as well as chunks, without changing values or transformations. Validation adds fixture-bounded typed result-PHI checks, scratch/result/metadata/source certificates, independent wrapping C formulas and four scalar-stage probes using the inherited AoS counter interface. Default five-vscale matrix has 40 early sum/XOR configurations with 476 calls each (19040 planned comparisons); the explicit isolated VPlan dispatch adds another 19040 calls, preserving all old VPlan checks and ordinary-tail instrumentation. These are planned counts, not observed execution or performance. Ordinary vector remainders, if emitted by the unchanged follow-up hints, use the inherited extra entry/lane counter interface with actual scratch widths; no extra compiler scratch or reread is introduced. Revision t000052 adds no compiler instructions, scratch, traffic, rereads, duplication, recomputation or guards. Original scalar/vector stages and their source/VF/scratch certificates are unchanged. Validation adds linear fixture signature/definition scans and exact text comparisons for 23 reference definitions across five families, plus one small variant emitter replacing the existing declaration/row loop. No LLVM parser, analysis framework or runtime machinery is introduced. The generator regression covers two reference naming schemes and 456 export variant rows; these are generator cases, not numerical comparisons or machine-code measurements. Revision t000053 changes validation only: default integer dispatch remains 260 bytes, logical traffic 8*N; mixed retained-state/CFG/export fixtures remain 1044 bytes, logical traffic 32*P. There is no production instruction, guard, scratch, reread, duplication, recomputation or profitability change. Certificates use fixed fixture instruction/edge scans, a definition table and local width/max matching; no general interpreter or recursive expression evaluator. Four unsigned minima are appended to C rows with omitted zero defaults for inherited rows. Certified default-dispatch loops expand from 23 to 71 unique N inputs and from 16 to 64 alias calls: 1484 planned calls per configuration (71*20+64), versus 476 historically. At default vscales the 40 integer configurations plan 59360 comparisons and the 20 ordered-overlap configurations plan 29680; the increase is 60480 comparisons across those 60 configurations. The isolated VPlan matrix remains 19040 planned comparisons with unchanged counts. These supersede the historical t000049 default-dispatch planned counts above and are not observed completions.",
   "tests": [
     "llvm/test/Other/reduction-fission-chunk-checker.test",
     "llvm/test/Other/reduction-fission-compact-cfg-checker.test",
@@ -90,7 +90,7 @@
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stage-metadata.ll",
     "llvm/test/Transforms/LoopVectorize/RISCV/reduction-fission-stores.ll"
   ],
-  "limitations": "This t000052 snapshot has not been compiled or tested by the worker. Only source/immutable-diff/log review, Python AST/JSON parsing, static registration audits and diff review are authorized locally. The t000049 harness built LLVM and passed 81/81 lit files and 106/106 VectorizeTests, but C harness compilation failed on missing ExportFn state-CFG reference declarations before linking or running comparisons. Its 767 host object generation requests and 255 uninstrumented RVV machine-verification requests are not executed numerical comparisons; that task executed zero comparisons and did not evaluate the 234 primary corpus compilations. Historical accepted-head results below do not validate this repaired integration. All fresh mandatory checks remain harness-only and pending. The new ABI/origin checks are deliberately limited to the existing unquoted ExportFn fixture signatures and exact renamed original definitions; they are not a general IR parser or an equivalence solver. Nonterminal/conditionally exiting update sites, several update sites, nonidentity extraction bypasses, incompatible extracted participation streams, mixed conditional/unconditional consumers, cycles/early exits, unsafe effects, strictfp/constrained FP and unavailable finite bounds remain unsupported. Compact and retained-state chunking remain explicitly unsupported. The exact historical unbounded-R0-address fixture remains executable only for N=0/1 and entry bypasses; no address bound is invented. Fixed-vscale host specialization at 1/2/4/8/32 is not EVL/VP emulation or RVV target execution. EVL/VP paths receive uninstrumented IR/machine checks only. Whole-function stack budgets, physical traffic, spills, code size and speedup remain unmeasured. The 117 immutable primary inputs and both accepted heads/refs remain unchanged; independent acceptance is pending.",
+  "limitations": "This t000053 snapshot has not been built or tested. Worker build/test/execution counts are all zero; only source/log/diff review and static syntax/registration audits are performed. The t000052 harness passed LLVM compilation, 82/82 lit files, 106/106 VectorizeTests and C compilation/link, then failed at interleave2_dispatch_once_ordered_scalar_remainder_s1, N=4 trial=0: the old oracle assumed primary vector entry at VF instead of max(VF,8). Prior stdout certifies 3334016 comparisons in five completed families, but the full checker did not complete, no complete dispatch configuration was printed and all 234 primary compilations were unattempted. Prior 767 host objects and 255 RVV machine-verification outputs are separate code-generation evidence. Fresh mandatory validation remains harness-only and pending. The new entry certificate deliberately supports only these single-block ordinary-LV stages with scalar remainders, width/umax guards, urem/sub rounding, canonical PHIs and at most one ordinary remainder and one exit forwarding block. More elaborate guards, rounding/control forms or epilogues reject; EVL is not interpreted. No scalar/VPlan scheduling change, concurrent store-lineage integration, benchmark rewrite, supplemental FP/errno assumption or measured speedup claim is made. All inherited transformation limitations, accepted heads and historical source-located corpus evidence remain as recorded in this report. Fixed-vscale host specialization is not RVV target execution; stack/traffic/spills and performance remain unmeasured.",
   "changed_expectations": [
     "Preserve all 78 inherited runnable lit files and every inherited checker mutation; add two runnable interaction files for a mandatory union of 80. Duplicate affine-evl split-file sections from the textual merge are consolidated without changing their contents or obligations.",
     "Keep d2 source-located diagnostic changes and positive final-export/compact-CFG/chunk expectations. The exact reject_conditional_update old-accumulator export remains scalar-reduction-feedback; its only accumulator is not extractable.",
@@ -102,7 +102,8 @@
     "t000049: source-located Selected traffic fields are now emitted for full-trip and compact scalar schedules as well as chunks. Field values use the same existing ScratchTrafficBytes calculation; chunk remarks retain their text/order.",
     "t000049: serial/nested choose remains a select mutation. state_cfg_affine uses its actual icmp predicate mutation; construction must succeed and export-control must reject it.",
     "t000049: tests and mandatory_lit.explicit_paths each list exactly 81 runnable files (80 inherited union plus the new dispatch checker), with no Inputs files. Supporting Inputs are separately registered with their owners and no artificial RUN line. No supporting Input is modified in this revision, avoiding the harness snapshot auto-union that previously reinserted changed Inputs despite report exclusions.",
-    "t000052: no compiler or inherited execution expectation changes. ExportFn declarations are generated for all 23 exact original references instead of a handwritten template list. The only new runnable file tests the generator, ABI/origin consistency and rejection behavior; all 81 inherited runnable files, dispatch certificates/formulas, isolated VPlan paths, affine predicate mutations, source-location/VF/scratch requirements and supporting-Input exclusions are retained."
+    "t000052: no compiler or inherited execution expectation changes. ExportFn declarations are generated for all 23 exact original references instead of a handwritten template list. The only new runnable file tests the generator, ABI/origin consistency and rejection behavior; all 81 inherited runnable files, dispatch certificates/formulas, isolated VPlan paths, affine predicate mutations, source-location/VF/scratch requirements and supporting-Input exclusions are retained.",
+    "t000053: only default ordinary-LV dispatch counter expectations change. Entry minima are certified separately from emitted VF and urem/sub rounding, including primary scalar fallback and secondary ordinary vectorization. Integer sum/XOR and ordered-overlap N coverage expands to the complete finite domain while retaining inherited large bypass counts; all isolated VPlan counts and every correctness/provenance/source/VF/scratch/alias check remain. The existing dispatch checker now runs both FP policies for each of LV1/LV2 and EVL/scalar remainder; no lit path is removed or added."
   ],
   "new_execution_obligations": {
     "state_cfg_functions": [
@@ -163,8 +164,8 @@
         32
       ],
       "planned_host_configurations": 40,
-      "planned_calls_per_configuration": 476,
-      "planned_comparisons": 19040,
+      "planned_calls_per_configuration": 1484,
+      "planned_comparisons": 59360,
       "counts": [
         0,
         1,
@@ -172,15 +173,63 @@
         3,
         4,
         5,
+        6,
         7,
         8,
         9,
+        10,
+        11,
+        12,
+        13,
+        14,
         15,
         16,
         17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
         31,
         32,
         33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
         63,
         64,
         65,
@@ -199,10 +248,20 @@
         "capacity/traffic/reread/duplication and original-latch DILocation/attached stage provenance",
         "explicit isolated VPlan stages and repeated-LV ordinary tails retained under both policies",
         "ordered overlap and nested compact full inherited matrices retained",
-        "all emitted ordinary vector remainders, independent entry/lane counts, and VF-1 stage revisit remarks distinguished from the primary observed VF"
+        "all emitted ordinary vector remainders, independent entry/lane counts, and VF-1 stage revisit remarks distinguished from the primary observed VF",
+        "separate per-stage width/entry-minimum/rounding/resume certificates, including shared threshold SSA and ordinary remainder guards",
+        "primary fallback uses all N, secondary ordinary loops use N minus the actual primary resume, with exact scalar and lane totals",
+        "all N=0..66 and inherited large bypass values; all reachable thresholds/VF boundaries and scalar-only vscale32",
+        "equivalent swapped/inverted comparisons and max operand order; distinct consumer floor 13 and width-only analogue",
+        "reject altered threshold operands/width, comparison polarity, branch destinations, rounding, resume or original entry bounds",
+        "ordinary producer and consumer max-floor 17 analogues, independently certified; scalar scratch indices remain tied to certified induction"
       ],
       "isolated_vplan_additional_planned_comparisons": 19040,
-      "status": "planned only; linked execution, counters and uninstrumented machine verification required from harness"
+      "status": "planned only; linked execution, counters and uninstrumented machine verification required from harness",
+      "planned_ordered_overlap_configurations": 20,
+      "planned_ordered_overlap_calls_per_configuration": 1484,
+      "planned_ordered_overlap_comparisons": 29680,
+      "plan_increase_across_default_dispatch": 60480
     },
     "export_reference_generation": {
       "reference_definitions": 23,
@@ -221,6 +280,61 @@
       "removed_execution_rows": 0,
       "require": "fresh harness C compilation/link and complete inherited/new actual transformed-path comparisons",
       "status": "all execution pending harness"
+    },
+    "dispatch_entry_repair": {
+      "regression": "llvm/test/Other/reduction-fission-dispatch-checker.test",
+      "policies": [
+        "strict",
+        "explicit fission FP reordering only"
+      ],
+      "lv_invocations": [
+        1,
+        2
+      ],
+      "tail_policies": [
+        "default EVL: machine verification only",
+        "scalar remainder: actual host execution"
+      ],
+      "runtime_expectation_source": "certified IR threshold and count structure, independent of observed probes",
+      "saved_failure": {
+        "artifact": "builds/t000052/execution/dispatch_once_ordered_scalar_remainder.rvv.ll",
+        "function": "interleave2",
+        "N": 4,
+        "vscale": 1,
+        "producer_vf": 4,
+        "consumer_vf": 4,
+        "producer_entry_threshold": "max(4*vscale,8)",
+        "consumer_entry_threshold": "max(4*vscale,8)",
+        "expected_primary_entries": [
+          0,
+          0
+        ],
+        "expected_scalar_entries": [
+          4,
+          4
+        ],
+        "comparison_completed": false
+      },
+      "cost_contracts": {
+        "integer_dispatch": {
+          "capacity_bytes": 260,
+          "logical_traffic": "8*N"
+        },
+        "mixed": {
+          "capacity_bytes": 1044,
+          "logical_traffic": "32*P"
+        }
+      },
+      "status": "planned only; no worker compilation or execution",
+      "fixture_vocabulary": [
+        "vscale width or unsigned max(width, positive u32 minimum), in either max operand order",
+        "shl/mul widths, with original no-wrap promises or permitted flag removal",
+        "ult/ugt scalar-on-true or complemented uge/ule vector-on-true guards",
+        "separate primary and ordinary minima; independent producer/consumer and whole-function shared SSA definitions",
+        "canonical zero-based VF induction, urem/sub rounding, equality exits and exact scalar resume PHIs",
+        "N-minus-primary-resume ordinary counts and base-plus-local scratch indices",
+        "original bounded/nonzero entry and scalar unit-step/scratch/N-exit checks"
+      ]
     }
   },
   "prior_immutable_evidence": {
@@ -1080,10 +1194,62 @@
       "results_json_present": false,
       "primary_corpus_compilations": 0,
       "interpretation": "Generation and codegen reached the failed C compile; neither substitutes for linked comparisons or primary evaluation. Historical evidence only."
+    },
+    "t000052_dispatch_failure": {
+      "revision": "93edb0cabd3b1a3b6f740d29a6851c7cbcb25392",
+      "llvm_compilation": "passed",
+      "lit": {
+        "passed": 82,
+        "total": 82
+      },
+      "VectorizeTests": {
+        "passed": 106,
+        "total": 106
+      },
+      "host_object_generation_completed": 767,
+      "uninstrumented_rvv_machine_verification_completed": 255,
+      "c_harness_compilation_link": "passed",
+      "full_execution_checker": "failed at N=4 dispatch counter expectation",
+      "completed_stdout_families": {
+        "producer_recurrences": {
+          "stdout_records": 1,
+          "completed_comparisons": 787968
+        },
+        "compact_recurrences": {
+          "stdout_records": 1,
+          "completed_comparisons": 1737216
+        },
+        "historical_compact_delay": {
+          "stdout_records": 1,
+          "completed_comparisons": 13056
+        },
+        "retained_exports": {
+          "stdout_records": 264,
+          "completed_comparisons": 784896
+        },
+        "cross_retention": {
+          "stdout_records": 20,
+          "completed_comparisons": 10880
+        }
+      },
+      "completed_comparisons_explicitly_certified_by_family_stdout": 3334016,
+      "unreported_main_comparisons": "not counted; no extrapolation from generated objects or plans",
+      "complete_dispatch_configurations_printed": 0,
+      "primary_corpus_compilations_completed": 0,
+      "sources": [
+        "jobs/t000052/000002-build/result.json",
+        "builds/t000052/lit.log",
+        "builds/t000052/unit.log",
+        "builds/t000052/execution.log",
+        "builds/t000052/execution/commands.jsonl",
+        "builds/t000052/execution/dispatch_once_ordered_scalar_remainder.rvv.ll",
+        "builds/t000052/execution/dispatch_twice_ordered_scalar_remainder.rvv.ll"
+      ],
+      "acceptance": "prior failure evidence only; does not validate t000053"
     }
   },
   "validation_requested": {
-    "task_id": "t000052",
+    "task_id": "t000053",
     "worker_executed": false,
     "fresh_build_required": true,
     "build": {
@@ -1187,10 +1353,8 @@
         "llvm/test/Other/Inputs/reduction-fission-compact-exits.ll",
         "llvm/test/Other/Inputs/reduction-fission-host-adapter.py"
       ],
-      "inherited_runnable_files": 81,
-      "additional_runnable_files": [
-        "llvm/test/Other/reduction-fission-export-symbols.test"
-      ],
+      "inherited_runnable_files": 82,
+      "additional_runnable_files": [],
       "supporting_inputs": [
         {
           "path": "llvm/test/Other/Inputs/reduction-fission-affine-counts.ll",
@@ -1217,7 +1381,7 @@
           "modified_by_this_revision": false
         }
       ],
-      "registration_audit": "report.tests == mandatory_lit.explicit_paths; exactly 82 runnable files (81 inherited plus export-symbols). Every path contains RUN; none contains an Inputs component. No supporting Input is changed. Preserve the three supporting Input exclusions and their owning RUN coverage in the harness snapshot auto-union and standalone invocation."
+      "registration_audit": "report.tests equals mandatory_lit.explicit_paths: 82 inherited runnable files, including the extended dispatch regression; no Inputs files changed or registered standalone. Preserve all supporting Input exclusions and owning RUN coverage."
     },
     "mandatory_unit_suite": {
       "required": true,
@@ -1264,7 +1428,9 @@
         "all 23 ExportFn reference definitions and mapped declarations",
         "all export and chunk execution rows with their exact original reference origins",
         "retained-XOR/extracted-add dispatch, independent formulas and isolated VPlan certificates",
-        "applicable affine icmp mutations and serial/nested select mutations"
+        "applicable affine icmp mutations and serial/nested select mutations",
+        "separate primary/ordinary entry threshold certificates, actual guard SSA, vector-rounded counts and fallback resumes",
+        "all default-dispatch N=0..66 and inherited large bypass values; independently generated expectations with exact lane conservation"
       ],
       "generation_is_not_execution": true,
       "new_dispatch_original_transformed_independent_formulas": true,
@@ -1278,7 +1444,62 @@
         "executed original/transformed/independent-formula comparisons with actual stdout counters",
         "uninstrumented RVV machine verification, including EVL paths (codegen only)",
         "234 immutable original primary compilations (no target execution or speedup claim)"
-      ]
+      ],
+      "dispatch_entry_certification": {
+        "regression": "llvm/test/Other/reduction-fission-dispatch-checker.test",
+        "policies": [
+          "strict",
+          "explicit fission FP reordering only"
+        ],
+        "lv_invocations": [
+          1,
+          2
+        ],
+        "tail_policies": [
+          "default EVL: machine verification only",
+          "scalar remainder: actual host execution"
+        ],
+        "runtime_expectation_source": "certified IR threshold and count structure, independent of observed probes",
+        "saved_failure": {
+          "artifact": "builds/t000052/execution/dispatch_once_ordered_scalar_remainder.rvv.ll",
+          "function": "interleave2",
+          "N": 4,
+          "vscale": 1,
+          "producer_vf": 4,
+          "consumer_vf": 4,
+          "producer_entry_threshold": "max(4*vscale,8)",
+          "consumer_entry_threshold": "max(4*vscale,8)",
+          "expected_primary_entries": [
+            0,
+            0
+          ],
+          "expected_scalar_entries": [
+            4,
+            4
+          ],
+          "comparison_completed": false
+        },
+        "cost_contracts": {
+          "integer_dispatch": {
+            "capacity_bytes": 260,
+            "logical_traffic": "8*N"
+          },
+          "mixed": {
+            "capacity_bytes": 1044,
+            "logical_traffic": "32*P"
+          }
+        },
+        "status": "planned only; no worker compilation or execution",
+        "fixture_vocabulary": [
+          "vscale width or unsigned max(width, positive u32 minimum), in either max operand order",
+          "shl/mul widths, with original no-wrap promises or permitted flag removal",
+          "ult/ugt scalar-on-true or complemented uge/ule vector-on-true guards",
+          "separate primary and ordinary minima; independent producer/consumer and whole-function shared SSA definitions",
+          "canonical zero-based VF induction, urem/sub rounding, equality exits and exact scalar resume PHIs",
+          "N-minus-primary-resume ordinary counts and base-plus-local scratch indices",
+          "original bounded/nonzero entry and scalar unit-step/scratch/N-exit checks"
+        ]
+      }
     },
     "rvv_machine_verification": {
       "required": true,
@@ -1319,12 +1540,14 @@
       ],
       "nested_or_helper_success_is_not_original_target_success": true
     },
-    "acceptance": "Fresh harness-only LLVM compilation and fresh C harness compilation/link; all 82 runnable lit files (all 81 inherited plus export-symbols), every RUN and inherited/new mutation; all VectorizeTests; complete original/transformed/independent-formula comparisons for every inherited/new matrix under strict and explicitly enabled fission FP reordering, once/twice LV at inherited fixed-vscales 1/2/4/8/32, including scalar consumers and actual vector/tail paths, early retained-XOR/add dispatch and isolated VPlan repeated-LV tails; uninstrumented RVV machine verification; all 234 immutable primary corpus compilations with exact original-target source-location Selected/Rejected remarks, independently observed stage VFs and bounded scratch/traffic/reread/duplication/guard evidence. Keep generated variants, executed comparisons and code generation separate. Crashes, incorrect transformations or failing mandatory checks block independent acceptance; resolve failures without dropping correctness checks. Preserve both accepted heads pending acceptance; no semantic expansion, source rewrite, supplementary math assumption, performance claim or speedup requirement."
+    "acceptance": "Fresh harness-only LLVM compilation and fresh C harness compilation/link; all 82 inherited runnable lit files, including every extended dispatch guard mutation and all eight policy/LV/tail combinations, every RUN and inherited/new mutation; all VectorizeTests; complete original/transformed/independent-formula comparisons for every inherited/new matrix under strict and explicitly enabled fission FP reordering, once/twice LV at inherited fixed-vscales 1/2/4/8/32, including scalar consumers and actual vector/tail paths, early retained-XOR/add dispatch and isolated VPlan repeated-LV tails; uninstrumented RVV machine verification; all 234 immutable primary corpus compilations with exact original-target source-location Selected/Rejected remarks, independently observed stage VFs and bounded scratch/traffic/reread/duplication/guard evidence. Keep generated variants, executed comparisons and code generation separate. Crashes, incorrect transformations or failing mandatory checks block independent acceptance; resolve failures without dropping correctness checks. Preserve both accepted heads pending acceptance; no semantic expansion, source rewrite, supplementary math assumption, performance claim or speedup requirement. Confirm corrected entry accounting at N=4/vscale=1 without any production scheduling change; primary/scalar/ordinary entry counters and participating lanes must agree with independent certificates at every reachable threshold and VF boundary. Preserve the explicit isolated VPlan matrix and do not combine the concurrent store lineage in this repair."
   },
   "future_work": [
     "Review harness artifacts before accepting the integration; existing heads must survive any failure.",
     "Consider compact/retained-state chunk carries only as a separate semantic task with executable path/carry verification.",
-    "Keep whole-function stack aggregation, target execution and performance measurement separate from this legality integration."
+    "Keep whole-function stack aggregation, target execution and performance measurement separate from this legality integration.",
+    "If the fixed-vscale execution oracle encounters a different ordinary-LV control form, add a small explicit certificate with positive/rejection coverage; do not relax path or output checks or alter production scheduling to match the oracle.",
+    "Review all immutable t000053 results before integration acceptance; concurrent store lineage remains a separate task."
   ],
   "supporting_inputs": [
     {
@@ -1358,20 +1581,23 @@
     "status": "inherited integration under revision; neither accepted head/ref changed by worker"
   },
   "current_validation_status": {
-    "task_id": "t000052",
+    "task_id": "t000053",
     "worker_executed_builds": 0,
     "worker_executed_tests": 0,
     "executed_numerical_comparisons": 0,
     "generated_or_compiled_host_variants": 0,
+    "lit_completed": 0,
+    "VectorizeTests_completed": 0,
     "rvv_machine_verification": "pending harness",
     "primary_corpus_compilations": 0,
+    "prior_snapshot_evidence": "prior_immutable_evidence.t000052_dispatch_failure (partial completed stdout only)",
     "static_audits": [
-      "Driver and embedded generator regression parse as Python AST; report parses as JSON.",
-      "tests equals mandatory_lit.explicit_paths: 82 unique files with RUN, including all 81 inherited runnable paths and no Inputs files.",
-      "Every preexisting certificate/helper function outside the edited check orchestration is AST-identical to the base revision.",
-      "Historical accepted-head evidence, accepted-head identifiers and supporting-Input registration are unchanged.",
-      "git diff --check reports no whitespace errors. These are static audits, not test execution."
+      "Driver and embedded dispatch regression parse as Python AST; report parses as JSON.",
+      "Report tests equals mandatory_lit.explicit_paths: 82 unique runnable files, each with RUN, with no Inputs component.",
+      "Only preexisting driver definitions check_dispatch_scalar_interleave, check_dispatch_overlap and check are changed. All other helper/class ASTs, including isolated VPlan, stage-VF, state/CFG/export/chunk/host-adapter certificates, are identical to base 93edb0cabd3b1a3b6f740d29a6851c7cbcb25392.",
+      "Existing dispatch regression expands from four to eight opt RUN configurations; all inherited rejection construction/certificate checks remain.",
+      "git diff --check reports no whitespace errors. These are static audits, not build/test execution."
     ],
-    "status": "implementation ready; all execution requested through validation_requested"
+    "status": "implementation ready; complete fresh validation requested through validation_requested"
   }
 }

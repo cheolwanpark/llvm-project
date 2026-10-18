@@ -2699,6 +2699,186 @@ def dispatch_stage_vfs(remarks):
     return result
 
 
+def dispatch_entry_certificates(body, producer_vf, consumer_vf, tail_vfs=(0, 0)):
+    """Certify the two ordinary-LV dispatch stages with scalar remainders.
+
+    This is a small fixture vocabulary, not an IR interpreter. Each vector
+    loop has a zero-based unit-VF induction, an unsigned entry comparison,
+    urem/sub rounding and an equality exit. A second LV invocation can apply
+    the same structure to N minus the primary resume index. Resolve threshold
+    definitions in the whole function: CSE can share them across stages, but
+    each stage must prove its own comparison, edges, width and resume value.
+    """
+    blocks = {label: chunk_instructions(code) for label, code in loop_blocks(body).items()}
+    definitions = {}
+    for label, code in blocks.items():
+        for line in code:
+            match = re.fullmatch(r'(%[-\w.$]+) = (.+)', line)
+            if match:
+                assert match[1] not in definitions, 'dispatch entry: duplicate SSA'
+                definitions[match[1]] = (label, match[2])
+    successors = {label: re.findall(r'\blabel %([-\w.$]+)', code[-1])
+                  for label, code in blocks.items()}
+    predecessors = {label: {p for p, targets in successors.items() if label in targets}
+                    for label in blocks}
+
+    def need(ok, detail):
+        assert ok, 'dispatch entry: ' + detail
+
+    def expression(value, label=None):
+        need(value in definitions and (label is None or definitions[value][0] == label),
+             'definition ' + value)
+        return definitions[value][1]
+
+    def instruction(label, pattern, detail):
+        matches = [m for line in blocks[label] if (m := re.fullmatch(pattern, line))]
+        need(len(matches) == 1, detail)
+        return matches[0]
+
+    def width(value, vf):
+        expr = expression(value)
+        if vf == 1 and expr == 'call i64 @llvm.vscale.i64()':
+            return
+        match = re.fullmatch(r'(mul|shl) (?:nuw )?(?:nsw )?i64 (%[-\w.$]+), (\d+)', expr)
+        need(match, 'threshold/step width form')
+        need((int(match[3]) == vf if match[1] == 'mul' else
+              int(match[3]) < 64 and (1 << int(match[3])) == vf) and
+             expression(match[2]) == 'call i64 @llvm.vscale.i64()', 'threshold/step width operand')
+
+    def threshold(value, vf):
+        expr = expression(value)
+        match = re.fullmatch(r'call i64 @llvm\.umax\.i64\(i64 (%[-\w.$]+|\d+), '
+                             r'i64 (%[-\w.$]+|\d+)\)', expr)
+        minimum = 0
+        if match:
+            operands = match.groups()
+            constants = [int(v) for v in operands if v.isdecimal()]
+            variables = [v for v in operands if v.startswith('%')]
+            need(len(constants) == len(variables) == 1 and 0 < constants[0] <= 0xffffffff,
+                 'threshold umax operands')
+            minimum, value = constants[0], variables[0]
+        width(value, vf)
+        return minimum
+
+    # The original participation guard controls both stages and every probe.
+    for line in ('%bounded = icmp ule i64 %n, 65', '%nonzero = icmp ne i64 %n, 0',
+                 '%enter = and i1 %bounded, %nonzero',
+                 'br i1 %enter, label %preheader, label %bypass'):
+        need(line in blocks['entry'], 'original bounded/nonzero entry')
+    need(predecessors['preheader'] == {'entry'}, 'original preheader edge')
+
+    def finished(label, end):
+        if label == end:
+            return
+        # Repeated LV can add one LCSSA forwarding block at a stage exit.
+        need(label in blocks and blocks[label][-1] == f'br label %{end}' and
+             all(re.fullmatch(r'%[-\w.$]+ = phi .+', line) for line in blocks[label][:-1]),
+             'stage exit forwarding')
+
+    def vector_loop(label, guard, vf, count, base, end):
+        induction = instruction(label, r'(%[-\w.$]+) = phi i64 \[ 0, %([-\w.$]+) \], '
+                                r'\[ (%[-\w.$]+), %' + re.escape(label) + r' \]', 'vector induction')
+        index, vector_ph, next_index = induction.groups()
+        need(blocks[vector_ph][-1] == f'br label %{label}' and
+             predecessors[vector_ph] == {guard} and
+             predecessors[label] == {vector_ph, label}, 'vector preheader edges')
+        step = re.fullmatch(r'add (?:nuw )?i64 ' + re.escape(index) + r', (%[-\w.$]+)',
+                            expression(next_index, label))
+        need(step, 'vector step')
+        width(step[1], vf)
+        remainder = instruction(vector_ph, r'(%[-\w.$]+) = urem i64 ' + re.escape(count) +
+                                r', (%[-\w.$]+)', 'vector rounding remainder')
+        width(remainder[2], vf)
+        rounded = instruction(vector_ph, r'(%[-\w.$]+) = sub i64 ' + re.escape(count) +
+                              ', ' + re.escape(remainder[1]), 'vector rounded count')[1]
+        branch = re.fullmatch(r'br i1 (%[-\w.$]+), label %([-\w.$]+), label %' +
+                              re.escape(label), blocks[label][-1])
+        need(branch and expression(branch[1], label) ==
+             f'icmp eq i64 {next_index}, {rounded}', 'vector rounded exit')
+        middle = branch[2]
+        need(predecessors[middle] == {label}, 'vector middle edge')
+        check = re.fullmatch(r'br i1 (%[-\w.$]+), label %([-\w.$]+), label %([-\w.$]+)',
+                             blocks[guard][-1])
+        need(check, 'entry branch')
+        comparison = re.fullmatch(r'icmp (ult|uge|ugt|ule) i64 (%[-\w.$]+), (%[-\w.$]+)',
+                                  expression(check[1], guard))
+        need(comparison, 'entry comparison')
+        pred, lhs, rhs = comparison.groups()
+        if lhs == count and pred in ('ult', 'uge'):
+            limit, scalar_on_true = rhs, pred == 'ult'
+        else:
+            need(rhs == count and pred in ('ugt', 'ule'), 'entry comparison operands/polarity')
+            limit, scalar_on_true = lhs, pred == 'ugt'
+        minimum = threshold(limit, vf)
+        scalar_ph = check[2] if scalar_on_true else check[3]
+        need((check[3] if scalar_on_true else check[2]) == vector_ph and
+             scalar_ph != vector_ph, 'entry branch destinations')
+        need(predecessors[scalar_ph] == {guard, middle}, 'scalar fallback edges')
+        done = re.fullmatch(r'br i1 (%[-\w.$]+), label %([-\w.$]+), label %' +
+                            re.escape(scalar_ph), blocks[middle][-1])
+        need(done and expression(done[1], middle) == f'icmp eq i64 {count}, {rounded}',
+             'empty remainder check')
+        finished(done[2], end)
+        resumed = rounded
+        if base != '0':
+            resumed = instruction(vector_ph, r'(%[-\w.$]+) = add i64 ' + re.escape(base) +
+                                  ', ' + re.escape(rounded), 'ordinary resume offset')[1]
+            scratch_index = instruction(label, r'(%[-\w.$]+) = add i64 ' + re.escape(base) +
+                                        ', ' + re.escape(index), 'ordinary scratch offset')[1]
+        else:
+            scratch_index = index
+        instruction(label, r'%[-\w.$]+ = getelementptr inbounds \[65 x (?:i32|double)\], '
+                    r'ptr %scalar\.fission\.scratch, i32 0, i64 ' + re.escape(scratch_index),
+                    'vector scratch index')
+        resume = instruction(scalar_ph, r'(%[-\w.$]+) = phi i64 \[ ' + re.escape(resumed) +
+                             ', %' + re.escape(middle) + r' \], \[ ' + re.escape(base) +
+                             ', %' + re.escape(guard) + r' \]', 'scalar fallback resume')[1]
+        return {'vf': vf, 'minimum': minimum, 'guard': guard, 'threshold': limit,
+                'count': count, 'rounded': rounded, 'scalar_ph': scalar_ph, 'resume': resume}
+
+    result = []
+    producer, consumer = scalar_consumer(body, 'dispatch entry')
+    for half, role, vf, tail_vf, guard, scalar, end in (
+            (producer, 'producer', producer_vf, tail_vfs[0], 'preheader', 'loop',
+             'scalar.fission.consumer.ph'),
+            (consumer, 'consumer', consumer_vf, tail_vfs[1], 'scalar.fission.consumer.ph',
+             'scalar.fission.consumer.body', 'exit')):
+        vectors = [label for label in loop_blocks(half) if re.fullmatch(r'vector\.body[\w.$-]*', label)]
+        need(len(vectors) == (2 if tail_vf else 1), role + ' vector loop count')
+        primary = vector_loop(vectors[0], guard, vf, '%n', '0', end)
+        scalar_ph, resume = primary['scalar_ph'], primary['resume']
+        ordinary = None
+        if tail_vf:
+            count = instruction(scalar_ph, r'(%[-\w.$]+) = sub i64 %n, ' + re.escape(resume),
+                                role + ' ordinary remaining count')[1]
+            ordinary = vector_loop(vectors[1], scalar_ph, tail_vf, count, resume, end)
+            scalar_ph, resume = ordinary['scalar_ph'], ordinary['resume']
+        need(blocks[scalar_ph][-1] == f'br label %{scalar}' and
+             predecessors[scalar] == {scalar_ph, scalar}, role + ' scalar entry edges')
+        induction = instruction(scalar, r'(%[-\w.$]+) = phi i64 \[ ' + re.escape(resume) +
+                                ', %' + re.escape(scalar_ph) + r' \], \[ (%[-\w.$]+), %' +
+                                re.escape(scalar) + r' \]', role + ' scalar induction')
+        instruction(scalar, r'%[-\w.$]+ = getelementptr inbounds \[65 x (?:i32|double)\], '
+                    r'ptr %scalar\.fission\.scratch, i32 0, i64 ' + re.escape(induction[1]),
+                    role + ' scalar scratch index')
+        need(expression(induction[2], scalar) in (f'add i64 {induction[1]}, 1',
+                                                 f'add nuw i64 {induction[1]}, 1'),
+             role + ' scalar step')
+        branch = re.fullmatch(r'br i1 (%[-\w.$]+), label %([-\w.$]+), label %' +
+                              re.escape(scalar), blocks[scalar][-1])
+        need(branch and expression(branch[1], scalar) == f'icmp eq i64 {induction[2]}, %n',
+             role + ' scalar exit')
+        finished(branch[2], end)
+        result.append({'role': role, 'primary': primary, 'ordinary': ordinary})
+    return result
+
+
+def dispatch_entry_fields(certificates):
+    """C row minima; zero keeps the inherited VF-only VPlan convention."""
+    return ', '.join(str(stage[part]['minimum'] if stage[part] else 0)
+                     for part in ('primary', 'ordinary') for stage in certificates)
+
+
 def check_dispatch_scalar_interleave(ir, name, factor, evl, producer_vf, consumer_vf,
                                     probe=False, stages=None):
     """Fixture certificate for retained XOR and a separately vectorized add.
@@ -2854,8 +3034,10 @@ def check_dispatch_scalar_interleave(ir, name, factor, evl, producer_vf, consume
                         '%b1 = getelementptr i32, ptr %out, i64 1',
                         'store i32 23, ptr %b1, align 4'):
         need(instruction in blocks['bypass'], 'zero-entry results')
+    entries = (None if evl else dispatch_entry_certificates(
+        body, producer_vf, consumer_vf, [tail['vf'] for tail in tails]))
     if stages is not None:
-        stages.update(primary_labels=vectors, ordinary_tails=tails)
+        stages.update(primary_labels=vectors, ordinary_tails=tails, entries=entries)
     if probe:
         need(not evl, 'host scalar-remainder policy')
         for stage, label in enumerate((vectors[0], 'loop', vectors[1], 'scalar.fission.consumer.body')):
@@ -2923,7 +3105,7 @@ def instrument_interleave_stages(ir, functions, ordinary_tails=None):
             'declare void @fission_interleave_tail_probe(i32, i64)\n')
 
 
-def check_dispatch_overlap(ir, evl, producer_vf, consumer_vf, probe=False, capacity=65):
+def check_dispatch_overlap(ir, evl, producer_vf, consumer_vf, probe=False, capacity=65, stages=None):
     """Both paths accept this AoS loop; default dispatch must split early once.
 
     Ordinary LV selects each width independently. Check the actual widths from
@@ -2948,6 +3130,12 @@ def check_dispatch_overlap(ir, evl, producer_vf, consumer_vf, probe=False, capac
     assert len(re.findall(rf'call double @llvm\.{reduction}\.fadd\.nxv{consumer_vf}f64\(',
                           consumer)) == 2, consumer
     assert not re.search(r'\bfadd\s+[^\n]*\breassoc\b', body), body
+    # Chunk overlap uses a different entering count/capacity and retains its
+    # dedicated chunk certificates. Only the full-trip dispatch uses this ABI.
+    if capacity == 65 and not evl:
+        entries = dispatch_entry_certificates(body, producer_vf, consumer_vf)
+        if stages is not None:
+            stages.update(entries=entries)
     if probe:
         def instrument(half, label, stage):
             header = (rf'^{label}:[^\n]*\n'
@@ -4094,7 +4282,7 @@ def check(args, work):
         stage_vfs = dispatch_stage_vfs(result.stderr)
         overlap_vfs = stage_vfs['interleave2_ordered']
         instrumented = result.stdout
-        layouts = {name: {} for name in ('interleave2', 'interleave3')}
+        layouts = {name: {} for name in ('interleave2', 'interleave3', 'interleave2_ordered')}
         for name, factor in (('interleave2', 2), ('interleave3', 3)):
             checked = check_dispatch_scalar_interleave(result.stdout, name, factor, evl,
                                                         *stage_vfs[name], probe=not evl,
@@ -4102,7 +4290,8 @@ def check(args, work):
             instrumented = instrumented.replace(function_definition(result.stdout, name), checked, 1)
         for name, checked in (
             ('interleave2_ordered', check_dispatch_overlap(result.stdout, evl,
-                                                          *overlap_vfs, probe=not evl)),
+                                                          *overlap_vfs, probe=not evl,
+                                                          stages=layouts['interleave2_ordered'])),
             ('compact_nested', check_scalar_function(result.stdout, 'compact_nested',
                                                       evl, probe=not evl)),
         ):
@@ -4143,15 +4332,17 @@ def check(args, work):
                     fp = function == 'interleave2_ordered'
                     pvf, avf = stage_vfs[function]
                     declarations.append(f'extern {"ShortFPFn" if fp else "ShortIntFn"} {name}, {reference};')
-                    # The final field opts the two early sum/XOR stages into
-                    # independent formulas and per-configuration execution evidence.
+                    # Keep the integer formula opt-in, then append independent
+                    # certified minima for both primary and ordinary stages.
                     formula = '' if fp else ', true'
                     if not fp:
                         dispatch_host_functions.add(name)
                     tail_vfs = ([0, 0] if fp else
                                 [tail['vf'] * scale for tail in layouts[function]['ordinary_tails']])
                     row = (f'{{"{name}", {factor}, 2, {pvf * scale}, {avf * scale}, '
-                           f'{name}, {reference}, {tail_vfs[0]}, {tail_vfs[1]}{formula}}}')
+                           f'{name}, {reference}, {tail_vfs[0]}, {tail_vfs[1]}{formula}, '
+                           f'{dispatch_entry_fields(layouts[function]["entries"])}'
+                           f'{", true" if fp else ""}}}')
                     (interleave_fp_rows if fp else interleave_int_rows).append(row)
             compile_ir(f'{tag}_s{scale}', fixed)
             records.append({'fixture': 'dispatch', 'repeated_lv': repeated,
@@ -4161,7 +4352,8 @@ def check(args, work):
                             'comparison': 'exact original dispatch IR and independent C sum/XOR '
                                           'formulas; inherited ordered overlap and compact nest',
                             'probes': 'actual producer vector/scalar and consumer vector/scalar '
-                                      'entries; exact N totals at independently observed widths; '
+                                      'entries; independently certified entry thresholds and rounded counts; '
+                                      'exact N lane totals at emitted widths; '
                                       'per-configuration execution totals; exact nested N/P/vector/tail',
                             'selection_remarks': result.stderr})
             print(f'Built combined default dispatch {tag}, vscale={scale}', flush=True)
@@ -4838,6 +5030,11 @@ def check(args, work):
             ('comparisons', 'aliases', 'bypasses', 'producer_vector', 'producer_tail',
              'consumer_vector', 'consumer_tail', 'producer_ordinary', 'producer_ordinary_lanes',
              'consumer_ordinary', 'consumer_ordinary_lanes'), map(int, match.groups()[1:])))
+        # All N=0..66 plus inherited 257/1023/1024/1025, twenty trials;
+        # N=2..65 also run once with output aliasing the input. These totals
+        # come from the fixture domain, never from the observed stage probes.
+        assert (dispatch_execution[name]['comparisons'], dispatch_execution[name]['aliases'],
+                dispatch_execution[name]['bypasses']) == (1484, 64, 120), dispatch_execution[name]
     assert set(dispatch_execution) == dispatch_host_functions, dispatch_execution
     assert len(dispatch_execution) == 8 * len(args.vscales), dispatch_execution
     (work / 'results.json').write_text(json.dumps({
@@ -4855,11 +5052,16 @@ def check(args, work):
             'default_vscales_expected': {
                 'scalar_matrix': 227300, 'vplan_matrix': 351600,
                 'shared_comparisons': 7800, 'inherited_union': 571100,
-                'additional_dispatch': 66960, 'union_with_dispatch': 638060,
+                'additional_dispatch': 127440, 'union_with_dispatch': 698540,
                 'additional_isolated_dispatch': 19040,
-                'union_with_dispatch_and_isolated': 657100,
+                'union_with_dispatch_and_isolated': 717580,
                 'additional_adapter': 1358,
             },
+            'certified_dispatch_counts': list(range(67)) + [257, 1023, 1024, 1025],
+            'certified_dispatch_planned_calls_per_configuration': 1484,
+            'dispatch_count_expansion': 'default sum/XOR and ordered overlap only: 1008 additional '
+                                        'comparisons per configuration; 60480 at default vscales. '
+                                        'Isolated VPlan and all other inherited matrices unchanged.',
             'dispatch': 'two early retained-XOR/moved-add AoS splits, one ordered early AoS overlap, '
                         'one compact nest; single/repeated LV and both FP options; '
                         'all inherited N/P, aliases, canaries and probes retained',
@@ -4893,7 +5095,8 @@ def check(args, work):
                       'outer final-value feedback, canaries, zero entry and P=0/1/N, all P at N=65, '
                       'last-inactive iterations, exact producer/consumer/tail/empty counters',
             'counts': 'additional comparisons and per-configuration path counters printed by C; '
-                      'the inherited 638060 transformed and 1358 adapter comparisons are unchanged',
+                      'historical inherited totals describe standalone subsets; see coverage_mapping '
+                      'for expanded default dispatch counts. Adapter counts are unchanged',
         },
         'producer_export_controls': {
             'functions': EXPORT_CONTROL_FUNCTIONS,
