@@ -3,14 +3,16 @@
 ; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
 ; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
 ; RUN:   -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=EVL < %t
+; RUN: FileCheck %s --check-prefixes=EVL,ONCE < %t
 ; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
 ; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -force-vector-width=4 \
 ; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
 ; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -S %s | FileCheck %s --check-prefix=EVL
+; RUN:   -S %s -o %t.repeat
+; RUN: FileCheck %s --check-prefixes=EVL,REPEAT < %t.repeat
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.repeat -o /dev/null
 ; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -force-vector-width=4 \
 ; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
@@ -45,6 +47,11 @@
 ; for the EVL trip count. The latch dominates the guard, vector preheader and
 ; consumer; both SSA values denote exactly P on that path. Check the linkage,
 ; not just the spelling of the exported count, and retain the P=0 result PHIs.
+; A second LV invocation forms LCSSA for those forwarded uses: the producer
+; merge is exported in the guard on the latch edge, and FP reductions are
+; exported in middle.block on the vector.body edge. Capture these exact PHIs
+; before using them in AVL and the result join. Integer scalar reductions are
+; computed in middle.block, outside the vector loop, and need no extra PHI.
 ;
 ; REMARK: scalar-compact.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
 ; REMARK: scalar-compact.c:12:3: scalar-IR fission producer VF 1
@@ -108,12 +115,14 @@ declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 ; EVL: latch:
 ; EVL: [[P:%fission\.participating\.merge]] = phi i64 [ %fission.participating.next, %left ], [ %fission.participating, %loop ]
 ; EVL: scalar.fission.consumer.guard:
+; REPEAT: [[FORWARDED_P:%fission\.participating\.merge\.lcssa]] = phi i64 [ [[P]], %latch ]{{$}}
 ; EVL: [[EXPORTED_P:%fission\.participating\.count]] = phi i64 [ [[P]], %latch ]
 ; EVL: %fission.empty = icmp eq i64 [[EXPORTED_P]], 0
 ; EVL: br i1 %fission.empty, label %scalar.fission.consumer.exit, label %scalar.fission.consumer.ph
 ; EVL: scalar.fission.consumer.ph:
 ; EVL: vector.body:
-; EVL: [[AVL:%.*]] = phi i64 [ [[P]], %vector.ph ], [ [[AVL_NEXT:%.*]], %vector.body ]
+; ONCE: [[AVL:%.*]] = phi i64 [ [[P]], %vector.ph ], [ [[AVL_NEXT:%.*]], %vector.body ]
+; REPEAT: [[AVL:%.*]] = phi i64 [ [[FORWARDED_P]], %vector.ph ], [ [[AVL_NEXT:%.*]], %vector.body ]
 ; EVL: [[EVL:%.*]] = call i32 @llvm.experimental.get.vector.length.i64(i64 [[AVL]], i32 4, i1 true)
 ; EVL: call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0({{.*}}i32 [[EVL]])
 ; EVL: call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0({{.*}}i32 [[EVL]])
@@ -125,13 +134,21 @@ declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 ; EVL: [[AVL_NEXT]] = sub nuw i64 [[AVL]], [[STEP]]
 ; EVL: [[DONE:%.*]] = icmp eq i64 [[AVL_NEXT]], 0
 ; EVL: br i1 [[DONE]], label %middle.block, label %vector.body
+; EVL: middle.block:
+; REPEAT-DAG: [[DR_EXIT:%.*]] = phi double [ [[DR]], %vector.body ]{{$}}
+; REPEAT-DAG: [[FR_EXIT:%.*]] = phi float [ [[FR]], %vector.body ]{{$}}
 ; EVL: [[I0:%.*]] = call i32 @llvm.vector.reduce.add.nxv4i32
 ; EVL: [[I1:%.*]] = call i32 @llvm.vector.reduce.add.nxv4i32
+; EVL: br label %scalar.fission.consumer.loopexit
+; EVL: scalar.fission.consumer.loopexit:
+; EVL: br label %scalar.fission.consumer.exit
 ; EVL: scalar.fission.consumer.exit:
 ; EVL: %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ], [ [[I0]], %scalar.fission.consumer.loopexit ]
 ; EVL: %r1.result = phi i32 [ -7, %scalar.fission.consumer.guard ], [ [[I1]], %scalar.fission.consumer.loopexit ]
-; EVL: %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ [[DR]], %scalar.fission.consumer.loopexit ]
-; EVL: %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ [[FR]], %scalar.fission.consumer.loopexit ]
+; ONCE: %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ [[DR]], %scalar.fission.consumer.loopexit ]
+; REPEAT: %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ [[DR_EXIT]], %scalar.fission.consumer.loopexit ]
+; ONCE: %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ [[FR]], %scalar.fission.consumer.loopexit ]
+; REPEAT: %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ [[FR_EXIT]], %scalar.fission.consumer.loopexit ]
 ; EVL: ret void
 ; TAIL-LABEL: define void @compact_triangle(
 ; TAIL: scalar.fission.consumer.guard:
@@ -242,12 +259,14 @@ exit:
 ; EVL: latch:
 ; EVL: [[P:%fission\.participating\.merge]] = phi i64 [ %fission.participating, %right ], [ %fission.participating.next, %left ]
 ; EVL: scalar.fission.consumer.guard:
+; REPEAT: [[FORWARDED_P:%fission\.participating\.merge\.lcssa]] = phi i64 [ [[P]], %latch ]{{$}}
 ; EVL: [[EXPORTED_P:%fission\.participating\.count]] = phi i64 [ [[P]], %latch ]
 ; EVL: %fission.empty = icmp eq i64 [[EXPORTED_P]], 0
 ; EVL: br i1 %fission.empty, label %scalar.fission.consumer.exit, label %scalar.fission.consumer.ph
 ; EVL: scalar.fission.consumer.ph:
 ; EVL: vector.body:
-; EVL: [[AVL:%.*]] = phi i64 [ [[P]], %vector.ph ], [ [[AVL_NEXT:%.*]], %vector.body ]
+; ONCE: [[AVL:%.*]] = phi i64 [ [[P]], %vector.ph ], [ [[AVL_NEXT:%.*]], %vector.body ]
+; REPEAT: [[AVL:%.*]] = phi i64 [ [[FORWARDED_P]], %vector.ph ], [ [[AVL_NEXT:%.*]], %vector.body ]
 ; EVL: [[EVL:%.*]] = call i32 @llvm.experimental.get.vector.length.i64(i64 [[AVL]], i32 4, i1 true)
 ; EVL: call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0({{.*}}i32 [[EVL]])
 ; EVL: call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0({{.*}}i32 [[EVL]])
@@ -259,13 +278,21 @@ exit:
 ; EVL: [[AVL_NEXT]] = sub nuw i64 [[AVL]], [[STEP]]
 ; EVL: [[DONE:%.*]] = icmp eq i64 [[AVL_NEXT]], 0
 ; EVL: br i1 [[DONE]], label %middle.block, label %vector.body
+; EVL: middle.block:
+; REPEAT-DAG: [[DR_EXIT:%.*]] = phi double [ [[DR]], %vector.body ]{{$}}
+; REPEAT-DAG: [[FR_EXIT:%.*]] = phi float [ [[FR]], %vector.body ]{{$}}
 ; EVL: [[I0:%.*]] = call i32 @llvm.vector.reduce.add.nxv4i32
 ; EVL: [[I1:%.*]] = call i32 @llvm.vector.reduce.add.nxv4i32
+; EVL: br label %scalar.fission.consumer.loopexit
+; EVL: scalar.fission.consumer.loopexit:
+; EVL: br label %scalar.fission.consumer.exit
 ; EVL: scalar.fission.consumer.exit:
 ; EVL: %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ], [ [[I0]], %scalar.fission.consumer.loopexit ]
 ; EVL: %r1.result = phi i32 [ -7, %scalar.fission.consumer.guard ], [ [[I1]], %scalar.fission.consumer.loopexit ]
-; EVL: %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ [[DR]], %scalar.fission.consumer.loopexit ]
-; EVL: %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ [[FR]], %scalar.fission.consumer.loopexit ]
+; ONCE: %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ [[DR]], %scalar.fission.consumer.loopexit ]
+; REPEAT: %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ [[DR_EXIT]], %scalar.fission.consumer.loopexit ]
+; ONCE: %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ [[FR]], %scalar.fission.consumer.loopexit ]
+; REPEAT: %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ [[FR_EXIT]], %scalar.fission.consumer.loopexit ]
 ; EVL: ret void
 ; TAIL-LABEL: define void @compact_diamond(
 ; TAIL: scalar.fission.consumer.guard:

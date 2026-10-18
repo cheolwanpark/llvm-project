@@ -75,9 +75,10 @@ def scalar_consumer(body, name):
 def check_compact_count(producer, consumer, name, evl):
     # These fixtures have one i64 compact counter and one latch. SCEV can
     # forward the single-input LCSSA export to its incoming latch value when
-    # expanding the consumer trip count. Accept precisely those two values,
-    # after checking their linkage; an arbitrary occurrence of the export in
-    # the consumer says nothing about the bound actually used by its control.
+    # expanding the consumer trip count. A later LV invocation forms LCSSA
+    # again, exporting that latch value through merge.lcssa in the guard.
+    # Accept only these demonstrated forms, after checking their linkage and
+    # entry edges. This is a bounded fixture check, not an equivalence solver.
     def require(pattern, text):
         match = re.search(pattern, text, re.M)
         assert match, f'@{name}: compact count provenance: {pattern}\n{text}'
@@ -91,14 +92,28 @@ def check_compact_count(producer, consumer, name, evl):
         require(rf'^  br i1 {re.escape(condition)}, label %{re.escape(on_true)}, '
                 rf'label %{re.escape(on_false)}(?:, ![^\n]*)?$', text)
 
+    whole = producer + 'scalar.fission.consumer.ph:\n' + consumer
+
+    def single_entry(label, predecessor):
+        # Each of these fixture blocks has exactly one incoming branch edge.
+        # Together with the named source block this checks the small dominance
+        # chain, without trusting printed predecessor comments or PHI spelling.
+        edge = rf'\blabel %{re.escape(label)}(?=[,\s]|$)'
+        assert len(re.findall(edge, whole)) == 1, whole
+        require(rf'^  br [^\n]*{edge}', predecessor)
+
     counter = '%fission.participating'
     merged, exported = counter + '.merge', counter + '.count'
     header = 'inner' if name == 'compact_nested' else 'loop'
     preheader = 'inner.ph' if name == 'compact_nested' else 'preheader'
 
-    def phi_inputs(text, value):
-        line = require(rf'^  {re.escape(value)} = phi i64 (\[[^\n]+)', text)[1]
-        return re.findall(r'\[ ([^,\]]+), (%[-\w.$]+) \]', line)
+    def phi_inputs(text, value, ty='i64'):
+        line = require(rf'^  {re.escape(value)} = phi {ty} '
+                       r'(.+?)(?:, ![^\n]*)?$', text)[1]
+        inputs = re.findall(r'\[ ([^,\]\n]+), (%[-\w.$]+) \]', line)
+        # Do not silently ignore a malformed or additional incoming operand.
+        assert ', '.join(f'[ {v}, {edge} ]' for v, edge in inputs) == line, line
+        return inputs
 
     assert phi_inputs(block(producer, header), counter) == [
         ('0', '%' + preheader), (merged, '%latch')], producer
@@ -109,8 +124,15 @@ def check_compact_count(producer, consumer, name, evl):
     require(r'^  %fission\.participating\.next = add nuw i64 '
             r'%fission\.participating, 1(?:, ![^\n]*)?$', block(producer, 'left'))
     guard = block(producer, 'scalar.fission.consumer.guard')
+    single_entry('scalar.fission.consumer.guard', block(producer, 'latch'))
+    single_entry('scalar.fission.consumer.ph', guard)
     assert phi_inputs(guard, exported) == [(merged, '%latch')], guard
-    counts = '(?:' + '|'.join(map(re.escape, (merged, exported))) + ')'
+    count_values = [merged, exported]
+    forwarded = merged + '.lcssa'
+    if re.search(rf'^  {re.escape(forwarded)} = ', whole, re.M):
+        assert phi_inputs(guard, forwarded) == [(merged, '%latch')], guard
+        count_values.append(forwarded)
+    counts = '(?:' + '|'.join(map(re.escape, count_values)) + ')'
     require(rf'^  %fission\.empty = icmp eq i64 {counts}, 0$', guard)
     branch(guard, '%fission.empty', 'scalar.fission.consumer.exit',
            'scalar.fission.consumer.ph')
@@ -124,13 +146,20 @@ def check_compact_count(producer, consumer, name, evl):
         'compact_nested': [('sum', 'i32', '%carry'), ('dsum', 'double', '%dcarry')],
     }
     exit_block = block(consumer, 'scalar.fission.consumer.exit')
+    results = {}
     for value, ty, start in starts[name]:
-        require(rf'^  %{value}\.result = phi {ty} \[ {re.escape(start)}, '
-                r'%scalar\.fission\.consumer\.guard \], '
-                r'\[ %[-\w.$]+, %scalar\.fission\.consumer\.loopexit \]', exit_block)
+        inputs = phi_inputs(exit_block, f'%{value}.result', ty)
+        assert len(inputs) == 2, exit_block
+        assert inputs[0] == (start, '%scalar.fission.consumer.guard'), exit_block
+        assert inputs[1][1] == '%scalar.fission.consumer.loopexit', exit_block
+        assert re.fullmatch(r'%[-\w.$]+', inputs[1][0]), exit_block
+        results[value] = inputs[1][0]
 
     vector = block(consumer, 'vector.body')
     if evl:
+        entry = re.split(r'^[\w.$-]+:', consumer, maxsplit=1, flags=re.M)[0]
+        single_entry('vector.ph', entry)
+        require(r'^  br label %vector\.body(?:, ![^\n]*)?$', block(consumer, 'vector.ph'))
         require(rf'^  %avl = phi i64 \[ {counts}, %vector\.ph \], '
                 r'\[ %avl\.next, %vector\.body \]', vector)
         length = require(r'^  (%[-\w.$]+) = call i32 '
@@ -143,6 +172,27 @@ def check_compact_count(producer, consumer, name, evl):
                 require(rf', i32 {re.escape(length)}\)(?:, ![^\n]*)?$', line)
         done = require(r'^  (%[-\w.$]+) = icmp eq i64 %avl\.next, 0(?:, ![^\n]*)?$', vector)[1]
         branch(vector, done, 'middle.block', 'vector.body')
+        # The second LV also forwards ordered FP results out of vector.body.
+        # Accept either the actual result or exactly one single-input PHI in
+        # middle.block on that edge. Scalar integer reductions are already in
+        # middle.block. Keep every empty-path start and the nonempty join edge.
+        middle = block(consumer, 'middle.block')
+        single_entry('middle.block', vector)
+        single_entry('scalar.fission.consumer.loopexit', middle)
+        require(r'^  br label %scalar\.fission\.consumer\.exit(?:, ![^\n]*)?$',
+                block(consumer, 'scalar.fission.consumer.loopexit'))
+        integers = re.findall(r'^  (%[-\w.$]+) = call i(?:32|64) '
+                              r'@llvm\.vector\.reduce\.add\.nxv4i(?:32|64)\(', middle, re.M)
+        integer_starts = [value for value, ty, _ in starts[name] if ty.startswith('i')]
+        assert [results[value] for value in integer_starts] == integers, exit_block
+        for value, ty, _ in starts[name]:
+            if ty.startswith('i'):
+                continue
+            reduced = require(rf'^  (%[-\w.$]+) = call {ty} '
+                              r'@llvm\.vp\.reduce\.fadd\.', vector)[1]
+            if results[value] != reduced:
+                assert phi_inputs(middle, results[value], ty) == [
+                    (reduced, '%vector.body')], middle
     else:
         # Check the vector bound's rounding input, its bypass/tail checks, and
         # the scalar tail's terminating bound. Incidental/dead uses do not count.

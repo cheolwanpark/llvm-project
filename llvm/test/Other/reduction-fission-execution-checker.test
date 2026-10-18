@@ -73,20 +73,24 @@ assert compact.startswith('define void @compact_triangle(') and compact.endswith
 assert ('%pi = phi i64 [ 0, %preheader ], [ %next, %latch ]\n'
         '  call void @record_compact_iteration()') in compact
 
-# SCEV expansion can use either the single-input LCSSA export or the identical
-# latch value. Check actual control operands, even if a dead use of the export
-# remains in the consumer. Do not accept any other purported equivalent bound.
+# SCEV expansion can use the export or latch value; repeated LV forwards the
+# latter through one PHI in the guard. Check actual definitions, edges and
+# control operands, even if a dead use of the original export remains.
 compact_tail = checker.function_definition(source, 'compact_triangle')
 producer, _ = checker.scalar_consumer(compact_tail, 'compact_triangle')
 compact_evl = producer + Path(sys.argv[3]).read_text().rstrip()
 exported = '%fission.participating.count'
 merged = '%fission.participating.merge'
+forwarded = merged + '.lcssa'
+forwarding_phi = '  ' + forwarded + ' = phi i64 [ ' + merged + ', %latch ]\n'
 
 
 def change_line(body, value, old, new):
     lines = [line for line in body.splitlines() if line.startswith('  ' + value + ' = ')]
-    assert len(lines) == 1 and old in lines[0], (value, old, body)
-    return body.replace(lines[0], lines[0].replace(old, new), 1)
+    assert len(lines) == 1, (value, body)
+    definition, expression = lines[0].split(' = ', 1)
+    assert old in expression, (value, old, expression)
+    return body.replace(lines[0], definition + ' = ' + expression.replace(old, new), 1)
 
 
 def reject_compact(body, evl, reason):
@@ -99,20 +103,29 @@ def reject_compact(body, evl, reason):
 
 
 for evl, original in ((False, compact_tail), (True, compact_evl)):
-    for bound in (exported, merged):
+    for bound in (exported, merged, forwarded):
         producer, consumer = checker.scalar_consumer(original, 'compact_triangle')
+        if bound == forwarded:
+            producer = producer.replace('scalar.fission.consumer.guard:\n',
+                                        'scalar.fission.consumer.guard:\n' + forwarding_phi)
         candidate = (producer + 'scalar.fission.consumer.ph:\n' +
                      consumer.replace(exported, bound))
-        if bound == merged:
+        if bound != exported:
             assert exported not in checker.scalar_consumer(candidate, 'compact_triangle')[1]
         assert checker.check_scalar_function(candidate, 'compact_triangle', evl=evl) == candidate
         # Forwarding in the zero check is also valid after proving the export.
-        forwarded_guard = change_line(candidate, '%fission.empty', exported, merged)
-        checker.check_scalar_function(forwarded_guard, 'compact_triangle', evl=evl)
+        guard_bounds = (exported, merged) + ((forwarded,) if bound == forwarded else ())
+        for guard_bound in guard_bounds:
+            forwarded_guard = change_line(candidate, '%fission.empty', exported, guard_bound)
+            checker.check_scalar_function(forwarded_guard, 'compact_triangle', evl=evl)
 
         controls = (['%avl'] if evl else
                     ['%min.iters.check', '%n.mod.vf', '%n.vec', '%cmp.n',
                      '%fission.consumer.more'])
+        same_prefix = candidate.replace(
+            'scalar.fission.consumer.guard:\n',
+            'scalar.fission.consumer.guard:\n  ' + forwarded +
+            '.unrelated = phi i64 [ %n, %latch ]\n')
         for control in controls:
             # Vector control may forward the count while the scalar tail
             # still uses its export, or conversely. Both are exactly P.
@@ -120,9 +133,13 @@ for evl, original in ((False, compact_tail), (True, compact_evl)):
             checker.check_scalar_function(change_line(candidate, control, bound, other),
                                           'compact_triangle', evl=evl)
             for wrong in ('%n', '%unrelated', '%fission.participating',
-                          '%fission.participating.next', '65'):
+                          '%fission.participating.next', '65',
+                          merged + '.unrelated', forwarded + '.unrelated',
+                          exported + '.lcssa'):
                 reject_compact(change_line(candidate, control, bound, wrong), evl,
                                control + ' bound ' + wrong)
+            reject_compact(change_line(same_prefix, control, bound, forwarded + '.unrelated'),
+                           evl, 'defined same-prefix original-trip bound at ' + control)
         conditions = (['%done.evl'] if evl else
                       ['%min.iters.check', '%vector.done', '%cmp.n', '%fission.consumer.more'])
         for condition in conditions:
@@ -152,7 +169,7 @@ for evl, original in ((False, compact_tail), (True, compact_evl)):
 
         for old, new in [
             ('icmp eq', 'icmp ne'), (', 0', ', 1'), (exported, '%n'),
-            (exported, '%unrelated'),
+            (exported, '%unrelated'), (exported, forwarded + '.unrelated'),
         ]:
             reject_compact(change_line(candidate, '%fission.empty', old, new),
                            evl, 'incorrect empty-stream comparison')
@@ -167,8 +184,17 @@ for evl, original in ((False, compact_tail), (True, compact_evl)):
                            'missing/incorrect empty-stream branch')
         reject_compact(candidate.replace('  %fission.empty = icmp eq i64 ' + exported + ', 0\n', ''),
                        evl, 'missing empty-stream comparison')
-        reject_compact(change_line(candidate, '%rd.result', '%start', '0.000000e+00'),
-                       evl, 'changed empty-stream initial accumulator')
+        for value, start, wrong in [('%r0.result', '17', '0'),
+                                    ('%r1.result', '-7', '0'),
+                                    ('%rd.result', '%start', '0.000000e+00'),
+                                    ('%rf.result', '%fstart', '0.000000e+00')]:
+            reject_compact(change_line(candidate, value, start, wrong),
+                           evl, 'changed empty-stream initial accumulator ' + value)
+            for old, new in [('%scalar.fission.consumer.guard', '%left'),
+                             ('%scalar.fission.consumer.loopexit', '%vector.body'),
+                             (' ]', ' ], [ ' + start + ', %entry ]')]:
+                reject_compact(change_line(candidate, value, old, new),
+                               evl, 'incorrect result incoming edge/cardinality ' + value)
 
         # In particular, using the latch bound must not hide a broken guard
         # export. Check edge, incoming value, cardinality and counter linkage.
@@ -176,16 +202,101 @@ for evl, original in ((False, compact_tail), (True, compact_evl)):
             (exported, merged, '%n'),
             (exported, merged, '%unrelated'),
             (exported, merged, '%fission.participating.next'),
+            (exported, merged, forwarded + '.unrelated'),
             (exported, '%latch', '%left'),
             (exported, ' ]', ' ], [ %n, %entry ]'),
             ('%fission.participating', '[ 0,', '[ 1,'),
             ('%fission.participating', merged, '%pi'),
+            ('%fission.participating', '%latch', '%left'),
             (merged, '%fission.participating, %loop', '%pi, %loop'),
+            (merged, '%left', '%preheader'),
+            (merged, ' ]', ' ], [ %n, %entry ]'),
             ('%fission.participating.next', '%fission.participating, 1', '%pi, 1'),
             ('%fission.participating.next', ', 1', ', 2'),
         ]:
             reject_compact(change_line(candidate, value, old, new), evl,
                            'broken count linkage at ' + value)
+
+        # A correct PHI spelling does not establish the real entry edge.
+        reject_compact(candidate.replace('preheader:\n  br label %loop',
+                                         'preheader:\n  br label %scalar.fission.consumer.guard'),
+                       evl, 'extra guard predecessor')
+        reject_compact(candidate.replace('  br label %loop\nloop:',
+                                         '  br label %scalar.fission.consumer.ph\nloop:'),
+                       evl, 'extra consumer preheader predecessor')
+
+        if bound == forwarded:
+            # No arbitrary suffix, copy chain, wrong edge or multi-input PHI
+            # qualifies as the one demonstrated LCSSA export of the latch.
+            for old, new in [
+                (merged, '%n'), (merged, '%unrelated'), (merged, exported),
+                (merged, '%fission.participating'),
+                (merged, '%fission.participating.next'),
+                (merged, forwarded + '.unrelated'),
+                ('%latch', '%left'), ('%latch', '%loop'),
+                (' ]', ' ], [ ' + merged + ', %left ]'),
+                (' ]', ' ], [ %n, %entry ]'),
+            ]:
+                reject_compact(change_line(candidate, forwarded, old, new), evl,
+                               'incorrect forwarding PHI: ' + new)
+            reject_compact(candidate.replace(forwarding_phi, ''), evl,
+                           'undefined forwarding value')
+            moved = candidate.replace(forwarding_phi, '').replace(
+                'scalar.fission.consumer.ph:\n',
+                'scalar.fission.consumer.ph:\n' + forwarding_phi)
+            reject_compact(moved, evl, 'forwarding PHI outside guard')
+            reject_compact(change_line(forwarded_guard, '%fission.empty',
+                                       forwarded, forwarded + '.unrelated'),
+                           evl, 'unrelated forwarding value in empty guard')
+
+        if evl:
+            # Ordered double/float results may be direct or each forwarded
+            # through exactly one middle.block PHI. All combinations keep the
+            # actual reduction result and the vector.body incoming edge.
+            for exports in (('dr',), ('fr',), ('dr', 'fr')):
+                result_candidate = candidate
+                for value in exports:
+                    ty = 'double' if value == 'dr' else 'float'
+                    result_phi = f'  %{value}.lcssa = phi {ty} [ %{value}, %vector.body ]\n'
+                    result_candidate = result_candidate.replace(
+                        'middle.block:\n', 'middle.block:\n' + result_phi)
+                    result_candidate = change_line(result_candidate,
+                                                   '%rd.result' if value == 'dr' else '%rf.result',
+                                                   '%' + value + ',', '%' + value + '.lcssa,')
+                checker.check_scalar_function(result_candidate, 'compact_triangle', evl=True)
+                for value in exports:
+                    result = '%rd.result' if value == 'dr' else '%rf.result'
+                    for old, new in [
+                        ('[ %' + value + ',', '[ %unrelated,'),
+                        ('[ %' + value + ',', '[ %' + value + '.unrelated,'),
+                        ('%vector.body', '%vector.ph'),
+                        (' ]', ' ], [ %' + value + ', %vector.ph ]'),
+                    ]:
+                        reject_compact(change_line(result_candidate, '%' + value + '.lcssa', old, new),
+                                       True, 'broken result forwarding at ' + value)
+                    reject_compact(change_line(result_candidate, result,
+                                               '%' + value + '.lcssa,', '%' + value + '.lcssa.unrelated,'),
+                                   True, 'unrelated same-prefix result')
+                    # Preserve the PHI but move it away from the vector exit.
+                    ty = 'double' if value == 'dr' else 'float'
+                    result_phi = f'  %{value}.lcssa = phi {ty} [ %{value}, %vector.body ]\n'
+                    same_prefix = result_candidate.replace(
+                        'middle.block:\n', 'middle.block:\n' +
+                        f'  %{value}.lcssa.unrelated = phi {ty} [ %start, %vector.body ]\n')
+                    reject_compact(change_line(same_prefix, result,
+                                               '%' + value + '.lcssa,', '%' + value + '.lcssa.unrelated,'),
+                                   True, 'defined unrelated same-prefix result')
+                    reject_compact(result_candidate.replace(result_phi, '').replace(
+                        'scalar.fission.consumer.loopexit:\n',
+                        'scalar.fission.consumer.loopexit:\n' + result_phi),
+                        True, 'result forwarding outside middle.block')
+            for result, old in (('%rd.result', '%dr,'), ('%rf.result', '%fr,'),
+                                ('%r0.result', '%ir,'), ('%r1.result', '%ir2,')):
+                reject_compact(change_line(candidate, result, old, '%unrelated,'),
+                               True, 'unrelated nonempty result')
+            reject_compact(candidate.replace('  br label %vector.ph\nvector.ph:',
+                                             '  br label %middle.block\nvector.ph:'),
+                           True, 'extra vector exit predecessor')
 
 # Fixed-vscale specialization must fail before handing unsupported EVL/VP
 # operations to a host backend. Renaming scalable types alone is not sound.
@@ -364,12 +475,13 @@ vector.body:
   br i1 %done.evl, label %middle.block, label %vector.body
 middle.block:
   %ir = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %il)
+  %ir2 = call i32 @llvm.vector.reduce.add.nxv4i32(<vscale x 4 x i32> %il)
   br label %scalar.fission.consumer.loopexit
 scalar.fission.consumer.loopexit:
   br label %scalar.fission.consumer.exit
 scalar.fission.consumer.exit:
   %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ], [ %ir, %scalar.fission.consumer.loopexit ]
-  %r1.result = phi i32 [ -7, %scalar.fission.consumer.guard ], [ %ir, %scalar.fission.consumer.loopexit ]
+  %r1.result = phi i32 [ -7, %scalar.fission.consumer.guard ], [ %ir2, %scalar.fission.consumer.loopexit ]
   %rd.result = phi double [ %start, %scalar.fission.consumer.guard ], [ %dr, %scalar.fission.consumer.loopexit ]
   %rf.result = phi float [ %fstart, %scalar.fission.consumer.guard ], [ %fr, %scalar.fission.consumer.loopexit ]
   ret void
