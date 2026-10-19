@@ -1,9 +1,13 @@
 # Backend-aware VPlan cost tools
 
-Active variant: **backend-aware-cost**, the full Python backend cost model.
+Active variant: **spill-aware**, a fixed ablation replacing only the middle-end
+spill estimate with TTI-priced observed spills. Incomplete spill observations use
+the existing estimate; unproven iteration mappings are excluded. Fitting and
+weights are unsupported. `--spill-count-unit instruction|register` defaults to
+`instruction`.
 
 `spill-reject` and `spill-aware` are fixed-policy ablation branches derived
-directly from this branch. All three share middle-end/backend observations,
+directly from `backend-aware-cost`. All three share middle-end/backend observations,
 protocol v3, the meta compiler and tools; only the Python selection policy and
 its tests/documentation differ. `--llvm-path` selects that checkout's compiler
 and policy together.
