@@ -120,7 +120,7 @@ There is no single-ID filter or database split override for this command.
 fold starts a new optimizer with the same fit seed and initial-state rules.
 Only its four training folds determine pairs, active parameters and the winning
 training objective. Held-out measurements never select weights or stopping
-steps. All fitting settings below also apply, except `--fit-seed` replaces
+steps. All fitting settings below, including `--objective`, also apply, except `--fit-seed` replaces
 `calibrate`'s `--seed`. Defaults remain 16 starts, 2,000 steps, CPU float64.
 Hyperparameters must be fixed before evaluating the held-out folds; this command
 does not perform nested CV or choose hyperparameters from the OOF scores.
@@ -245,7 +245,30 @@ Scalar instruction cost stays fixed at 0.5 model units to anchor the scale.
 Parameters absent from the observations stay at multiplier 1. Dependency graphs
 are compiled into batched max-plus operations once, not rebuilt per fitting step.
 
-## Weighted pairwise fitting
+## Training objectives
+
+`calibrate` and `evaluate-cv` accept `--objective
+weighted-pairwise|log-cycle-regression|soft-regret`. The default is
+`weighted-pairwise`. All three use the existing 19-parameter hard-min/max model,
+positive bounded multipliers and identical optimizer settings. Multiple usable
+plans for one VF contribute their minimum predicted cost. Every training loop
+has equal weight.
+
+Use the existing commands with the desired objective, for example from
+`utils/vplan-tools`:
+
+```sh
+uv run python calibrate --objective log-cycle-regression --output /tmp/regression-weights.json
+uv run python calibrate --objective soft-regret --temperature 0.1 --output /tmp/regret-weights.json
+uv run python evaluate-weights --weights /tmp/regret-weights.json --metric-mode ranking
+uv run python evaluate-cv --objective soft-regret --temperature 0.1 \
+  --output-dir .cache/cv-soft-regret
+```
+
+Use `--objective weighted-pairwise` or omit `--objective` for the original loss.
+Evaluation reads the saved weights and does not need an objective option.
+
+### Weighted pairwise
 
 For a faster measured candidate a and slower b, retain the pair only when
 `(cycles_b - cycles_a) / cycles_a > pair_threshold`. The inclusive comparison is
@@ -277,11 +300,50 @@ start uses existing coefficients; other starts are log-uniform between 0.5 and 2
 clipped to the configured bounds. Starts are independent rows in one CPU float64
 batch. The lowest regularized tuning objective across every start and step is
 saved. Validation is never loaded for fitting, early stopping, or weight selection.
-No regression, soft-regret, or smooth-max objective is implemented.
+The hard min/max model is used for every objective; there is no smooth-max approximation.
+
+### Relative log-cycle regression
+
+`--objective log-cycle-regression` means **within-loop centered log MSE**:
+
+```text
+predicted = log(cost) - mean_over_vfs(log(cost))
+measured  = log(cycles) - mean_over_vfs(log(cycles))
+loss = mean_over_loops(mean_over_vfs((predicted - measured)^2))
+       + regularization * mean(log(multiplier)^2)
+```
+
+Centering removes each loop's multiplicative scale difference between model units
+and whole-kernel cycle measurements. This fits relative VF cycle differences and
+does not calibrate absolute CPU cycles. Additive overhead in measurements is not
+removed by centering. `temperature`, `pair-threshold`, and `weight-saturation`
+do not affect this objective.
+
+### Soft regret
+
+`--objective soft-regret` uses the measured oracle-relative cost of each VF:
+
+```text
+p = softmax_over_vfs(-log(cost) / temperature)
+regret = cycles / min_over_vfs(cycles) - 1
+loss = mean_over_loops(sum_over_vfs(p * regret))
+       + regularization * mean(log(multiplier)^2)
+```
+
+Softmax is evaluated stably. `--temperature` defaults to 0.1 and must be positive.
+Pair threshold and saturation do not affect soft regret. Both new objectives
+include otherwise eligible loops whose VF differences are at most 1%; pairwise
+continues excluding loops with no retained pairs. Thus actual training populations
+can differ, and the weights artifacts record their counts and exclusions.
+Evaluation always uses the hard argmin VF or verified final choice, never the
+soft expected training regret.
 
 `--output` is required. Version 2 JSON stores model version, multipliers, defaults,
 fixed parameters, settings, optimizer diagnostics, tuning IDs and fingerprint,
-compiler provenance, exclusions, and initial/fitted tuning metrics. It is a plain
+compiler provenance, exclusions, and initial/fitted tuning metrics. It also records
+`objective_id`, `formulation`, `settings.objective`, and `ignored_settings`. The
+model version and weights schema remain unchanged; existing weight files remain
+readable, subject to the existing compiler/extraction provenance checks. It is a plain
 JSON file, not a pickle or an LLVM configuration file.
 
 ## Evaluation and exclusions
@@ -395,6 +457,10 @@ VPLAN_CLANG="$PWD/../../build-vplan-tools/bin/clang" \
 The ordinary tests need no external database or LLVM build. Optional integration
 tests verify extraction, analytics-only operation, backend/default formula
 agreement, and the original O2/O3 feedback pipeline.
+
+Objective tests cover centered-log scale invariance, expected-regret values,
+temperature limits, padded loop averaging, gradients, bounds and near-tie
+eligibility.
 
 CV tests additionally cover deterministic ID grouping, training/held-out
 separation, held-out measurement isolation, per-fold replay weights, pooled

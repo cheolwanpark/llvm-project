@@ -20,11 +20,7 @@ from selection_evaluation import selection_row, summarize_rows
 import vplan_tools as vt
 
 FOLDS = 5
-FIT_DEFAULTS = {
-    "learning_rate": .03, "min_multiplier": .25, "max_multiplier": 4.,
-    "min_tail_scale": 1 / 64, "max_tail_scale": 64., "temperature": .1,
-    "weight_saturation": 1.25, "pair_threshold": .01, "regularization": .001,
-}
+FIT_DEFAULTS = cal.FIT_DEFAULTS
 
 
 def make_folds(ids, seed):
@@ -58,10 +54,7 @@ def parser():
     result.add_argument("--cache-dir", type=vt.resolved_path, default=vt.TOOLS / ".cache/analytics")
     result.add_argument("--artifacts-dir", type=vt.resolved_path)
     result.add_argument("--skip-build", action="store_true", help="reuse existing clang and llvm-extract")
-    result.add_argument("--starts", type=vt.positive_int, default=16)
-    result.add_argument("--steps", type=vt.positive_int, default=2000)
-    for name, default in FIT_DEFAULTS.items():
-        result.add_argument("--" + name.replace("_", "-"), type=cal.finite_float, default=default)
+    cal.add_fit_options(result)
     return result
 
 
@@ -70,11 +63,7 @@ def parse_args(argv):
     args = p.parse_args(argv)
     if args.compiler_mode != "meta":
         p.error("cross validation requires --compiler-mode meta")
-    if not (0 < args.min_multiplier <= 1 <= args.max_multiplier and args.min_multiplier < args.max_multiplier
-            and 0 < args.min_tail_scale <= 1 <= args.max_tail_scale and args.min_tail_scale < args.max_tail_scale
-            and args.learning_rate > 0 and args.temperature > 0 and args.weight_saturation > 1
-            and args.pair_threshold >= 0 and args.regularization >= 0):
-        p.error("invalid fitting bounds, rate, temperature, saturation, threshold, or regularization")
+    cal.validate_fit_options(p, args)
     # calibration.fit owns its own torch.Generator; it never uses the split RNG.
     args.seed = args.fit_seed
     return args
@@ -91,9 +80,7 @@ def fit_fold(train, clang, args, identity, metadata, cv_context, path):
         "default_multipliers": dict.fromkeys(PARAMETERS, 1.),
         "fixed": {"scalar_instruction": .5,
                   "unobserved_parameters": [p for i, p in enumerate(PARAMETERS) if i not in model.active]},
-        "settings": {k: getattr(args, k) for k in ("starts", "steps", "seed", *FIT_DEFAULTS)},
-        "optimizer": "Adam/CPU/float64",
-        "objective": "loop-mean weighted pairwise logistic + mean log-multiplier L2",
+        **cal.fit_metadata(args),
         "dataset": metadata, "compiler_identity": identity,
         # Retain the existing weight reader/provenance contract. These are this
         # fold's training IDs, regardless of their original database labels.
@@ -227,6 +214,7 @@ def main(argv=None):
                   cv_implementation=cal.digest_file(Path(__file__)),
                   folds=[], complete=False, successful=False)
     all_rows, all_rankings = [], []
+    report.update(cal.fit_metadata(args))
     started = time.perf_counter()
     print(f"CV: {len(benchmarks)} benchmarks; held-out sizes={[len(f) for f in folds]}; "
           f"split seed={args.split_seed}, fit seed={args.fit_seed}", flush=True)

@@ -52,8 +52,9 @@ uv run python evaluate-weights --weights /tmp/weights.json \
 no split override. Evaluation defaults to Top-1/regret of the final replayed VF;
 `--metric-mode ranking` retains cost-ranking diagnostics. `evaluate` uses default Python costs; `evaluate-weights` uses fitted
 coefficients in the same model. Fitting preserves the hard-max analytical structure, learns 19
-shared internal coefficient multipliers with weighted pairwise ranking, and
-excludes measured pairs within 1%. Learned coefficients are not installed into
+shared internal coefficient multipliers with selectable weighted pairwise ranking,
+within-loop centered log-cycle regression, or soft regret. Pairwise remains the
+default and excludes measured pairs within 1%. Learned coefficients are not installed into
 LLVM; the meta compiler accepts `--weights` and sends only selected IDs to LLVM. Unsupported or ambiguous observations are reported as exclusions; the
 usable population may be smaller than the partition.
 
@@ -78,6 +79,7 @@ uv run --project utils/vplan-tools python utils/vplan-tools/evaluate-cv \
 
 The held-out sizes are 49/49/49/48/48. Default evaluation verifies the final
 replayed selection; `--metric-mode ranking` runs numerical ranking diagnostics.
+`--objective` selects the training loss.
 Fitting defaults remain 16 starts and 2,000 steps per fold. `--skip-build` reuses
 existing compiler binaries. Results include `folds.json`, per-fold weights and
 metrics, and `summary.json` with pooled out-of-fold (OOF) metrics and fold

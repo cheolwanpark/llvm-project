@@ -88,7 +88,7 @@ class CVTests(unittest.TestCase):
         result.candidate_status["policy"] = load_policy(weights_path=kwargs["weights"]).identity
         return result
 
-    def run_cv(self, name, mode="ranking", collect=None, replay=None):
+    def run_cv(self, name, mode="ranking", collect=None, replay=None, objective="weighted-pairwise"):
         out = self.root / name
         with patch.object(vt, "ensure_compiler", return_value=Path("/fake/clang")), \
              patch.object(cal, "collector_identity", return_value={"compiler": "test"}), \
@@ -96,8 +96,41 @@ class CVTests(unittest.TestCase):
              patch.object(vt, "compile_report", side_effect=replay or self.replay), \
              patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
             code = cv.main(["--db", str(self.db), "--output-dir", str(out),
-                            "--metric-mode", mode, "--starts", "2", "--steps", "4"])
+                            "--metric-mode", mode, "--objective", objective, "--starts", "2", "--steps", "4"])
         return code, json.loads((out / "summary.json").read_text()), out
+
+    def test_each_new_objective_supports_ranking_and_selection(self):
+        before = self.db.read_bytes()
+        for objective in ("log-cycle-regression", "soft-regret"):
+            for mode in ("ranking", "selection"):
+                with self.subTest(objective=objective, mode=mode), patch.object(cal, "fit", wraps=cal.fit) as fit:
+                    code, summary, out = self.run_cv(objective + "-" + mode, mode=mode, objective=objective)
+                    self.assertEqual(code, 0)
+                    self.assertEqual(fit.call_count, 5)
+                    self.assertTrue(summary["complete"] and summary["successful"])
+                    self.assertEqual(summary["settings"]["objective"], objective)
+                    self.assertEqual(len(summary["benchmarks"]), 11)
+                    self.assertEqual(summary["metrics"]["scored"], 11)
+                    for fold in summary["folds"]:
+                        directory = out / f"fold-{fold['fold']}"
+                        weights = json.loads((directory / "weights.json").read_text())
+                        evaluated = json.loads((directory / "evaluation.json").read_text())
+                        self.assertEqual(weights["settings"]["objective"], objective)
+                        self.assertEqual(evaluated["weights_sha256"], cal.digest_file(directory / "weights.json"))
+                    self.assertEqual(self.db.read_bytes(), before)
+
+    def test_new_objective_weights_ignore_held_out_measurements(self):
+        for objective in ("log-cycle-regression", "soft-regret"):
+            _, first, out = self.run_cv(objective + "-first", objective=objective)
+            held_out = first["folds"][0]["held_out_ids"]
+            before = json.loads((out / "fold-0/weights.json").read_text())
+            with sqlite3.connect(self.db) as con:
+                con.executemany("UPDATE measurements SET cycles=cycles+137 WHERE benchmark_id=? AND vf=2",
+                                [(i,) for i in held_out])
+            _, _, out2 = self.run_cv(objective + "-second", objective=objective)
+            after = json.loads((out2 / "fold-0/weights.json").read_text())
+            self.assertEqual(before["multipliers"], after["multipliers"])
+            self.assertEqual(before["fitting"], after["fitting"])
 
     def test_real_fit_and_ranking_cover_every_id_once_without_modifying_db(self):
         before = self.db.read_bytes()

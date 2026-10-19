@@ -1,4 +1,4 @@
-"""Raw-analytics collection, weighted pairwise fitting, and holdout evaluation."""
+"""Raw-analytics collection, analytical objective fitting, and holdout evaluation."""
 from __future__ import annotations
 
 import argparse
@@ -18,6 +18,48 @@ from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P, same_cont
 from observations import validate_manifest, bind_observation
 
 CACHE_VERSION = 4
+FIT_DEFAULTS = {
+    "learning_rate": .03, "min_multiplier": .25, "max_multiplier": 4.,
+    "min_tail_scale": 1 / 64, "max_tail_scale": 64., "temperature": .1,
+    "weight_saturation": 1.25, "pair_threshold": .01, "regularization": .001,
+}
+FORMULATIONS = {
+    "weighted-pairwise": "loop-mean weighted pairwise logistic",
+    "log-cycle-regression": "within-loop-centered-log-mse",
+    "soft-regret": "loop-mean softmax expected oracle regret",
+}
+
+
+def objective_name(args):
+    return getattr(args, "objective", "weighted-pairwise")
+
+
+def add_fit_options(parser):
+    parser.add_argument("--objective", choices=tuple(FORMULATIONS), default="weighted-pairwise")
+    parser.add_argument("--starts", type=vt.positive_int, default=16)
+    parser.add_argument("--steps", type=vt.positive_int, default=2000)
+    for name, default in FIT_DEFAULTS.items():
+        parser.add_argument("--" + name.replace("_", "-"), type=finite_float, default=default)
+
+
+def validate_fit_options(parser, args):
+    if not (0 < args.min_multiplier <= 1 <= args.max_multiplier and args.min_multiplier < args.max_multiplier
+            and 0 < args.min_tail_scale <= 1 <= args.max_tail_scale and args.min_tail_scale < args.max_tail_scale
+            and args.learning_rate > 0 and args.temperature > 0 and args.weight_saturation > 1
+            and args.pair_threshold >= 0 and args.regularization >= 0):
+        parser.error("invalid fitting bounds, rate, temperature, saturation, threshold, or regularization")
+
+
+def fit_metadata(args):
+    name = objective_name(args)
+    settings = {k: getattr(args, k) for k in ("starts", "steps", "seed", *FIT_DEFAULTS)}
+    settings["objective"] = name
+    ignored = [] if name == "weighted-pairwise" else ["weight_saturation", "pair_threshold"]
+    if name == "log-cycle-regression":
+        ignored.append("temperature")
+    return dict(settings=settings, objective_id=name, formulation=FORMULATIONS[name],
+                objective=FORMULATIONS[name] + " + mean log-multiplier L2",
+                ignored_settings=ignored, optimizer="Adam/CPU/float64")
 
 
 def digest_file(path):
@@ -151,8 +193,9 @@ def prepare(benchmarks, clang, args, identity, metadata, fitting):
             b = vt.restrict_measurements(b, candidate_vfs)
             if len(b.measured) < 2:
                 raise vt.ToolError("fewer than two compiler scalable VFs with measurements")
-            pairs = make_pairs(b.measured, args.pair_threshold, args.weight_saturation) if fitting else []
-            if fitting and not pairs:
+            pairwise = fitting and objective_name(args) == "weighted-pairwise"
+            pairs = make_pairs(b.measured, args.pair_threshold, args.weight_saturation) if pairwise else []
+            if pairwise and not pairs:
                 raise vt.ToolError("no pairs above the measurement threshold")
             # The compiler defines the comparison set before analytics filtering.
             # Unsupported alternatives are ignored only when another plan for
@@ -221,6 +264,54 @@ class RankingLoss:
         return pair + self.regularization * log_multipliers.square().mean(1)
 
 
+class LoopLoss:
+    """Equal loop weights, with padded VF rows for batched regression/regret."""
+
+    def __init__(self, model, examples, temperature, regularization, objective):
+        self.model, self.temperature, self.regularization = model, temperature, regularization
+        self.objective = objective
+        self.groups = [torch.tensor(g) for e in examples for g in e.groups]
+        width = max(len(e.vfs) for e in examples)
+        indices, masks, cycles = [], [], []
+        offset = 0
+        for e in examples:
+            size = len(e.vfs)
+            indices.append(list(range(offset, offset + size)) + [0] * (width - size))
+            masks.append([True] * size + [False] * (width - size))
+            cycles.append([e.benchmark.measured[v] for v in e.vfs] + [1] * (width - size))
+            offset += size
+        self.indices = torch.tensor(indices, dtype=torch.long)
+        self.mask = torch.tensor(masks, dtype=torch.bool)
+        self.count = self.mask.sum(1)
+        measured = torch.tensor(cycles, dtype=DTYPE)
+        logs = measured.log()
+        self.targets = (logs - (logs * self.mask).sum(1, keepdim=True) / self.count[:, None]) * self.mask
+        oracle = measured.masked_fill(~self.mask, math.inf).amin(1, keepdim=True)
+        self.regrets = measured / oracle - 1
+
+    def __call__(self, log_multipliers):
+        scores = self.model.scores(log_multipliers.exp())
+        costs = torch.stack([scores[:, g].amin(1) for g in self.groups], 1).log()
+        costs = costs[:, self.indices]
+        if self.objective == "log-cycle-regression":
+            centers = (costs * self.mask).sum(2, keepdim=True) / self.count[None, :, None]
+            errors = (costs - centers - self.targets).square() * self.mask
+            data = (errors.sum(2) / self.count).mean(1)
+        else:
+            probabilities = (-costs / self.temperature).masked_fill(~self.mask, -math.inf).softmax(2)
+            data = (probabilities * self.regrets).sum(2).mean(1)
+        return data + self.regularization * log_multipliers.square().mean(1)
+
+
+def make_objective(model, examples, args):
+    name = objective_name(args)
+    if name == "weighted-pairwise":
+        return RankingLoss(model, examples, args.temperature, args.regularization)
+    if name not in FORMULATIONS:
+        raise vt.ToolError(f"unknown fitting objective: {name}")
+    return LoopLoss(model, examples, args.temperature, args.regularization, name)
+
+
 def fit(model, examples, args):
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(True)
@@ -233,7 +324,7 @@ def fit(model, examples, args):
     initial.clamp_(lo, hi).mul_(active)
     logs = torch.nn.Parameter(initial)
     optimizer = torch.optim.Adam([logs], lr=args.learning_rate)
-    objective = RankingLoss(model, examples, args.temperature, args.regularization)
+    objective = make_objective(model, examples, args)
     best = math.inf
     best_logs, best_start, best_step = None, None, None
     start_best = [math.inf] * args.starts
@@ -300,36 +391,24 @@ def initialize(args, split):
 def calibrate_main(argv=None):
     parser = common_parser("Fit shared analytical coefficients using tuning data only.")
     parser.add_argument("--output", required=True, type=vt.resolved_path, help="weights and tuning diagnostics JSON")
-    parser.add_argument("--starts", type=vt.positive_int, default=16)
-    parser.add_argument("--steps", type=vt.positive_int, default=2000)
+    add_fit_options(parser)
     parser.add_argument("--seed", type=int, default=0)
-    for name, default in (("learning-rate", .03), ("min-multiplier", .25), ("max-multiplier", 4.),
-                          ("min-tail-scale", 1/64), ("max-tail-scale", 64.), ("temperature", .1), ("weight-saturation", 1.25),
-                          ("pair-threshold", .01), ("regularization", .001)):
-        parser.add_argument("--" + name, type=finite_float, default=default)
     args = parser.parse_args(argv)
     from selection import load_policy
     if not load_policy(args.llvm_path).supports_fit:
         raise vt.ToolError("this is a fixed ablation policy; fitting and weights are unsupported")
-    if not (0 < args.min_multiplier <= 1 <= args.max_multiplier and args.min_multiplier < args.max_multiplier
-            and 0 < args.min_tail_scale <= 1 <= args.max_tail_scale and args.min_tail_scale < args.max_tail_scale
-            and args.learning_rate > 0 and args.temperature > 0 and args.weight_saturation > 1
-            and args.pair_threshold >= 0 and args.regularization >= 0):
-        parser.error("invalid fitting bounds, rate, temperature, saturation, threshold, or regularization")
+    validate_fit_options(parser, args)
     benchmarks, metadata, clang, identity = initialize(args, "tuning")
     model, examples, excluded, provenance = prepare(benchmarks, clang, args, identity, metadata, True)
     weights, diagnostics = fit(model, examples, args)
     results = results_for(model, examples, weights)
     initial = results_for(model, examples, torch.ones(P, dtype=DTYPE))
-    config_keys = ("starts", "steps", "seed", "learning_rate", "min_multiplier", "max_multiplier",
-                   "temperature", "weight_saturation", "pair_threshold", "regularization", "min_tail_scale", "max_tail_scale")
     artifact = {"schema_version": 2, "model_version": MODEL_VERSION,
         "multipliers": dict(zip(PARAMETERS, weights.tolist(), strict=True)),
         "default_multipliers": dict.fromkeys(PARAMETERS, 1.),
         "fixed": {"scalar_instruction": .5,
                   "unobserved_parameters": [p for i, p in enumerate(PARAMETERS) if i not in model.active]},
-        "settings": {k: getattr(args, k) for k in config_keys}, "optimizer": "Adam/CPU/float64",
-        "objective": "loop-mean weighted pairwise logistic + mean log-multiplier L2",
+        **fit_metadata(args),
         "dataset": metadata, "compiler_identity": identity,
         "tuning_ids": [b.id for b in benchmarks],
         "tuning_fingerprint": digest_json([{"id": b.id, "source": b.source, "args": b.compile_args,
