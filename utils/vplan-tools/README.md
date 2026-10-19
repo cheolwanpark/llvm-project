@@ -367,8 +367,14 @@ regret, exclusion counts, the highest regrets and evaluation time directly to th
 terminal. Progress and individual exclusion reasons go to stderr. There are no
 result-file output options; compilation uses temporary files that are cleaned up.
 
-The default `--metric-mode selection` selects from all generated candidates before
-joining to measurements. Top-1 exact compares the replayed VF with the measured
+The backend-aware policy selects only scalable (`sN`) candidates, with both
+default and fitted weights. Fixed (`fN`) candidates remain in manifests and raw
+analytics, but cannot win even with a lower or tied cost. Scalable cost ties keep
+candidate enumeration order. If no scalable candidate has a usable score, the
+policy selects scalar with reason `no evaluable scalable vector candidates`.
+
+The default `--metric-mode selection` applies this policy before joining to
+measurements. Top-1 exact compares the replayed VF with the measured
 winner within the compiler's scalable VF set (smaller VF breaks measured ties).
 Regret is its measured cycles divided by the best measured cycles in that set,
 minus one. Missing measurements for any compiler VF, scalar or fixed VF choices,

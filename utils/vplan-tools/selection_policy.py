@@ -6,6 +6,7 @@ from cost_model import load_weights, score_observation
 class Policy(PolicyBase):
     name = "backend-aware-cost"
     supports_fit = True
+    scalar_reason = "no evaluable scalable vector candidates"
 
     def __init__(self, weights_path=None, spill_count_unit=None):
         super().__init__(weights_path, spill_count_unit)
@@ -14,3 +15,7 @@ class Policy(PolicyBase):
     def evaluate(self, candidate, observation):
         breakdown = score_observation(observation, self.weights)
         return {"status": "scored", "score": breakdown["score"], "breakdown": breakdown}
+
+    def choose(self, rows):
+        return super().choose([(candidate, status) for candidate, status in rows
+                               if candidate["vf"].startswith("s")])

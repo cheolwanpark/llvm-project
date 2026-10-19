@@ -58,6 +58,10 @@ default and excludes measured pairs within 1%. Learned coefficients are not inst
 LLVM; the meta compiler accepts `--weights` and sends only selected IDs to LLVM. Unsupported or ambiguous observations are reported as exclusions; the
 usable population may be smaller than the partition.
 
+The backend-aware policy selects only scalable VFs with both default and fitted
+weights. Fixed VFs remain available for diagnostics but cannot be selected;
+loops without a scoreable scalable candidate fall back to scalar.
+
 ## Five-fold cross validation
 
 The current dataset contains **243 benchmarks and 1,685 measurements**, targeting

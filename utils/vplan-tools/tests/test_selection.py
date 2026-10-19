@@ -145,6 +145,36 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(select_loops(Policy(), manifest, statuses)[0]['id'], '1')
         self.assertTrue(select_loops(Policy(), manifest, [dict(status='unsupported')] * 3)[0]['scalar'])
 
+    def test_backend_policy_ignores_fixed_candidates_with_default_or_fitted_weights(self):
+        from selection_policy import Policy
+        fitted_weights = object()
+        with patch('selection_policy.load_weights', return_value=({}, fitted_weights)):
+            policies = [Policy(), Policy('weights.json')]
+        self.assertIs(policies[1].weights, fitted_weights)
+        for policy in policies:
+            for fixed_score in (1, 3):
+                with self.subTest(fitted=policy.weights is not None, fixed_score=fixed_score):
+                    r = result(candidate_vfs=('f8', 's2', 's4'))
+                    statuses = [dict(status='scored', score=fixed_score if c['vf'] == 'f8' else 3)
+                                for c in r.manifest['candidates']]
+                    choice = select_loops(policy, r.manifest, statuses)[0]
+                    self.assertEqual(choice['id'], 'selected_kernel:0:0:s2')
+                    self.assertEqual([c['vf'] for c in r.manifest['candidates']], ['f8', 's2', 's4'])
+
+    def test_backend_policy_falls_back_when_no_scalable_candidate_is_evaluable(self):
+        from selection_policy import Policy
+        for candidate_vfs, statuses in (
+            (('f8',), [dict(status='scored', score=1)]),
+            (('f8', 's2', 's4'), [dict(status='scored', score=1),
+                                 dict(status='unsupported'), dict(status='probe-failed')]),
+        ):
+            with self.subTest(candidate_vfs=candidate_vfs):
+                r = result(vf=candidate_vfs[0], candidate_vfs=candidate_vfs)
+                choice = select_loops(Policy(), r.manifest, statuses)[0]
+                self.assertTrue(choice['scalar'])
+                self.assertNotIn('id', choice)
+                self.assertEqual(choice['reason'], 'no evaluable scalable vector candidates')
+
 
 class ComparisonTests(unittest.TestCase):
     def test_comparison_audits_context_and_preserves_exclusions(self):
