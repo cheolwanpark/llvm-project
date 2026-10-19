@@ -252,11 +252,12 @@ static const SCEV *getScalarFissionExitWitness(Loop &L, ScalarEvolution &SE,
   return Witness;
 }
 
-static std::optional<uint64_t> getScalarFissionScratchBytes(
-    uint64_t MaxTripCount, const MapVector<Value *, AllocaInst *> &Scratch,
-    const DataLayout &DL) {
+static std::optional<uint64_t>
+getScalarFissionScratchBytes(uint64_t MaxTripCount,
+                            ArrayRef<Value *> Contributions,
+                            const DataLayout &DL) {
   uint64_t ScratchBytes = 0;
-  for (const auto &[Contribution, Slot] : Scratch) {
+  for (Value *Contribution : Contributions) {
     Type *Ty = Contribution->getType();
     uint64_t Bytes = DL.getTypeAllocSize(Ty).getFixedValue();
     uint64_t Alignment = DL.getABITypeAlign(Ty).value();
@@ -273,24 +274,81 @@ static std::optional<uint64_t> getScalarFissionScratchBytes(
   return ScratchBytes;
 }
 
-Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
-                                     ScalarEvolution &SE,
-                                     OptimizationRemarkEmitter &ORE) {
-  if (!isReductionFissionEnabled() || !EnableScalarReductionFission ||
-      isReductionFissionStage(L))
-    return nullptr;
+namespace {
 
+struct Reduction {
+  PHINode *Phi;
+  Instruction *Update;
+  // Conditional recurrences merge an arm-local update with the unchanged
+  // header accumulator. This merge, rather than Update, is their live-out.
+  PHINode *Merge;
+  Value *Contribution;
+  unsigned ContributionOperand;
+  Value *Start;
+};
+
+struct ProducerState {
+  PHINode *Phi;
+  Value *Start;
+  Value *Backedge;
+};
+
+struct ProducerExport {
+  PHINode *ExitPhi;
+  unsigned IncomingIndex;
+  Instruction *Value;
+};
+
+struct ExitEdge {
+  PHINode *Phi;
+  unsigned IncomingIndex;
+  Value *OriginalValue;
+};
+
+// A successful analysis owns no new IR. Ordered lists and edge snapshots keep
+// emission independent of mutations to the original producer and its uses.
+// Original instructions may be erased during emission; do not reuse the plan
+// after emitting its consumer.
+struct ScalarFissionPlan {
+  // Original control and metadata.
+  BasicBlock *Header;
+  BasicBlock *Latch;
+  BasicBlock *Preheader;
+  BasicBlock *Exit;
+  BranchInst *Branch;
+  ICmpInst *Compare;
+  PHINode *IV;
+  BinaryOperator *Next;
+  DebugLoc OriginalLoc;
+  MDNode *OriginalID;
+  // Recurrences and live-out snapshots, in original discovery order.
+  SmallVector<Reduction, 4> Reductions;
+  SmallVector<ProducerState, 4> RetainedState;
+  SmallVector<ProducerExport, 4> ProducerExportEdges;
+  SmallVector<Instruction *, 4> ProducerExports;
+  SmallVector<ExitEdge, 4> ExitEdges;
+  // Unique scratch streams and the checked allocation/scheduling decisions.
+  SmallVector<Value *, 4> Contributions;
+  uint64_t MaxTripCount;
+  uint64_t Capacity;
+  uint64_t ScratchBytes;
+  uint64_t ScratchTrafficBytes;
+  BasicBlock *ParticipationArm;
+  bool CanonicalCount;
+  bool CanonicalChunks;
+  bool Chunked;
+};
+
+} // namespace
+
+static Expected<ScalarFissionPlan>
+analyzeScalarReductionFission(Loop &L, DominatorTree &DT, ScalarEvolution &SE,
+                             OptimizationRemarkEmitter &ORE) {
   BasicBlock *Header = L.getHeader();
   Function *F = Header->getParent();
   DebugLoc OriginalLoc = L.getStartLoc();
-  auto Reject = [&](StringRef Reason) -> Loop * {
-    ORE.emit([&]() {
-      return OptimizationRemarkMissed("vplan-reduction-fission", "Rejected",
-                                      OriginalLoc, Header)
-             << "scalar-IR reduction fission rejected: "
-             << ore::NV("Reason", Reason);
-    });
-    return nullptr;
+  auto Reject = [](StringRef Reason) {
+    return createStringError(errc::not_supported, Reason);
   };
 
   BasicBlock *Latch = L.getLoopLatch();
@@ -344,16 +402,6 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   bool CanonicalCount = L.getCanonicalInductionVariable() == IV &&
                         Compare->isEquality() &&
                         Compare->getOperand(0) == Next;
-  struct Reduction {
-    PHINode *Phi;
-    Instruction *Update;
-    // Conditional recurrences merge an arm-local update with the unchanged
-    // header accumulator. This merge, rather than Update, is their live-out.
-    PHINode *Merge;
-    Value *Contribution;
-    unsigned ContributionOperand;
-    PHINode *ConsumerPhi = nullptr;
-  };
   SmallVector<Reduction, 4> Reductions;
   SmallPtrSet<Instruction *, 8> ReductionInsts;
   BasicBlock *ParticipationArm = nullptr;
@@ -462,17 +510,12 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
           Export->getIncomingBlock(U.getOperandNo()) != Latch)
         return Fail("scalar-reduction-feedback");
     }
-    return Reduction{&Phi, Update, Merge, Contribution, ContributionOperand};
+    return Reduction{&Phi, Update, Merge, Contribution, ContributionOperand,
+                     Phi.getIncomingValueForBlock(Preheader)};
   };
   // Snapshot both edges before mutation. In particular, a backedge can name
   // another retained PHI: all chunk carries must read the same final producer
   // iteration, rather than successively substituting already updated state.
-  struct ProducerState {
-    PHINode *Phi;
-    Value *Start;
-    Value *Backedge;
-    PHINode *Carry = nullptr;
-  };
   SmallVector<ProducerState, 4> RetainedState;
   for (PHINode &Phi : Header->phis()) {
     if (&Phi == IV)
@@ -511,15 +554,11 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       return Reject("scalar-reduction-feedback");
   }
 
-  struct ProducerExport {
-    PHINode *ExitPhi;
-    unsigned IncomingIndex;
-    Instruction *Value;
-  };
   SmallVector<ProducerExport, 4> ProducerExportEdges;
   // One forwarding PHI per distinct value, even for multiple exit PHIs. Build
   // the complete mapping before changing any uses or predecessor edges.
-  MapVector<Instruction *, PHINode *> ProducerExports;
+  SmallVector<Instruction *, 4> ProducerExports;
+  SmallPtrSet<Instruction *, 8> SeenExports;
   for (BasicBlock *BB : L.blocks()) {
     for (Instruction &I : *BB) {
       for (Use &U : I.uses()) {
@@ -539,7 +578,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
             !DT.dominates(&I, Branch))
           return Reject("scalar-unsupported-live-out");
         ProducerExportEdges.push_back({Phi, U.getOperandNo(), &I});
-        ProducerExports.insert({&I, nullptr});
+        if (SeenExports.insert(&I).second)
+          ProducerExports.push_back(&I);
       }
       if (isa<ConstrainedFPIntrinsic>(I))
         return Reject("scalar-strict-fp");
@@ -601,9 +641,11 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
 
   const DataLayout &DL = F->getDataLayout();
   // Identical contribution values share one slot, without any reassociation.
-  MapVector<Value *, AllocaInst *> Scratch;
+  SmallVector<Value *, 4> Contributions;
+  SmallPtrSet<Value *, 8> SeenContributions;
   for (const Reduction &R : Reductions)
-    Scratch.insert({R.Contribution, nullptr});
+    if (SeenContributions.insert(R.Contribution).second)
+      Contributions.push_back(R.Contribution);
   auto StandardTrip =
       getScalarFissionMaxTripCount(L, SE, cast<IntegerType>(IV->getType()));
   std::optional<uint64_t> MaxTrip;
@@ -634,7 +676,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                                  : SE.applyLoopGuards(BTC, &L);
     std::string StandardAdmission = StandardFailure;
     if (MaxTrip)
-      StandardAdmission = getScalarFissionScratchBytes(*MaxTrip, Scratch, DL)
+      StandardAdmission = getScalarFissionScratchBytes(*MaxTrip, Contributions, DL)
                               ? "admitted"
                               : "scalar-scratch-limit";
     return OptimizationRemarkAnalysis("vplan-reduction-fission",
@@ -681,7 +723,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     return Reject(StandardFailure);
   uint64_t MaxTripCount = *MaxTrip;
   auto ScratchSize = [&](uint64_t Capacity) {
-    return getScalarFissionScratchBytes(Capacity, Scratch, DL);
+    return getScalarFissionScratchBytes(Capacity, Contributions, DL);
   };
   uint64_t Capacity = MaxTripCount;
   auto ScratchBytes = ScratchSize(Capacity);
@@ -712,7 +754,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     ScratchBytes = ScratchSize(Capacity);
   }
   uint64_t ScratchTrafficBytes = 0;
-  for (auto [Contribution, Slot] : Scratch) {
+  for (Value *Contribution : Contributions) {
     auto Total = checkedAddUnsigned(
         ScratchTrafficBytes,
         DL.getTypeStoreSize(Contribution->getType()).getFixedValue());
@@ -721,45 +763,78 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     ScratchTrafficBytes = *Total;
   }
 
-  ORE.emit([&]() {
-    OptimizationRemark Remark("vplan-reduction-fission", "Selected",
-                              OriginalLoc, Header);
-    Remark << "split " << ore::NV("Path", "scalar-IR")
-           << " reduction loop; stage VFs selected independently "
-              "by normal vectorization; scratch capacity ";
-    if (Chunked)
-      Remark << ore::NV("ChunkCapacity", Capacity);
-    else
-      Remark << ore::NV("MaxTripCount", MaxTripCount);
-    Remark << ", scratch bytes " << ore::NV("ScratchBytes", *ScratchBytes)
-           << ", producer live-outs "
-           << ore::NV("ProducerLiveOuts", ProducerExports.size());
-    if (Chunked)
-      Remark << ", chunked schedule, trip bound "
-             << ore::NV("MaxTripCount", MaxTripCount);
-    // Full-trip and compact schedules need the same original-loop traffic
-    // evidence as chunks. For a compact stream these are participating-iteration
-    // bytes; capacity is still the independently bounded full producer count.
-    Remark << ", scratch store bytes/iteration "
-           << ore::NV("ScratchStoreBytesPerIteration", ScratchTrafficBytes)
-           << ", scratch load bytes/iteration "
-           << ore::NV("ScratchLoadBytesPerIteration", ScratchTrafficBytes)
-           << ", producer reread bytes/iteration "
-           << ore::NV("ProducerRereadBytesPerIteration", 0)
-           << ", duplicated producer instructions "
-           << ore::NV("DuplicatedProducerInstructions", 0);
-    if (Chunked)
-      Remark << ", producer state carries "
-             << ore::NV("ProducerStateCarries", RetainedState.size());
-    return Remark;
-  });
+  SmallVector<ExitEdge, 4> ExitEdges;
+  for (PHINode &Phi : Exit->phis()) {
+    int Index = Phi.getBasicBlockIndex(Latch);
+    if (Index >= 0)
+      ExitEdges.push_back({&Phi, unsigned(Index), Phi.getIncomingValue(Index)});
+  }
+
+  ScalarFissionPlan Plan;
+  Plan.Header = Header;
+  Plan.Latch = Latch;
+  Plan.Preheader = Preheader;
+  Plan.Exit = Exit;
+  Plan.Branch = Branch;
+  Plan.Compare = Compare;
+  Plan.IV = IV;
+  Plan.Next = Next;
+  Plan.OriginalLoc = OriginalLoc;
+  Plan.OriginalID = L.getLoopID();
+  Plan.Reductions = std::move(Reductions);
+  Plan.RetainedState = std::move(RetainedState);
+  Plan.ProducerExportEdges = std::move(ProducerExportEdges);
+  Plan.ProducerExports = std::move(ProducerExports);
+  Plan.ExitEdges = std::move(ExitEdges);
+  Plan.Contributions = std::move(Contributions);
+  Plan.MaxTripCount = MaxTripCount;
+  Plan.Capacity = Capacity;
+  Plan.ScratchBytes = *ScratchBytes;
+  Plan.ScratchTrafficBytes = ScratchTrafficBytes;
+  Plan.ParticipationArm = ParticipationArm;
+  Plan.CanonicalCount = CanonicalCount;
+  Plan.CanonicalChunks = CanonicalChunks;
+  Plan.Chunked = Chunked;
+  return Plan;
+}
+
+static Loop *emitScalarReductionFission(Loop &L, const ScalarFissionPlan &Plan,
+                                       LoopInfo &LI, DominatorTree &DT,
+                                       ScalarEvolution &SE) {
+  BasicBlock *Header = Plan.Header;
+  BasicBlock *Latch = Plan.Latch;
+  BasicBlock *Preheader = Plan.Preheader;
+  BasicBlock *Exit = Plan.Exit;
+  BranchInst *Branch = Plan.Branch;
+  ICmpInst *Compare = Plan.Compare;
+  PHINode *IV = Plan.IV;
+  BinaryOperator *Next = Plan.Next;
+  DebugLoc OriginalLoc = Plan.OriginalLoc;
+  MDNode *OriginalID = Plan.OriginalID;
+  const auto &Reductions = Plan.Reductions;
+  const auto &RetainedState = Plan.RetainedState;
+  const auto &ProducerExportEdges = Plan.ProducerExportEdges;
+  uint64_t Capacity = Plan.Capacity;
+  BasicBlock *ParticipationArm = Plan.ParticipationArm;
+  bool CanonicalCount = Plan.CanonicalCount;
+  bool CanonicalChunks = Plan.CanonicalChunks;
+  bool Chunked = Plan.Chunked;
+  Function *F = Header->getParent();
+  const DataLayout &DL = F->getDataLayout();
+  MapVector<Value *, AllocaInst *> Scratch;
+  for (Value *Contribution : Plan.Contributions)
+    Scratch.insert({Contribution, nullptr});
+  MapVector<Instruction *, PHINode *> ProducerExports;
+  for (Instruction *Export : Plan.ProducerExports)
+    ProducerExports.insert({Export, nullptr});
+  DenseMap<PHINode *, PHINode *> StateCarries;
+  DenseMap<PHINode *, PHINode *> ConsumerPhis;
 
   // All rejection points precede mutation. Retain the original entry guard.
   // Chunked producers keep global IVs/operations and use a local chunk latch
   // test. A compact stream may be empty even when its producer runs: its guard
   // forwards the incoming accumulator (the chunk carry when chunked).
   SE.forgetTopmostLoop(&L);
-  MDNode *OriginalID = L.getLoopID();
   LLVMContext &Ctx = F->getContext();
   BasicBlock *ProducerPH = Preheader;
   BasicBlock *ChunkHeader = nullptr;
@@ -793,16 +868,16 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     CB.SetCurrentDebugLocation(Branch->getDebugLoc());
     ChunkBase = CB.CreatePHI(IV->getType(), 2, "fission.chunk.base");
     ChunkBase->addIncoming(IV->getIncomingValueForBlock(Preheader), Preheader);
-    for (Reduction &R : Reductions) {
+    for (const Reduction &R : Reductions) {
       PHINode *Carry = CB.CreatePHI(R.Phi->getType(), 2,
                                    R.Phi->getName() + ".chunk.carry");
-      Carry->addIncoming(R.Phi->getIncomingValueForBlock(Preheader), Preheader);
+      Carry->addIncoming(R.Start, Preheader);
       ChunkCarries[R.Phi] = Carry;
     }
-    for (ProducerState &S : RetainedState) {
-      S.Carry = CB.CreatePHI(S.Phi->getType(), 2,
-                            S.Phi->getName() + ".chunk.carry");
-      S.Carry->addIncoming(S.Start, Preheader);
+    for (const ProducerState &S : RetainedState) {
+      StateCarries[S.Phi] = CB.CreatePHI(
+          S.Phi->getType(), 2, S.Phi->getName() + ".chunk.carry");
+      StateCarries[S.Phi]->addIncoming(S.Start, Preheader);
     }
     if (CanonicalChunks) {
       // N > 0 on entry, 0 <= base < N, and base+count <= N cannot wrap.
@@ -819,9 +894,9 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     Preheader->getTerminator()->replaceSuccessorWith(Header, ChunkHeader);
     IV->replaceIncomingBlockWith(Preheader, ProducerPH);
     IV->setIncomingValueForBlock(ProducerPH, ChunkBase);
-    for (ProducerState &S : RetainedState) {
+    for (const ProducerState &S : RetainedState) {
       S.Phi->replaceIncomingBlockWith(Preheader, ProducerPH);
-      S.Phi->setIncomingValueForBlock(ProducerPH, S.Carry);
+      S.Phi->setIncomingValueForBlock(ProducerPH, StateCarries[S.Phi]);
     }
   }
   BasicBlock *ConsumerGuard =
@@ -880,12 +955,12 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     // inside the chunk loop. No consumer-exit PHI, evaluation, or reread is
     // needed. Keep original current/next-value exports independent: the value
     // exported on final exit need not be the one that seeds the next chunk.
-    for (ProducerState &S : RetainedState) {
+    for (const ProducerState &S : RetainedState) {
       auto *Forward = PHINode::Create(
           S.Phi->getType(), 1, S.Phi->getName() + ".chunk.backedge",
           ProducerExit->getFirstNonPHIIt());
       Forward->addIncoming(S.Backedge, Latch);
-      S.Carry->addIncoming(Forward, ChunkLatch);
+      StateCarries[S.Phi]->addIncoming(Forward, ChunkLatch);
     }
     if (!CanonicalChunks) {
       // Snapshot both actual latch results before changing the branch. These
@@ -1028,12 +1103,11 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   PHINode *ConsumerIV = B.CreatePHI(IV->getType(), 2, "fission.consumer.iv");
   ConsumerIV->addIncoming(ConstantInt::get(IV->getType(), 0), ConsumerPH);
   DenseMap<Value *, Value *> ConsumerUpdates;
-  for (Reduction &R : Reductions) {
-    R.ConsumerPhi = B.CreatePHI(R.Phi->getType(), 2, R.Phi->getName() + ".consume");
-    R.ConsumerPhi->addIncoming(
-        Chunked ? ChunkCarries.lookup(R.Phi)
-                : R.Phi->getIncomingValueForBlock(Preheader),
-        ConsumerPH);
+  for (const Reduction &R : Reductions) {
+    ConsumerPhis[R.Phi] =
+        B.CreatePHI(R.Phi->getType(), 2, R.Phi->getName() + ".consume");
+    ConsumerPhis[R.Phi]->addIncoming(
+        Chunked ? ChunkCarries.lookup(R.Phi) : R.Start, ConsumerPH);
   }
   DenseMap<Value *, Value *> Contributions;
   for (auto [Contribution, Slot] : Scratch) {
@@ -1044,16 +1118,16 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     Contributions[Contribution] =
         B.CreateLoad(Contribution->getType(), Address, "fission.contribution");
   }
-  for (Reduction &R : Reductions) {
+  for (const Reduction &R : Reductions) {
     // clone keeps flags, intrinsic attributes, operand order and grouping.
     Instruction *Update = R.Update->clone();
     Update->setOperand(R.ContributionOperand, Contributions[R.Contribution]);
-    Update->setOperand(1 - R.ContributionOperand, R.ConsumerPhi);
+    Update->setOperand(1 - R.ContributionOperand, ConsumerPhis[R.Phi]);
     B.Insert(Update, R.Update->getName() + ".consume");
     // Insert() applies the builder's latch location. Keep the source update's
     // own location, including an absent location, on the cloned operation.
     Update->setDebugLoc(R.Update->getDebugLoc());
-    R.ConsumerPhi->addIncoming(Update, ConsumerBody);
+    ConsumerPhis[R.Phi]->addIncoming(Update, ConsumerBody);
     if (ParticipationArm) {
       auto *LoopResult = PHINode::Create(R.Phi->getType(), 1,
                                          R.Phi->getName() + ".lcssa",
@@ -1061,8 +1135,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       LoopResult->addIncoming(Update, ConsumerBody);
       auto *Result = PHINode::Create(R.Phi->getType(), 2,
                                     R.Phi->getName() + ".result", ConsumerExit);
-      Result->addIncoming(Chunked ? ChunkCarries.lookup(R.Phi)
-                                 : R.Phi->getIncomingValueForBlock(Preheader),
+      Result->addIncoming(Chunked ? ChunkCarries.lookup(R.Phi) : R.Start,
                           ConsumerGuard);
       Result->addIncoming(LoopResult, ConsumerLoopExit);
       if (Chunked)
@@ -1078,12 +1151,9 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
       ConsumerUpdates[R.Update] = Update;
     }
   }
-  for (PHINode &Export : Exit->phis()) {
-    int Index = Export.getBasicBlockIndex(Latch);
-    if (Index >= 0)
-      if (Value *Update = ConsumerUpdates.lookup(Export.getIncomingValue(Index)))
-        Export.setIncomingValue(Index, Update);
-  }
+  for (const ExitEdge &E : Plan.ExitEdges)
+    if (Value *Update = ConsumerUpdates.lookup(E.OriginalValue))
+      E.Phi->setIncomingValue(E.IncomingIndex, Update);
   // The compact consumer iterates exactly P times in original participation
   // order. Noncanonical producers use an independent zero/one consumer,
   // consuming exactly their exported number of completed iterations.
@@ -1162,13 +1232,13 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     Export.replaceIncomingBlockWith(
         Latch, Chunked ? ChunkLatch
                       : (ParticipationArm ? ConsumerExit : ConsumerBody));
-  for (Reduction &R : Reductions) {
+  for (const Reduction &R : Reductions) {
     R.Update->dropAllReferences();
     R.Phi->dropAllReferences();
     if (R.Merge)
       R.Merge->dropAllReferences();
   }
-  for (Reduction &R : Reductions) {
+  for (const Reduction &R : Reductions) {
     R.Update->eraseFromParent();
     R.Phi->eraseFromParent();
     if (R.Merge)
@@ -1187,4 +1257,59 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
   assert((!Chunked || L.getParentLoop()->isRecursivelyLCSSAForm(DT, LI)) &&
          "chunk scheduler and stages must remain in LCSSA");
   return Consumer;
+}
+
+Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
+                                     ScalarEvolution &SE,
+                                     OptimizationRemarkEmitter &ORE) {
+  if (!isReductionFissionEnabled() || !EnableScalarReductionFission ||
+      isReductionFissionStage(L))
+    return nullptr;
+
+  auto Plan = analyzeScalarReductionFission(L, DT, SE, ORE);
+  if (!Plan) {
+    std::string Reason = toString(Plan.takeError());
+    ORE.emit([&]() {
+      return OptimizationRemarkMissed("vplan-reduction-fission", "Rejected",
+                                      L.getStartLoc(), L.getHeader())
+             << "scalar-IR reduction fission rejected: "
+             << ore::NV("Reason", Reason);
+    });
+    return nullptr;
+  }
+
+  ORE.emit([&]() {
+    OptimizationRemark Remark("vplan-reduction-fission", "Selected",
+                              Plan->OriginalLoc, Plan->Header);
+    Remark << "split " << ore::NV("Path", "scalar-IR")
+           << " reduction loop; stage VFs selected independently "
+              "by normal vectorization; scratch capacity ";
+    if (Plan->Chunked)
+      Remark << ore::NV("ChunkCapacity", Plan->Capacity);
+    else
+      Remark << ore::NV("MaxTripCount", Plan->MaxTripCount);
+    Remark << ", scratch bytes " << ore::NV("ScratchBytes", Plan->ScratchBytes)
+           << ", producer live-outs "
+           << ore::NV("ProducerLiveOuts", Plan->ProducerExports.size());
+    if (Plan->Chunked)
+      Remark << ", chunked schedule, trip bound "
+             << ore::NV("MaxTripCount", Plan->MaxTripCount);
+    // Full-trip and compact schedules need the same original-loop traffic
+    // evidence as chunks. For a compact stream these are participating-iteration
+    // bytes; capacity is still the independently bounded full producer count.
+    Remark << ", scratch store bytes/iteration "
+           << ore::NV("ScratchStoreBytesPerIteration", Plan->ScratchTrafficBytes)
+           << ", scratch load bytes/iteration "
+           << ore::NV("ScratchLoadBytesPerIteration", Plan->ScratchTrafficBytes)
+           << ", producer reread bytes/iteration "
+           << ore::NV("ProducerRereadBytesPerIteration", 0)
+           << ", duplicated producer instructions "
+           << ore::NV("DuplicatedProducerInstructions", 0);
+    if (Plan->Chunked)
+      Remark << ", producer state carries "
+             << ore::NV("ProducerStateCarries", Plan->RetainedState.size());
+    return Remark;
+  });
+
+  return emitScalarReductionFission(L, *Plan, LI, DT, SE);
 }
