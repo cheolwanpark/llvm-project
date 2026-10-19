@@ -1,9 +1,12 @@
 # Backend-aware VPlan cost tools
 
-Active variant: **backend-aware-cost**, the full Python backend cost model.
+Active variant: **spill-reject**, a fixed ablation selecting the largest scalable
+VF with complete zero-vector-spill/reload observations. Scalar-register spills
+do not affect selection. No accepted candidate means scalar retention.
+Fitting, weights and cost-ranking metrics are unsupported.
 
 `spill-reject` and `spill-aware` are fixed-policy ablation branches derived
-directly from this branch. All three share middle-end/backend observations,
+directly from `backend-aware-cost`. All three share middle-end/backend observations,
 protocol v3, the meta compiler and tools; only the Python selection policy and
 its tests/documentation differ. `--llvm-path` selects that checkout's compiler
 and policy together.
