@@ -908,7 +908,7 @@ public:
   void plan(ElementCount UserVF, unsigned UserIC);
 
   void registerRACandidates();
-  std::pair<VectorizationFactor, VPlan *> selectRAProbe();
+  std::pair<VectorizationFactor, VPlan *> selectRARequested();
 
   /// Return the VPlan for \p VF. At the moment, there is always a single VPlan
   /// for each VF.

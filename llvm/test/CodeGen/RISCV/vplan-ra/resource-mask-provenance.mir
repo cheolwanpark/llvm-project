@@ -1,6 +1,5 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_provenance:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
-# RUN: %python %S/Inputs/check-mask-resource.py provenance %t.json
+# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-mask-provenance.json 0
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=none -verify-machineinstrs %s -o %t.before.mir
 # RUN: diff %t.before.mir %t.mir
 # Boolean definitions invalidate old predicate identities; full copies retain

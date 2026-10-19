@@ -26,8 +26,7 @@ DEFAULT_LLVM = TOOLS.parents[1]
 DEFAULT_DB = DEFAULT_LLVM / "dataset.sqlite"
 
 
-class ToolError(Exception):
-    """An actionable error suitable for display without a Python traceback."""
+from model_errors import ToolError
 
 
 class ReportError(ToolError):
@@ -130,7 +129,7 @@ def argument_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=positive_int, default=120,
                         help="timeout per compiler invocation in seconds (default: 120)")
     parser.add_argument("--compiler-mode", choices=("meta", "direct"), default="meta",
-                        help="RA feedback pipeline (default) or direct diagnostic compilation")
+                        help="Python selection pipeline (default) or ordinary LLVM compilation")
     return parser
 
 
@@ -278,7 +277,8 @@ def source_name(benchmark: Benchmark) -> str:
 def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int,
                    compiler_mode: str = "meta", meta_script: Path | None = None,
                    artifacts_dir: Path | None = None,
-                   *, stop_after_ra: bool = False) -> subprocess.CompletedProcess:
+                   *, stop_after_ra: bool = False, analytics_only: bool = False,
+                   weights: Path | None = None) -> subprocess.CompletedProcess:
     flags = benchmark_flags(benchmark)
     with tempfile.TemporaryDirectory(prefix="vplan-tools-") as temporary:
         root = Path(temporary)
@@ -302,7 +302,11 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                        "--llvm-extract", str(clang.parent / "llvm-extract"),
                        "--timeout", str(timeout)]
             if stop_after_ra:
-                command += ["--stop-after-ra", "--analytics-only"]
+                command += ["--stop-after-ra"]
+            if analytics_only:
+                command += ["--analytics-only"]
+            if weights:
+                command += ["--weights", str(weights)]
             if detail:
                 command.append("--detail")
             command += ["--", *flags]
@@ -310,6 +314,14 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                 # The driver enforces the timeout separately for every probe.
                 result = subprocess.run(command, capture_output=True, text=True, errors="replace")
                 result.artifact_root = root
+                if result.returncode == 0:
+                    result.candidate_status = json.loads((root / "backend/candidate-status.json").read_text())
+                    if not analytics_only:
+                        result.selection = json.loads((root / "backend/selection.json").read_text())
+                    if detail:
+                        result.stderr += (root / "backend/discover.stderr").read_text()
+                        for log in sorted((root / "backend").glob("probe-*.stderr")):
+                            result.stderr += log.read_text()
                 return result
             except OSError as exc:
                 raise ToolError(f"cannot execute meta-compiler: {exc}") from exc
@@ -321,6 +333,7 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
         import types
         driver_path = meta_script or DEFAULT_LLVM / "utils/vplan-meta-compile"
         driver = types.ModuleType("vplan_meta_driver")
+        driver.__file__ = str(driver_path)
         SourceFileLoader(driver.__name__, str(driver_path)).exec_module(driver)
         # Direct mode retains LLVM's ordinary cost policy. Extract before the
         # ordinary optimization pipeline rather than enabling the meta pipeline.
@@ -610,6 +623,8 @@ def evaluate_benchmarks(clang: Path, benchmarks: list[Benchmark], timeout: int,
                         artifacts_dir: Path | None = None,
                         compiler_mode: str = "meta", meta_script: Path | None = None,
                         *, detail_all: bool = False) -> list[Result]:
+    if compiler_mode != "direct":
+        raise ToolError("meta evaluation uses the shared Python model collector")
     results = []
     for index, benchmark in enumerate(benchmarks, 1):
         print(f"[{index}/{len(benchmarks)}] {benchmark.id}", file=sys.stderr, flush=True)
@@ -664,6 +679,7 @@ def print_vplans_main(argv: list[str] | None = None) -> int:
     parser = argument_parser("Print VPlan costs for a benchmark stored in a dataset database.")
     parser.add_argument("--benchmark", required=True, help="exact benchmark ID")
     parser.add_argument("--detail", action="store_true", help="include detailed cost calculations")
+    parser.add_argument("--weights", type=resolved_path)
     args = parser.parse_args(argv)
     benchmarks, _ = load_database(args.db, benchmark_id=args.benchmark)
     benchmark = next((b for b in benchmarks if b.id == args.benchmark), None)
@@ -672,16 +688,32 @@ def print_vplans_main(argv: list[str] | None = None) -> int:
     clang = ensure_compiler(args.llvm_path, args.build_dir, args.jobs)
     result = compile_report(clang, benchmark, args.detail, args.timeout,
                             compiler_mode=args.compiler_mode,
-                            meta_script=args.llvm_path.resolve() / "utils/vplan-meta-compile")
+                            meta_script=args.llvm_path.resolve() / "utils/vplan-meta-compile",
+                            stop_after_ra=args.compiler_mode == "meta", weights=args.weights)
+    if args.compiler_mode == "meta" and result.returncode == 0:
+        for row in result.candidate_status["candidates"]:
+            print(f"{row['id']}: {row['status']} " + (f"score={row['score']:.12g}" if 'score' in row else row.get('reason', '')))
+            if args.detail and 'breakdown' in row:
+                print(json.dumps(row['breakdown'], sort_keys=True))
+        for choice in result.selection["selections"]:
+            print(f"{choice['function']} loop={choice['loop']}: " +
+                  ("scalar (" + choice['reason'] + ")" if choice['scalar'] else "selected=" + choice['id']) +
+                  " IC=1 epilogue=f0")
     sys.stdout.write(result.stderr)
     if result.returncode:
         raise ToolError(f"compilation failed for {benchmark.id} (exit {result.returncode})")
-    if "VPlan report_version=" not in result.stderr:
+    if args.compiler_mode == "direct" and "VPlan report_version=" not in result.stderr:
         print(f"{benchmark.id}: compilation succeeded but LLVM emitted no VPlan report", file=sys.stderr)
     return 0
 
 
 def evaluate_main(argv: list[str] | None = None) -> int:
+    mode_parser = argparse.ArgumentParser(add_help=False)
+    mode_parser.add_argument("--compiler-mode", default="meta")
+    mode, _ = mode_parser.parse_known_args(argv)
+    if mode.compiler_mode == "meta":
+        from calibration import evaluate_model_main
+        return evaluate_model_main(argv)
     parser = argument_parser("Compare VPlan cost rankings with measured cycle rankings.")
     parser.add_argument("--benchmark", action="append", metavar="BENCHMARK",
                         help="one exact benchmark ID (default: all benchmarks; specify only once)")

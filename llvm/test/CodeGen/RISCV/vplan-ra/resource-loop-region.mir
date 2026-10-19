@@ -1,26 +1,8 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=region:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
-# RUN: FileCheck %s --check-prefix=FEATURES < %t.json
-# RUN: FileCheck %s --check-prefix=OPS < %t.json
+# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-loop-region.json 0
 #
 # The two unconditional main-loop blocks dominate the exiting latch.
 # The scalar path's short immediate-VL vector loop must not be accumulated.
-# FEATURES-DAG: "supported":true
-# FEATURES-DAG: "loop_blocks":2
-# FEATURES-DAG: "recurrences":[]
-# FEATURES-DAG: "unit8":16
-# FEATURES-DAG: "integer8":8
-# FEATURES-DAG: "scalar8":32
-# FEATURES-DAG: "config8":8
-# FEATURES-DAG: "spill8":0
-# FEATURES-DAG: "indexed8":0
-# FEATURES-DAG: "strided8":0
-# FEATURES-DAG: "masked8":0
-# FEATURES-DAG: "fp8":0
-# FEATURES-DAG: "fused8":0
-# OPS-DAG: {"direction":"load","group8":8,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":32,"work8":8}
-# OPS-DAG: {"direction":"load","group8":8,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":32,"work8":8}
-# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"integer","masked":false,"sew":32,"work8":8}
 --- |
   define void @region() #0 {
   entry:

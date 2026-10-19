@@ -1,48 +1,11 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=resource:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
-# RUN: FileCheck %s --check-prefix=FEATURES < %t.json
-# RUN: FileCheck %s --check-prefix=OPS < %t.json
-# RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; o=r['operations']; m=[x for x in o if x['kind'] in ('unit','strided','indexed')]; assert [x['direction'] for x in m]==['load','store','load','store','load','store','load','store']; assert all('direction' not in x for x in o if x['kind']=='spill'); assert sum(x['work8'] for x in m if x['kind']=='unit')==r['unit8']==32"
+# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-demand.json 0
 #
 # Keep standalone fields and whole operation objects in separate invocations.
 # FileCheck DAG matches in one invocation must not reuse any input characters.
 # No overlapping DAG matches are allowed or needed.
 #
-# FEATURES-DAG: "supported":true
-# FEATURES-DAG: "version":1
-# FEATURES-DAG: "loop_blocks":1
-# FEATURES-DAG: "unit8":32
-# FEATURES-DAG: "strided8":64
-# FEATURES-DAG: "indexed8":64
-# FEATURES-DAG: "masked8":72
-# FEATURES-DAG: "integer8":40
-# FEATURES-DAG: "fp8":8
-# FEATURES-DAG: "fused8":16
-# FEATURES-DAG: "spill8":48
-# FEATURES-DAG: "scalar8":40
-# FEATURES-DAG: "config8":8
-# FEATURES-DAG: "group8":4,
-# FEATURES-DAG: "index_group8":16,
-# FEATURES-DAG: "index_sew":64,
-# FEATURES-DAG: "sew":16,
 #
-# OPS-DAG: {"direction":"load","group8":8,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":32,"work8":8}
-# OPS-DAG: {"direction":"store","group8":8,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":32,"work8":8}
-# OPS-DAG: {"direction":"load","group8":4,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":16,"work8":8}
-# OPS-DAG: {"direction":"store","group8":8,"index_group8":0,"index_sew":0,"kind":"unit","masked":true,"predicate_id":1,"sew":32,"work8":8}
-# OPS-DAG: {"direction":"load","group8":8,"index_group8":0,"index_sew":0,"kind":"strided","masked":false,"sew":32,"work8":32}
-# OPS-DAG: {"direction":"store","group8":8,"index_group8":0,"index_sew":0,"kind":"strided","masked":true,"predicate_id":1,"sew":32,"work8":32}
-# OPS-DAG: {"direction":"load","group8":8,"index_group8":16,"index_sew":64,"kind":"indexed","masked":false,"sew":32,"work8":32}
-# OPS-DAG: {"direction":"store","group8":8,"index_group8":8,"index_sew":32,"kind":"indexed","masked":true,"predicate_id":1,"sew":32,"work8":32}
-# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"integer","masked":false,"sew":32,"work8":16}
-# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"integer","masked":false,"sew":32,"work8":16}
-# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"integer","masked":true,"sew":32,"work8":8}
-# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"fp","masked":false,"sew":32,"work8":8}
-# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"fused","masked":false,"sew":64,"work8":16}
-# OPS-DAG: {"group8":0,"index_group8":0,"index_sew":0,"kind":"spill","masked":false,"sew":0,"work8":16}
-# OPS-DAG: {"group8":0,"index_group8":0,"index_sew":0,"kind":"spill","masked":false,"sew":0,"work8":16}
-# OPS-DAG: {"group8":0,"index_group8":0,"index_sew":0,"kind":"spill","masked":false,"sew":0,"work8":8}
-# OPS-DAG: {"group8":0,"index_group8":0,"index_sew":0,"kind":"spill","masked":false,"sew":0,"work8":8}
 #
 # Nominal VLEN=128. Fractional grouping retains group8=4 with an issue floor
 # of work8=8. Indexed e64 M2 indices serve e32 M1 data. Widening uses M2 work.

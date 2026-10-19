@@ -154,7 +154,6 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVRedundantCopyEliminationPass(*PR);
   initializeRISCVAsmPrinterPass(*PR);
   initializeRISCVVPlanAnalyticsPass(*PR);
-  initializeRISCVVPlanCostPass(*PR);
   initializeRISCVPromoteConstantPass(*PR);
 }
 
@@ -671,8 +670,6 @@ void RISCVPassConfig::addPostRegAlloc() {
     addPass(createRISCVRedundantCopyEliminationPass());
   if (vplanAnalyticsEnabled())
     addPass(createRISCVVPlanAnalyticsPass());
-  if (vplanCostEnabled())
-    addPass(createRISCVVPlanCostPass());
 }
 
 bool RISCVPassConfig::addILPOpts() {

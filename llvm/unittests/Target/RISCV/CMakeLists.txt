@@ -18,7 +18,6 @@ set(LLVM_LINK_COMPONENTS
   )
 
 add_llvm_target_unittest(RISCVTests
-  VPlanBackendCostTest.cpp
   MCInstrAnalysisTest.cpp
   RISCVInstrInfoTest.cpp
   RISCVSelectionDAGTest.cpp

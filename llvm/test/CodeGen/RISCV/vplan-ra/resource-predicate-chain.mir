@@ -1,6 +1,5 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=chain:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
-# RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; assert r['supported'] and r['loop_blocks']==2; o=[x for x in r['operations'] if x['kind']=='unit']; assert len(o)==2; assert o[0]['predicate_id']>0 and o[0]['predicate_id']==o[1]['predicate_id']; assert r['unit8']==48 and r['masked8']==48"
+# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-predicate-chain.json 0
 #
 # Carry proven identity along a unique forward edge, with repeated copies in
 # the successor. Ignore the backedge and any setup predicate provenance.

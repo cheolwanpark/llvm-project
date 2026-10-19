@@ -14,7 +14,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import calibration as cal
-from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P, needs_scalar_reference
+from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P, needs_scalar_cost
 import vplan_tools as vt
 
 
@@ -97,57 +97,63 @@ class ModelTests(unittest.TestCase):
         ins[1]["Predicate"] = 8
         self.assertEqual(self.body(analytics(ins)), 60 / 16)
 
-    def test_scalar_tail_folded_tail_and_unknown_trip(self):
-        scalar = analytics(Width=2, MaxTripCount=11)
-        vector = analytics([instruction("integer")], vf=4, scalable=True,
-                           Width=4, MaxTripCount=11, ScalarTail=True)
-        model = CostModel([scalar, vector])
-        self.assertEqual(model.scores(torch.ones(P, dtype=DTYPE), [0, 0])[0].tolist(), [2.75, 2.75])
-        vector["ScalarTail"] = False
-        self.assertEqual(CostModel([scalar, vector]).scores(torch.ones(P, dtype=DTYPE), [0, 0])[0, 1], 3.)
-        scalar["MaxTripCount"] = vector["MaxTripCount"] = 0
-        self.assertEqual(CostModel([scalar, vector]).scores(torch.ones(P, dtype=DTYPE), [0, 0])[0, 1], .25)
+    def test_tail_formula_and_gradient(self):
+        a = analytics([instruction("integer")], vf=4, scalable=True,
+                      Width=4, MaxTripCount=11, ExactTripCount=11,
+                      ScalarTail=True, ScalarCost=.5)
+        m = CostModel([a])
+        w = torch.ones(P, dtype=DTYPE, requires_grad=True)
+        parts = m.breakdown(w)
+        self.assertEqual(float(parts["score"].detach()), 3.5)
+        self.assertEqual(float(parts["tail"].detach()), 1.5)
+        parts["score"].sum().backward()
+        self.assertEqual(float(w.grad[-1]), 1.5)
+        self.assertIn(P - 1, m.active)
+        for fields, expected in (({"ScalarTail": False}, 3.), ({"MaxTripCount": 0}, .25),
+                                 ({"Width": 8}, 2.5), ({"ScalarCost": 0}, 2.)):
+            model = CostModel([a | fields])
+            self.assertEqual(float(model.scores(torch.ones(P, dtype=DTYPE))), expected)
+        folded = CostModel([a | {"ScalarTail": False, "ScalarCost": None}])
+        self.assertNotIn(P - 1, folded.active)
 
-    def test_invalid_observations_and_scalar_context(self):
-        for a in (analytics(Error="unsupported"), analytics(CPU="other"),
-                  analytics([instruction("unknown")]), analytics([instruction("integer", Group8=3)])):
-            with self.assertRaises(vt.ToolError):
-                CostModel([a])
-        a, b = analytics(), analytics(vf=2, scalable=True, RunID="different")
-        with self.assertRaisesRegex(vt.ToolError, "scalar analytics context"):
-            CostModel([a, b]).scores(torch.ones(P, dtype=DTYPE), [0, 0])
-
-    def test_optional_scalar_reference(self):
+    def test_optional_middle_end_scalar_cost(self):
         for tail, maximum, exact, expected in (
                 (False, 11, 0, 3.), (True, 0, 0, .25),
                 (True, 12, 12, 3.), (True, 12, 0, None),
-                (True, 12, 11, None), (True, 11, 12, None),
-                (True, 11, 11, None)):
+                (True, 12, 11, None), (True, 11, 12, None), (True, 11, 11, None)):
             with self.subTest(tail=tail, maximum=maximum, exact=exact):
                 a = analytics([instruction("integer")], vf=4, scalable=True,
                               ScalarTail=tail, MaxTripCount=maximum, ExactTripCount=exact)
-                model = CostModel([a])
-                self.assertEqual(needs_scalar_reference(a), expected is None)
+                self.assertEqual(needs_scalar_cost(a), expected is None)
                 if expected is None:
-                    with self.assertRaisesRegex(vt.ToolError, "missing scalar reference"):
-                        model.scores(torch.ones(P, dtype=DTYPE), [None])
+                    with self.assertRaisesRegex(vt.ToolError, "missing middle-end scalar cost"):
+                        CostModel([a])
                 else:
-                    self.assertEqual(float(model.scores(torch.ones(P, dtype=DTYPE), [None])[0, 0]), expected)
+                    self.assertEqual(float(CostModel([a]).scores(torch.ones(P, dtype=DTYPE))), expected)
 
-    def test_mixed_scalar_references_scores_and_gradients(self):
-        scalar = analytics(MaxTripCount=11, ExactTripCount=11)
-        tail = analytics([instruction("integer")], vf=4, scalable=True,
-                         MaxTripCount=11, ExactTripCount=11, ScalarTail=True)
-        no_tail = analytics([instruction("fp", Base="VFADD_VV")], vf=2, scalable=True,
-                            RunID="another-run")
-        model = CostModel([scalar, tail, no_tail])
-        w = torch.ones((2, P), dtype=DTYPE, requires_grad=True)
-        scores = model.scores(w, [0, 0, None])
-        self.assertEqual(scores.tolist(), [[5.5, 3.5, 1.]] * 2)
-        scores.sum().backward()
-        self.assertEqual(w.grad[:, 5].tolist(), [2., 2.])
-        self.assertEqual(w.grad[:, 6].tolist(), [1., 1.])
-        self.assertTrue(torch.isfinite(w.grad).all())
+    def test_invalid_observations(self):
+        for a in (analytics(Error="unsupported"), analytics(CPU="other"),
+                  analytics([instruction("unknown")]), analytics([instruction("integer", Group8=3)]),
+                  analytics(ScalarCost=-1), analytics(Edges=[edge(20, 0)])):
+            with self.assertRaises(vt.ToolError):
+                CostModel([a])
+
+    def test_migrated_resource_equations(self):
+        # Concrete formula checks replace the C++ frozen cost oracle.
+        for category, group, sew, expected in (
+                ("unit", 4, 32, .5), ("strided", 8, 32, 4.),
+                ("integer", 16, 32, 2.), ("fp", 16, 32, 4.),
+                ("fused", 16, 32, 4.), ("copy", 4, 32, .25),
+                ("slide", 16, 32, 3.), ("mask_logical", 64, 32, 1.),
+                ("fp_div", 8, 16, 29.), ("fp_div", 8, 32, 25.), ("fp_div", 8, 64, 37.)):
+            with self.subTest(category=category, sew=sew):
+                self.assertEqual(self.body(analytics([instruction(category, Group8=group, SEW=sew,
+                    Load=category in ("unit", "strided"))])), expected)
+        self.assertEqual(self.body(analytics([instruction("spill", Bytes=16, ScalableBytes=True)], VLen=256)), 2.)
+        a = analytics([instruction("fused", Base="VFMACC_VV")], Edges=[edge(0, 0, 1)])
+        self.assertEqual(self.body(a), 5.)
+        a["Edges"][0]["WholeValue"] = False
+        self.assertEqual(self.body(a), 2.)
 
     def test_new_integer_families_use_existing_group_work_only(self):
         for family, group, expected in (("VAADD", 8, 1.), ("VWSLL", 8, 2.),
@@ -169,43 +175,42 @@ class RankingTests(unittest.TestCase):
         self.assertAlmostEqual(pairs[-1][2], math.log(1.02) / math.log(1.25))
 
     def example(self):
-        scalar = analytics()
         a = analytics([instruction("integer")], vf=1, scalable=True)
         b = analytics([instruction("unit", Load=True, Base="VLE32_V")], vf=2, scalable=True)
         bm = vt.Benchmark("test", "tuning", "source", ["-O3"], {}, {1: 100, 2: 150})
-        e = cal.Example(bm, [[1], [2]], [1, 2], cal.make_pairs(bm.measured, .01, 1.25))
-        return CostModel([scalar, a, b]), [0, 0, 0], [e]
+        e = cal.Example(bm, [[0], [1]], [1, 2], cal.make_pairs(bm.measured, .01, 1.25))
+        return CostModel([a, b]), [e]
 
     def test_loss_sign_and_loop_normalization(self):
-        model, scalars, examples = self.example()
-        loss = cal.RankingLoss(model, scalars, examples, .1, 0)
+        model, examples = self.example()
+        loss = cal.RankingLoss(model, examples, .1, 0)
         logs = torch.zeros((1, P), dtype=DTYPE)
         expected = math.log1p(math.exp(math.log(4) / .1))
         self.assertAlmostEqual(float(loss(logs)), expected)
-        two = cal.RankingLoss(model, scalars, examples * 2, .1, 0)
+        two = cal.RankingLoss(model, examples * 2, .1, 0)
         self.assertAlmostEqual(float(two(logs)), expected)
         logs[0, 5] = math.log(.25); logs[0, 0] = math.log(4)
         self.assertLess(float(loss(logs)), expected)
 
     def test_fitting_improves_loss_is_repeatable_and_respects_constraints(self):
-        model, scalars, examples = self.example()
+        model, examples = self.example()
         args = SimpleNamespace(seed=0, starts=3, steps=80, min_multiplier=.25,
-            max_multiplier=4., temperature=.1, regularization=.001, learning_rate=.03)
+            max_multiplier=4., min_tail_scale=1/64, max_tail_scale=64., temperature=.1, regularization=.001, learning_rate=.03)
         with patch("sys.stderr", new_callable=io.StringIO):
-            weights, info = cal.fit(model, scalars, examples, args)
-            again, second = cal.fit(model, scalars, examples, args)
+            weights, info = cal.fit(model, examples, args)
+            again, second = cal.fit(model, examples, args)
         self.assertTrue(torch.equal(weights, again))
         self.assertEqual(info, second)
         self.assertLess(info["objective"], info["initial_objective"])
         self.assertTrue(((weights >= .25) & (weights <= 4)).all())
         self.assertTrue(all(weights[i] == 1 for i in range(P) if i not in model.active))
-        scores = model.scores(weights, scalars)[0]
-        self.assertLess(scores[1], scores[2])
+        scores = model.scores(weights)[0]
+        self.assertLess(scores[0], scores[1])
 
     def test_weights_validation(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "weights.json"
-            valid = {"schema_version": 1, "model_version": MODEL_VERSION,
+            valid = {"schema_version": 2, "model_version": MODEL_VERSION,
                      "multipliers": dict.fromkeys(PARAMETERS, 1.),
                      "dataset": {}, "compiler_identity": {}, "tuning_ids": ["train"]}
             path.write_text(json.dumps(valid))
@@ -216,22 +221,26 @@ class RankingTests(unittest.TestCase):
                 with self.assertRaises(vt.ToolError):
                     cal.load_weights(path)
 
-    def test_fitting_with_and_without_scalar_references(self):
-        model, scalars, examples = self.example()
-        vectors = [a | {"RunID": "other-run"} for a in model.observations[1:]]
-        mixed = CostModel(model.observations + vectors)
-        examples.append(cal.Example(examples[0].benchmark, [[3], [4]], [1, 2], examples[0].pairs))
-        args = SimpleNamespace(seed=0, starts=2, steps=30, min_multiplier=.25,
-            max_multiplier=4., temperature=.1, regularization=.001, learning_rate=.03)
+    def test_tail_scale_has_independent_fit_bounds(self):
+        a = analytics(vf=2, scalable=True, Width=4, MaxTripCount=11,
+                      ExactTripCount=11, ScalarTail=True, ScalarCost=.01)
+        b = a | {"VF": 4, "ScalarTail": False}
+        model = CostModel([a, b])
+        benchmark = vt.Benchmark("tail", "tuning", "source", [], {}, {2: 200, 4: 100})
+        examples = [cal.Example(benchmark, [[0], [1]], [2, 4], [(1, 0, 1.)])]
+        args = SimpleNamespace(seed=0, starts=2, steps=120, min_multiplier=.25,
+            max_multiplier=4., min_tail_scale=1/64, max_tail_scale=64.,
+            temperature=.1, regularization=.001, learning_rate=.1)
         with patch("sys.stderr", new_callable=io.StringIO):
-            weights, info = cal.fit(mixed, scalars + [None, None], examples, args)
+            weights, info = cal.fit(model, examples, args)
+        self.assertGreater(weights[-1], 4)
+        self.assertLessEqual(weights[-1], 64)
+        self.assertEqual(weights[:-1].tolist(), [1.] * (P - 1))
         self.assertLess(info["objective"], info["initial_objective"])
-        scores = mixed.scores(weights, scalars + [None, None])[0]
-        self.assertTrue(torch.equal(scores[1:3], scores[3:5]))
 
     def test_float_results_are_serializable(self):
-        model, scalars, examples = self.example()
-        r = cal.results_for(model, scalars, examples, torch.ones(P, dtype=DTYPE))[0]
+        model, examples = self.example()
+        r = cal.results_for(model, examples, torch.ones(P, dtype=DTYPE))[0]
         data = vt.result_json(r)
         self.assertEqual(data["scores"]["1"], {"value": 1.})
         json.dumps(data, allow_nan=False)
@@ -253,24 +262,12 @@ class CollectionTests(unittest.TestCase):
         return result
 
     def test_prepare_without_scalar_and_with_unsupported_alternative(self):
-        vectors = [analytics(vf=vf, scalable=True) for vf in (1, 2)]
-        bad = analytics(vf=2, scalable=True, ScalarTail=True, MaxTripCount=8)
-        # Same context, but only one alternative has a usable no-tail formula.
-        vectors = [a | {"MaxTripCount": 8} for a in vectors]
-        for scalar in ([], [analytics(Error="missing loop")]):
-            result = self.prepare(scalar + [bad] + vectors)
-            self.assertEqual(result[1], [None, None])
-            self.assertEqual(result[2][0].groups, [[0], [1]])
-        exact = [a | {"ScalarTail": True, "ExactTripCount": 8} for a in vectors]
-        self.assertEqual(self.prepare(exact)[1], [None, None])
-
-    def test_prepare_rejects_missing_vf_and_ambiguous_scalar(self):
         vectors = [analytics(vf=vf, scalable=True, MaxTripCount=8) for vf in (1, 2)]
-        for observations in (vectors[:1], [vectors[0], vectors[1] | {"ScalarTail": True}]):
-            with self.assertRaisesRegex(vt.ToolError, "missing predicted costs.*s2"):
-                self.prepare(observations)
-        with self.assertRaisesRegex(vt.ToolError, "ambiguous scalar reference"):
-            self.prepare([analytics(), analytics(Candidate="selected_kernel:0:1:f1")] + vectors)
+        bad = vectors[1] | {"ScalarTail": True}
+        result = self.prepare([bad] + vectors)
+        self.assertEqual(result[1][0].groups, [[0], [1]])
+        with self.assertRaisesRegex(vt.ToolError, "missing predicted costs.*s2"):
+            self.prepare([vectors[0], bad])
 
     def test_prepare_checks_context_without_scalar(self):
         a, b = [analytics(vf=vf, scalable=True) for vf in (1, 2)]
@@ -282,36 +279,17 @@ class CollectionTests(unittest.TestCase):
         with self.assertRaisesRegex(vt.ToolError, "VLEN differs"):
             self.prepare([a | {"VLen": 256}, b | {"VLen": 256}])
 
-    def test_prepare_batches_optional_scalar_indices_with_offsets(self):
-        benchmarks = [vt.Benchmark(name, "tuning", "source", ["-O3"], {}, {1: 100, 2: 150})
-                      for name in ("no-scalar", "scalar")]
-        bundles = []
-        for b in benchmarks:
-            observations = ([analytics()] if b.id == "scalar" else []) + [
-                analytics(vf=vf, scalable=True) for vf in (1, 2)]
-            rows = [{"candidate": {"vf": ("s" if a["ScalableVF"] else "f") + str(a["VF"])},
-                     "analytics": a | {"RunID": b.id}} for a in observations]
-            bundles.append({"key": b.id, "run_id": b.id, "rows": rows})
-        args = SimpleNamespace(pair_threshold=.01, weight_saturation=1.25)
-        with patch.object(cal, "collect", side_effect=bundles), patch("sys.stderr", new_callable=io.StringIO):
-            model, scalars, examples, excluded, _ = cal.prepare(
-                benchmarks, None, args, {}, {"measurement_protocol": {}}, True)
-        self.assertEqual(scalars, [None, None, 2, 2, 2])
-        self.assertEqual([e.groups for e in examples], [[[0], [1]], [[3], [4]]])
-        self.assertEqual(excluded, [])
-        scores = model.scores(torch.ones(P, dtype=DTYPE), scalars)[0]
-        self.assertTrue(torch.equal(scores[:2], scores[3:]))
-
     def test_warm_cache_never_recompiles_and_source_or_tool_change_invalidates(self):
         b = vt.Benchmark("test", "tuning", "source", ["-O3"], {}, {1: 10, 2: 20})
-        a = analytics()
-        row = {"candidate": {"id": a["Candidate"], "function": "selected_kernel", "loop": 0, "vf": "f1"},
+        a = analytics(vf=2, scalable=True)
+        row = {"candidate": {"id": a["Candidate"], "function": "selected_kernel", "loop": 0, "vf": "s2"},
                "analytics": a}
         with tempfile.TemporaryDirectory() as td:
             identity = {"compiler": "one"}
             args = SimpleNamespace(cache_dir=Path(td), artifacts_dir=None, timeout=1, llvm_path=vt.DEFAULT_LLVM)
             key = cal.digest_json({"identity": identity, "source": b.source, "flags": b.compile_args})
-            bundle = {"key": key, "identity": identity, "run_id": "run", "rows": [row]}
+            bundle = {"version": cal.CACHE_VERSION, "loops": [{"function": "selected_kernel", "loop": 0}],
+                      "key": key, "identity": identity, "run_id": "run", "rows": [row]}
             vt.write_json(Path(td) / f"{key}.json", bundle)
             with patch.object(vt, "compile_report", side_effect=vt.ToolError("cache miss")) as compile_:
                 self.assertEqual(cal.collect(b, Path("/clang"), args, identity), bundle)

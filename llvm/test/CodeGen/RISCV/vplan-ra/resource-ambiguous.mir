@@ -1,22 +1,7 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=ambiguous:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
-# RUN: FileCheck %s --check-prefix=FEATURES < %t.json
+# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-ambiguous.json 0
 #
 # Two plausible strip-mined loops must not be guessed or combined.
-# FEATURES-DAG: "supported":false
-# FEATURES-DAG: "loop_blocks":0
-# FEATURES-DAG: "operations":[]
-# FEATURES-DAG: "recurrences":[]
-# FEATURES-DAG: "unit8":0
-# FEATURES-DAG: "spill8":0
-# FEATURES-DAG: "strided8":0
-# FEATURES-DAG: "indexed8":0
-# FEATURES-DAG: "masked8":0
-# FEATURES-DAG: "integer8":0
-# FEATURES-DAG: "fp8":0
-# FEATURES-DAG: "fused8":0
-# FEATURES-DAG: "scalar8":0
-# FEATURES-DAG: "config8":0
 --- |
   define void @ambiguous() #0 {
   entry:

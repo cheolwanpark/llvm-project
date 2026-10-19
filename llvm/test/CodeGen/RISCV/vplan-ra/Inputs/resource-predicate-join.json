@@ -1,0 +1,57 @@
+{
+  "0": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "candidate loop identity lost (possibly fully unrolled)",
+    "DependencyCoverage": "block-local",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "outside",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 1,
+        "Role": "outside",
+        "Successors": [3]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": [3]
+      },
+      {
+        "ID": 3,
+        "Role": "outside",
+        "Successors": [1, 4]
+      },
+      {
+        "ID": 4,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 4, "Distance": 0, "OperandIndex": 2, "Source": 3, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 3, "Source": 2, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 4, "Source": 2, "WholeValue": true},
+      {"Destination": 11, "Distance": 0, "OperandIndex": 0, "Source": 10, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "BNE", "Category": "scalar"},
+      {"Opcode": "PseudoBR", "Category": "scalar"},
+      {"Opcode": "PseudoVSETVLI", "Category": "config", "ConfigUnused": false},
+      {"Opcode": "COPY", "Category": "copy", "SEW": 0, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false},
+      {"Opcode": "PseudoVSE32_V_M2_MASK", "Category": "unit", "SEW": 32, "Group8": 16, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 1, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": true, "Masked": true, "Barrier": false, "SameCopy": false},
+      {"Opcode": "PseudoBR", "Category": "scalar"},
+      {"Opcode": "COPY", "Category": "copy", "SEW": 0, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false},
+      {"Opcode": "PseudoBR", "Category": "scalar"},
+      {"Opcode": "PseudoVSE32_V_M2_MASK", "Category": "unit", "SEW": 32, "Group8": 16, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 3, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": true, "Masked": true, "Barrier": false, "SameCopy": false},
+      {"Opcode": "PseudoVSE32_V_M2_MASK", "Category": "unit", "SEW": 32, "Group8": 16, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 3, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": true, "Masked": true, "Barrier": false, "SameCopy": false},
+      {"Opcode": "ADDI", "Category": "scalar"},
+      {"Opcode": "BNE", "Category": "scalar"},
+      {"Opcode": "PseudoBR", "Category": "scalar"},
+      {"Opcode": "PseudoRET", "Category": "scalar"}
+    ]
+  }
+}

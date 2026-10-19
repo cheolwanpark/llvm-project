@@ -43,11 +43,11 @@ uv run python evaluate-weights --weights /tmp/weights.json \
 ```
 
 `calibrate` reads tuning only. Both evaluation tools read validation only and have
-no split override. `evaluate` uses LLVM costs; `evaluate-weights` uses fitted
-Python costs. Fitting preserves the hard-max analytical structure, learns 18
+no split override. `evaluate` uses default Python costs; `evaluate-weights` uses fitted
+coefficients in the same model. Fitting preserves the hard-max analytical structure, learns 19
 shared internal coefficient multipliers with weighted pairwise ranking, and
 excludes measured pairs within 1%. Learned coefficients are not installed into
-LLVM. Unsupported or ambiguous observations are reported as exclusions; the
+LLVM; the meta compiler accepts `--weights` and sends only selected IDs to LLVM. Unsupported or ambiguous observations are reported as exclusions; the
 usable population may be smaller than the partition.
 
 Database precedence is **`--db PATH` > `VPLAN_DB` > checkout/dataset.sqlite**.
@@ -63,7 +63,7 @@ uv run --project utils/vplan-tools python utils/vplan-tools/evaluate
 
 Common options include `--benchmark ID`, `--build-dir`, `--llvm-path`, `--jobs`
 (default 2), `--timeout` (120 seconds per invocation), and `--artifacts-dir` on
-evaluation/calibration commands. Printing supports `--detail`. LLVM printing and
+evaluation/calibration commands. Printing supports `--detail`. Printing and
 evaluation support `--compiler-mode meta|direct`; calibration always uses raw
 post-RA analytics. O2/O3 options are preserved.
 

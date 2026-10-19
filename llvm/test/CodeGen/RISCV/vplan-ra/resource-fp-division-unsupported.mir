@@ -1,16 +1,8 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=unsupported:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
-# RUN: FileCheck %s < %t.json
-# RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; assert r['supported'] is False; assert len(r['operations']) == 1; assert r['operations'][0]['kind'] == 'fp_div'"
+# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-fp-division-unsupported.json 0
 # A supported divide does not enable square root or other unsupported work.
 # The partial observation proves divide was accepted before square root
 # stopped collection. Arithmetic counters still exclude division service.
-# CHECK-DAG: "supported":false
-# CHECK-DAG: "loop_blocks":1
-# CHECK-DAG: "fp8":0
-# CHECK-DAG: "scalar8":0
-# CHECK-DAG: "config8":8
-# CHECK-DAG: {"form":"vv","group8":16,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":false,"sew":32,"work8":16}
 --- |
   define void @unsupported() #0 {
   entry:

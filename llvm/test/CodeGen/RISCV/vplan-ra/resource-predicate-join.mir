@@ -1,6 +1,5 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=join:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
-# RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; assert not r['supported']; assert r['loop_blocks']==0 and r['operations']==[]"
+# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-predicate-join.json 0
 #
 # An external predecessor of the apparent latch makes this an irreducible
 # region. Preserve the existing conservative unsupported-region result; do

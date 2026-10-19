@@ -1,41 +1,10 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=copy:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
-# RUN: FileCheck %s --check-prefix=FEATURES < %t.json
-# RUN: FileCheck %s --check-prefix=OPS < %t.json
-# RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; ops=r['operations']; copies=[o for o in ops if o['kind']=='copy']; assert len(ops)==16; assert [(o['group8'],o['work8']) for o in copies]==[(8,8),(16,16),(32,32),(64,64),(8,8),(8,0),(16,0),(32,0),(64,0),(8,0)]"
+# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-copy.json 0
 #
 # Nominal VLEN=128. COPY uses whole physical groups even after mf2 vset.
 # Each group has a non-self and a self copy; v0 mask copies use one register.
 # Supported memory, arithmetic and spills coexist without double counting.
 # Copies in setup and exit are excluded; scalar COPY retains scalar overhead.
-# FEATURES-DAG: "supported":true
-# FEATURES-DAG: "loop_blocks":1
-# FEATURES-DAG: "config8":8
-# FEATURES-DAG: "scalar8":32
-# FEATURES-DAG: "integer8":16
-# FEATURES-DAG: "fp8":8
-# FEATURES-DAG: "fused8":16
-# FEATURES-DAG: "unit8":0
-# FEATURES-DAG: "indexed8":0
-# FEATURES-DAG: "strided8":128
-# FEATURES-DAG: "masked8":128
-# FEATURES-DAG: "spill8":32
-# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":8}
-# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":16}
-# OPS-DAG: {"group8":32,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":32}
-# OPS-DAG: {"group8":64,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":64}
-# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":8}
-# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":0}
-# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":0}
-# OPS-DAG: {"group8":32,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":0}
-# OPS-DAG: {"group8":64,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":0}
-# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"copy","masked":false,"sew":0,"work8":0}
-# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"integer","masked":false,"sew":32,"work8":16}
-# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"fp","masked":false,"sew":32,"work8":8}
-# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"fused","masked":false,"sew":64,"work8":16}
-# OPS-DAG: {"direction":"load","group8":32,"index_group8":0,"index_sew":0,"kind":"strided","masked":true,"predicate_id":2,"sew":32,"work8":128}
-# OPS-DAG: {"group8":0,"index_group8":0,"index_sew":0,"kind":"spill","masked":false,"sew":0,"work8":16}
-# OPS-DAG: {"group8":0,"index_group8":0,"index_sew":0,"kind":"spill","masked":false,"sew":0,"work8":16}
 --- |
   define void @copy() #0 {
   entry:

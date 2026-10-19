@@ -1,33 +1,11 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+zvfh -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=division:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
-# RUN: FileCheck %s --check-prefix=FEATURES < %t.json
-# RUN: FileCheck %s --check-prefix=OPS < %t.json
-# RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; assert len(r['operations']) == 9; assert r['recurrences'] == []"
+# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-fp-division.json 0
 #
 # VLEN=128. Divide forms are derived from base instruction metadata, with
 # SEW and fractional LMUL from each pseudo rather than the preceding vset.
 # Fractional operations issue one chunk; M2/M4/M8 issue 2/4/8 chunks.
 # Division uses neither ordinary FP arithmetic nor memory mask service.
 # Setup and exit division instructions must not be collected.
-# FEATURES-DAG: "supported":true
-# FEATURES-DAG: "loop_blocks":1
-# FEATURES-DAG: "fp8":0
-# FEATURES-DAG: "fused8":0
-# FEATURES-DAG: "integer8":0
-# FEATURES-DAG: "masked8":0
-# FEATURES-DAG: "unit8":0
-# FEATURES-DAG: "spill8":0
-# FEATURES-DAG: "scalar8":24
-# FEATURES-DAG: "config8":8
-# OPS-DAG: {"form":"vv","group8":2,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":false,"sew":16,"work8":8}
-# OPS-DAG: {"form":"vv","group8":4,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":true,"sew":32,"work8":8}
-# OPS-DAG: {"form":"vv","group8":64,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":false,"sew":64,"work8":64}
-# OPS-DAG: {"form":"vf","group8":2,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":true,"sew":16,"work8":8}
-# OPS-DAG: {"form":"vf","group8":4,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":false,"sew":32,"work8":8}
-# OPS-DAG: {"form":"vf","group8":8,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":true,"sew":64,"work8":8}
-# OPS-DAG: {"form":"reverse_vf","group8":16,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":false,"sew":16,"work8":16}
-# OPS-DAG: {"form":"reverse_vf","group8":32,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":true,"sew":32,"work8":32}
-# OPS-DAG: {"form":"reverse_vf","group8":64,"index_group8":0,"index_sew":0,"kind":"fp_div","masked":false,"sew":64,"work8":64}
 --- |
   define void @division() #0 {
   entry:

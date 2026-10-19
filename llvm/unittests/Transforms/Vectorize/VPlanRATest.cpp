@@ -1,6 +1,7 @@
-//===- VPlanRATest.cpp - Backend feedback selection integration tests ------===//
+//===- VPlanRATest.cpp - Explicit selection integration tests ------===//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+#include "llvm/Transforms/Vectorize/VPlanRA.h"
 #include "llvm/Analysis/TargetTransformInfoImpl.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Module.h"
@@ -12,7 +13,6 @@
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
-#include "llvm/Transforms/Vectorize/VPlanRA.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -20,7 +20,8 @@ using namespace llvm;
 namespace {
 class TestTTI : public TargetTransformInfoImplCRTPBase<TestTTI> {
 public:
-  explicit TestTTI(const DataLayout &DL) : TargetTransformInfoImplCRTPBase(DL) {}
+  explicit TestTTI(const DataLayout &DL)
+      : TargetTransformInfoImplCRTPBase(DL) {}
   TypeSize getRegisterBitWidth(TTI::RegisterKind K) const override {
     return TypeSize::getFixed(K == TTI::RGK_ScalableVector ? 0 : 128);
   }
@@ -76,18 +77,21 @@ json::Value runLV(StringRef Manifest) {
   return cantFail(json::parse((*Buffer)->getBuffer()));
 }
 
-TEST(VPlanRA, BackendScoresChangeTheActualMainVFSelection) {
+TEST(VPlanRA, ExplicitSelectionAndScalarRetention) {
   SmallString<128> Dir;
   ASSERT_FALSE(sys::fs::createUniqueDirectory("vplan-ra-unit", Dir));
   SmallString<128> Manifest(Dir), Feedback(Dir);
   sys::path::append(Manifest, "manifest.json");
   sys::path::append(Feedback, "feedback.json");
   auto &Opts = cl::getRegisteredOptions();
-  auto &Out = *static_cast<cl::opt<std::string> *>(Opts["vplan-candidates-output"]);
-  auto &In = *static_cast<cl::opt<std::string> *>(Opts["vplan-ra-feedback"]);
+  auto &Out =
+      *static_cast<cl::opt<std::string> *>(Opts["vplan-candidates-output"]);
+  auto &In =
+      *static_cast<cl::opt<std::string> *>(Opts["vplan-selection-input"]);
   auto &ID = *static_cast<cl::opt<std::string> *>(Opts["vplan-ra-run-id"]);
   auto &IC = *static_cast<cl::opt<unsigned> *>(Opts["force-vector-interleave"]);
-  auto &Epi = *static_cast<cl::opt<bool> *>(Opts["enable-epilogue-vectorization"]);
+  auto &Epi =
+      *static_cast<cl::opt<bool> *>(Opts["enable-epilogue-vectorization"]);
   SaveAndRestore<std::string> SaveOut(Out.getValue(), Manifest.str().str());
   SaveAndRestore<std::string> SaveIn(In.getValue());
   SaveAndRestore<std::string> SaveID(ID.getValue(), "unit-test");
@@ -95,41 +99,37 @@ TEST(VPlanRA, BackendScoresChangeTheActualMainVFSelection) {
   SaveAndRestore<bool> SaveEpi(Epi.getValue(), false);
   auto Baseline = runLV(Manifest);
   auto *Rows = Baseline.getAsObject()->getArray("candidates");
-  ASSERT_GE(Rows->size(), 3u);
-  // Feed computed scores directly into the real vectorizer, including a scalar
-  // win.
+  ASSERT_GE(Rows->size(), 2u);
+  EXPECT_TRUE(Baseline.getAsObject()->getArray("selections")->empty());
   for (StringRef Wanted : {"f1", "f2", "f4"}) {
-    json::Array FeedbackRows;
-    for (auto &Row : *Rows) {
-      const auto &O = *Row.getAsObject();
-      if (O.getBoolean("probeable") != true)
-        continue;
-      FeedbackRows.push_back(json::Object{
-          {"id", O.getString("id")->str()},
-          {"cost", json::Object{{"body_quarters", 4},
-                                {"scalar_quarters", 4},
-                                {"score_quarters",
-                                 O.getString("vf") == Wanted ? 4 : 40000},
-                                {"divisor", 1},
-                                {"width", 1},
-                                {"scalar_width", 1},
-                                {"kind", "cost-per-lane"}}},
-          {"selection", json::Object{{"id", O.getString("id")->str()},
-                                     {"ic", 1},
-                                     {"epilogue_vf", "f0"},
-                                     {"emitted", true}}}});
-    }
-    writeVPlanRAJSON(Feedback,
-                     json::Object{{"version", 2},
-                                  {"run_id", "unit-test"},
-                                  {"candidates", std::move(FeedbackRows)}});
+    json::Object Choice{{"function", "kernel"},
+                        {"loop", 0},
+                        {"scalar", Wanted == "f1"},
+                        {"ic", 1},
+                        {"epilogue_vf", "f0"}};
+    if (Wanted != "f1")
+      for (auto &Row : *Rows)
+        if (Row.getAsObject()->getString("vf") == Wanted)
+          Choice["id"] = Row.getAsObject()->getString("id")->str();
+    json::Array Choices;
+    Choices.push_back(std::move(Choice));
+    writeVPlanRAJSON(
+        Feedback,
+        json::Object{
+            {"version", 3},
+            {"run_id", "unit-test"},
+            {"candidates", json::Array(*Rows)},
+            {"loops", json::Array(*Baseline.getAsObject()->getArray("loops"))},
+            {"selections", std::move(Choices)}});
     In = Feedback.str().str();
     auto Final = runLV(Manifest);
     auto *Selected = Final.getAsObject()->getArray("selections");
     ASSERT_EQ(Selected->size(), 1u);
-    EXPECT_TRUE((*Selected)[0].getAsObject()->getString("id")->ends_with(Wanted));
-    EXPECT_EQ((*Selected)[0].getAsObject()->getBoolean("emitted"),
-              Wanted != "f1");
+    EXPECT_EQ((*Selected)[0].getAsObject()->getBoolean("scalar"),
+              Wanted == "f1");
+    if (Wanted != "f1")
+      EXPECT_TRUE(
+          (*Selected)[0].getAsObject()->getString("id")->ends_with(Wanted));
   }
   EXPECT_FALSE(sys::fs::remove_directories(Dir));
 }

@@ -6374,17 +6374,19 @@ void LoopVectorizationPlanner::registerRACandidates() {
   for (const auto &P : VPlans) {
     Config.RA->registerPlan(*P);
     for (ElementCount VF : P->vectorFactors())
-      Config.RA->recordCandidate(*P, VF);
+      Config.RA->recordCandidate(*P, VF,
+          estimateElementCount(VF, Config.getVScaleForTuning()));
   }
 }
 
 std::pair<VectorizationFactor, VPlan *>
-LoopVectorizationPlanner::selectRAProbe() {
+LoopVectorizationPlanner::selectRARequested() {
   for (const auto &P : VPlans)
     for (ElementCount VF : P->vectorFactors())
-      if (Config.RA->isProbe(*P, VF)) {
+      if (Config.RA->isRequested(*P, VF)) {
         // Probe selection is a materialization request, not a cost decision.
-        return {VectorizationFactor(VF, 1, 1), P.get()};
+        return {VectorizationFactor(VF, InstructionCost::getInvalid(),
+                                    InstructionCost::getInvalid()), P.get()};
       }
   reportFatalUsageError("requested VPlan RA candidate was not regenerated");
 }
@@ -6395,56 +6397,6 @@ LoopVectorizationPlanner::computeBestVF() {
     Config.CostReport->Phase = "main-selection";
   if (VPlans.empty())
     return {VectorizationFactor::Disabled(), nullptr};
-  if (Config.RA) {
-    ElementCount ScalarVF = ElementCount::getFixed(1);
-    VPlan *Best = nullptr;
-    for (auto &P : VPlans)
-      if (P->hasVF(ScalarVF)) {
-        Best = P.get();
-        break;
-      }
-    if (!Best)
-      reportFatalUsageError("backend selection requires a scalar candidate");
-    if (!vplanRAHasFeedback())
-      return {VectorizationFactor(ScalarVF, 1, 1), Best};
-    auto Scalar = Config.RA->cost(*Best, ScalarVF);
-    auto BestCost = Scalar;
-    auto BestVF = ScalarVF;
-    if (Config.CostReport)
-      Config.CostReport->scalarBaseline(Scalar.Body);
-    for (auto &P : VPlans) {
-      for (auto VF : P->vectorFactors()) {
-        auto C = Config.RA->cost(*P, VF);
-        bool Better = backendCostLess(C, BestCost);
-        if (Config.CostReport) {
-          Config.CostReport->backendWidth(*P, VF, C.Width);
-          Config.CostReport->beginComparison(*P, VF, C.Body, Best, BestVF);
-          Config.CostReport->comparisonContext(
-              PSE.getSmallConstantMaxTripCount(), P->hasScalarTail());
-          Config.CostReport->comparisonScore(C.Score, BestCost.Score, C.Kind,
-                                             C.Divisor, BestCost.Divisor);
-          Config.CostReport->comparisonResult(Better, "backend-score");
-          Config.CostReport->beginComparison(*P, VF, C.Body, nullptr, ScalarVF,
-                                             true);
-          Config.CostReport->comparisonScore(C.Score, Scalar.Score, C.Kind,
-                                             C.Divisor, Scalar.Divisor);
-          Config.CostReport->comparisonResult(backendCostLess(C, Scalar),
-                                              "backend-score");
-          VP_COST_DETAIL(Config.CostReport,
-                         OS << "      backend-breakdown="
-                            << json::Value(json::Object(C.Breakdown)) << '\n');
-        }
-        if (Better) {
-          Best = P.get();
-          BestVF = VF;
-          BestCost = std::move(C);
-        }
-      }
-    }
-    if (Config.CostReport)
-      Config.CostReport->select(*Best, BestVF, "backend-score");
-    return {VectorizationFactor(BestVF, BestCost.Body, Scalar.Body), Best};
-  }
   // If there is a single VPlan with a single VF, return it directly.
   VPlan &FirstPlan = *VPlans[0];
 
@@ -8615,6 +8567,9 @@ bool LoopVectorizePass::processLoop(Loop *L) {
 
   // Function containing loop
   Function *F = L->getHeader()->getParent();
+  std::unique_ptr<VPlanRAContext> RA;
+  if (vplanRAEnabled())
+    RA = std::make_unique<VPlanRAContext>(*F, ReportLoopIndex);
 
   // Looking at the diagnostic output is the only way to determine if a loop
   // was vectorized (other than looking at the IR or machine code), so it
@@ -8817,18 +8772,20 @@ bool LoopVectorizePass::processLoop(Loop *L) {
 
   // Plan how to best vectorize.
   LVP.plan(UserVF, UserIC);
-  std::unique_ptr<VPlanRAContext> RA;
-  if (vplanRAEnabled()) {
+  if (RA) {
     if (!IsInnerLoop)
       reportFatalUsageError("VPlan RA currently supports inner loops only");
-    RA = std::make_unique<VPlanRAContext>(*F, ReportLoopIndex);
+    RA->setLoopInfo(CM.expectedCost(ElementCount::getFixed(1)),
+                    PSE.getSmallConstantMaxTripCount(),
+                    PSE.getSE()->getSmallConstantTripCount(L));
     Config.RA = RA.get();
     LVP.registerRACandidates();
   }
-  auto [VF, BestPlanPtr] = LVP.computeBestVF();
+  if (RA && !RA->hasRequest())
+    return false;
+  auto [VF, BestPlanPtr] = RA ? LVP.selectRARequested() : LVP.computeBestVF();
   bool RAProbe = RA && RA->probesThisLoop();
   if (RAProbe) {
-    std::tie(VF, BestPlanPtr) = LVP.selectRAProbe();
     F->addFnAttr("vplan.ra.candidate", getVPlanRAProbe());
     F->addFnAttr("vplan.ra.vf", std::to_string(VF.Width.getKnownMinValue()));
     F->addFnAttr("vplan.ra.scalable", VF.Width.isScalable() ? "1" : "0");
@@ -8840,8 +8797,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                  std::to_string(PSE.getSE()->getSmallConstantTripCount(L)));
     F->addFnAttr("vplan.ra.scalar-tail",
                  BestPlanPtr->hasScalarTail() ? "1" : "0");
-    if (VF.Width.isScalar())
-      markVPlanRALoop(*L, getVPlanRAProbe(), *PSE.getSE());
   }
   unsigned IC = 1;
 
@@ -8877,12 +8832,14 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       using namespace llvm::PatternMatch;
       if (Checks.getSCEVChecks().first &&
           match(Checks.getSCEVChecks().first, m_One())) {
+        if (RA) RA->failure("always-failing-scev-check");
         VP_COST_SUMMARY(Config.CostReport,
                         OS << "  rejection reason=always-failing-scev-check\n");
         return false;
       }
       if (Checks.getMemRuntimeChecks().first &&
           match(Checks.getMemRuntimeChecks().first, m_One())) {
+        if (RA) RA->failure("always-failing-memory-check");
         VP_COST_SUMMARY(
             Config.CostReport,
             OS << "  rejection reason=always-failing-memory-check\n");

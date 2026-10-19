@@ -1,0 +1,40 @@
+{
+  "0": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 5, "Distance": 1, "OperandIndex": 1, "Source": 5, "WholeValue": true},
+      {"Destination": 6, "Distance": 0, "OperandIndex": 0, "Source": 5, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Category": "scalar"},
+      {"Opcode": "PseudoVAADD_VV_M1", "Category": "integer", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false},
+      {"Opcode": "PseudoVWSLL_VI_M1", "Category": "integer", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false},
+      {"Opcode": "PseudoVSEXT_VF2_M2", "Category": "integer", "SEW": 32, "Group8": 16, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false},
+      {"Opcode": "PseudoVZEXT_VF2_M2", "Category": "integer", "SEW": 32, "Group8": 16, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false},
+      {"Opcode": "ADDI", "Category": "scalar"},
+      {"Opcode": "BNE", "Category": "scalar"},
+      {"Opcode": "PseudoBR", "Category": "scalar"},
+      {"Opcode": "PseudoRET", "Category": "scalar"}
+    ]
+  }
+}

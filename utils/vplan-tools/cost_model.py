@@ -1,22 +1,18 @@
-"""Continuous counterpart of RISCVVPlanCost.cpp, with shared physical parameters.
-
-Raw geometry and dependency eligibility are fixed. All maxima remain hard maxima;
-only InstructionCost's quarter-unit truncation/saturation is deliberately absent.
-The compiler is never given these learned costs.
-"""
+"""Shared differentiable VPlan body and trip-count model; no dataset access."""
 from __future__ import annotations
 
+import json
 import math
 import torch
 
-from vplan_tools import ToolError
+from model_errors import ToolError
 
-MODEL_VERSION = "rvv-shared-18-v1"
+MODEL_VERSION = "rvv-python-19-v3"
 PARAMETERS = (
     "memory_unit", "memory_nonunit", "memory_mask", "strided_group", "masked_group",
     "arithmetic_integer", "arithmetic_fp", "movement_copy", "movement_slide",
     "divider", "spill", "configuration", "latency_load", "latency_fp",
-    "latency_fma", "latency_integer", "latency_multiply", "latency_chunk",
+    "latency_fma", "latency_integer", "latency_multiply", "latency_chunk", "tail_scale",
 )
 P = len(PARAMETERS)
 DTYPE = torch.float64
@@ -62,11 +58,11 @@ def value_edge(a, e, fused):
             ("Implicit", "Undef", "SubReg")) and (fused or not use["Tied"]))
 
 
-def needs_scalar_reference(a):
+def needs_scalar_cost(a):
     """Require a tail reference unless both the loop and score omit its work."""
     if not a["MaxTripCount"]:
         return False
-    if not a["ScalarTail"] and (a["ScalableVF"] or a["VF"] != 1):
+    if not a["ScalarTail"]:
         return False
     # A divisible upper bound alone cannot prove that the real tail is empty.
     return not (a["ExactTripCount"] > 0
@@ -120,6 +116,13 @@ class CostModel:
         self.active = set()
         for ci, a in enumerate(observations):
             validate_analytics(a)
+            scalar = a.get("ScalarCost")
+            if needs_scalar_cost(a) and scalar is None:
+                raise ToolError("missing middle-end scalar cost for scalar tail")
+            if scalar is not None and (type(scalar) not in (int, float) or not math.isfinite(scalar) or scalar < 0):
+                raise ToolError("invalid middle-end scalar cost")
+            if a["MaxTripCount"] and a["ScalarTail"] and a["MaxTripCount"] % a["Width"] and scalar:
+                self.active.add(P - 1)
             try:
                 self._compile_body(ci, a)
             except (KeyError, TypeError, ValueError, IndexError) as exc:
@@ -298,7 +301,7 @@ class CostModel:
             self.layers.append((torch.tensor(parents), torch.tensor(coeffs, dtype=DTYPE),
                                 torch.tensor(masks, dtype=DTYPE)))
 
-    def bodies(self, multipliers):
+    def body_breakdown(self, multipliers):
         if multipliers.ndim == 1:
             multipliers = multipliers.unsqueeze(0)
         n = multipliers.shape[0]
@@ -319,32 +322,57 @@ class CostModel:
                 values[:, self.terminal_node], reduce="amax", include_self=True)
         bounds = torch.stack((memory, r[:, :, 4], r[:, :, 5],
                               r[:, :, 6] + self.scalar_fixed, r[:, :, 7], recurrence, load_use), -1)
-        return (bounds.amax(-1) + r[:, :, 8] + r[:, :, 9]) / 16
+        return {"resource_bound": bounds.amax(-1) / 16,
+                "memory": memory / 16, "arithmetic": r[:, :, 4] / 16,
+                "movement": r[:, :, 5] / 16,
+                "scalar_and_unused_configuration": (r[:, :, 6] + self.scalar_fixed) / 16,
+                "divider": r[:, :, 7] / 16, "recurrence": recurrence / 16,
+                "load_use": load_use / 16, "spill": r[:, :, 8] / 16,
+                "configuration": r[:, :, 9] / 16,
+                "body": (bounds.amax(-1) + r[:, :, 8] + r[:, :, 9]) / 16}
 
-    def scores(self, multipliers, scalar_indices: list[int | None]):
-        body = self.bodies(multipliers)
-        main, tail, destinations, references = [], [], [], []
-        for index, (a, si) in enumerate(zip(self.observations, scalar_indices, strict=True)):
-            if si is None:
-                if needs_scalar_reference(a):
-                    raise ToolError("missing scalar reference for scalar tail")
-            else:
-                scalar = self.observations[si]
-                if scalar["ScalableVF"] or scalar["VF"] != 1 or not same_context(a, scalar):
-                    raise ToolError("scalar analytics context mismatch")
+    def bodies(self, multipliers):
+        return self.body_breakdown(multipliers)["body"]
+
+    def breakdown(self, multipliers):
+        if multipliers.ndim == 1:
+            multipliers = multipliers.unsqueeze(0)
+        result = self.body_breakdown(multipliers)
+        main, tail = [], []
+        for a in self.observations:
             t, w = a["MaxTripCount"], a["Width"]
-            if not t:
-                main.append(1 / w)
-            elif a["ScalarTail"] or not a["ScalableVF"] and a["VF"] == 1:
-                main.append(t // w)
-                if t % w:
-                    destinations.append(index)
-                    references.append(si)
-                    tail.append((t % w) / self.observations[si]["Width"])
-            else:
-                main.append((t + w - 1) // w)
-        scores = body * torch.tensor(main, dtype=DTYPE)
-        if destinations:
-            scores = scores.index_add(1, torch.tensor(destinations),
-                body[:, references] * torch.tensor(tail, dtype=DTYPE))
-        return scores
+            main.append(1 / w if not t else t // w if a["ScalarTail"] else (t + w - 1) // w)
+            tail.append((t % w) * (a.get("ScalarCost") or 0) if t and a["ScalarTail"] else 0)
+        result["body_iterations"] = torch.tensor(main, dtype=DTYPE).expand(multipliers.shape[0], -1)
+        result["tail"] = multipliers[:, -1:] * torch.tensor(tail, dtype=DTYPE)
+        result["score"] = result["body"] * result["body_iterations"] + result["tail"]
+        return result
+
+    def scores(self, multipliers):
+        return self.breakdown(multipliers)["score"]
+
+
+def load_weights(path):
+    try:
+        value = json.loads(path.read_text())
+        if value["schema_version"] != 2 or value["model_version"] != MODEL_VERSION:
+            raise ValueError("unsupported weights schema/model version; refit using protocol v3")
+        if set(value["multipliers"]) != set(PARAMETERS):
+            raise ValueError("wrong parameter set")
+        numbers = [value["multipliers"][p] for p in PARAMETERS]
+        if any(type(x) not in (int, float) or not math.isfinite(x) or x <= 0 for x in numbers):
+            raise ValueError("multipliers must be finite and positive")
+        return value, torch.tensor(numbers, dtype=DTYPE)
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise ToolError(f"invalid weights {path}: {exc}") from exc
+
+
+def score_observation(observation, weights=None):
+    if weights is None:
+        weights = torch.ones(P, dtype=DTYPE)
+    with torch.no_grad():
+        parts = CostModel([observation]).breakdown(weights)
+    result = {k: float(v[0, 0]) for k, v in parts.items()}
+    if any(not math.isfinite(v) or v < 0 for v in result.values()):
+        raise ToolError("nonfinite or negative model result")
+    return result

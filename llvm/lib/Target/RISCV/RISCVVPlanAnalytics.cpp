@@ -33,16 +33,6 @@ json::Value llvm::vplan::toJSON(const Operand &V) {
                       {"Tied", json::Value(V.Tied)},
                       {"SubReg", json::Value(V.SubReg)}};
 }
-bool llvm::vplan::fromJSON(const json::Value &V, Operand &R, json::Path P) {
-  json::ObjectMapper O(V, P);
-  return O && O.map("Reg", R.Reg) && O.map("Name", R.Name) &&
-         O.map("Units", R.Units) && O.map("Group8", R.Group8) &&
-         O.map("Vector", R.Vector) && O.map("Def", R.Def) &&
-         O.map("Use", R.Use) && O.map("Implicit", R.Implicit) &&
-         O.map("Dead", R.Dead) && O.map("Undef", R.Undef) &&
-         O.map("EarlyClobber", R.EarlyClobber) && O.map("Tied", R.Tied) &&
-         O.map("SubReg", R.SubReg);
-}
 json::Value llvm::vplan::toJSON(const InstructionInfo &V) {
   return json::Object{{"ID", json::Value(V.ID)},
                       {"Block", json::Value(V.Block)},
@@ -69,23 +59,6 @@ json::Value llvm::vplan::toJSON(const InstructionInfo &V) {
                       {"Operands", json::Value(V.Operands)},
                       {"Immediates", json::Value(V.Immediates)}};
 }
-bool llvm::vplan::fromJSON(const json::Value &V, InstructionInfo &R,
-                           json::Path P) {
-  json::ObjectMapper O(V, P);
-  return O && O.map("ID", R.ID) && O.map("Block", R.Block) &&
-         O.map("Opcode", R.Opcode) && O.map("Base", R.Base) &&
-         O.map("Category", R.Category) && O.map("SEW", R.SEW) &&
-         O.map("Group8", R.Group8) && O.map("IndexSEW", R.IndexSEW) &&
-         O.map("IndexGroup8", R.IndexGroup8) &&
-         O.map("Predicate", R.Predicate) && O.map("StackSlot", R.StackSlot) &&
-         O.map("Bytes", R.Bytes) && O.map("ScalableBytes", R.ScalableBytes) &&
-         O.map("Stack", R.Stack) && O.map("Spill", R.Spill) &&
-         O.map("Load", R.Load) && O.map("Store", R.Store) &&
-         O.map("Masked", R.Masked) && O.map("Meta", R.Meta) &&
-         O.map("Barrier", R.Barrier) && O.map("ConfigUnused", R.ConfigUnused) &&
-         O.map("SameCopy", R.SameCopy) && O.map("Operands", R.Operands) &&
-         O.map("Immediates", R.Immediates);
-}
 json::Value llvm::vplan::toJSON(const Edge &V) {
   return json::Object{{"Source", json::Value(V.Source)},
                       {"Destination", json::Value(V.Destination)},
@@ -93,22 +66,10 @@ json::Value llvm::vplan::toJSON(const Edge &V) {
                       {"Distance", json::Value(V.Distance)},
                       {"WholeValue", json::Value(V.WholeValue)}};
 }
-bool llvm::vplan::fromJSON(const json::Value &V, Edge &R, json::Path P) {
-  json::ObjectMapper O(V, P);
-  return O && O.map("Source", R.Source) &&
-         O.map("Destination", R.Destination) &&
-         O.map("OperandIndex", R.OperandIndex) &&
-         O.map("Distance", R.Distance) && O.map("WholeValue", R.WholeValue);
-}
 json::Value llvm::vplan::toJSON(const Block &V) {
   return json::Object{{"ID", json::Value(V.ID)},
                       {"Role", json::Value(V.Role)},
                       {"Successors", json::Value(V.Successors)}};
-}
-bool llvm::vplan::fromJSON(const json::Value &V, Block &R, json::Path P) {
-  json::ObjectMapper O(V, P);
-  return O && O.map("ID", R.ID) && O.map("Role", R.Role) &&
-         O.map("Successors", R.Successors);
 }
 json::Value llvm::vplan::toJSON(const Analytics &V) {
   return json::Object{
@@ -133,23 +94,6 @@ json::Value llvm::vplan::toJSON(const Analytics &V) {
       {"Blocks", json::Value(V.Blocks)},
       {"Instructions", json::Value(V.Instructions)},
       {"Edges", json::Value(V.Edges)}};
-}
-bool llvm::vplan::fromJSON(const json::Value &V, Analytics &R, json::Path P) {
-  json::ObjectMapper O(V, P);
-  return O && O.map("Version", R.Version) && O.map("RunID", R.RunID) &&
-         O.map("Candidate", R.Candidate) && O.map("Function", R.Function) &&
-         O.map("CPU", R.CPU) && O.map("Stage", R.Stage) &&
-         O.map("Error", R.Error) &&
-         O.map("DependencyCoverage", R.DependencyCoverage) &&
-         O.map("VLen", R.VLen) && O.map("Width", R.Width) &&
-         O.map("VF", R.VF) && O.map("ScalableVF", R.ScalableVF) &&
-         O.map("MaxTripCount", R.MaxTripCount) &&
-         O.map("ExactTripCount", R.ExactTripCount) &&
-         O.map("ScalarTail", R.ScalarTail) && O.map("Header", R.Header) &&
-         O.map("Latch", R.Latch) &&
-         O.map("PeakLiveVectorRegisters", R.PeakLiveVectorRegisters) &&
-         O.map("Blocks", R.Blocks) && O.map("Instructions", R.Instructions) &&
-         O.map("Edges", R.Edges);
 }
 namespace {
 // Fractional LMUL is kept exactly in eighths; encoding 4 is reserved.

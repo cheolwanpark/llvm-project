@@ -1,64 +1,44 @@
 # RUN: split-file %s %t
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/dependent.json.analytics %t/dependent.mir -o %t/dependent-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/dependent.json.analytics > %t/dependent.json
-# RUN: FileCheck %s --check-prefix=DEPENDENT < %t/dependent.json
+# RUN: %python %S/Inputs/check-raw.py %t/dependent.json.analytics %S/Inputs/recurrences.json 0
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/independent.json.analytics %t/independent.mir -o %t/independent-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/independent.json.analytics > %t/independent.json
-# RUN: FileCheck %s --check-prefix=INDEPENDENT < %t/independent.json
+# RUN: %python %S/Inputs/check-raw.py %t/independent.json.analytics %S/Inputs/recurrences.json 1
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/tied-dependent.json.analytics %t/tied-dependent.mir -o %t/tied-dependent-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/tied-dependent.json.analytics > %t/tied-dependent.json
-# RUN: FileCheck %s --check-prefix=TIED-DEPENDENT < %t/tied-dependent.json
+# RUN: %python %S/Inputs/check-raw.py %t/tied-dependent.json.analytics %S/Inputs/recurrences.json 2
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/tied-independent.json.analytics %t/tied-independent.mir -o %t/tied-independent-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/tied-independent.json.analytics > %t/tied-independent.json
-# RUN: FileCheck %s --check-prefix=TIED-INDEPENDENT < %t/tied-independent.json
+# RUN: %python %S/Inputs/check-raw.py %t/tied-independent.json.analytics %S/Inputs/recurrences.json 3
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/grouped.json.analytics %t/grouped.mir -o %t/grouped-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/grouped.json.analytics > %t/grouped.json
-# RUN: FileCheck %s --check-prefix=GROUPED < %t/grouped.json
+# RUN: %python %S/Inputs/check-raw.py %t/grouped.json.analytics %S/Inputs/recurrences.json 4
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/alias-overwrite.json.analytics %t/alias-overwrite.mir -o %t/alias-overwrite-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/alias-overwrite.json.analytics > %t/alias-overwrite.json
-# RUN: FileCheck %s --check-prefix=ALIAS-OVERWRITE < %t/alias-overwrite.json
+# RUN: %python %S/Inputs/check-raw.py %t/alias-overwrite.json.analytics %S/Inputs/recurrences.json 5
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/alias-reuse.json.analytics %t/alias-reuse.mir -o %t/alias-reuse-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/alias-reuse.json.analytics > %t/alias-reuse.json
-# RUN: FileCheck %s --check-prefix=ALIAS-REUSE < %t/alias-reuse.json
+# RUN: %python %S/Inputs/check-raw.py %t/alias-reuse.json.analytics %S/Inputs/recurrences.json 6
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/overwrite.json.analytics %t/overwrite.mir -o %t/overwrite-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/overwrite.json.analytics > %t/overwrite.json
-# RUN: FileCheck %s --check-prefix=OVERWRITE < %t/overwrite.json
+# RUN: %python %S/Inputs/check-raw.py %t/overwrite.json.analytics %S/Inputs/recurrences.json 7
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/undef.json.analytics %t/undef.mir -o %t/undef-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/undef.json.analytics > %t/undef.json
-# RUN: FileCheck %s --check-prefix=UNDEF < %t/undef.json
+# RUN: %python %S/Inputs/check-raw.py %t/undef.json.analytics %S/Inputs/recurrences.json 8
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/passthrough.json.analytics %t/passthrough.mir -o %t/passthrough-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/passthrough.json.analytics > %t/passthrough.json
-# RUN: FileCheck %s --check-prefix=PASSTHROUGH < %t/passthrough.json
+# RUN: %python %S/Inputs/check-raw.py %t/passthrough.json.analytics %S/Inputs/recurrences.json 9
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/load-reuse.json.analytics %t/load-reuse.mir -o %t/load-reuse-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/load-reuse.json.analytics > %t/load-reuse.json
-# RUN: FileCheck %s --check-prefix=LOAD-REUSE < %t/load-reuse.json
+# RUN: %python %S/Inputs/check-raw.py %t/load-reuse.json.analytics %S/Inputs/recurrences.json 10
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/implicit-def.json.analytics %t/implicit-def.mir -o %t/implicit-def-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/implicit-def.json.analytics > %t/implicit-def.json
-# RUN: FileCheck %s --check-prefix=IMPLICIT-DEF < %t/implicit-def.json
+# RUN: %python %S/Inputs/check-raw.py %t/implicit-def.json.analytics %S/Inputs/recurrences.json 11
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/fractional.json.analytics %t/fractional.mir -o %t/fractional-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/fractional.json.analytics > %t/fractional.json
-# RUN: FileCheck %s --check-prefix=FRACTIONAL < %t/fractional.json
+# RUN: %python %S/Inputs/check-raw.py %t/fractional.json.analytics %S/Inputs/recurrences.json 12
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/e64.json.analytics %t/e64.mir -o %t/e64-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/e64.json.analytics > %t/e64.json
-# RUN: FileCheck %s --check-prefix=E64 < %t/e64.json
+# RUN: %python %S/Inputs/check-raw.py %t/e64.json.analytics %S/Inputs/recurrences.json 13
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/masked.json.analytics %t/masked.mir -o %t/masked-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/masked.json.analytics > %t/masked.json
-# RUN: FileCheck %s --check-prefix=MASKED < %t/masked.json
+# RUN: %python %S/Inputs/check-raw.py %t/masked.json.analytics %S/Inputs/recurrences.json 14
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/integer.json.analytics %t/integer.mir -o %t/integer-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/integer.json.analytics > %t/integer.json
-# RUN: FileCheck %s --check-prefix=INTEGER < %t/integer.json
+# RUN: %python %S/Inputs/check-raw.py %t/integer.json.analytics %S/Inputs/recurrences.json 15
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/branching.json.analytics %t/branching.mir -o %t/branching-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/branching.json.analytics > %t/branching.json
-# RUN: FileCheck %s --check-prefix=BRANCHING < %t/branching.json
+# RUN: %python %S/Inputs/check-raw.py %t/branching.json.analytics %S/Inputs/recurrences.json 16
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/multiple-backedges.json.analytics %t/multiple-backedges.mir -o %t/multiple-backedges-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/multiple-backedges.json.analytics > %t/multiple-backedges.json
-# RUN: FileCheck %s --check-prefix=MULTIPLE-BACKEDGES < %t/multiple-backedges.json
+# RUN: %python %S/Inputs/check-raw.py %t/multiple-backedges.json.analytics %S/Inputs/recurrences.json 17
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/widening.json.analytics %t/widening.mir -o %t/widening-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/widening.json.analytics > %t/widening.json
-# RUN: FileCheck %s --check-prefix=WIDENING < %t/widening.json
+# RUN: %python %S/Inputs/check-raw.py %t/widening.json.analytics %S/Inputs/recurrences.json 18
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/reduction.json.analytics %t/reduction.mir -o %t/reduction-out.mir
-# RUN: %python %S/Inputs/legacy-view.py %t/reduction.json.analytics > %t/reduction.json
-# RUN: FileCheck %s --check-prefix=REDUCTION < %t/reduction.json
+# RUN: %python %S/Inputs/check-raw.py %t/reduction.json.analytics %S/Inputs/recurrences.json 19
 #
 # Identical instruction totals can describe a two-step recurrence, independent
 # arithmetic, two serial tied FMAs, or two independent FMA accumulators. Only
@@ -66,50 +46,6 @@
 # overwrites, undef, implicit definitions, and tail passthrough break a chain.
 # LMUL aliases share physical register units: v9 overwrites part of v8m2.
 #
-# DEPENDENT-DAG: "supported":true
-# DEPENDENT-DAG: "recurrences":[{"extra_chunks":0,"fp_steps":2,"fused_steps":0}]
-# DEPENDENT-DAG: "fp8":16
-# INDEPENDENT-DAG: "supported":true
-# INDEPENDENT-DAG: "recurrences":[]
-# INDEPENDENT-DAG: "fp8":16
-# TIED-DEPENDENT-DAG: "supported":true
-# TIED-DEPENDENT-DAG: "recurrences":[{"extra_chunks":0,"fp_steps":0,"fused_steps":2}]
-# TIED-DEPENDENT-DAG: "fused8":16
-# TIED-INDEPENDENT-DAG: "supported":true
-# TIED-INDEPENDENT-DAG: "recurrences":[{"extra_chunks":0,"fp_steps":0,"fused_steps":1},{"extra_chunks":0,"fp_steps":0,"fused_steps":1}]
-# TIED-INDEPENDENT-DAG: "fused8":16
-# GROUPED-DAG: "supported":true
-# GROUPED-DAG: "recurrences":[{"extra_chunks":1,"fp_steps":0,"fused_steps":1}]
-# ALIAS-OVERWRITE-DAG: "supported":true
-# ALIAS-OVERWRITE-DAG: "recurrences":[]
-# ALIAS-REUSE-DAG: "supported":true
-# ALIAS-REUSE-DAG: "recurrences":[]
-# OVERWRITE-DAG: "supported":true
-# OVERWRITE-DAG: "recurrences":[]
-# UNDEF-DAG: "supported":true
-# UNDEF-DAG: "recurrences":[]
-# PASSTHROUGH-DAG: "supported":true
-# PASSTHROUGH-DAG: "recurrences":[]
-# LOAD-REUSE-DAG: "supported":true
-# LOAD-REUSE-DAG: "recurrences":[]
-# IMPLICIT-DEF-DAG: "supported":true
-# IMPLICIT-DEF-DAG: "recurrences":[]
-# FRACTIONAL-DAG: "supported":true
-# FRACTIONAL-DAG: "recurrences":[{"extra_chunks":0,"fp_steps":0,"fused_steps":1}]
-# E64-DAG: "supported":true
-# E64-DAG: "recurrences":[{"extra_chunks":0,"fp_steps":0,"fused_steps":1}]
-# MASKED-DAG: "supported":true
-# MASKED-DAG: "recurrences":[]
-# INTEGER-DAG: "supported":true
-# INTEGER-DAG: "recurrences":[]
-# BRANCHING-DAG: "supported":true
-# BRANCHING-DAG: "recurrences":[]
-# MULTIPLE-BACKEDGES-DAG: "supported":true
-# MULTIPLE-BACKEDGES-DAG: "recurrences":[]
-# WIDENING-DAG: "supported":true
-# WIDENING-DAG: "recurrences":[]
-# REDUCTION-DAG: "supported":false
-# REDUCTION-DAG: "recurrences":[]
 
 #--- dependent.mir
 --- |

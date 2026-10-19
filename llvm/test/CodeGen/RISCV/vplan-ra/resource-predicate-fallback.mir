@@ -1,10 +1,5 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.json.analytics > %t.json
-# RUN: %python -c "import json; r=json.load(open('%t.json'))['features']['resource_demand']; assert not r['supported'] and r['loop_blocks']==1; assert r['unit8']==16 and r['masked8']==16 and r['scalar8']==0; o=r['operations']; assert len(o)==2 and o[0]['kind']=='copy'; assert o[1]['kind']=='unit' and o[1]['predicate_id']>0"
-# RUN: FileCheck %s < %t.mir
-# CHECK: $v0 = COPY $v1
-# CHECK: PseudoVSE32_V_M2_MASK
-# CHECK: $v0 = VMV1R_V $v1
+# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-predicate-fallback.json 0
 #
 # Proven predicate reuse must not expand the resource model's support set.
 # VMV1R_V remains unsupported here, even though provenance recognizes its

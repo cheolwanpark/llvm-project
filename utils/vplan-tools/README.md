@@ -90,7 +90,7 @@ First use configures/builds `clang`, resource headers, and `llvm-extract` in
 `build-vplan-tools`: Release, assertions enabled, RISCV and Clang enabled, with
 examples and benchmarks disabled. Existing compatible builds are refreshed and
 updated under a build lock. The supplied LLVM checkout must implement VPlan
-protocol v2. `--jobs` defaults to 2; `--timeout` defaults to 120 seconds per
+protocol v3. `--jobs` defaults to 2; `--timeout` defaults to 120 seconds per
 compiler invocation. Build progress and diagnostics go to stderr.
 
 Source text is unchanged. Its recorded C/C++ language selects the source suffix.
@@ -102,16 +102,23 @@ needed by this dataset without linking a RISC-V runtime.
 In default `meta` mode, the driver prepares the pre-vectorizer checkpoint,
 recursively extracts `selected_kernel` and its callees with constant initializers,
 then discovers candidates. Preparation/checksum functions are not independently
-costed. Each scalar/vector candidate is observed after RA cleanup. Compiler
+costed. Each vector candidate is observed after RA cleanup. Compiler
 analytics limitations remain explicit, including unsupported instructions,
 conditional regions, and unprovable iteration mappings.
 
-`evaluate` and printing use LLVM's existing backend costs and final replay.
-Their optional `--compiler-mode direct` instead extracts frontend IR and runs
-LLVM's ordinary cost policy. Direct mode does not enable backend feedback.
-`calibrate` and `evaluate-weights` require meta mode, collect **raw analytics only**,
-and never replay Python costs into LLVM. Their scalar tail reference is the same
-loop's scalar observation. See [VPLAN_RA.md](../../VPLAN_RA.md) for the protocol.
+`evaluate`, `evaluate-weights`, and `calibrate` share raw collection, validation,
+and the Python model. Evaluation skips final replay. `print-vplans` and its alias
+show Python scores and selections; `--detail` adds ordinary VPlan diagnostics.
+Printing accepts `--weights PATH`. `--compiler-mode direct` uses ordinary LLVM
+costs and the text report parser; meta mode uses structured JSON only.
+
+Scalar tail cost comes from the manifest's middle-end scalar iteration cost.
+No scalar probe is collected. It may be unavailable when the formula has no tail
+term: unknown trip bound, folded tail, or both positive exact count and upper
+bound divisible by the verified width. An upper bound alone does not prove an
+empty actual tail. Missing required scalar cost excludes that candidate explicitly.
+Candidates must agree on run, function/loop, CPU, VLEN and trip-count context.
+See [VPLAN_RA.md](../../VPLAN_RA.md) for the protocol and final compilation usage.
 
 Analytics are cached under `.cache/analytics` (override with `--cache-dir`). Keys
 include source, recorded flags, compiler/extractor binaries, driver/collection
@@ -128,17 +135,15 @@ that context.
 body = (max(memory, arithmetic, movement, scalar,
             divider, recurrence, load_use) + spill + configuration) / 16
 unknown trip count: body / observed_width
-scalar tail: body * floor(T/width) + scalar_body/scalar_width * (T % width)
+scalar tail: body * floor(T/width) + tail_scale * middle_end_scalar_cost * (T % width)
 folded tail: body * ceil(T/width)
 ```
 
-Internal resource calculations, predicate sharing, dependency eligibility,
-load/store overlap and hard min/max follow `RISCVVPlanCost.cpp`. Geometry,
-register groups and chunks are fixed observations. Python omits InstructionCost's
-quarter-unit truncation and saturation; its default floating-point costs can
-therefore differ from LLVM costs near quantization boundaries. A trip-count bound
-is not asserted to be the actual runtime count. Function-call/counter overhead
-and other work outside the selected loop are not modeled.
+`cost_model.py` implements resource calculations, predicate sharing, dependency
+eligibility, load/store overlap and hard min/max. Geometry and register groups
+are fixed observations. Scores use continuous float64 arithmetic. A trip-count
+bound is not asserted to be the actual runtime count. One-time initialization,
+guards, exits and other work outside the selected loop are excluded.
 
 All learned values are positive multipliers relative to existing coefficients:
 
@@ -179,6 +184,7 @@ explicit experimental choice, not an estimated noise bound.
 | `--starts`, `--steps`, `--seed` | 16, 2000, 0 |
 | `--learning-rate` | 0.03 |
 | `--min-multiplier`, `--max-multiplier` | 0.25, 4 |
+| `--min-tail-scale`, `--max-tail-scale` | 1/64, 64 |
 | `--temperature`, `--weight-saturation` | 0.1, 1.25 |
 | `--pair-threshold`, `--regularization` | 0.01, 0.001 |
 
@@ -189,7 +195,7 @@ batch. The lowest regularized tuning objective across every start and step is
 saved. Validation is never loaded for fitting, early stopping, or weight selection.
 No regression, soft-regret, or smooth-max objective is implemented.
 
-`--output` is required. Version 1 JSON stores model version, multipliers, defaults,
+`--output` is required. Version 2 JSON stores model version, multipliers, defaults,
 fixed parameters, settings, optimizer diagnostics, tuning IDs and fingerprint,
 compiler provenance, exclusions, and initial/fitted tuning metrics. It is a plain
 JSON file, not a pickle or an LLVM configuration file.
@@ -198,10 +204,9 @@ JSON file, not a pickle or an LLVM configuration file.
 
 Only measured scalable VFs participate. Multiple usable plans for one VF use the
 minimum score. A benchmark is excluded if any measured VF lacks a usable score,
-the selected loop is ambiguous, or fewer than two VFs were measured. The Python
-path can ignore an unsupported unmeasured VF; LLVM final replay still requires
-its complete feedback set and may exclude more benchmarks. Compare eligible ID
-sets as well as metrics when comparing the two commands.
+the selected loop is ambiguous, or fewer than two VFs were measured. Unsupported
+unmeasured VFs do not invalidate the ranking. Final compilation selects each loop
+independently; function-level aggregation for dataset evaluation is not implemented.
 
 | Metric | Definition |
 | --- | --- |
@@ -215,18 +220,98 @@ average ranks and excludes constant rankings. p95 uses linear interpolation.
 Each benchmark has equal metric weight. Reports include denominators, exclusions,
 coverage and the ten largest regrets. `--exclude-reasons` prints individual reasons.
 
-`evaluate --json-output` writes schema version 2 with dataset metadata, validation
-metrics, exclusions and exact rational LLVM scores. `evaluate-weights` writes
-version 1 with model/weights provenance and floating-point scores (`value`);
-its metrics use the same definitions. Each command assesses its own eligible
-population. Expected analytics limitations can produce substantial exclusions;
-the partition size is not a claim of usable fitting/evaluation coverage.
-
-LLVM evaluation retains its existing exit behavior: 1 for compiler failures or
-no eligible benchmarks, even when partial metrics were produced. Fitting and
-weights evaluation report unsupported benchmarks as exclusions and return 0
-when a usable result was produced, 1 for invalid configuration or no usable data.
+Both meta evaluation commands write schema 2 with model provenance, float scores,
+metrics and exclusions. Default and fitted evaluation share coverage policy and
+collection. Direct evaluation retains rational LLVM report scores. No eligible
+benchmarks or invalid configuration returns 1; successful evaluation returns 0.
 All commands return 130 on interruption.
+
+`tail_scale` is the nineteenth positive multiplier and has its own search bounds.
+It defaults to 1 and stays fixed when no nonzero tail term is observed. Body
+multipliers retain [0.25, 4] bounds. Scores and diagnostic breakdown come from the
+same code. Model `rvv-python-19-v3`, weights schema 2 and cache bundle v3 reject
+older artifacts; recollect and refit without automatic conversion.
+
+### Historical coverage verification after the minimal fixes
+
+The following records protocol v2 experiments before the Python selection migration.
+They are preserved as historical results, not reruns of the current compiler.
+
+Fresh analytics from the modified Release/assertions compiler, using the audited
+205-benchmark dataset and unchanged fitting defaults, give:
+
+| Path | Before fixes | After fixes |
+| --- | ---: | ---: |
+| Python tuning | 5/31 | 20/31 |
+| Python validation | 65/174 | 133/174 |
+| LLVM validation | — | 130/174 |
+
+All previously eligible Python benchmarks remain eligible: 15 tuning and 68
+validation IDs were recovered. All 786 retained candidate scores across the
+153 benchmarks are finite and positive; eight benchmarks use no scalar
+reference. Compiler and collector identities changed, and weights were refitted
+against the new context. The database and its split were unchanged.
+
+The 15 recovered tuning IDs are:
+
+```text
+lcals/energy-calc-l03
+media-stats/flac-loose-mid-side-sum-abs
+minimd/force-eam-file2array-l630
+minimd/force-eam-file2array-l658
+minimd/force-eam-file2array-l696
+mlas/mlas-dequant8-perchannel
+mlas/mlas-dequant8-pertensor
+mlas/mlas-linear-query-dk128
+mlas/mlas-linear-query-dk512
+mlas/mlas-sgemm-4acc
+mlas/mlas-sgemm-8acc
+rajaperf/gen-lin-recur-forward
+rajaperf/gen-lin-recur-reverse
+rodinia/rodinia-pathfinder-row
+rodinia/rodinia-pathfinder-traverse
+```
+
+The 145 tuning pairs reduce the regularized objective from 0.438089 to 0.102186
+(start 14, step 1914, zero-based). Coverage gains do not imply better validation
+regret:
+
+| Population and model | Top-1 exact | Mean regret | p95 regret | Mean Spearman |
+| --- | ---: | ---: | ---: | ---: |
+| Tuning 20, default continuous | 45.00% | 11.91% | 51.65% | 0.5727 |
+| Tuning 20, fitted | 80.00% | 0.60% | 3.49% | 0.8382 |
+| Validation 133, default continuous | 29.32% | 12.73% | 56.52% | 0.5657 |
+| Validation 133, fitted | 34.59% | 14.95% | 58.77% | 0.4871 |
+| Common validation 130, LLVM | 28.46% | 12.88% | 56.56% | 0.5637 |
+| Common validation 130, fitted | 34.62% | 14.33% | 53.19% | 0.4938 |
+
+Python additionally scores `lcals/pressure-calc-l01`,
+`media-stats/vtk-ssim-var-covar-u8`, and
+`minimd/force-lj-compute-fullneigh-l410`. LLVM's scalar-first cost probes fail
+on conditional body blocks for these three. LLVM evaluation wrote its report
+and returned 1 with 33 compiler failures and 44 total exclusions.
+
+The remaining Python exclusions are unproved iteration mappings, unsupported
+square-root/segment operations, ambiguous multiple loops, the ADI probe
+materialization failure, and the unsupported early-exit loop in
+`tealeaf/eigenvalue-driver-tqli-l72`. No guards were relaxed to include them.
+
+| Exclusion reported | Tuning | Validation |
+| --- | ---: | ---: |
+| Iteration mapping | 6 | 11 |
+| Square root | 4 | 7 |
+| Segment memory | 0 | 10 |
+| Multiple loops | 0 | 12 |
+| Probe materialization | 0 | 1 |
+| Loop shape / early exit | 1 | 0 |
+
+Local artifacts are kept under `.cache/minimal-fixes/`: `weights.json`,
+`validation-weights.json`, `validation-llvm.json`, and `verification.json`.
+The last file records every recovered ID, exclusions, identity checks, and
+metrics on the common validation set. These artifacts and the raw analytics
+remain ignored by Git. Reproduce the run with the commands above, passing
+`--cache-dir .cache/minimal-fixes/analytics` to the Python cost tools and choosing
+output paths under `.cache/minimal-fixes/`.
 
 ## Tests
 
@@ -239,3 +324,9 @@ VPLAN_CLANG="$PWD/../../build-vplan-tools/bin/clang" \
 The ordinary tests need no external database or LLVM build. Optional integration
 tests verify extraction, analytics-only operation, backend/default formula
 agreement, and the original O2/O3 feedback pipeline.
+
+The minimal-fix verification passed all 87 Python tests with `VPLAN_CLANG` set
+and all 25 LLVM lit tests in `llvm/test/CodeGen/RISCV/vplan-ra/` plus the
+`vplan-ra-checkpoint.ll`, `vplan-ra-iteration-mapping.ll`, and
+`vplan-ra-fixed-vscale.ll` RISCV LoopVectorize tests. The latter exercises a
+STREAM-shaped kernel through actual prepare/resume and machine analytics.

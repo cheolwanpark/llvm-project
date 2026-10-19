@@ -1,19 +1,9 @@
-# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+zvbb -run-pass=riscv-vplan-analytics,riscv-vplan-cost -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=integer:0:0:f1 -vplan-analytics-output=%t.analytics.json -vplan-cost-output=%t.cost.json %s -o /dev/null
-# RUN: %python %S/Inputs/legacy-view.py %t.analytics.json | FileCheck %s --check-prefix=OPS
-# RUN: FileCheck %s --check-prefix=COST < %t.cost.json
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+zvbb -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=integer:0:0:f1 -vplan-analytics-output=%t.analytics.json %s -o /dev/null
+# RUN: %python %S/Inputs/check-raw.py %t.analytics.json %S/Inputs/resource-integer-families.json 0
 # RUN: %python -c "import json; a=json.load(open('%t.analytics.json')); i=[i for i in a['Instructions'] if i['Category']=='integer']; assert len(i)==4; assert all(not x['Barrier'] for x in i); assert [x['Group8'] for x in i]==[8,8,16,16]"
 #
-# Use a self-referencing f1 cost probe to check the C++ body calculation.
-# VAADD has M1 work. VWSLL has source M1 / destination M2 work. The extension
-# pseudos already describe destination M2, and must not double it again.
-# Integer service is (8+16+16+16)*2/16 = 7, above scalar loop control.
-# OPS-DAG: "supported":true
-# OPS-DAG: "integer8":56
-# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"integer","masked":false,"sew":32,"work8":8}
-# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"integer","masked":false,"sew":32,"work8":16}
-# COST-DAG: "supported":true
-# COST-DAG: "body_quarters":28
-# COST-DAG: "score_quarters":28
+# Preserve raw instruction categories and source/destination register groups.
+# Python model tests cover the corresponding integer service formula.
 --- |
   define void @integer() #0 {
   entry:

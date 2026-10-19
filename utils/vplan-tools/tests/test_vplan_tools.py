@@ -407,7 +407,7 @@ class CLITests(unittest.TestCase):
                 patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "clang version test", "")), \
                 patch("sys.stdout", new_callable=io.StringIO) as output, \
                 patch("sys.stderr", new_callable=io.StringIO):
-            self.assertEqual(vt.evaluate_main(["--llvm-path", "/llvm"]), 1)
+            self.assertEqual(vt.evaluate_main(["--compiler-mode", "direct", "--llvm-path", "/llvm"]), 1)
         build.assert_called_once()
         self.assertEqual(compile_.call_count, 3)
         self.assertIn("total=3 measured=3 scored=2 excluded=1 compile_failed=1", output.getvalue())
@@ -424,7 +424,7 @@ class CLITests(unittest.TestCase):
                     patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "clang version test", "")), \
                     patch("sys.stdout", new_callable=io.StringIO) as output, \
                     patch("sys.stderr", new_callable=io.StringIO):
-                self.assertEqual(vt.evaluate_main(["--llvm-path", "/llvm", *flags]), 1)
+                self.assertEqual(vt.evaluate_main(["--compiler-mode", "direct", "--llvm-path", "/llvm", *flags]), 1)
             self.assertIn("total=1 measured=1 scored=0 excluded=1", output.getvalue())
             self.assertEqual("Excluded benchmarks:" in output.getvalue(), bool(flags))
             self.assertEqual("example: measured_vfs=4; no VPlan report" in output.getvalue(), bool(flags))
@@ -441,9 +441,9 @@ class CLITests(unittest.TestCase):
                 patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "clang version test", "")), \
                 patch("sys.stdout", new_callable=io.StringIO) as output, \
                 patch("sys.stderr", new_callable=io.StringIO):
-            self.assertEqual(vt.evaluate_main(["--llvm-path", "/llvm", "--benchmark", "selected"]), 0)
+            self.assertEqual(vt.evaluate_main(["--compiler-mode", "direct", "--llvm-path", "/llvm", "--benchmark", "selected"]), 0)
         compile_.assert_called_once_with(Path("/custom/clang"), rows[1], False, 120,
-                                             compiler_mode="meta",
+                                             compiler_mode="direct",
                                              meta_script=Path("/llvm/utils/vplan-meta-compile"),
                                              artifacts_dir=None)
         self.assertIn("Benchmark: selected", output.getvalue())
@@ -455,7 +455,7 @@ class CLITests(unittest.TestCase):
         with patch.object(vt, "load_database", return_value=([benchmark()], {})), \
                 patch.object(vt, "ensure_compiler") as build:
             with self.assertRaisesRegex(vt.ToolError, "unknown benchmark: absent"):
-                vt.evaluate_main(["--llvm-path", "/llvm", "--benchmark", "absent"])
+                vt.evaluate_main(["--compiler-mode", "direct", "--llvm-path", "/llvm", "--benchmark", "absent"])
             build.assert_not_called()
 
     def test_evaluation_rejects_multiple_benchmarks(self):
@@ -464,7 +464,7 @@ class CLITests(unittest.TestCase):
             with self.subTest(args=args), patch("sys.stderr", new_callable=io.StringIO), \
                     patch.object(vt, "load_database") as load:
                 with self.assertRaises(SystemExit) as exc:
-                    vt.evaluate_main(["--llvm-path", "/llvm", *args])
+                    vt.evaluate_main(["--compiler-mode", "direct", "--llvm-path", "/llvm", *args])
                 self.assertEqual(exc.exception.code, 2)
                 load.assert_not_called()
 
@@ -554,7 +554,7 @@ class StandaloneTests(unittest.TestCase):
                     patch.object(vt, "ensure_compiler", return_value=Path("/build/clang")), \
                     patch.object(vt, "compile_report", return_value=subprocess.CompletedProcess(
                         [], 0, "driver output", "VPlan report_version=2\nfinal report\n")) as compile_, \
-                    patch("sys.argv", [name, "--benchmark", "example", "--detail"]), \
+                    patch("sys.argv", [name, "--compiler-mode", "direct", "--benchmark", "example", "--detail"]), \
                     patch("sys.stdout", new_callable=io.StringIO) as output:
                 with self.assertRaises(SystemExit) as exit_:
                     runpy.run_path(str(vt.TOOLS / name), run_name="__main__")
@@ -568,7 +568,7 @@ class StandaloneTests(unittest.TestCase):
             root = Path(temporary)
             tool_dir = root / "utils/vplan-tools"
             tool_dir.mkdir(parents=True)
-            for name in ("vplan_tools.py", "evaluate", "print-vplans", "print-vplan"):
+            for name in ("vplan_tools.py", "model_errors.py", "calibration.py", "cost_model.py", "observations.py", "evaluate", "print-vplans", "print-vplan"):
                 shutil.copy2(vt.TOOLS / name, tool_dir / name)
             env = dict(os.environ, VPLAN_DB="", PYTHONDONTWRITEBYTECODE="1")
             for name in ("evaluate", "print-vplans", "print-vplan"):

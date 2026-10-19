@@ -1,11 +1,8 @@
 # RUN: split-file %s %t
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loads:0:0:s4 -vplan-analytics-output=%t.loads.json.analytics %t/loads.mir -o %t.loads.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.loads.json.analytics > %t.loads.json
+# RUN: %python %S/Inputs/check-raw.py %t.loads.json.analytics %S/Inputs/resource-memory-direction.json 0
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=stores:0:0:s4 -vplan-analytics-output=%t.stores.json.analytics %t/stores.mir -o %t.stores.mir
-# RUN: %python %S/Inputs/legacy-view.py %t.stores.json.analytics > %t.stores.json
-# RUN: FileCheck %s --check-prefix=LOAD < %t.loads.json
-# RUN: FileCheck %s --check-prefix=STORE < %t.stores.json
-# RUN: %python -c "import json; a=json.load(open('%t.loads.json'))['features']['resource_demand']; b=json.load(open('%t.stores.json'))['features']['resource_demand']; assert a['supported'] and b['supported']; assert all(x['direction']=='load' for x in a['operations']); assert all(x['direction']=='store' for x in b['operations']); assert [{k:v for k,v in x.items() if k!='direction'} for x in a['operations']]==[{k:v for k,v in x.items() if k!='direction'} for x in b['operations']]; assert a['unit8']==b['unit8']==72 and a['strided8']==b['strided8']==128 and a['indexed8']==b['indexed8']==128 and a['masked8']==b['masked8']==256"
+# RUN: %python %S/Inputs/check-raw.py %t.stores.json.analytics %S/Inputs/resource-memory-direction.json 1
 #
 # No MachineMemOperands are supplied: load/store direction must come from
 # instruction descriptor metadata. Identical loads and stores preserve access
@@ -14,14 +11,6 @@
 # operation records. Mixed directions and spill exclusion are checked in
 # resource-demand.mir.
 #
-# LOAD-DAG: {"direction":"load","group8":4,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":16,"work8":8}
-# LOAD-DAG: {"direction":"load","group8":64,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":32,"work8":64}
-# LOAD-DAG: {"direction":"load","group8":32,"index_group8":0,"index_sew":0,"kind":"strided","masked":true,"predicate_id":1,"sew":32,"work8":128}
-# LOAD-DAG: {"direction":"load","group8":32,"index_group8":32,"index_sew":32,"kind":"indexed","masked":true,"predicate_id":1,"sew":32,"work8":128}
-# STORE-DAG: {"direction":"store","group8":4,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":16,"work8":8}
-# STORE-DAG: {"direction":"store","group8":64,"index_group8":0,"index_sew":0,"kind":"unit","masked":false,"sew":32,"work8":64}
-# STORE-DAG: {"direction":"store","group8":32,"index_group8":0,"index_sew":0,"kind":"strided","masked":true,"predicate_id":1,"sew":32,"work8":128}
-# STORE-DAG: {"direction":"store","group8":32,"index_group8":32,"index_sew":32,"kind":"indexed","masked":true,"predicate_id":1,"sew":32,"work8":128}
 
 #--- loads.mir
 --- |

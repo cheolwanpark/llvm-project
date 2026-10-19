@@ -27,7 +27,6 @@ struct Operand {
   bool SubReg = false;
 };
 json::Value toJSON(const Operand &V);
-bool fromJSON(const json::Value &V, Operand &R, json::Path P);
 struct InstructionInfo {
   int64_t ID = 0;
   int64_t Block = 0;
@@ -55,7 +54,6 @@ struct InstructionInfo {
   std::vector<int64_t> Immediates;
 };
 json::Value toJSON(const InstructionInfo &V);
-bool fromJSON(const json::Value &V, InstructionInfo &R, json::Path P);
 struct Edge {
   int64_t Source = 0;
   int64_t Destination = 0;
@@ -64,14 +62,12 @@ struct Edge {
   bool WholeValue = false;
 };
 json::Value toJSON(const Edge &V);
-bool fromJSON(const json::Value &V, Edge &R, json::Path P);
 struct Block {
   int64_t ID = 0;
   std::string Role = "outside";
   std::vector<int64_t> Successors;
 };
 json::Value toJSON(const Block &V);
-bool fromJSON(const json::Value &V, Block &R, json::Path P);
 struct Analytics {
   int64_t Version = 2;
   std::string RunID;
@@ -96,17 +92,14 @@ struct Analytics {
   std::vector<Edge> Edges;
 };
 json::Value toJSON(const Analytics &V);
-bool fromJSON(const json::Value &V, Analytics &R, json::Path P);
 Analytics collectAnalytics(const MachineFunction &MF);
 } // namespace vplan
 class RISCVVPlanAnalytics : public MachineFunctionPass {
-  vplan::Analytics Result;
   bool Seen = false;
 
 public:
   static char ID;
   RISCVVPlanAnalytics();
-  const vplan::Analytics &getResult() const { return Result; }
   StringRef getPassName() const override { return "RISC-V VPlan analytics"; }
   void getAnalysisUsage(AnalysisUsage &AU) const override;
   bool runOnMachineFunction(MachineFunction &MF) override;

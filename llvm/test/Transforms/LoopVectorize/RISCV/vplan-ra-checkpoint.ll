@@ -15,8 +15,10 @@
 ; RESUME-NOT: vector.body
 ; RESUME-NOT: llvm.vplan.checkpoint
 ; MANIFEST-DAG: "run_id":"test"
-; MANIFEST-DAG: "vf":"f1"
+; MANIFEST-DAG: "scalar_cost":
+; MANIFEST-DAG: "version":3
 ; MANIFEST-DAG: "selections":
+; MANIFEST-NOT: "vf":"f1"
 ; BAD-RESUME: vplan resume requires a prepared checkpoint
 ; BAD-LEVEL: VPlan checkpoint pipelines require non-LTO -O2/-O3
 

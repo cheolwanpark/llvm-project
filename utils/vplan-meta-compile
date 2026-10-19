@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Compile every generated VPlan/VF through RA, then replay LV with feedback.
-
-This is fixed experiment infrastructure. Research lives in
-RISCVVPlanAnalytics.cpp and RISCVVPlanCost.cpp, not this driver.
-No measurements or benchmark database are read by this program.
-"""
+"""Collect vector analytics, rank in Python, and replay explicit selections."""
 from __future__ import annotations
 
 import argparse
@@ -15,7 +10,11 @@ import subprocess
 import sys
 
 
-class MetaCompileError(Exception):
+sys.path.insert(0, str(Path(__file__).resolve().parent / "vplan-tools"))
+from model_errors import ToolError
+from observations import validate_manifest, bind_observation
+
+class MetaCompileError(ToolError):
     pass
 
 
@@ -109,22 +108,13 @@ class Driver:
     def manifest(self, path: Path, run_id: str) -> dict:
         try:
             value = json.loads(path.read_text())
-            if value["version"] != 2 or value["run_id"] != run_id:
-                raise ValueError("version/run mismatch")
-            rows = value["candidates"]
-            if not isinstance(rows, list) or len({r["id"] for r in rows}) != len(rows):
-                raise ValueError("invalid/duplicate candidates")
-            for row in rows:
-                if type(row["probeable"]) is not bool:
-                    raise ValueError("missing probeability")
-            if not isinstance(value["selections"], list):
-                raise ValueError("missing selections")
+            validate_manifest(value, run_id)
             return value
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise MetaCompileError(f"invalid manifest {path}: {exc}") from exc
 
     def compile(self, output: Path | None, emit: str, stop_after_ra: bool,
-                detail: bool, analytics_only: bool = False) -> dict:
+                detail: bool, analytics_only: bool = False, weights_path: Path | None = None) -> dict:
         if analytics_only and not stop_after_ra:
             raise MetaCompileError("--analytics-only requires --stop-after-ra")
         validate_flags(self.flags)
@@ -142,84 +132,99 @@ class Driver:
             checkpoint.rename(self.work / "module-pre-vectorize.bc")
             extracted.rename(checkpoint)
         identity = {"checkpoint": digest(checkpoint), "compiler": digest(self.clang),
-                    "flags": self.flags, "protocol": 2,
+                    "flags": self.flags, "protocol": 3,
                     "extract_function": self.extract_function}
         run_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         write_json(self.work / "identity.json", identity | {"run_id": run_id})
         common = [*resume_flags(self.flags), "-x", "ir", str(checkpoint),
                   *llvm_flag("vplan-pipeline", "resume"),
                   *llvm_flag("vplan-ra-run-id", run_id)]
+        report_flags = ["-mllvm", "-print-vplans", "-mllvm", "-print-detailed-vplans"] if detail else []
         manifest_path = self.work / "candidates.json"
-        self.run("discover", [*common, *llvm_flag("vplan-candidates-output", str(manifest_path)),
+        self.run("discover", [*common, *report_flags, *llvm_flag("vplan-candidates-output", str(manifest_path)),
                               "-S", "-emit-llvm", "-o", str(self.work / "discovery.ll")])
         manifest = self.manifest(manifest_path, run_id)
-        feedback = []
-        scalar_analytics = {}
-        # Score scalar candidates first; vector costs consume only their raw
-        # analytics, never middle-end costs or Python-computed model values.
-        ordered = sorted(enumerate(manifest["candidates"]), key=lambda item: item[1]["vf"] != "f1")
-        for index, row in ordered:
+        weights = None
+        if not analytics_only:
+            from cost_model import load_weights, score_observation
+            if weights_path:
+                _, weights = load_weights(weights_path)
+        statuses = []
+        selections = []
+        loops = {(r["function"], r["loop"]): r for r in manifest["loops"]}
+        for index, row in enumerate(manifest["candidates"]):
+            status = {"id": row["id"], "status": "unavailable"}
+            statuses.append(status)
             if not row["probeable"]:
+                status["reason"] = row.get("reason", "not probeable")
                 continue
             label = f"probe-{index:04d}"
             analytics_path = self.work / f"{label}.analytics.json"
-            cost_path = self.work / f"{label}.cost.json"
-            loop_key = (row["function"], row["loop"])
-            scalar_flags = []
-            if row["vf"] != "f1" and not analytics_only:
-                if loop_key not in scalar_analytics:
-                    raise MetaCompileError(f"{label}: missing scalar candidate")
-                scalar_flags = llvm_flag("vplan-scalar-analytics-input", str(scalar_analytics[loop_key]))
             probe_manifest = self.work / f"{label}.manifest.json"
             mir = self.work / f"{label}.mir"
-            cost_flags = [] if analytics_only else [*llvm_flag("vplan-cost-output", str(cost_path)), *scalar_flags]
-            self.run(label, [*common, *llvm_flag("vplan-probe-candidate", row["id"]),
-                             *llvm_flag("vplan-candidates-output", str(probe_manifest)),
-                             *llvm_flag("vplan-analytics-output", str(analytics_path)),
-                             *cost_flags,
-                             *llvm_flag("stop-after", "riscv-vplan-analytics" if analytics_only else "riscv-vplan-cost"),
-                             "-S", "-o", str(mir)])
-            probe = self.manifest(probe_manifest, run_id)
-            if probe["candidates"] != manifest["candidates"]:
-                raise MetaCompileError(f"{label}: candidate set/context changed during replay")
-            choices = [s for s in probe["selections"] if s["id"] == row["id"]]
-            if len(choices) != 1:
-                raise MetaCompileError(f"{label}: requested candidate was not selected exactly once")
             try:
-                observation = json.loads(analytics_path.read_text())
-                if analytics_only:
-                    if (observation["Version"] != 2 or observation["RunID"] != run_id
-                            or observation["Candidate"] != row["id"]
-                            or observation["Function"] != row["function"]
-                            or observation["Stage"] != "post-ra-cleanup"):
-                        raise ValueError("analytics identity mismatch")
-                    # Unsupported observations remain visible for the Python
-                    # consumer; no compiler costs or feedback are fabricated.
-                    continue
-                cost = json.loads(cost_path.read_text())
-                if (observation["Version"] != 2 or observation["RunID"] != run_id
-                    or observation["Candidate"] != row["id"] or observation["Stage"] != "post-ra-cleanup"
-                    or observation["Function"] != row["function"] or observation["Error"]
-                    or cost["version"] != 2 or cost["run_id"] != run_id
-                    or cost["id"] != row["id"] or cost["supported"] is not True
-                    or not isinstance(cost["cost"], dict)
-                    or not mir.is_file() or not mir.stat().st_size):
-                    raise ValueError("identity, stage, analytics, cost, or MIR mismatch")
-            except (OSError, ValueError, KeyError, TypeError) as exc:
+                self.run(label, [*common, *report_flags,
+                    *llvm_flag("vplan-probe-candidate", row["id"]),
+                    *llvm_flag("vplan-candidates-output", str(probe_manifest)),
+                    *llvm_flag("vplan-analytics-output", str(analytics_path)),
+                    *llvm_flag("stop-after", "riscv-vplan-analytics"), "-S", "-o", str(mir)])
+            except MetaCompileError as exc:
+                status.update(status="probe-failed", reason=str(exc))
+                if probe_manifest.exists():
+                    failed = self.manifest(probe_manifest, run_id)
+                    if failed["candidates"] != manifest["candidates"] or failed["loops"] != manifest["loops"]:
+                        raise MetaCompileError(f"{label}: candidate context changed")
+                    reasons = [f["reason"] for f in failed["failures"] if f["id"] == row["id"]]
+                    if reasons:
+                        status["reason"] = "; ".join(reasons)
+                continue
+            probe = self.manifest(probe_manifest, run_id)
+            if probe["candidates"] != manifest["candidates"] or probe["loops"] != manifest["loops"]:
+                raise MetaCompileError(f"{label}: candidate set/context changed during replay")
+            failures = [f for f in probe["failures"] if f["id"] == row["id"]]
+            if failures:
+                status.update(status="probe-failed", reason=failures[0]["reason"])
+                continue
+            choice = {"function": row["function"], "loop": row["loop"], "scalar": False,
+                      "id": row["id"], "ic": 1, "epilogue_vf": "f0"}
+            if probe["selections"] != [choice]:
+                raise MetaCompileError(f"{label}: requested candidate/configuration not materialized")
+            try:
+                observation = bind_observation(json.loads(analytics_path.read_text()), row,
+                    loops[(row["function"], row["loop"])], run_id)
+                if not mir.is_file() or not mir.stat().st_size:
+                    raise ValueError("missing MIR")
+            except (OSError, ValueError) as exc:
                 raise MetaCompileError(f"{label}: invalid backend result: {exc}") from exc
-            if row["vf"] == "f1":
-                scalar_analytics.setdefault(loop_key, analytics_path)
-            feedback.append({"id": row["id"], "cost": cost["cost"],
-                             "selection": choices[0], "mir": str(mir)})
-        feedback_path = self.work / "feedback.json"
+            status.update(status="collected", analytics=str(analytics_path))
+            if not analytics_only:
+                try:
+                    breakdown = score_observation(observation, weights)
+                    status.update(status="scored", score=breakdown["score"], breakdown=breakdown)
+                except ToolError as exc:
+                    status.update(status="unsupported", reason=str(exc))
+        statuses_path = self.work / "candidate-status.json"
+        write_json(statuses_path, {"version": 3, "run_id": run_id, "candidates": statuses})
+        selection_path = self.work / "selection.json"
         if not analytics_only:
-            write_json(feedback_path, {"version": 2, "run_id": run_id, "candidates": feedback})
-        result = {"version": 2, "run_id": run_id, "candidates": len(feedback),
-                  "manifest": str(manifest_path), "feedback": str(feedback_path),
+            for key in loops:
+                eligible = [(row, status) for row, status in zip(manifest["candidates"], statuses, strict=True)
+                            if (row["function"], row["loop"]) == key and status["status"] == "scored"]
+                choice = {"function": key[0], "loop": key[1], "scalar": not bool(eligible),
+                          "ic": 1, "epilogue_vf": "f0"}
+                if eligible:
+                    row, _ = min(eligible, key=lambda pair: pair[1]["score"])
+                    choice["id"] = row["id"]
+                else:
+                    choice["reason"] = "no evaluable vector candidates"
+                selections.append(choice)
+            write_json(selection_path, {"version": 3, "run_id": run_id,
+                "loops": manifest["loops"], "candidates": manifest["candidates"], "selections": selections})
+        result = {"version": 3, "run_id": run_id, "candidates": len(statuses),
+                  "manifest": str(manifest_path), "candidate_status": str(statuses_path),
                   "stage": "post-ra-cleanup", "analytics_only": analytics_only}
-        if analytics_only:
-            result["candidates"] = sum(r["probeable"] for r in manifest["candidates"])
-            result.pop("feedback")
+        if not analytics_only:
+            result["selection"] = str(selection_path)
         if not stop_after_ra:
             if output is None:
                 raise MetaCompileError("final compilation requires --output")
@@ -227,16 +232,18 @@ class Driver:
             output.parent.mkdir(parents=True, exist_ok=True)
             final_manifest = self.work / "final.manifest.json"
             actions = {"llvm": ["-S", "-emit-llvm"], "asm": ["-S"], "obj": ["-c"]}
-            report_flags = ["-mllvm", "-print-vplans"]
-            if detail:
-                report_flags += ["-mllvm", "-print-detailed-vplans"]
-            final = self.run("final", [*common, *llvm_flag("vplan-ra-feedback", str(feedback_path)),
+            final = self.run("final", [*common, *llvm_flag("vplan-selection-input", str(selection_path)),
                                       *llvm_flag("vplan-candidates-output", str(final_manifest)),
                                       *report_flags, *actions[emit], "-o", str(output)])
             replay = self.manifest(final_manifest, run_id)
             if replay["candidates"] != manifest["candidates"]:
                 raise MetaCompileError("final compilation regenerated a different candidate set")
-            sys.stderr.write(final.stderr)
+            if replay["loops"] != manifest["loops"] or replay["selections"] != selections or replay["failures"]:
+                raise MetaCompileError("final compilation selection/configuration mismatch")
+            if not output.is_file() or not output.stat().st_size:
+                raise MetaCompileError("final compilation produced no output")
+            if detail:
+                sys.stderr.write(final.stderr)
             result.update(stage="final", output=str(output), final_manifest=str(final_manifest))
         write_json(self.work / "result.json", result)
         return result
@@ -251,6 +258,7 @@ def main(argv=None) -> int:
     parser.add_argument("--emit", choices=("llvm", "asm", "obj"), default="obj")
     parser.add_argument("--stop-after-ra", action="store_true")
     parser.add_argument("--analytics-only", action="store_true", help="collect raw facts without computing backend costs")
+    parser.add_argument("--weights", type=Path, help="protocol v3 fitted Python model weights")
     parser.add_argument("--detail", action="store_true")
     parser.add_argument("--extract-function", help="isolate a function at the pre-vectorizer checkpoint")
     parser.add_argument("--llvm-extract", type=Path, help="matching llvm-extract binary")
@@ -265,10 +273,10 @@ def main(argv=None) -> int:
     try:
         result = Driver(args.clang, args.input, args.work_dir, flags, args.timeout,
                         args.extract_function, args.llvm_extract).compile(
-            args.output, args.emit, args.stop_after_ra, args.detail, args.analytics_only)
+            args.output, args.emit, args.stop_after_ra, args.detail, args.analytics_only, args.weights)
         print(json.dumps(result))
         return 0
-    except (MetaCompileError, OSError) as exc:
+    except (ToolError, OSError) as exc:
         print(f"meta-compiler: {exc}", file=sys.stderr)
         return 1
 

@@ -1,0 +1,846 @@
+{
+  "0": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 2, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 2, "Source": 2, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 5, "Distance": 0, "OperandIndex": 0, "Source": 4, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "1": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 5, "Distance": 0, "OperandIndex": 0, "Source": 4, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "2": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 1, "Source": 2, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 5, "Distance": 0, "OperandIndex": 0, "Source": 4, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_M1_E32", "Base": "VFMACC_VV", "Category": "fused", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_M1_E32", "Base": "VFMACC_VV", "Category": "fused", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "3": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 2, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 5, "Distance": 0, "OperandIndex": 0, "Source": 4, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_M1_E32", "Base": "VFMACC_VV", "Category": "fused", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_M1_E32", "Base": "VFMACC_VV", "Category": "fused", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "4": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 2, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 0, "Source": 3, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_M2_E32", "Base": "VFMACC_VV", "Category": "fused", "SEW": 32, "Group8": 16, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "5": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 3, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 4, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 5, "Distance": 0, "OperandIndex": 0, "Source": 4, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_M2_E32", "Base": "VFMACC_VV", "Category": "fused", "SEW": 32, "Group8": 16, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVLE32_V_M1", "Base": "VLE32_V", "Category": "unit", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": true, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "6": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 3, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 4, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 1, "Source": 2, "WholeValue": false},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 5, "Distance": 0, "OperandIndex": 0, "Source": 4, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVLE32_V_M2", "Base": "VLE32_V", "Category": "unit", "SEW": 32, "Group8": 16, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": true, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_M1_E32", "Base": "VFMACC_VV", "Category": "fused", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "7": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 3, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 4, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 5, "Distance": 0, "OperandIndex": 0, "Source": 4, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_M1_E32", "Base": "VFMACC_VV", "Category": "fused", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVLE32_V_M1", "Base": "VLE32_V", "Category": "unit", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": true, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "8": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 0, "Source": 3, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_M1_E32", "Base": "VFMACC_VV", "Category": "fused", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "9": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 2, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 0, "Source": 3, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "10": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 3, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 4, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 2, "Source": 2, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 5, "Distance": 0, "OperandIndex": 0, "Source": 4, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVLE32_V_M1", "Base": "VLE32_V", "Category": "unit", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": true, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "11": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 1, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 5, "Distance": 0, "OperandIndex": 0, "Source": 4, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_M1_E32", "Base": "VFMACC_VV", "Category": "fused", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "IMPLICIT_DEF", "Base": "IMPLICIT_DEF", "Category": "meta", "SEW": 0, "Group8": 0, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "12": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 2, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 0, "Source": 3, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_MF2_E32", "Base": "VFMACC_VV", "Category": "fused", "SEW": 32, "Group8": 4, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "13": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 2, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 0, "Source": 3, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFMACC_VV_M1_E64", "Base": "VFMACC_VV", "Category": "fused", "SEW": 64, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "14": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 2, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 2, "Source": 2, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 7, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 0, "Source": 3, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32_MASK", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 1, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": true, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "15": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 2, "Source": 2, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 4, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 0, "Source": 3, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVADD_VV_M1", "Base": "VADD_VV", "Category": "integer", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "16": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 5, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 2, "Source": 4, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 2, "Source": 4, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 2, "Source": 2, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 3, "Source": 3, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 5, "Distance": 1, "OperandIndex": 1, "Source": 5, "WholeValue": true},
+      {"Destination": 6, "Distance": 0, "OperandIndex": 0, "Source": 5, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "17": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 5, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 2, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 2, "Source": 4, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 2, "Source": 2, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 5, "Distance": 1, "OperandIndex": 1, "Source": 5, "WholeValue": true},
+      {"Destination": 6, "Distance": 0, "OperandIndex": 0, "Source": 5, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFADD_VV_M1_E32", "Base": "VFADD_VV", "Category": "fp", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": true, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "18": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 2, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 0, "Source": 3, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFWMACC_VV_M1_E32", "Base": "VFWMACC_VV", "Category": "fused", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": true, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  },
+  "19": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 1, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 2, "WholeValue": true},
+      {"Destination": 2, "Distance": 1, "OperandIndex": 3, "Source": 2, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 5, "Source": 1, "WholeValue": true},
+      {"Destination": 2, "Distance": 0, "OperandIndex": 6, "Source": 1, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 0, "Source": 3, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoVSETVLI", "Base": "PseudoVSETVLI", "Category": "config", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "ConfigUnused": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoVFREDUSUM_VS_M1_E32", "Base": "VFREDUSUM_VS", "Category": "unknown", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": false, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": true, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": true}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": true, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "ADDI", "Base": "ADDI", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": true, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "BNE", "Base": "BNE", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": [{"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}, {"Dead": false, "Def": false, "EarlyClobber": false, "Implicit": false, "SubReg": false, "Tied": false, "Undef": false, "Vector": false}]},
+      {"Opcode": "PseudoBR", "Base": "PseudoBR", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []},
+      {"Opcode": "PseudoRET", "Base": "PseudoRET", "Category": "scalar", "SEW": 0, "Group8": 0, "Masked": false, "Barrier": false, "Operands": []}
+    ]
+  }
+}

@@ -14,9 +14,10 @@ import torch
 import torch.nn.functional as F
 
 import vplan_tools as vt
-from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P, needs_scalar_reference, same_context
+from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P, same_context, load_weights
+from observations import validate_manifest, bind_observation
 
-CACHE_VERSION = 1
+CACHE_VERSION = 3
 
 
 def digest_file(path):
@@ -39,6 +40,7 @@ def collector_identity(clang, meta_script):
         "driver": digest_file(meta_script),
         "collector": digest_file(Path(__file__)),
         "tools": digest_file(Path(vt.__file__)),
+        "protocol": digest_file(Path(__file__).with_name("observations.py")),
         "headers": {p.name: digest_file(p) for p in sorted((vt.TOOLS / "include").iterdir()) if p.is_file()},
     }
 
@@ -62,30 +64,39 @@ def collect(benchmark, clang, args, identity):
                         if args.artifacts_dir else Path(td))
         result = vt.compile_report(clang, benchmark, False, args.timeout,
             meta_script=args.llvm_path / "utils/vplan-meta-compile", artifacts_dir=artifact_dir,
-            stop_after_ra=True)
+            stop_after_ra=True, analytics_only=True)
         if result.returncode:
             lines = [l for l in result.stderr.splitlines() if "error:" in l or "meta-compiler:" in l]
             raise vt.ToolError("analytics compilation failed: " + " | ".join(lines[-2:] or [result.stderr[-1500:]]))
         backend = result.artifact_root / "backend"
         manifest = json.loads((backend / "candidates.json").read_text())
+        validate_manifest(manifest, manifest["run_id"])
+        statuses = json.loads((backend / "candidate-status.json").read_text())["candidates"]
+        loops = {(r["function"], r["loop"]): r for r in manifest["loops"]}
         rows = []
         for index, row in enumerate(manifest["candidates"]):
             if row["function"] != "selected_kernel" or not row["probeable"]:
                 continue
             prefix = backend / f"probe-{index:04d}"
-            rows.append({"candidate": row,
-                         "analytics": json.loads(prefix.with_suffix(".analytics.json").read_text())})
-        bundle = {"key": key, "identity": identity, "run_id": manifest["run_id"], "rows": rows}
+            status = statuses[index]
+            observation = (bind_observation(json.loads(prefix.with_suffix(".analytics.json").read_text()),
+                           row, loops[(row["function"], row["loop"])], manifest["run_id"])
+                           if status["status"] == "collected" else None)
+            rows.append({"candidate": row, "analytics": observation,
+                         "reason": status.get("reason", "")})
+        bundle = {"version": CACHE_VERSION, "loops": manifest["loops"], "key": key, "identity": identity, "run_id": manifest["run_id"], "rows": rows}
         validate_bundle(bundle)
         vt.write_json(path, bundle)
         return bundle
 
 
 def validate_bundle(bundle):
+    if bundle["version"] != CACHE_VERSION:
+        raise vt.ToolError("unsupported analytics cache version; recollect")
     rows = bundle["rows"]
     if not rows:
         raise vt.ToolError("no candidates for selected_kernel")
-    loops = {(r["candidate"]["function"], r["candidate"]["loop"]) for r in rows}
+    loops = {(r["function"], r["loop"]) for r in bundle["loops"] if r["function"] == "selected_kernel"}
     if len(loops) != 1 or next(iter(loops))[0] != "selected_kernel":
         raise vt.ToolError("ambiguous selected_kernel loops")
     ids = [r["candidate"]["id"] for r in rows]
@@ -93,6 +104,8 @@ def validate_bundle(bundle):
         raise vt.ToolError("duplicate analytics candidate")
     for r in rows:
         a, c = r["analytics"], r["candidate"]
+        if a is None:
+            continue
         if (a["RunID"] != bundle["run_id"] or a["Candidate"] != c["id"]
                 or a["Function"] != c["function"]
                 or ("s" if a["ScalableVF"] else "f") + str(a["VF"]) != c["vf"]):
@@ -128,7 +141,6 @@ def make_pairs(measured, threshold, saturation):
 
 def prepare(benchmarks, clang, args, identity, metadata, fitting):
     observations, examples, excluded, provenance = [], [], [], []
-    scalar_indices: list[int | None] = []
     for index, b in enumerate(benchmarks, 1):
         print(f"[{index}/{len(benchmarks)}] {b.id}", file=sys.stderr, flush=True)
         try:
@@ -144,58 +156,45 @@ def prepare(benchmarks, clang, args, identity, metadata, fitting):
             rows, unsupported = [], {}
             for row in bundle["rows"]:
                 vf = row["candidate"]["vf"]
-                if vf != "f1" and vf not in {f"s{v}" for v in b.measured}:
+                if vf not in {f"s{v}" for v in b.measured}:
                     continue
                 try:
+                    if row["analytics"] is None:
+                        raise vt.ToolError(row["reason"])
                     CostModel([row["analytics"]])
                     rows.append(row)
                 except vt.ToolError as exc:
                     unsupported[vf] = str(exc)
-            scalars = [i for i, r in enumerate(rows) if r["candidate"]["vf"] == "f1"]
-            if len(scalars) > 1:
-                raise vt.ToolError("ambiguous scalar reference")
             local = [r["analytics"] for r in rows]
             if any(not same_context(a, local[0]) for a in local):
                 raise vt.ToolError("candidate analytics context mismatch")
             expected_vlen = metadata["measurement_protocol"].get("vlen_bits")
             if expected_vlen and any(a["VLen"] != expected_vlen for a in local):
                 raise vt.ToolError("analytics VLEN differs from measured VLEN")
-            if not scalars:
-                usable = []
-                for row in rows:
-                    if needs_scalar_reference(row["analytics"]):
-                        unsupported[row["candidate"]["vf"]] = (
-                            "missing scalar reference for scalar tail: " + unsupported.get("f1", ""))
-                    else:
-                        usable.append(row)
-                rows = usable
-                local = [r["analytics"] for r in rows]
-            scalar_index = scalars[0] if scalars else None
             groups = [[i for i, r in enumerate(rows) if r["candidate"]["vf"] == f"s{vf}"] for vf in sorted(b.measured)]
             missing = [vf for vf, g in zip(sorted(b.measured), groups) if not g]
             if missing:
                 raise vt.ToolError("missing predicted costs for measured VF(s): " + ", ".join(
                     f"s{v} ({unsupported.get(f's{v}', 'not generated')})" for v in missing))
             model = CostModel(local)
-            base = model.scores(torch.ones(P, dtype=DTYPE), [scalar_index] * len(local))
+            base = model.scores(torch.ones(P, dtype=DTYPE))
             if not torch.isfinite(base).all() or not (base > 0).all():
                 raise vt.ToolError("nonpositive or nonfinite candidate score")
             offset = len(observations)
             observations.extend(local)
-            scalar_indices.extend([offset + scalar_index if scalar_index is not None else None] * len(local))
             examples.append(Example(b, [[offset + i for i in g] for g in groups], sorted(b.measured), pairs))
             provenance.append({"id": b.id, "cache_key": bundle["key"], "run_id": bundle["run_id"]})
         except (vt.ToolError, OSError, ValueError, KeyError, TypeError) as exc:
             excluded.append({"id": b.id, "reason": str(exc)})
             print(f"  excluded: {exc}", file=sys.stderr, flush=True)
-    if not examples:
+    if not examples and fitting:
         raise vt.ToolError("no eligible benchmarks; see exclusions above")
-    return CostModel(observations), scalar_indices, examples, excluded, provenance
+    return CostModel(observations), examples, excluded, provenance
 
 
 class RankingLoss:
-    def __init__(self, model, scalars, examples, temperature, regularization):
-        self.model, self.scalars, self.examples = model, scalars, examples
+    def __init__(self, model, examples, temperature, regularization):
+        self.model, self.examples = model, examples
         self.temperature, self.regularization = temperature, regularization
         self.groups = [torch.tensor(g) for e in examples for g in e.groups]
         left, right, weights = [], [], []
@@ -210,24 +209,25 @@ class RankingLoss:
         self.weights = torch.tensor(weights, dtype=DTYPE)
 
     def __call__(self, log_multipliers):
-        scores = self.model.scores(log_multipliers.exp(), self.scalars)
+        scores = self.model.scores(log_multipliers.exp())
         costs = torch.stack([scores[:, g].amin(1) for g in self.groups], 1).log()
         pair = (F.softplus((costs[:, self.left] - costs[:, self.right]) / self.temperature) * self.weights).sum(1)
         return pair + self.regularization * log_multipliers.square().mean(1)
 
 
-def fit(model, scalars, examples, args):
+def fit(model, examples, args):
     torch.set_num_threads(1)
     torch.use_deterministic_algorithms(True)
     generator = torch.Generator(device="cpu").manual_seed(args.seed)
     initial = torch.empty((args.starts, P), dtype=DTYPE).uniform_(math.log(.5), math.log(2), generator=generator)
     initial[0].zero_()
     active = torch.tensor([i in model.active for i in range(P)], dtype=DTYPE)
-    lo, hi = math.log(args.min_multiplier), math.log(args.max_multiplier)
+    lo = torch.tensor([math.log(args.min_multiplier)] * (P - 1) + [math.log(args.min_tail_scale)], dtype=DTYPE)
+    hi = torch.tensor([math.log(args.max_multiplier)] * (P - 1) + [math.log(args.max_tail_scale)], dtype=DTYPE)
     initial.clamp_(lo, hi).mul_(active)
     logs = torch.nn.Parameter(initial)
     optimizer = torch.optim.Adam([logs], lr=args.learning_rate)
-    objective = RankingLoss(model, scalars, examples, args.temperature, args.regularization)
+    objective = RankingLoss(model, examples, args.temperature, args.regularization)
     best = math.inf
     best_logs, best_start, best_step = None, None, None
     start_best = [math.inf] * args.starts
@@ -257,9 +257,11 @@ def fit(model, scalars, examples, args):
         "pairs": sum(len(e.pairs) for e in examples), "benchmarks": len(examples)}
 
 
-def results_for(model, scalars, examples, weights):
+def results_for(model, examples, weights):
+    if not examples:
+        return []
     with torch.no_grad():
-        scores = model.scores(weights, scalars)[0]
+        scores = model.scores(weights)[0]
     return [vt.score_benchmark(e.benchmark, {vf: float(scores[g].min())
              for vf, g in zip(e.vfs, e.groups, strict=True)}) for e in examples]
 
@@ -296,22 +298,23 @@ def calibrate_main(argv=None):
     parser.add_argument("--steps", type=vt.positive_int, default=2000)
     parser.add_argument("--seed", type=int, default=0)
     for name, default in (("learning-rate", .03), ("min-multiplier", .25), ("max-multiplier", 4.),
-                          ("temperature", .1), ("weight-saturation", 1.25),
+                          ("min-tail-scale", 1/64), ("max-tail-scale", 64.), ("temperature", .1), ("weight-saturation", 1.25),
                           ("pair-threshold", .01), ("regularization", .001)):
         parser.add_argument("--" + name, type=finite_float, default=default)
     args = parser.parse_args(argv)
     if not (0 < args.min_multiplier <= 1 <= args.max_multiplier and args.min_multiplier < args.max_multiplier
+            and 0 < args.min_tail_scale <= 1 <= args.max_tail_scale and args.min_tail_scale < args.max_tail_scale
             and args.learning_rate > 0 and args.temperature > 0 and args.weight_saturation > 1
             and args.pair_threshold >= 0 and args.regularization >= 0):
         parser.error("invalid fitting bounds, rate, temperature, saturation, threshold, or regularization")
     benchmarks, metadata, clang, identity = initialize(args, "tuning")
-    model, scalars, examples, excluded, provenance = prepare(benchmarks, clang, args, identity, metadata, True)
-    weights, diagnostics = fit(model, scalars, examples, args)
-    results = results_for(model, scalars, examples, weights)
-    initial = results_for(model, scalars, examples, torch.ones(P, dtype=DTYPE))
+    model, examples, excluded, provenance = prepare(benchmarks, clang, args, identity, metadata, True)
+    weights, diagnostics = fit(model, examples, args)
+    results = results_for(model, examples, weights)
+    initial = results_for(model, examples, torch.ones(P, dtype=DTYPE))
     config_keys = ("starts", "steps", "seed", "learning_rate", "min_multiplier", "max_multiplier",
-                   "temperature", "weight_saturation", "pair_threshold", "regularization")
-    artifact = {"schema_version": 1, "model_version": MODEL_VERSION,
+                   "temperature", "weight_saturation", "pair_threshold", "regularization", "min_tail_scale", "max_tail_scale")
+    artifact = {"schema_version": 2, "model_version": MODEL_VERSION,
         "multipliers": dict(zip(PARAMETERS, weights.tolist(), strict=True)),
         "default_multipliers": dict.fromkeys(PARAMETERS, 1.),
         "fixed": {"scalar_instruction": .5,
@@ -332,53 +335,42 @@ def calibrate_main(argv=None):
     return 0
 
 
-def load_weights(path):
-    try:
-        value = json.loads(path.read_text())
-        if value["schema_version"] != 1 or value["model_version"] != MODEL_VERSION:
-            raise ValueError("unsupported weights schema/model version")
-        if set(value["multipliers"]) != set(PARAMETERS):
-            raise ValueError("wrong parameter set")
-        if (not isinstance(value["dataset"], dict) or not isinstance(value["compiler_identity"], dict)
-                or not isinstance(value["tuning_ids"], list)
-                or not all(isinstance(i, str) for i in value["tuning_ids"])):
-            raise ValueError("missing or invalid training provenance")
-        numbers = [value["multipliers"][p] for p in PARAMETERS]
-        if any(type(x) not in (int, float) or not math.isfinite(x) or x <= 0 for x in numbers):
-            raise ValueError("multipliers must be finite and positive")
-        return value, torch.tensor(numbers, dtype=DTYPE)
-    except (OSError, KeyError, TypeError, ValueError) as exc:
-        raise vt.ToolError(f"invalid weights {path}: {exc}") from exc
-
-
-def evaluate_weights_main(argv=None):
+def evaluate_model_main(argv=None, *, fitted=False):
     parser = common_parser("Evaluate a fitted analytical model on validation data only.")
-    parser.add_argument("--weights", required=True, type=vt.resolved_path)
+    parser.add_argument("--weights", required=fitted, type=vt.resolved_path)
     parser.add_argument("--json-output", type=vt.resolved_path)
     parser.add_argument("--exclude-reasons", action="store_true")
     args = parser.parse_args(argv)
-    artifact, weights = load_weights(args.weights)
+    artifact, weights = (load_weights(args.weights) if args.weights else
+                         (None, torch.ones(P, dtype=DTYPE)))
     benchmarks, metadata, clang, identity = initialize(args, "validation")
-    if artifact["dataset"] != metadata:
-        raise vt.ToolError("weights were fitted against different dataset metadata")
-    if artifact["compiler_identity"] != identity:
-        raise vt.ToolError("weights/compiler extraction context differs; refit with this toolchain")
-    overlap = sorted(set(artifact["tuning_ids"]) & {b.id for b in benchmarks})
-    if overlap:
-        raise vt.ToolError("validation contains IDs used to fit these weights: " + ", ".join(overlap))
-    model, scalars, examples, excluded, provenance = prepare(benchmarks, clang, args, identity, metadata, False)
-    results = results_for(model, scalars, examples, weights)
+    if artifact is not None:
+        if not all(k in artifact for k in ("dataset", "compiler_identity", "tuning_ids")):
+            raise vt.ToolError("weights lack training provenance required for validation")
+        if artifact["dataset"] != metadata:
+            raise vt.ToolError("weights were fitted against different dataset metadata")
+        if artifact["compiler_identity"] != identity:
+            raise vt.ToolError("weights/compiler extraction context differs; refit with this toolchain")
+        overlap = sorted(set(artifact["tuning_ids"]) & {b.id for b in benchmarks})
+        if overlap:
+            raise vt.ToolError("validation contains IDs used to fit these weights: " + ", ".join(overlap))
+    model, examples, excluded, provenance = prepare(benchmarks, clang, args, identity, metadata, False)
+    results = results_for(model, examples, weights)
     by_id = {b.id: b for b in benchmarks}
     results += [vt.Result(by_id[e["id"]], reason=e["reason"]) for e in excluded]
     results.sort(key=lambda r: r.benchmark.id)
-    vt.print_summary("Validation: fitted continuous model", results)
+    vt.print_summary("Validation: " + ("fitted" if artifact else "default") + " Python model", results)
     vt.print_worst_regrets(results)
     if args.exclude_reasons:
         for e in excluded:
             print(f"{e['id']}: {e['reason']}")
     if args.json_output:
-        vt.write_json(args.json_output, {"schema_version": 1, "model_version": MODEL_VERSION,
-            "weights_sha256": digest_file(args.weights), "metadata": metadata,
+        vt.write_json(args.json_output, {"schema_version": 2, "model_version": MODEL_VERSION,
+            "weights_sha256": digest_file(args.weights) if args.weights else None, "metadata": metadata,
             "metrics": vt.summary_json(results), "provenance": provenance,
             "benchmarks": [vt.result_json(r) for r in results]})
-    return 0
+    return 0 if examples else 1
+
+
+def evaluate_weights_main(argv=None):
+    return evaluate_model_main(argv, fitted=True)

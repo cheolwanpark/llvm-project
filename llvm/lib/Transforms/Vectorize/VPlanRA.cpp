@@ -1,9 +1,9 @@
-//===- VPlanRA.cpp - Fixed transport for backend-informed VPlan research ---===//
+//===- VPlanRA.cpp - Fixed transport for backend-informed VPlan research
+//---===//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #include "llvm/Transforms/Vectorize/VPlanRA.h"
 #include "VPlan.h"
-#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -21,240 +21,218 @@
 using namespace llvm;
 static cl::opt<VPlanPipelineStage> Pipeline(
     "vplan-pipeline", cl::Hidden, cl::init(VPlanPipelineStage::Full),
-    cl::values(clEnumValN(VPlanPipelineStage::Full, "full", "Normal pipeline"),
-               clEnumValN(VPlanPipelineStage::Prepare, "prepare", "Stop before LV"),
-               clEnumValN(VPlanPipelineStage::Resume, "resume", "Resume before LV")));
-static cl::opt<std::string> Manifest("vplan-candidates-output", cl::Hidden,
-                                    cl::desc("Write VPlan RA candidate manifest"));
-static cl::opt<std::string> Probe("vplan-probe-candidate", cl::Hidden,
-                                 cl::desc("Materialize an enumerated candidate"));
-static cl::opt<std::string> FeedbackPath("vplan-ra-feedback", cl::Hidden,
-                                        cl::desc("Read candidate RA feedback"));
-static cl::opt<std::string> RunID("vplan-ra-run-id", cl::Hidden,
-                                 cl::desc("Checkpoint/compiler/options digest"));
-
+    cl::values(
+        clEnumValN(VPlanPipelineStage::Full, "full", "Normal pipeline"),
+        clEnumValN(VPlanPipelineStage::Prepare, "prepare", "Stop before LV"),
+        clEnumValN(VPlanPipelineStage::Resume, "resume", "Resume before LV")));
+static cl::opt<std::string>
+    Manifest("vplan-candidates-output", cl::Hidden,
+             cl::desc("Write VPlan RA candidate manifest"));
+static cl::opt<std::string>
+    Probe("vplan-probe-candidate", cl::Hidden,
+          cl::desc("Materialize an enumerated candidate"));
+static cl::opt<std::string>
+    SelectionPath("vplan-selection-input", cl::Hidden,
+                  cl::desc("Read Python-selected VPlan candidates"));
+static cl::opt<std::string>
+    RunID("vplan-ra-run-id", cl::Hidden,
+          cl::desc("Checkpoint/compiler/options digest"));
 namespace {
-IntrusiveRefCntPtr<vfs::FileSystem> InputFS;
 struct Transport {
-  json::Array Candidates;
-  json::Array Selections;
-  StringMap<json::Object> Feedback;
+  json::Array Candidates, Loops, Selections, Failures;
+  json::Array ExpectedCandidates, ExpectedLoops;
+  StringMap<json::Object> Choices;
   StringMap<bool> Consumed;
-  bool Loaded = false;
-  bool ProbeSelected = false;
+  bool Loaded = false, ProbeSelected = false, ProbeFailed = false;
 };
 Transport &state() {
   static Transport S;
   return S;
 }
 std::string vfName(ElementCount VF) {
-  return (Twine(VF.isScalable() ? "s" : "f") +
-          Twine(VF.getKnownMinValue())).str();
+  return (Twine(VF.isScalable() ? "s" : "f") + Twine(VF.getKnownMinValue()))
+      .str();
 }
-void loadFeedback(vfs::FileSystem &FS) {
+std::string loopKey(StringRef F, int64_t Index) {
+  return (F + ":" + Twine(Index)).str();
+}
+void loadSelection(vfs::FileSystem &FS) {
   auto &S = state();
   if (S.Loaded)
     return;
   S.Loaded = true;
-  if (FeedbackPath.empty())
+  if (SelectionPath.empty())
     return;
-  auto Buffer = FS.getBufferForFile(FeedbackPath);
+  auto Buffer = FS.getBufferForFile(SelectionPath);
   if (!Buffer)
-    reportFatalUsageError(Twine("cannot read VPlan RA feedback: ") + FeedbackPath.getValue());
+    reportFatalUsageError("cannot read VPlan selection input");
   auto Parsed = json::parse((*Buffer)->getBuffer());
   if (!Parsed)
-    reportFatalUsageError(Twine("invalid VPlan RA feedback: ") + toString(Parsed.takeError()));
+    reportFatalUsageError(Twine(toString(Parsed.takeError())));
   auto *Root = Parsed->getAsObject();
-  if (!Root || Root->getInteger("version") != 2 ||
+  if (!Root || Root->getInteger("version") != 3 ||
       Root->getString("run_id") != StringRef(RunID))
-    reportFatalUsageError("VPlan RA feedback version/run mismatch");
-  auto *Rows = Root->getArray("candidates");
-  if (!Rows)
-    reportFatalUsageError("missing VPlan RA feedback candidates");
+    reportFatalUsageError("VPlan selection version/run mismatch");
+  auto *Rows = Root->getArray("selections");
+  auto *Candidates = Root->getArray("candidates");
+  auto *Loops = Root->getArray("loops");
+  if (!Rows || !Candidates || !Loops)
+    reportFatalUsageError("missing VPlan selection context");
+  S.ExpectedCandidates = *Candidates;
+  S.ExpectedLoops = *Loops;
   for (auto &Row : *Rows) {
     auto *O = Row.getAsObject();
-    auto ID = O ? O->getString("id") : std::nullopt;
-    const auto *Selection = O ? O->getObject("selection") : nullptr;
-    if (!ID || !O->getObject("cost") || !Selection ||
-        Selection->getString("id") != ID || !Selection->getInteger("ic") ||
-        *Selection->getInteger("ic") < 1 ||
-        !Selection->getString("epilogue_vf") ||
-        !Selection->getBoolean("emitted") ||
-        !S.Feedback.try_emplace(*ID, *O).second)
-      reportFatalUsageError("invalid/duplicate VPlan RA feedback candidate");
+    auto F = O ? O->getString("function") : std::nullopt;
+    auto L = O ? O->getInteger("loop") : std::nullopt;
+    auto Scalar = O ? O->getBoolean("scalar") : std::nullopt;
+    if (!F || !L || *L < 0 || !Scalar || O->getInteger("ic") != 1 ||
+        O->getString("epilogue_vf") != "f0" ||
+        (!*Scalar && !O->getString("id")) || (*Scalar && O->get("id")) ||
+        !S.Choices.try_emplace(loopKey(*F, *L), *O).second)
+      reportFatalUsageError("invalid/duplicate VPlan selection");
   }
 }
 } // namespace
-
-void llvm::initializeVPlanRA(vfs::FileSystem &FS) {
-  InputFS = &FS;
-  loadFeedback(FS);
-}
-Expected<json::Value> llvm::readVPlanRAJSON(StringRef Path) {
-  auto FS = InputFS ? InputFS : vfs::getRealFileSystem();
-  auto Buffer = FS->getBufferForFile(Path);
-  if (!Buffer)
-    return errorCodeToError(Buffer.getError());
-  return json::parse((*Buffer)->getBuffer());
-}
-
+void llvm::initializeVPlanRA(vfs::FileSystem &FS) { loadSelection(FS); }
 VPlanPipelineStage llvm::getVPlanPipelineStage() { return Pipeline; }
 bool llvm::vplanRAEnabled() {
-  return !Manifest.empty() || !Probe.empty() || !FeedbackPath.empty();
+  return !Manifest.empty() || !Probe.empty() || !SelectionPath.empty();
 }
 StringRef llvm::getVPlanRAProbe() { return Probe.getValue(); }
 StringRef llvm::getVPlanRARunID() { return RunID.getValue(); }
-bool llvm::vplanRAHasFeedback() { return !FeedbackPath.empty(); }
-
 void llvm::writeVPlanRAJSON(StringRef Path, json::Value Value) {
   std::error_code EC;
   raw_fd_ostream OS(Path, EC, sys::fs::OF_Text);
   if (EC)
-    reportFatalUsageError(Twine("cannot write VPlan RA artifact: ") + EC.message());
+    reportFatalUsageError(Twine("cannot write VPlan artifact: ") +
+                          EC.message());
   OS << Value << '\n';
   OS.close();
   if (OS.has_error())
-    reportFatalUsageError("failed to write VPlan RA artifact");
+    reportFatalUsageError("failed to write VPlan artifact");
 }
-
 VPlanRAContext::VPlanRAContext(const Function &F, unsigned Index)
     : FunctionName(F.getName().str()), LoopIndex(Index),
       Prefix((F.getName() + ":" + Twine(Index) + ":").str()) {
   if (RunID.empty())
     reportFatalUsageError("VPlan RA requires -vplan-ra-run-id");
-  if (!Probe.empty() && !FeedbackPath.empty())
-    reportFatalUsageError("VPlan RA probe cannot consume feedback");
+  if (!Probe.empty() && !SelectionPath.empty())
+    reportFatalUsageError("VPlan probe cannot consume selection input");
   if (!state().Loaded)
-    loadFeedback(*vfs::getRealFileSystem());
+    loadSelection(*vfs::getRealFileSystem());
+  LoopPosition = state().Loops.size();
+  state().Loops.push_back(json::Object{{"function", FunctionName},
+                                       {"loop", LoopIndex},
+                                       {"scalar_cost", nullptr},
+                                       {"max_trip_count", 0},
+                                       {"exact_trip_count", 0}});
+  if (!SelectionPath.empty()) {
+    auto Key = loopKey(FunctionName, LoopIndex);
+    auto It = state().Choices.find(Key);
+    if (It == state().Choices.end())
+      reportFatalUsageError("missing loop selection");
+    if (*It->second.getBoolean("scalar")) {
+      state().Selections.push_back(json::Object(It->second));
+      state().Consumed[Key] = true;
+    } else {
+      SelectedID = It->second.getString("id")->str();
+    }
+  }
 }
-
+void VPlanRAContext::setLoopInfo(InstructionCost Scalar, unsigned Max,
+                                 unsigned Exact) {
+  auto &O = *state().Loops[LoopPosition].getAsObject();
+  if (Scalar.isValid() && Scalar >= 0) {
+    int64_t Whole = Scalar.getValue();
+    O["scalar_cost"] =
+        double(Whole) + double(((Scalar - Whole) * 4).getValue()) / 4;
+  }
+  O["max_trip_count"] = Max;
+  O["exact_trip_count"] = Exact;
+}
 void VPlanRAContext::registerPlan(const VPlan &Plan) { Plans.push_back(&Plan); }
-
-std::string VPlanRAContext::candidateID(const VPlan &Plan, ElementCount VF) const {
+std::string VPlanRAContext::candidateID(const VPlan &Plan,
+                                        ElementCount VF) const {
   auto It = llvm::find(Plans, &Plan);
-  assert(It != Plans.end() && "unregistered VPlan RA candidate");
+  assert(It != Plans.end() && "unregistered VPlan candidate");
   return Prefix + std::to_string(It - Plans.begin()) + ":" + vfName(VF);
 }
-bool VPlanRAContext::isProbe(const VPlan &Plan, ElementCount VF) const {
-  return !Probe.empty() && Probe == candidateID(Plan, VF);
+bool VPlanRAContext::isRequested(const VPlan &Plan, ElementCount VF) const {
+  auto ID = candidateID(Plan, VF);
+  return (!Probe.empty() && Probe == ID) || SelectedID == ID;
 }
 bool VPlanRAContext::probesThisLoop() const {
   return !Probe.empty() && StringRef(Probe).starts_with(Prefix);
 }
-void VPlanRAContext::recordCandidate(const VPlan &Plan, ElementCount VF) {
-  auto ID = candidateID(Plan, VF);
+bool VPlanRAContext::hasRequest() const {
+  return probesThisLoop() || !SelectedID.empty();
+}
+void VPlanRAContext::recordCandidate(const VPlan &Plan, ElementCount VF,
+                                     unsigned Width) {
+  if (VF.isScalar())
+    return;
   state().Candidates.push_back(
-      json::Object{{"id", ID},
+      json::Object{{"id", candidateID(Plan, VF)},
                    {"function", FunctionName},
                    {"loop", LoopIndex},
                    {"vf", vfName(VF)},
+                   {"estimated_width", Width},
                    {"probeable", true},
                    {"scalar_tail", Plan.hasScalarTail()}});
-  if (!FeedbackPath.empty()) {
-    auto It = state().Feedback.find(ID);
-    if (It == state().Feedback.end())
-      reportFatalUsageError(Twine("missing backend cost for ") + ID);
-    (void)parseBackendCost(*It->second.getObject("cost"));
-    Feedback.try_emplace(ID, It->second);
-    state().Consumed[ID] = true;
-  }
 }
-VPlanBackendCost VPlanRAContext::cost(const VPlan &Plan,
-                                      ElementCount VF) const {
-  auto It = Feedback.find(candidateID(Plan, VF));
-  if (It == Feedback.end())
-    reportFatalUsageError("unregistered backend cost request");
-  return parseBackendCost(*It->second.getObject("cost"));
+void VPlanRAContext::failure(StringRef Reason) {
+  auto ID = probesThisLoop() ? getVPlanRAProbe() : StringRef(SelectedID);
+  state().Failures.push_back(
+      json::Object{{"id", ID.str()}, {"reason", Reason.str()}});
+  if (probesThisLoop())
+    state().ProbeFailed = true;
+  if (!SelectionPath.empty())
+    reportFatalUsageError(Twine("selected VPlan rejected: ") + Reason);
 }
 void VPlanRAContext::selection(const VPlan &Plan, ElementCount VF, unsigned IC,
                                ElementCount EpilogueVF, bool Emitted) {
   auto ID = candidateID(Plan, VF);
-  json::Object Selection{{"id", ID}, {"ic", IC},
-                         {"epilogue_vf", vfName(EpilogueVF)},
-                         {"emitted", Emitted}};
-  state().Selections.push_back(std::move(Selection));
-  if (isProbe(Plan, VF))
+  if (!isRequested(Plan, VF) || IC != 1 ||
+      EpilogueVF != ElementCount::getFixed(0) || !Emitted)
+    reportFatalUsageError("VPlan selection replay mismatch");
+  state().Selections.push_back(
+      json::Object{{"function", FunctionName},
+                   {"loop", LoopIndex},
+                   {"scalar", false},
+                   {"id", ID},
+                   {"ic", IC},
+                   {"epilogue_vf", vfName(EpilogueVF)}});
+  if (probesThisLoop())
     state().ProbeSelected = true;
-  if (!FeedbackPath.empty()) {
-    auto It = Feedback.find(ID);
-    if (It == Feedback.end())
-      reportFatalUsageError("selected candidate has no VPlan RA feedback");
-    const auto *Expected = It->second.getObject("selection");
-    if (Expected->getInteger("ic") != int64_t(IC) ||
-        Expected->getString("epilogue_vf") != vfName(EpilogueVF) ||
-        (Emitted && Expected->getBoolean("emitted") != true))
-      reportFatalUsageError("final VPlan configuration differs from RA probe");
-  }
+  if (!SelectionPath.empty())
+    state().Consumed[loopKey(FunctionName, LoopIndex)] = true;
 }
 void llvm::finishVPlanRA(Module &M) {
   if (!vplanRAEnabled())
     return;
   if (!state().Loaded)
-    loadFeedback(*vfs::getRealFileSystem());
+    loadSelection(*vfs::getRealFileSystem());
   auto &S = state();
-  if (!Probe.empty() && !S.ProbeSelected)
-    reportFatalUsageError(Twine("VPlan RA probe was not materialized: ") + Probe.getValue());
-  if (S.Consumed.size() != S.Feedback.size())
-    reportFatalUsageError("unexpected/stale VPlan RA feedback candidates");
+  if (!Probe.empty() && !S.ProbeSelected && !S.ProbeFailed)
+    reportFatalUsageError("VPlan probe candidate was not materialized");
+  if (!SelectionPath.empty() &&
+      (S.Consumed.size() != S.Choices.size() ||
+       json::Value(json::Array(S.Candidates)) !=
+           json::Value(json::Array(S.ExpectedCandidates)) ||
+       json::Value(json::Array(S.Loops)) !=
+           json::Value(json::Array(S.ExpectedLoops))))
+    reportFatalUsageError(
+        "unexpected/stale VPlan selection or candidate context changed");
   if (!Manifest.empty())
     writeVPlanRAJSON(Manifest,
-                     json::Object{{"version", 2},
+                     json::Object{{"version", 3},
                                   {"run_id", std::string(RunID)},
                                   {"triple", M.getTargetTriple().str()},
+                                  {"loops", std::move(S.Loops)},
                                   {"candidates", std::move(S.Candidates)},
-                                  {"selections", std::move(S.Selections)}});
+                                  {"selections", std::move(S.Selections)},
+                                  {"failures", std::move(S.Failures)}});
   S = Transport();
-}
-
-int64_t llvm::costQuarters(InstructionCost C) {
-  assert(C.isValid() && C >= 0);
-  int64_t Whole = C.getValue();
-  return Whole * 4 + ((C - Whole) * 4).getValue();
-}
-json::Object llvm::serializeBackendCost(const VPlanBackendCost &C) {
-  return json::Object{{"body_quarters", costQuarters(C.Body)},
-                      {"scalar_quarters", costQuarters(C.ScalarBody)},
-                      {"score_quarters", costQuarters(C.Score)},
-                      {"divisor", C.Divisor},
-                      {"width", C.Width},
-                      {"scalar_width", C.ScalarWidth},
-                      {"kind", C.Kind},
-                      {"breakdown", json::Object(C.Breakdown)}};
-}
-VPlanBackendCost llvm::parseBackendCost(const json::Object &O) {
-  auto Read = [&](StringRef Key) {
-    auto Q = O.getInteger(Key);
-    if (!Q || *Q < 0)
-      reportFatalUsageError("invalid backend cost numerator");
-    return InstructionCost(*Q / 4) + InstructionCost(*Q % 4) / 4;
-  };
-  VPlanBackendCost C;
-  C.Body = Read("body_quarters");
-  C.ScalarBody = Read("scalar_quarters");
-  C.Score = Read("score_quarters");
-  auto D = O.getInteger("divisor");
-  auto K = O.getString("kind");
-  if (!D || *D <= 0 || uint64_t(*D) > UINT32_MAX || !K ||
-      (*K != "whole-loop" && *K != "cost-per-lane"))
-    reportFatalUsageError("invalid backend cost denominator/kind");
-  auto W = O.getInteger("width"), SW = O.getInteger("scalar_width");
-  if (!W || !SW || *W <= 0 || *SW <= 0 || uint64_t(*W) > UINT32_MAX ||
-      uint64_t(*SW) > UINT32_MAX)
-    reportFatalUsageError("invalid backend iteration width");
-  C.Width = *W;
-  C.ScalarWidth = *SW;
-  C.Divisor = *D;
-  C.Kind = K->str();
-  if (auto *B = O.getObject("breakdown"))
-    C.Breakdown = *B;
-  return C;
-}
-bool llvm::backendCostLess(const VPlanBackendCost &A,
-                           const VPlanBackendCost &B) {
-  if (A.Kind != B.Kind)
-    reportFatalUsageError("inconsistent backend score kinds");
-  return (APInt(128, costQuarters(A.Score)) * B.Divisor)
-      .ult(APInt(128, costQuarters(B.Score)) * A.Divisor);
 }
 
 static MDNode *tag(LLVMContext &C, StringRef Key, StringRef Value) {

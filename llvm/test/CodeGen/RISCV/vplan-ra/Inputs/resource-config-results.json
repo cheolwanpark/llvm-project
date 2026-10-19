@@ -1,0 +1,130 @@
+{
+  "0": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 2, "Source": 2, "WholeValue": true},
+      {"Destination": 4, "Distance": 1, "OperandIndex": 1, "Source": 10, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 2, "Source": 2, "WholeValue": true},
+      {"Destination": 5, "Distance": 0, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 6, "Distance": 0, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 7, "Distance": 0, "OperandIndex": 1, "Source": 5, "WholeValue": true},
+      {"Destination": 10, "Distance": 0, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 10, "Distance": 0, "OperandIndex": 2, "Source": 9, "WholeValue": true},
+      {"Destination": 11, "Distance": 0, "OperandIndex": 1, "Source": 5, "WholeValue": true},
+      {"Destination": 11, "Distance": 0, "OperandIndex": 4, "Source": 9, "WholeValue": true},
+      {"Destination": 13, "Distance": 0, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 14, "Distance": 0, "OperandIndex": 2, "Source": 10, "WholeValue": true},
+      {"Destination": 14, "Distance": 0, "OperandIndex": 3, "Source": 13, "WholeValue": true},
+      {"Destination": 14, "Distance": 0, "OperandIndex": 4, "Source": 13, "WholeValue": true},
+      {"Destination": 15, "Distance": 0, "OperandIndex": 0, "Source": 3, "WholeValue": true},
+      {"Destination": 15, "Distance": 0, "OperandIndex": 1, "Source": 12, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoVSETIVLI", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoBR", "Category": "scalar"},
+      {"Opcode": "PseudoVSETVLI", "Category": "config", "ConfigUnused": false},
+      {"Opcode": "SUB", "Category": "scalar"},
+      {"Opcode": "ADD", "Category": "scalar"},
+      {"Opcode": "PseudoVSETVLI", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoVSETVLI", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoVSETVLIX0", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoVSETIVLI", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoVSETIVLI", "Category": "config", "ConfigUnused": false},
+      {"Opcode": "ADD", "Category": "scalar"},
+      {"Opcode": "PseudoVSETVLIX0X0", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoVSETIVLI", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoVSETVLI", "Category": "config", "ConfigUnused": false},
+      {"Opcode": "PseudoVLE32_V_M1", "Category": "unit", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": true, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false},
+      {"Opcode": "BNE", "Category": "scalar"},
+      {"Opcode": "PseudoBR", "Category": "scalar"},
+      {"Opcode": "PseudoVSETIVLI", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoRET", "Category": "scalar"}
+    ]
+  },
+  "1": {
+    "Version": 2,
+    "Stage": "post-ra-cleanup",
+    "Error": "",
+    "DependencyCoverage": "single-block-distance-0-1",
+    "Blocks": [
+      {
+        "ID": 0,
+        "Role": "entry",
+        "Successors": [1]
+      },
+      {
+        "ID": 1,
+        "Role": "body",
+        "Successors": [1, 2]
+      },
+      {
+        "ID": 2,
+        "Role": "outside",
+        "Successors": []
+      }
+    ],
+    "Edges": [
+      {"Destination": 2, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 3, "Distance": 1, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 3, "Distance": 0, "OperandIndex": 2, "Source": 2, "WholeValue": true},
+      {"Destination": 4, "Distance": 1, "OperandIndex": 1, "Source": 10, "WholeValue": true},
+      {"Destination": 4, "Distance": 0, "OperandIndex": 2, "Source": 2, "WholeValue": true},
+      {"Destination": 5, "Distance": 0, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 6, "Distance": 0, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 7, "Distance": 0, "OperandIndex": 1, "Source": 5, "WholeValue": true},
+      {"Destination": 10, "Distance": 0, "OperandIndex": 1, "Source": 4, "WholeValue": true},
+      {"Destination": 10, "Distance": 0, "OperandIndex": 2, "Source": 9, "WholeValue": true},
+      {"Destination": 11, "Distance": 0, "OperandIndex": 1, "Source": 5, "WholeValue": true},
+      {"Destination": 11, "Distance": 0, "OperandIndex": 4, "Source": 9, "WholeValue": true},
+      {"Destination": 13, "Distance": 0, "OperandIndex": 1, "Source": 3, "WholeValue": true},
+      {"Destination": 14, "Distance": 0, "OperandIndex": 2, "Source": 10, "WholeValue": true},
+      {"Destination": 14, "Distance": 0, "OperandIndex": 3, "Source": 13, "WholeValue": true},
+      {"Destination": 14, "Distance": 0, "OperandIndex": 4, "Source": 13, "WholeValue": true},
+      {"Destination": 15, "Distance": 0, "OperandIndex": 0, "Source": 3, "WholeValue": true},
+      {"Destination": 15, "Distance": 0, "OperandIndex": 1, "Source": 12, "WholeValue": true}
+    ],
+    "Instructions": [
+      {"Opcode": "PseudoVSETIVLI", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoBR", "Category": "scalar"},
+      {"Opcode": "PseudoVSETVLI", "Category": "config", "ConfigUnused": false},
+      {"Opcode": "SUB", "Category": "scalar"},
+      {"Opcode": "ADD", "Category": "scalar"},
+      {"Opcode": "PseudoVSETVLI", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoVSETVLI", "Category": "config", "ConfigUnused": false},
+      {"Opcode": "PseudoVSETVLIX0", "Category": "config", "ConfigUnused": false},
+      {"Opcode": "PseudoVSETIVLI", "Category": "config", "ConfigUnused": false},
+      {"Opcode": "PseudoVSETIVLI", "Category": "config", "ConfigUnused": false},
+      {"Opcode": "ADD", "Category": "scalar"},
+      {"Opcode": "PseudoVSETVLIX0X0", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoVSETIVLI", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoVSETVLI", "Category": "config", "ConfigUnused": false},
+      {"Opcode": "PseudoVLE32_V_M1", "Category": "unit", "SEW": 32, "Group8": 8, "IndexSEW": 0, "IndexGroup8": 0, "Predicate": 0, "Bytes": 0, "ScalableBytes": false, "Stack": false, "Load": true, "Store": false, "Masked": false, "Barrier": false, "SameCopy": false},
+      {"Opcode": "BNE", "Category": "scalar"},
+      {"Opcode": "PseudoBR", "Category": "scalar"},
+      {"Opcode": "PseudoVSETIVLI", "Category": "config", "ConfigUnused": true},
+      {"Opcode": "PseudoRET", "Category": "scalar"}
+    ]
+  }
+}
