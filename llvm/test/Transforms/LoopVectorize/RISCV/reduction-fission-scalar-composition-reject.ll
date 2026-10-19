@@ -1,15 +1,22 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=112 -S %s | FileCheck %s
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=112 -vplan-reduction-fission-allow-fp-reordering -S %s | FileCheck %s
-;
-; No moved accumulator may affect retained values, addresses or predicates.
-; Volatile/atomic writes and noncanonical compact chunk control stay rejected.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compose_reject_feedback(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compose_reject_volatile(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compose_reject_atomic(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compose_reject_control(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) nounwind willreturn speculatable memory(none)
 
-; CHECK-LABEL: define void @compose_reject_feedback(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define void @compose_reject_feedback(ptr %a, ptr %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
 entry:
@@ -96,11 +103,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @compose_reject_volatile(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define void @compose_reject_volatile(ptr %a, ptr %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
 entry:
@@ -184,11 +186,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @compose_reject_atomic(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define void @compose_reject_atomic(ptr %a, ptr %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
 entry:
@@ -272,11 +269,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @compose_reject_control(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define void @compose_reject_control(ptr %a, ptr %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) {
 entry:

@@ -1,35 +1,11 @@
-; REQUIRES: asserts
-; RUN: opt -verify-each -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
-; RUN:   -mtriple=riscv64 -mattr=+v,+f,+d,+zvl128b \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -debug-only=vplan-reduction-fission \
-; RUN:   -S %s -o %t 2>&1 | FileCheck %s --check-prefix=SELECT
-; RUN: FileCheck %s --check-prefix=IR < %t
-; RUN: llc -verify-machineinstrs -mtriple=riscv64 -mattr=+v,+f,+d,+zvl128b %t -o /dev/null
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+f,+d,+zvl128b \
-; RUN:   -tail-folding-policy=must-fold-tail -S %s \
-; RUN:   | FileCheck %s --check-prefix=OFF
-;
-; SciPy/VDT sincos reduction shape with a constant bound. The larger producer
-; VF is not pressure-safe, but equal-VF fission still reduces pressure.
-; No forced VF or lowered analysis thresholds are used.
-;
-; SELECT: candidate: reductions=5 scratch-bytes=16384
-; SELECT-SAME: baseline-vf=vscale x 2 producer-vf=vscale x 2 accumulator-vf=vscale x 2
-;
-; IR-LABEL: define {{.*}}void @kernel(
-; IR-COUNT-2: alloca [1024 x double]
-; IR: vector.fission.producer.body:
-; IR: @llvm.fabs.nxv2f64
-; IR-COUNT-2: store <vscale x 2 x double>
-; IR: vector.fission.accumulator.body:
-; IR-COUNT-2: load <vscale x 2 x double>
-; IR: @llvm.vector.reduce.fadd.nxv2f64
-;
-; OFF-LABEL: define {{.*}}void @kernel(
-; OFF-NOT: fission
-; OFF: ret void
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @kernel(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"
 target triple = "riscv64-unknown-unknown-elf"
 

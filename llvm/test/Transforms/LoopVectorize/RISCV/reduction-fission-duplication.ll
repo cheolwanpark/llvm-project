@@ -1,28 +1,11 @@
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-chain-depth=6 \
-; RUN:   -vplan-reduction-fission-max-duplicated-recipes=0 -S %s \
-; RUN:   | FileCheck %s --implicit-check-not=fission.scratch
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-chain-depth=6 \
-; RUN:   -vplan-reduction-fission-max-duplicated-recipes=8 -S %s \
-; RUN:   | FileCheck %s --check-prefix=SPLIT
-
-; SPLIT-LABEL: define void @pressure_candidate(
-; SPLIT: vector.fission.producer.body:
-; SPLIT: load <vscale x 16 x i32>
-; SPLIT: store <vscale x 16 x i32>
-; SPLIT: vector.fission.accumulator.body:
-; SPLIT-COUNT-2: load <vscale x 2 x i32>
-;
-; A short reduction needs the same original input load as the long chain.
-; Zero duplication budget must reject this candidate.
-; CHECK-LABEL: define void @pressure_candidate(
-; CHECK: ret void
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @pressure_candidate(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @pressure_candidate(ptr noalias readonly %a, ptr noalias writeonly %out) {
 entry:
   br label %loop

@@ -79,117 +79,112 @@ for details.
 
 ### Experimental reduction fission
 
-Reduction fission is disabled by default. Enable it with
-`-enable-vplan-reduction-fission` to separate reduction contributions into a
-producer loop and consume stack scratch in an accumulator loop. Scalar IR
-splitting is tried first, before whole-loop vectorization legality and VPlan
-construction. The two resulting loops enter the normal vectorizer independently;
-a scalar producer can therefore feed a vectorized consumer. If scalar splitting
-does not apply, the VPlan path may still apply. With chunking, each chunk's
-producer finishes before that chunk's consumer runs, then the next chunk starts.
-Without chunking, the full producer, including its remainder, finishes first.
+`ScalarFissionPass` is an independent, opt-in function pass. It separates closed
+scalar state updates from their producer before normal loop vectorization:
 
 ```sh
-opt input.ll -S -o output.ll -passes=loop-vectorize \
-  -mtriple=riscv64 -mattr=+v,+zvl128b -force-vector-interleave=1 \
-  -enable-vplan-reduction-fission
+opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
+    -verify-each -S input.ll -o split.ll
+opt -passes=loop-vectorize -S split.ll -o vectorized.ll
 ```
 
-Clang accepts the enable option through `-mllvm -enable-vplan-reduction-fission`.
+Use `-enable-scalar-fission` with `default<O2>`, `default<O3>`, or Clang's
+`-mllvm` to enable pipeline integration. The default placement is Late, immediately
+before LV after loop normalization. `-scalar-fission-early` selects the independent
+placement before full unrolling. Explicit `-passes=scalar-fission` runs the pass
+without the enable flag. Vectorization-disable hints do not disable fission;
+`llvm.loop.scalar_fission.disable` does. Optnone is respected.
 
-The scalar path supports bounded affine integer loop control and acyclic producer
-CFGs with a single latch exit. It preserves original predicates, ordinary loads
-and stores (including aliasing accesses), retained producer recurrences and
-available final producer live-outs. Supported reductions include integer add,
-subtract, multiply, bitwise and min/max operations, and ordinary float/double add
-and subtract. Conditional updates on a common participation arm compact their
-contributions in order; an empty stream forwards the incoming accumulator without
-arithmetic or scratch reads. Each distinct contribution has one scratch stream.
-Proven iteration bounds and checked size/alignment arithmetic limit storage;
-when full-trip storage exceeds the scratch limit, a bounded chunk schedule is
-used if possible. Each consumer uses the actual completed or participating count.
+The pass first builds a plan, validates its complete chunk schedule and only then
+creates IR. Rejections allocate no scratch and do not partially split a loop.
+Standard LoopSimplify, LCSSA and rotation normalization can remain after rejection.
+The original entry guard and termination test are preserved. A bounded local
+ordinal limits producer execution to a chunk, then the consumer visits exactly
+those completed iterations. Neither a constant trip bound nor a separate total
+iteration counter is required. Scalar/scalar execution is supported.
 
-Scalar splitting preserves reduction operand order, flags and initial values;
-it adds no FP reassociation permission. Accumulator feedback into the producer,
-incompatible participation, unsupported exits, internal cycles, volatile/atomic
-accesses and strict/constrained FP remain excluded. Calls need explicit
-`memory(none)`, `nounwind`, `willreturn` and `speculatable` contracts and must
-satisfy the supported call restrictions; a libm name alone grants no permission.
-Original memory operations stay together in the producer and the consumer uses
-private scratch. Normal vectorizer costing chooses each stage's VF and tail
-handling. Stage metadata prevents repeated fission.
+Supported state includes scalar integer arithmetic, bitwise and min/max updates,
+ordinary FP addition/subtraction and closed compound update slices. Branch/PHI
+and select representations retain their execution semantics, including different
+participation conditions. Producer-local recurrences and final live-outs remain
+in the producer. Reducible inner producer loops with dedicated unique exits are
+retained, with outer consumers using their LCSSA outputs. State influencing a
+producer address, predicate, effect or termination cannot move.
 
-The VPlan path supports single-block loops with an exact constant count or an
-exact runtime count with a proven constant upper bound. It retains the zero-trip
-entry guard and uses the actual count for both stages and their scalar
-remainders. It requires interleave count one, no user-specified vectorization VF
-and no vectorized epilogue. Live-outs must be supported reduction results.
-Simple consecutive stores require proven independence from other accesses and
-nonoverlapping store iterations; runtime alias checks and additional SCEV
-predicates are unsupported. Unsupported candidates fall back to normal
-vectorization. Minimum reduction count and accumulator pressure overflow are
-not prerequisites. Chain depth is a cut preference, and each stage selects its
-VF independently using legality and register-pressure estimates. No separate FP
-cost gate or pressure-improvement requirement applies.
+Consumer-only loads can move, and stable shared loads can be reread. The proof
+checks every producer writer against the underlying memory object, covering all
+iterations reordered by the chunk schedule. Unknown aliases are rejected; there
+is no new noalias assumption or runtime alias versioning. Conditional loads stay
+on their original paths. Existing result buffers can replace scratch when stores
+use a nonwrapping canonical IV, are injective, and are disjoint from other writers.
+Computed shared values cross through private scratch; private suffixes remain in
+the consumer. Constants, addresses and affine integer IVs are reconstructed.
 
-For supported VPlan FP sums, `-vplan-reduction-fission-allow-fp-reordering`
-permits reassociation in the private fission candidate. Only the sum's adds and
-final reduction gain `reassoc`; it grants no producer reassociation, `nnan`,
-`ninf`, `nsz`, `contract` or reciprocal approximation. Initial values are used
-once, with a `-0.0` FP-add identity when `nsz` is absent. Reassociation can change
-rounding, cancellation and overflow results; NaN payload equality is not
-promised. Strict/constrained FP, FP inductions and accumulator-dependent FMA
-decomposition remain excluded. The existing `-hints-allow-reordering` policy is
-unchanged.
+Raw input snapshots cannot cross through scratch, including cast, select, PHI,
+freeze and identity-operation wrappers. If a safe original read is impossible,
+the analysis retries a computed-result boundary or rejects. Recomputed freezes
+are prohibited because repeated freezes can choose different values. Scratch
+allocation is bounded by both the byte budget and pointer index representation.
+Traffic remarks distinguish static original access widths, potential extra reads,
+reused buffers, and scratch bytes. Nested and conditional execution multiplicities
+vary, and opaque calls’ dynamic access volume is not estimated; these counts do
+not estimate cache traffic or runtime.
 
-The hidden options below keep their defaults. Except for the two `enable-`
-options, names in the table have the prefix `vplan-reduction-fission-`.
+Producer calls need no vector mapping or `speculatable` attribute. They must be
+ordinary non-tail calls, `nounwind` and `willreturn`, without bundles, convergence,
+returns-twice, strict FP or other special control constraints. Memory-effect calls
+also require `nosync`, `nofree`, `nocallback`, and no inaccessible-memory effects.
+The original call count, condition and order are retained. Calls are not cloned
+into the consumer. No contracts are inferred from library or helper names.
 
-| Option | Default | Behavior |
+Irreducible outer control, multiple outer completion exits, EH, volatile/atomic
+accesses, strict/constrained FP, nonreconstructible state inputs and unsupported
+call effects are rejected with specific reasons. Analysis has a 4096-step budget per candidate, with at most two state-slice candidates.
+There is no minimum reduction count, producer depth, register-pressure gate,
+whole-loop vector-legality prerequisite or speedup requirement.
+
+By default FP flags, operand order, seeds and update order are preserved. Explicit
+`-scalar-fission-allow-fp-reordering` adds only `reassoc` to recognized consumer FP
+sums, including simple conditional sums. It adds no `nnan`, `ninf`, `nsz`,
+`contract` or reciprocal permission. Subtraction, compensated updates,
+accumulator-dependent FMA, producer expressions and unrelated loops are unchanged.
+
+| Option | Default | Meaning |
 | --- | --- | --- |
-| `enable-vplan-reduction-fission` | `false` | Enable both fission paths. |
-| `enable-scalar-reduction-fission` | `true` | Try scalar splitting when fission is enabled; `false` isolates VPlan fission. |
-| `min-chain-depth` | `8` | Prefer VPlan cuts at this producer depth; shorter producers remain eligible. |
-| `combine-add-contributions` | `true` | Try combining eligible integer-add contributions when it saves scratch. |
-| `force-producer-vf` | `0` | Force the VPlan producer scalable VF; `0` means unspecified. Use with the accumulator option. |
-| `force-accumulator-vf` | `0` | Force the VPlan consumer scalable VF; `0` means unspecified. Use with the producer option. |
-| `max-scratch-bytes` | `65536` | Scratch limit for both paths; scalar splitting uses chunking when possible. |
-| `max-duplicated-recipes` | `8` | Limit duplicated recipes in a VPlan partition. |
-| `max-scalable-vf-multiplier` | `8` | Bound VPlan scalable VF search expansion relative to the register-width/data-width VF. |
-| `allow-fp-reordering` | `false` | Allow reassociation only for supported VPlan fission FP sums. |
-| `min-reductions` | `4` | Accepted for compatibility; currently has no effect on transformation selection. |
-| `min-pressure-percent` | `100` | Accepted for compatibility; currently has no effect on transformation selection. |
+| `enable-scalar-fission` | false | Enable default-pipeline integration. |
+| `scalar-fission-early` | false | Use the position before full unrolling. |
+| `scalar-fission-max-scratch-bytes` | 65536 | Static scratch byte budget per split. |
+| `scalar-fission-chunk-capacity` | 1024 | Maximum completed iterations per chunk; the byte budget may lower it. |
+| `scalar-fission-allow-fp-reordering` | false | Consumer FP sum reassociation. |
+| `scalar-fission-producer-vf`, `scalar-fission-consumer-vf` | 0 | Independent VF requests; 0 is automatic, fixed 1 is scalar. |
+| `scalar-fission-producer-scalable`, `scalar-fission-consumer-scalable` | false | Interpret the respective VF as scalable, including vscale x 1. |
+| `scalar-fission-producer-interleave`, `scalar-fission-consumer-interleave` | 0 | Independent interleave requests; 0 is automatic. |
 
-Forced VFs are scalable lane counts, not LMUL values. Specify both as valid
-powers of two. They must satisfy stage legality, scratch and duplication limits
-and be available in the VF search. They do not force the normal vectorizer's VF
-for scalar-split loops. For example, to inspect only VPlan fission:
+Stage requests use ordinary LLVM loop metadata. Normal LV decides legality,
+tails and code generation; fission does not construct vector plans. Stage remarks
+report actual VF/IC separately from requests. An unsupported forced pair may
+fall back or be ignored, and must be classified as unavailable.
 
-```sh
-opt input.ll -S -o output.ll -passes=loop-vectorize \
-  -mtriple=riscv64 -mattr=+v,+zvl128b -force-vector-interleave=1 \
-  -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-  -vplan-reduction-fission-force-producer-vf=2 \
-  -vplan-reduction-fission-force-accumulator-vf=4
-```
+`enable-vplan-reduction-fission`, `vplan-reduction-fission-max-scratch-bytes` and
+`vplan-reduction-fission-allow-fp-reordering` remain aliases. The old
+`vplan-reduction-fission-force-producer-vf` and `...-force-accumulator-vf` flags
+now request scalable metadata on scalar stages independently. Disabling
+`enable-scalar-reduction-fission` to isolate VPlan fission is an error: that path
+was removed. Obsolete recipe limits, VF search, pressure/count/depth options and
+contribution combining produce migration diagnostics and never become gates.
 
-`-pass-remarks=vplan-reduction-fission` reports selection, scratch capacity and
-traffic, and stage VFs. `-pass-remarks-missed=vplan-reduction-fission` reports
-rejections; `-pass-remarks-analysis=vplan-reduction-fission` includes scalar bound
-evidence. Remarks retain the original loop's source attribution. Assertions
-builds also support `-debug-only=vplan-reduction-fission`.
+Use `-pass-remarks=scalar-fission` and `-pass-remarks-missed=scalar-fission` for
+selection and rejection evidence. Stage provenance prevents repeated splitting
+and is propagated through normal vectorization.
 
-`ScalarReductionFission.cpp` separates read-only legality and storage analysis
-from IR emission. The adjacent `VPlanReductionFission*` files implement VPlan
-orchestration, dependency/pressure analysis, stage construction and optional FP
-reassociation. Regression tests cover both paths, including repeated LV,
-chunking, retained state, live-outs and rejection without partial transformation.
-`llvm/utils/check-reduction-fission.py` compares original and transformed IR on
-the host using fixed-vscale specializations. Default EVL/VP output has separate
-RVV code-generation and machine-verification checks; host execution uses labeled
-scalar-remainder variants and rejects unsupported EVL/VP specialization. Host
-comparisons and independent oracles do not establish RVV target execution or
-performance improvements.
+`llvm/utils/check-scalar-fission.py` executes original and transformed host IR
+against independent oracles, then machine-verifies RVV code separately.
+`llvm/utils/scalar-fission-sweep.py` changes only metadata on a frozen split IR
+and records actual VF/IC and unavailable pairs. Its optional external benchmark
+command saves execution results; without one, performance remains unmeasured.
+`llvm/utils/evaluate-scalar-fission.py` checks the pinned 117-case corpus, matches
+exact target-loop locations and compares independent original-LV, Early and Late
+runs under both FP policies. The sweep and corpus tools require PyYAML.
 
 ### Diagnostics
 

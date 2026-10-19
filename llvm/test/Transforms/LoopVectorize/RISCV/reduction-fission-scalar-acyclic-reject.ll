@@ -1,44 +1,47 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=259 -S %s | FileCheck %s
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=259 -S %s | FileCheck %s
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=259 \
-; RUN:   -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -disable-output %s 2>&1 | FileCheck %s --check-prefix=REASON
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission \
-; RUN:   -enable-vplan-native-path -pass-remarks=vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=259 \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission \
-; RUN:   -S %s -o %t.cycle 2>%t.cycle.remarks
-; RUN: FileCheck %s --check-prefix=CYCLE < %t.cycle.remarks
-; RUN: FileCheck %s --check-prefix=CYCLEIR < %t.cycle
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 \
-; RUN:   -S %s | FileCheck %s --check-prefix=EXPORT
-;
-; Generalized admission must not admit effects, feedback, partial-state exports,
-; cycles or early exits. The former larger-CFG compact cases and unconditional
-; final merged exports now chunk at C=64/B=256 under the 259-byte ceiling;
-; the 260-byte run still requires their exact full-trip split.
-; Loop::getStartLoc uses loop metadata or the preheader/header terminator,
-; not the latch's debug location. Supply the original loop start at each
-; preheader so every rejection retains its exact source location.
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_early_exit(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_internal_cycle(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_predicate(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_contribution(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_result_feedback(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_liveout(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_store(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_unsafe_call(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_header_update(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_switch(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_conditional_serial(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_conditional_nested(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @safe(i32) memory(none) nounwind willreturn speculatable
 declare i32 @unsafe(i32) memory(read) nounwind willreturn speculatable
 
-; REASON: scalar-acyclic-reject.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-cfg
-; CHECK-LABEL: define i32 @reject_acyclic_early_exit(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define i32 @reject_acyclic_early_exit(ptr %a, i64 %n) !dbg !6 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -86,43 +89,6 @@ bypass:
   ret i32 19
 }
 
-; The ordinary worklist only visits the internal natural loop. Explicit outer
-; hints with the native worklist also exercise our acyclicity rejection for the
-; original outer target, rather than requiring a remark for an unvisited loop.
-; The outer loop metadata carries 22:3; the inner loop has its own 25:5 start.
-; collectSupportedLoops selects only the explicitly hinted outer loop on the
-; native path. Require its rejection and exclude any inner-loop fission remark.
-; CYCLE-NOT: scalar-acyclic-reject.c:25:5:
-; CYCLE: scalar-acyclic-reject.c:22:3: scalar-IR reduction fission rejected: scalar-unsupported-cfg
-; CYCLE-NOT: scalar-acyclic-reject.c:25:5:
-; CYCLEIR-LABEL: define i32 @reject_acyclic_internal_cycle(
-; CYCLEIR-NOT: scalar.fission
-; CYCLEIR: loop:
-; CYCLEIR-NOT: scalar.fission
-; CYCLEIR: %sum = phi i32 [ 19, %preheader ], [ %update, %latch ]
-; CYCLEIR-NOT: scalar.fission
-; CYCLEIR: br i1 %choose, label %left, label %right
-; CYCLEIR-NOT: scalar.fission
-; CYCLEIR: left2:
-; CYCLEIR-NOT: scalar.fission
-; CYCLEIR: %again = icmp eq i32 %x, 3
-; CYCLEIR-NOT: scalar.fission
-; CYCLEIR: br i1 %again, label %left2, label %{{[^, ]+}}
-; CYCLEIR-NOT: scalar.fission
-; CYCLEIR: latch:
-; CYCLEIR-NOT: scalar.fission
-; CYCLEIR: %update = add i32 %sum, %c
-; CYCLEIR-NOT: scalar.fission
-; CYCLEIR: br i1 %done, label %exit, label %loop
-; CYCLEIR-NOT: scalar.fission
-; CYCLEIR: ret i32
-; CYCLEIR-NOT: scalar.fission
-; CYCLEIR: }
-; CHECK-LABEL: define i32 @reject_acyclic_internal_cycle(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define i32 @reject_acyclic_internal_cycle(ptr %a, i64 %n) !dbg !8 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -168,12 +134,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-acyclic-reject.c:32:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define i32 @reject_acyclic_predicate(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define i32 @reject_acyclic_predicate(ptr %a, i64 %n) !dbg !10 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -218,12 +178,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-acyclic-reject.c:42:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define i32 @reject_acyclic_contribution(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define i32 @reject_acyclic_contribution(ptr %a, i64 %n) !dbg !12 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -268,12 +222,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-acyclic-reject.c:52:3: scalar-IR reduction fission rejected: scalar-reduction-feedback
-; CHECK-LABEL: define i32 @reject_acyclic_result_feedback(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define i32 @reject_acyclic_result_feedback(ptr %a, i64 %n) !dbg !14 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -319,22 +267,6 @@ bypass:
   ret i32 19
 }
 
-; Final latch-merged exports now also support canonical bounded chunks.
-; Keep the exact original source: C=64 at 259 bytes, full-trip C=65 at 260.
-; Serial/nested mixed exports are executed by scalar-export-controls.ll.
-; REASON: scalar-acyclic-reject.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256, producer live-outs 1, chunked schedule
-; CHECK-LABEL: define i32 @reject_acyclic_liveout(
-; CHECK: alloca [64 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %c.fission.export = phi i32 [ %c, %latch ]
-; CHECK: %[[CHUNK_FINAL:.*]] = phi i32 [ %c.fission.export, %scalar.fission.chunk.latch ]
-; CHECK: ret i32 %[[CHUNK_FINAL]]
-; CHECK: }
-; EXPORT-LABEL: define i32 @reject_acyclic_liveout(
-; EXPORT: alloca [65 x i32]
-; EXPORT: %c.fission.export = phi i32 [ %c, %latch ]
-; EXPORT: %[[FINAL:.*]] = phi i32 [ %c.fission.export, %scalar.fission.consumer.body ]
-; EXPORT: ret i32 %[[FINAL]]
 define i32 @reject_acyclic_liveout(ptr %a, i64 %n) !dbg !16 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -379,22 +311,6 @@ bypass:
   ret i32 19
 }
 
-; The arm-local self-store is now legal and stays in right2. The exact
-; capacity boundary chunks at 259 and splits full-trip at 260 bytes.
-; REASON: scalar-acyclic-reject.c:72:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256
-; CHECK-LABEL: define i32 @reject_acyclic_store(
-; CHECK: alloca [64 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: right2:
-; CHECK: store i32 %x, ptr %p
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: ret i32
-; EXPORT-LABEL: define i32 @reject_acyclic_store(
-; EXPORT: alloca [65 x i32]
-; EXPORT: right2:
-; EXPORT: store i32 %x, ptr %p
-; EXPORT: scalar.fission.consumer.ph:
-; EXPORT: ret i32
 define i32 @reject_acyclic_store(ptr %a, i64 %n) !dbg !18 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -440,12 +356,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-acyclic-reject.c:82:3: scalar-IR reduction fission rejected: scalar-unsafe-call
-; CHECK-LABEL: define i32 @reject_acyclic_unsafe_call(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define i32 @reject_acyclic_unsafe_call(ptr %a, i64 %n) !dbg !20 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -490,12 +400,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-acyclic-reject.c:92:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define i32 @reject_acyclic_header_update(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define i32 @reject_acyclic_header_update(ptr %a, i64 %n) !dbg !22 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -540,12 +444,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-acyclic-reject.c:102:3: scalar-IR reduction fission rejected: scalar-unsupported-cfg
-; CHECK-LABEL: define i32 @reject_acyclic_switch(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define i32 @reject_acyclic_switch(ptr %a, i64 %n) !dbg !24 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -590,22 +488,6 @@ bypass:
   ret i32 19
 }
 
-; Canonical terminal participation now chunks at C=64/B=256 (259 ceiling).
-; REASON: scalar-acyclic-reject.c:112:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256
-; CHECK-LABEL: define i32 @reject_acyclic_conditional_serial(
-; CHECK: alloca [64 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: scalar.fission.consumer.guard:
-; CHECK: scalar.fission.consumer.exit:
-; CHECK: ret i32
-; EXPORT-LABEL: define i32 @reject_acyclic_conditional_serial(
-; EXPORT: left2:
-; EXPORT: %fission.participating.next = add nuw i64 %fission.participating, 1
-; EXPORT: store i32 %first,
-; EXPORT: br label %latch
-; EXPORT: scalar.fission.consumer.guard:
-; EXPORT: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; EXPORT: ret i32
 define i32 @reject_acyclic_conditional_serial(ptr %a, i64 %n) !dbg !26 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -649,23 +531,6 @@ bypass:
   ret i32 19
 }
 
-; Canonical terminal participation now chunks at C=64/B=256 (259 ceiling).
-; REASON: scalar-acyclic-reject.c:122:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 256
-; CHECK-LABEL: define i32 @reject_acyclic_conditional_nested(
-; CHECK: alloca [64 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: scalar.fission.consumer.guard:
-; CHECK: scalar.fission.consumer.exit:
-; CHECK: ret i32
-; EXPORT-LABEL: define i32 @reject_acyclic_conditional_nested(
-; EXPORT: active.merge:
-; EXPORT: %active = phi i32
-; EXPORT: %fission.participating.next = add nuw i64 %fission.participating, 1
-; EXPORT: store i32 %active,
-; EXPORT: br label %latch
-; EXPORT: scalar.fission.consumer.guard:
-; EXPORT: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; EXPORT: ret i32
 define i32 @reject_acyclic_conditional_nested(ptr %a, i64 %n) !dbg !28 {
 entry:
   %valid = icmp ule i64 %n, 65

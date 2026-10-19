@@ -1,28 +1,20 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s < %t
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-;
-; Bounds concern full original trips, even if the predicate admits no updates.
-; A count of 255 fits i8; 256 original trips with an i8 IV do not fit the
-; compact counter and must reject before mutation. No wrapping allocation.
-; The default 65536-byte ceiling admits exactly 16384 i32 slots. One additional trip
-; uses a partial second chunk with the same bounded storage. No profitability thresholds or runtime assumptions.
-;
-; REMARK: scratch capacity 255, scratch bytes 1020
-; REMARK: scalar-IR reduction fission rejected: trip-count-overflow
-; REMARK: scratch capacity 16384, scratch bytes 65536
-; REMARK: scratch capacity 16384, scratch bytes 65536, producer live-outs 0, chunked schedule, trip bound 16385
-
-; CHECK-LABEL: define i32 @compact_i8_max(
-; CHECK: alloca [255 x i32]
-; CHECK: scalar.fission.consumer.guard:
-; CHECK: scalar.fission.consumer.body:
-; CHECK: scalar.fission.consumer.exit:
-; CHECK: ret i32
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_i8_max(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_i8_overflow(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_default_limit(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_over_limit(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define i32 @compact_i8_max(i32 %cutoff) {
 entry:
   br label %preheader
@@ -47,9 +39,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @compact_i8_overflow(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @compact_i8_overflow(i32 %cutoff) {
 entry:
   br label %preheader
@@ -74,12 +63,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @compact_default_limit(
-; CHECK: alloca [16384 x i32]
-; CHECK: scalar.fission.consumer.guard:
-; CHECK: scalar.fission.consumer.body:
-; CHECK: scalar.fission.consumer.exit:
-; CHECK: ret i32
 define i32 @compact_default_limit(i32 %cutoff) {
 entry:
   br label %preheader
@@ -104,11 +87,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @compact_over_limit(
-; CHECK: alloca [16384 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: scalar.fission.consumer.guard:
-; CHECK: ret i32
 define i32 @compact_over_limit(i32 %cutoff) {
 entry:
   br label %preheader

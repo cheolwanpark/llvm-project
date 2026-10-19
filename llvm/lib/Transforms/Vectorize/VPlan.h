@@ -413,10 +413,6 @@ public:
   /// SubclassID field of the VPRecipeBase objects. They are used for concrete
   /// type identification.
   using VPRecipeTy = enum : unsigned char {
-    VPFissionLiveOutSC,
-    VPFissionScalarIntrinsicSC,
-    VPFissionScratchLoadSC,
-    VPFissionScratchStoreSC,
     VPBranchOnMaskSC,
     VPDerivedIVSC,
     VPExpandSCEVSC,
@@ -625,8 +621,6 @@ public:
 
   static inline bool classof(const VPRecipeBase *R) {
     switch (R->getVPRecipeID()) {
-    case VPRecipeBase::VPFissionScratchLoadSC:
-    case VPRecipeBase::VPFissionScalarIntrinsicSC:
     case VPRecipeBase::VPDerivedIVSC:
     case VPRecipeBase::VPExpandSCEVSC:
     case VPRecipeBase::VPExpressionSC:
@@ -656,8 +650,6 @@ public:
     case VPRecipeBase::VPWidenLoadEVLSC:
     case VPRecipeBase::VPWidenLoadSC:
       return true;
-    case VPRecipeBase::VPFissionLiveOutSC:
-    case VPRecipeBase::VPFissionScratchStoreSC:
     case VPRecipeBase::VPBranchOnMaskSC:
     case VPRecipeBase::VPInterleaveEVLSC:
     case VPRecipeBase::VPInterleaveSC:
@@ -1130,8 +1122,7 @@ struct VPRecipeWithIRFlags : public VPSingleDefRecipe, public VPIRFlags {
         VPIRFlags(Flags) {}
 
   static inline bool classof(const VPRecipeBase *R) {
-    return R->getVPRecipeID() == VPRecipeBase::VPFissionScalarIntrinsicSC ||
-           R->getVPRecipeID() == VPRecipeBase::VPBlendSC ||
+    return R->getVPRecipeID() == VPRecipeBase::VPBlendSC ||
            R->getVPRecipeID() == VPRecipeBase::VPInstructionSC ||
            R->getVPRecipeID() == VPRecipeBase::VPWidenSC ||
            R->getVPRecipeID() == VPRecipeBase::VPWidenGEPSC ||

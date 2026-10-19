@@ -1,38 +1,11 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-force-producer-vf=8 -vplan-reduction-fission-force-accumulator-vf=2 \
-; RUN:   -S %s -o %t
-; RUN: FileCheck %s < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-force-producer-vf=8 -vplan-reduction-fission-force-accumulator-vf=2 \
-; RUN:   -vplan-reduction-fission-allow-fp-reordering -S %s -o %t.relaxed
-; RUN: FileCheck %s --check-prefix=RELAXED < %t.relaxed
-;
-; Exercise all five extensions together. The execution helper compares this
-; kernel's reductions, complete output arrays and surrounding canaries.
-; CHECK-LABEL: define void @combined(
-; CHECK: vector.fission.producer.body:
-; CHECK: phi <vscale x 8 x i32>
-; CHECK: scalar.fission.producer.body:
-; CHECK: mul i32 %step,
-; CHECK: vector.fission.accumulator.body:
-; CHECK: store <vscale x 2 x i32>
-; CHECK: call double @llvm.vector.reduce.fadd
-; CHECK: scalar.fission.accumulator.body:
-; CHECK: store i32
-; CHECK: fadd double
-; RELAXED-LABEL: define void @combined(
-; RELAXED: vector.fission.producer.body:
-; RELAXED: fmul <vscale x 8 x double>
-; RELAXED: vector.fission.accumulator.body:
-; RELAXED: fadd reassoc <vscale x 2 x double>
-; RELAXED: scalar.fission.accumulator.body:
-; RELAXED: fadd reassoc double
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @combined(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @combined(ptr noalias readonly %a, ptr noalias %out, i64 %n, ptr noalias %fp, double %start, ptr noalias readonly %fpinput, ptr noalias %dst, ptr noalias %dst2, i32 %step) {
 entry:
   %valid = icmp ule i64 %n, 1024

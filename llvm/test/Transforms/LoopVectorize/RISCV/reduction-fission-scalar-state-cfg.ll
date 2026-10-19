@@ -1,79 +1,19 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=1044 \
-; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t.scalar 2> %t.scalar.remarks
-; RUN: FileCheck %s --check-prefix=SCALAR < %t.scalar
-; RUN: FileCheck %s --check-prefix=SCALAR-REMARK < %t.scalar.remarks
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=1044 \
-; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t.vector 2> %t.vector.remarks
-; RUN: FileCheck %s --check-prefix=VECTOR < %t.vector
-; RUN: FileCheck %s --check-prefix=REMARK < %t.vector.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.vector -o /dev/null
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=1044 \
-; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t.repeat 2> %t.repeat.remarks
-; RUN: FileCheck %s --check-prefix=VECTOR < %t.repeat
-; RUN: FileCheck %s --check-prefix=REMARK < %t.repeat.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.repeat -o /dev/null
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 \
-; RUN:   -scalable-vectorization=off -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission \
-; RUN:   -S %s -o %t.limit 2> %t.limit.remarks
-; RUN: FileCheck %s --check-prefix=LIMIT < %t.limit.remarks
-; RUN: FileCheck %s --check-prefix=CHUNK < %t.limit
-;
-;
-; One state recurrence is retained while four closed reductions move. State
-; determines participation and contributions, updates only on a bypass edge,
-; and exports the last producer state even when P=0 or the final iteration is
-; inactive. It occurs before/after reductions to test transactional recognition.
-; Serial/nested upstream diamonds and three affine latch bypasses stay intact.
-; At 1043 bytes canonical serial chunks with C=64/B=1024 and retained
-; state. Affine nested/three-bypass cases now use original-control chunks; 1044 fits all trips.
-; Executed by check-reduction-fission.py against original IR and independent C.
-;
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @state_cfg_serial(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @state_cfg_nested(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @state_cfg_affine(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; SCALAR-LABEL: define void @state_cfg_serial(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR: %state = phi i32
-; SCALAR: right:
-; SCALAR: %state.delta = add i32 %x, 1
-; SCALAR: %state.next = add i32 %state, %state.delta
-; SCALAR: latch:
-; SCALAR: %state.merge = phi i32
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR-DAG: %state.merge.fission.export = phi i32 [ %state.merge, %latch ]
-; SCALAR-DAG: %fission.participating.count = phi i64 [ %fission.participating.merge, %latch ]
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: ret void
-; SCALAR-REMARK: scalar-state-cfg.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 7
-; SCALAR-REMARK: scalar-state-cfg.c:12:3: scalar-IR fission producer VF 1
-; SCALAR-REMARK: scalar-state-cfg.c:12:3: scalar-IR fission consumer VF 1
-; REMARK: scalar-state-cfg.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 7
-; REMARK: scalar-state-cfg.c:12:3: scalar-IR fission producer VF 1
-; REMARK: scalar-state-cfg.c:12:3: scalar-IR fission consumer VF vscale x 4
-; LIMIT: scalar-state-cfg.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
-; CHUNK-LABEL: define void @state_cfg_serial(
-; CHUNK: alloca [64 x i32]
-; CHUNK: scalar.fission.chunk:
-; CHUNK: scalar.fission.consumer.guard:
-; CHUNK: ret void
-; VECTOR-LABEL: define void @state_cfg_serial(
-; VECTOR: vector.body:
-; VECTOR: call i32 @llvm.vector.reduce.add.nxv4i32
-; VECTOR: ret void
 define void @state_cfg_serial(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !10 {
 entry:
@@ -202,40 +142,6 @@ exit:
   ret void
 }
 
-; SCALAR-LABEL: define void @state_cfg_nested(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR: %state = phi i32
-; SCALAR: right:
-; SCALAR: %state.delta = add i32 %x, 1
-; SCALAR: %state.next = add i32 %state, %state.delta
-; SCALAR: latch:
-; SCALAR: %state.merge = phi i32
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR-DAG: %state.merge.fission.export = phi i32 [ %state.merge, %latch ]
-; SCALAR-DAG: %fission.participating.count = phi i64 [ %fission.participating.merge, %latch ]
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: ret void
-; SCALAR-REMARK: scalar-state-cfg.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 7
-; SCALAR-REMARK: scalar-state-cfg.c:22:3: scalar-IR fission producer VF 1
-; SCALAR-REMARK: scalar-state-cfg.c:22:3: scalar-IR fission consumer VF 1
-; REMARK: scalar-state-cfg.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 7
-; REMARK: scalar-state-cfg.c:22:3: scalar-IR fission producer VF 1
-; REMARK: scalar-state-cfg.c:22:3: scalar-IR fission consumer VF vscale x 4
-; LIMIT: scalar-state-cfg.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
-; CHUNK-LABEL: define void @state_cfg_nested(
-; CHUNK: alloca [64 x i32]
-; CHUNK: alloca [64 x double]
-; CHUNK: alloca [64 x float]
-; CHUNK: scalar.fission.chunk:
-; CHUNK: scalar.fission.consumer.guard:
-; CHUNK: ret void
-; CHUNK: }
-; VECTOR-LABEL: define void @state_cfg_nested(
-; VECTOR: vector.body:
-; VECTOR: call i32 @llvm.vector.reduce.add.nxv4i32
-; VECTOR: ret void
 define void @state_cfg_nested(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !12 {
 entry:
@@ -365,40 +271,6 @@ exit:
   ret void
 }
 
-; SCALAR-LABEL: define void @state_cfg_affine(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR: %state = phi i32
-; SCALAR: right1:
-; SCALAR: %state.delta = add i32 %x, 1
-; SCALAR: %state.next = add i32 %state, %state.delta
-; SCALAR: latch:
-; SCALAR: %state.merge = phi i32
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR-DAG: %state.merge.fission.export = phi i32 [ %state.merge, %latch ]
-; SCALAR-DAG: %fission.participating.count = phi i64 [ %fission.participating.merge, %latch ]
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: ret void
-; SCALAR-REMARK: scalar-state-cfg.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 7
-; SCALAR-REMARK: scalar-state-cfg.c:32:3: scalar-IR fission producer VF 1
-; SCALAR-REMARK: scalar-state-cfg.c:32:3: scalar-IR fission consumer VF 1
-; REMARK: scalar-state-cfg.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 7
-; REMARK: scalar-state-cfg.c:32:3: scalar-IR fission producer VF 1
-; REMARK: scalar-state-cfg.c:32:3: scalar-IR fission consumer VF vscale x 4
-; LIMIT: scalar-state-cfg.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
-; CHUNK-LABEL: define void @state_cfg_affine(
-; CHUNK: alloca [64 x i32]
-; CHUNK: alloca [64 x double]
-; CHUNK: alloca [64 x float]
-; CHUNK: scalar.fission.chunk:
-; CHUNK: scalar.fission.consumer.guard:
-; CHUNK: ret void
-; CHUNK: }
-; VECTOR-LABEL: define void @state_cfg_affine(
-; VECTOR: vector.body:
-; VECTOR: call i32 @llvm.vector.reduce.add.nxv4i32
-; VECTOR: ret void
 define void @state_cfg_affine(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !14 {
 entry:

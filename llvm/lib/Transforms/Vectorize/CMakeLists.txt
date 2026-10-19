@@ -25,13 +25,8 @@ add_llvm_component_library(LLVMVectorize
   SandboxVectorizer/VecUtils.cpp
   SLPVectorizer/SLPUtils.cpp
   SLPVectorizer.cpp
-  ScalarReductionFission.cpp
   Vectorize.cpp
   VectorCombine.cpp
-  VPlanReductionFission.cpp
-  VPlanReductionFissionAnalysis.cpp
-  VPlanReductionFissionFPReordering.cpp
-  VPlanReductionFissionTransforms.cpp
   VPlan.cpp
   VPlanAnalysis.cpp
   VPlanConstruction.cpp

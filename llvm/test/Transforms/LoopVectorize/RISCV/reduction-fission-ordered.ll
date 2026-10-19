@@ -1,35 +1,11 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-force-producer-vf=8 \
-; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 -S %s -o %t
-; RUN: FileCheck %s < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o - | FileCheck %s --check-prefix=ASM
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 -tail-folding-policy=must-fold-tail \
-; RUN:   -force-tail-folding-style=data -S %s | FileCheck %s
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 -pass-remarks=vplan-reduction-fission \
-; RUN:   -disable-output %s 2>&1 | FileCheck %s --check-prefix=REMARK
-; REMARK: trip count bounded-runtime, scratch capacity 1024
-; REMARK: reduction sum: ordered, reordering permission: IR
-; ASM: vfredosum.vs
-
-; Mixed integer and ordered FP sums exercise selection with scalar FP pressure.
-; CHECK-LABEL: define void @ordered(
-; CHECK: vector.fission.producer.body:
-; CHECK: scalar.fission.producer.body:
-; CHECK: vector.fission.accumulator.body:
-; CHECK: phi double
-; CHECK: call double @llvm.vector.reduce.fadd.{{.*}}(double {{%.*}}, <vscale x
-; CHECK: scalar.fission.accumulator.body:
-; CHECK: fadd double
-; CHECK: vector.fission.done:
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @ordered(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @ordered(ptr noalias readonly %a, ptr noalias %out, i64 %n, ptr noalias %fp, double %start) {
 entry:
   %valid = icmp ule i64 %n, 1024

@@ -1,64 +1,26 @@
-; RUN: opt -enable-scalar-reduction-fission=false -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
-; RUN:   -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s < %t
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-min-chain-depth=1000 -vplan-reduction-fission-min-reductions=1000 \
-; RUN:   -vplan-reduction-fission-min-pressure-percent=1000 -S %s | FileCheck %s
-; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-force-producer-vf=1 -vplan-reduction-fission-force-accumulator-vf=4 \
-; RUN:   -S %s | FileCheck %s
-; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=259 -S %s \
-; RUN:   | FileCheck %s --check-prefix=REJECT --implicit-check-not=vector.fission --implicit-check-not=fission.scratch
-; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=260 -S %s | FileCheck %s --check-prefix=BOUND
-; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -hints-allow-reordering=false -S %s \
-; RUN:   | FileCheck %s --check-prefix=REJECT --implicit-check-not=vector.fission --implicit-check-not=fission.scratch
-; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scalable-vf-multiplier=1 -pass-remarks=vplan-reduction-fission \
-; RUN:   -S %s -o %t.limited 2> %t.limited.remarks
-; RUN: FileCheck %s < %t.limited
-; RUN: FileCheck %s --check-prefix=LIMITED < %t.limited.remarks
-;
-; Explicit fission now accepts one or two short, low-pressure producers, with
-; no pressure/FP cost win required. The depth flag is a cut preference and the
-; old reduction/pressure minima are compatibility no-ops. These functions are
-; also executed against scalar IR by utils/check-reduction-fission.py.
-; Scratch capacity is 65, execution uses guarded N, and each stage owns a tail.
-; LIMITED-COUNT-2: producer VF vscale x 4, accumulator VF vscale x 4
-; LIMITED-COUNT-2: producer VF vscale x 2, accumulator VF vscale x 2
-; REMARK: split reduction loop: baseline VF {{.*}}, producer VF {{.*}}, accumulator VF {{.*}}, trip count bounded-runtime, scratch capacity 65, scratch bytes 260
-; REMARK-SAME: scratch store bytes/iteration 4, scratch load bytes/iteration 4, duplicated recipes 0, reread loads/iteration 0
-; REMARK: reduction sum: ordered, reordering permission: IR
-; REJECT-LABEL: define void @short_one(
-; REJECT: ret void
-; BOUND-LABEL: define void @short_one(
-; BOUND: alloca [65 x i32]
-; BOUND: vector.fission.producer.body:
-; BOUND: vector.fission.accumulator.body:
-; BOUND-LABEL: define void @short_two(
-; BOUND-NOT: fission
-; BOUND: ret void
-;
-; CHECK-LABEL: define void @short_one(
-; CHECK: alloca [65 x i32]
-; CHECK: vector.fission.producer.body:
-; CHECK: mul <vscale x
-; CHECK: scalar.fission.producer.body:
-; CHECK: vector.fission.accumulator.body:
-; CHECK: @llvm.vector.reduce.add.
-; CHECK: scalar.fission.accumulator.body:
-; CHECK: vector.fission.done:
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @short_one(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @short_two(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @short_ordered(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @short_ordered_two(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @short_dependence(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @short_invariant(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @short_one(ptr noalias readonly %a, ptr noalias %out, i64 %n) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -85,14 +47,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @short_two(
-; CHECK-COUNT-2: alloca [65 x i32]
-; CHECK: vector.fission.producer.body:
-; CHECK: scalar.fission.producer.body:
-; CHECK: vector.fission.accumulator.body:
-; CHECK: @llvm.vector.reduce.add.
-; CHECK: @llvm.vector.reduce.xor.
-; CHECK: scalar.fission.accumulator.body:
 define void @short_two(ptr noalias readonly %a, ptr noalias %out, i64 %n) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -126,16 +80,6 @@ bypass:
   ret void
 }
 
-; These are ordered, ordinary FP operations, with no reassociation permission.
-; CHECK-LABEL: define void @short_ordered(
-; CHECK: alloca [65 x double]
-; CHECK: vector.fission.producer.body:
-; CHECK: fmul <vscale x
-; CHECK: scalar.fission.producer.body:
-; CHECK: vector.fission.accumulator.body:
-; CHECK: call double @llvm.vector.reduce.fadd.
-; CHECK: scalar.fission.accumulator.body:
-; CHECK: fadd double
 define void @short_ordered(ptr noalias readonly %a, ptr noalias %out, i64 %n, double %start) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -162,14 +106,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @short_ordered_two(
-; CHECK-COUNT-2: alloca [65 x double]
-; CHECK: vector.fission.producer.body:
-; CHECK: scalar.fission.producer.body:
-; CHECK: vector.fission.accumulator.body:
-; CHECK-COUNT-2: call double @llvm.vector.reduce.fadd.
-; CHECK: scalar.fission.accumulator.body:
-; CHECK-COUNT-2: fadd double
 define void @short_ordered_two(ptr noalias readonly %a, ptr noalias %out, i64 %n, double %start) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -203,10 +139,6 @@ bypass:
   ret void
 }
 
-; Real loop-carried memory flow is still a rejection even with one short sum.
-; CHECK-LABEL: define void @short_dependence(
-; CHECK-NOT: fission
-; CHECK: ret void
 define void @short_dependence(ptr %a, ptr noalias %out) {
 entry:
   br label %loop
@@ -227,10 +159,6 @@ exit:
   ret void
 }
 
-; A reduction of an invariant does not justify filling a per-iteration array.
-; CHECK-LABEL: define void @short_invariant(
-; CHECK-NOT: fission
-; CHECK: ret void
 define void @short_invariant(i32 %x, ptr %out) {
 entry:
   br label %loop

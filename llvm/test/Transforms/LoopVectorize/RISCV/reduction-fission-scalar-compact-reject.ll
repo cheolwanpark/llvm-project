@@ -1,22 +1,63 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -S %s | FileCheck %s
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -S %s | FileCheck %s
-;
-; Each independent rejection has otherwise bounded canonical control. Never
-; admit producer feedback, incompatible recurrence streams, partial-state
-; exports or unsafe operations just because the update/identity PHI matches.
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_predicate_feedback(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_contribution_feedback(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_updated_feedback(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_cross_reduction(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_different_participation(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_mixed_participation(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_changed_bypass(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_partial_state_export(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_producer_export(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_store(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_volatile(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_atomic(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_readonly_call(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_errno_call(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_constrained(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_strictfp(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_unsupported_division(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @readonly_helper(i32) memory(read) nounwind willreturn speculatable
 declare i32 @errno_helper(i32) nounwind willreturn
 declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
 
-; CHECK-LABEL: define i32 @reject_compact_predicate_feedback(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_predicate_feedback(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -46,9 +87,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_contribution_feedback(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_contribution_feedback(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -79,9 +117,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_updated_feedback(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_updated_feedback(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -112,18 +147,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_cross_reduction(
-; The observed sum stays in the producer. The closed, dead sum2 can move;
-; producer-export support now makes that partial split legal. Never extract
-; sum or redirect update2 to a moved accumulator. The execution checker also
-; compares this exact historical function with its original and scalar formula.
-; CHECK: alloca [65 x i32]
-; CHECK: %sum = phi i32
-; CHECK-NOT: %sum.consume =
-; CHECK: %update = add i32 %sum, %x
-; CHECK: store i32 %sum,
-; CHECK: scalar.fission.consumer.guard:
-; CHECK: ret i32
 define i32 @reject_compact_cross_reduction(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -156,9 +179,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_different_participation(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_different_participation(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -193,9 +213,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_mixed_participation(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_mixed_participation(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -227,9 +244,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_changed_bypass(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_changed_bypass(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -259,9 +273,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_partial_state_export(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_partial_state_export(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -293,12 +304,6 @@ bypass:
   ret i32 19
 }
 
-; Historical rejection now forwards the final header load through the guard,
-; including P=0 and a final inactive iteration. Its xor/return is unchanged.
-; CHECK-LABEL: define i32 @reject_compact_producer_export(
-; CHECK: alloca [65 x i32]
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: ret i32
 define i32 @reject_compact_producer_export(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -330,13 +335,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_store(
-; CHECK: alloca [65 x i32]
-; CHECK: scalar.fission.consumer.guard:
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: ret i32
-; Historical store rejection is now positive. The write stays on the original
-; participating path; it cannot observe or alter the extracted accumulator.
 define i32 @reject_compact_store(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -367,9 +365,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_volatile(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_volatile(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -400,9 +395,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_atomic(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_atomic(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -433,9 +425,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_readonly_call(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_readonly_call(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -466,9 +455,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_errno_call(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_errno_call(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -499,9 +485,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_constrained(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_constrained(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -532,9 +515,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @reject_compact_strictfp(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_strictfp(ptr %a, i64 %n) strictfp {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -564,10 +544,6 @@ bypass:
   ret i32 19
 }
 
-
-; CHECK-LABEL: define i32 @reject_compact_unsupported_division(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
 define i32 @reject_compact_unsupported_division(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65

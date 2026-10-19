@@ -22,7 +22,6 @@
 #include "VPlanDominatorTree.h"
 #include "VPlanHelpers.h"
 #include "VPlanPatternMatch.h"
-#include "VPlanReductionFission.h"
 #include "VPlanTransforms.h"
 #include "VPlanUtils.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -45,6 +44,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/GraphWriter.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/ScalarFission.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopVersioning.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
@@ -188,7 +188,8 @@ VPMultiDefValue::~VPMultiDefValue() {
 }
 
 // Get the top-most entry block of \p Start. This is the entry block of the
-// containing VPlan. This function is templated to support both const and non-const blocks
+// containing VPlan. This function is templated to support both const and
+// non-const blocks
 template <typename T> static T *getPlanEntry(T *Start) {
   T *Next = Start;
   T *Current = Start;
@@ -1336,13 +1337,13 @@ void VPlanPrinter::dump() {
 
   {
     // Print live-ins.
-  std::string Str;
-  raw_string_ostream SS(Str);
-  Plan.printLiveIns(SS);
-  SmallVector<StringRef, 0> Lines;
-  StringRef(Str).rtrim('\n').split(Lines, "\n");
-  for (auto Line : Lines)
-    OS << DOT::EscapeString(Line.str()) << "\\n";
+    std::string Str;
+    raw_string_ostream SS(Str);
+    Plan.printLiveIns(SS);
+    SmallVector<StringRef, 0> Lines;
+    StringRef(Str).rtrim('\n').split(Lines, "\n");
+    for (auto Line : Lines)
+      OS << DOT::EscapeString(Line.str()) << "\\n";
   }
 
   OS << "\"]\n";
@@ -1763,7 +1764,7 @@ void LoopVectorizationPlanner::updateLoopMetadataAndProfileInfo(
                                *ORE);
       Hints.setAlreadyVectorized();
     }
-    preserveReductionFissionStageMetadata(OrigLoopID, *OrigLoop);
+    preserveScalarFissionStageMetadata(OrigLoopID, *OrigLoop);
   }
   // Tag the scalar remainder so downstream passes (e.g. the unroller and
   // WarnMissedTransforms) can produce more informative remarks.  Only emit
@@ -1790,7 +1791,7 @@ void LoopVectorizationPlanner::updateLoopMetadataAndProfileInfo(
       Hints.setAlreadyVectorized();
     }
   }
-  preserveReductionFissionStageMetadata(OrigLoopID, *VectorLoop);
+  preserveScalarFissionStageMetadata(OrigLoopID, *VectorLoop);
   // Tag the vector loop body so downstream passes can identify it.  Only
   // emit when remarks are enabled.
   if (ORE->enabled())

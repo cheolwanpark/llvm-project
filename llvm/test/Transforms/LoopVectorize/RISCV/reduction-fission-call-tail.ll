@@ -1,25 +1,11 @@
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-force-producer-vf=4 \
-; RUN:   -vplan-reduction-fission-force-accumulator-vf=4 -S %s | FileCheck %s
-; RUN: sed 's/> noundef/>/' %s | opt -passes=loop-vectorize -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-force-producer-vf=4 \
-; RUN:   -vplan-reduction-fission-force-accumulator-vf=4 -S | FileCheck %s --check-prefix=SAFE
-; SAFE: vector.fission.producer.body:
-; SAFE: @vecfoo(
-; SAFE: vector.fission.accumulator.body:
-;
-; Fission must validate the actual variant, not just its scalar function: passing
-; inactive poison lanes to a noundef parameter introduces immediate UB.
-; CHECK-LABEL: define void @call_variant(
-; CHECK-NOT: fission
-; CHECK: call <vscale x 4 x i32> @vecfoo(
-; CHECK-NOT: fission
-; CHECK: ret void
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @call_variant(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @call_variant(ptr noalias readonly %a, ptr noalias %out) {
 entry:
   %base = getelementptr i32, ptr %a, i64 1

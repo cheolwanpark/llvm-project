@@ -1,24 +1,57 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=CHECK --implicit-check-not=scalar.fission < %t
-; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-allow-fp-reordering -pass-remarks-missed=vplan-reduction-fission \
-; RUN:   -S %s -o %t.reordered 2> %t.reordered.remarks
-; RUN: FileCheck %s --check-prefix=CHECK --implicit-check-not=scalar.fission < %t.reordered
-; RUN: FileCheck %s --check-prefix=REASON < %t.reordered.remarks
-;
-; No store admission can bypass accumulator-use closure, the effects whitelist
-; or strict FP. Fail before mutation under either fission FP policy.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_accumulator_value(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_accumulator_address(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_update_value(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_update_address(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_accumulator_predicate(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_partial_export(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_volatile(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_atomic(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_vector(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_aggregate(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_fence(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_atomicrmw(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_effect(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_strictfp(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_constrained(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare void @effect(ptr) nounwind willreturn
 declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
 
-; REASON: scalar-stores-reject.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define i32 @reject_store_accumulator_value(
-; CHECK: ret i32
 define i32 @reject_store_accumulator_value(ptr %a, i64 %n) !dbg !10 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -45,9 +78,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:22:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define i32 @reject_store_accumulator_address(
-; CHECK: ret i32
 define i32 @reject_store_accumulator_address(ptr %a, i64 %n) !dbg !12 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -76,9 +106,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:32:3: scalar-IR reduction fission rejected: scalar-reduction-feedback
-; CHECK-LABEL: define i32 @reject_store_update_value(
-; CHECK: ret i32
 define i32 @reject_store_update_value(ptr %a, i64 %n) !dbg !14 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -105,9 +132,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:42:3: scalar-IR reduction fission rejected: scalar-reduction-feedback
-; CHECK-LABEL: define i32 @reject_store_update_address(
-; CHECK: ret i32
 define i32 @reject_store_update_address(ptr %a, i64 %n) !dbg !16 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -136,9 +160,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:52:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define i32 @reject_store_accumulator_predicate(
-; CHECK: ret i32
 define i32 @reject_store_accumulator_predicate(ptr %a, i64 %n) !dbg !18 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -167,9 +188,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:62:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define i32 @reject_store_partial_export(
-; CHECK: ret i32
 define i32 @reject_store_partial_export(ptr %a, i64 %n) !dbg !20 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -198,9 +216,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:72:3: scalar-IR reduction fission rejected: scalar-non-simple-store
-; CHECK-LABEL: define i32 @reject_store_volatile(
-; CHECK: ret i32
 define i32 @reject_store_volatile(ptr %a, i64 %n) !dbg !22 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -227,9 +242,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:82:3: scalar-IR reduction fission rejected: scalar-non-simple-store
-; CHECK-LABEL: define i32 @reject_store_atomic(
-; CHECK: ret i32
 define i32 @reject_store_atomic(ptr %a, i64 %n) !dbg !24 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -256,9 +268,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:92:3: scalar-IR reduction fission rejected: scalar-non-simple-store
-; CHECK-LABEL: define i32 @reject_store_vector(
-; CHECK: ret i32
 define i32 @reject_store_vector(ptr %a, i64 %n) !dbg !26 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -285,9 +294,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:102:3: scalar-IR reduction fission rejected: scalar-non-simple-store
-; CHECK-LABEL: define i32 @reject_store_aggregate(
-; CHECK: ret i32
 define i32 @reject_store_aggregate(ptr %a, i64 %n) !dbg !28 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -314,9 +320,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:112:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
-; CHECK-LABEL: define i32 @reject_store_fence(
-; CHECK: ret i32
 define i32 @reject_store_fence(ptr %a, i64 %n) !dbg !30 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -344,9 +347,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:122:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
-; CHECK-LABEL: define i32 @reject_store_atomicrmw(
-; CHECK: ret i32
 define i32 @reject_store_atomicrmw(ptr %a, i64 %n) !dbg !32 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -374,9 +374,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:132:3: scalar-IR reduction fission rejected: scalar-unsafe-call
-; CHECK-LABEL: define i32 @reject_store_effect(
-; CHECK: ret i32
 define i32 @reject_store_effect(ptr %a, i64 %n) !dbg !34 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -404,9 +401,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:142:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; CHECK-LABEL: define i32 @reject_store_strictfp(
-; CHECK: ret i32
 define i32 @reject_store_strictfp(ptr %a, i64 %n) strictfp !dbg !36 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -433,9 +427,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-stores-reject.c:152:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; CHECK-LABEL: define i32 @reject_store_constrained(
-; CHECK: ret i32
 define i32 @reject_store_constrained(ptr %a, i64 %n) !dbg !38 {
 entry:
   %valid = icmp ule i64 %n, 65

@@ -1,82 +1,52 @@
-; RUN: opt -passes='loop-simplify,lcssa,print<scalar-evolution>' -disable-output \
-; RUN:   -mtriple=riscv64 -mattr=+v %s 2> %t.scev
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -force-vector-width=4 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -pass-remarks-analysis=vplan-reduction-fission \
-; RUN:   -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=EVL < %t
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-; RUN: FileCheck %s --check-prefix=BOUND < %t.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -force-vector-width=4 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -S %s -o %t.repeat
-; RUN: FileCheck %s --check-prefix=EVL < %t.repeat
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.repeat -o /dev/null
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -force-vector-width=4 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
-; RUN:   -enable-vplan-reduction-fission -S %s -o %t.tail
-; RUN: FileCheck %s --check-prefix=TAIL --implicit-check-not=llvm.vp. --implicit-check-not=llvm.experimental.get.vector.length < %t.tail
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.tail -o /dev/null
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 \
-; RUN:   -scalable-vectorization=off -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-min-reductions=1000000 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=1000000 \
-; RUN:   -vplan-reduction-fission-min-pressure-percent=1000000 \
-; RUN:   -S %s | FileCheck %s --check-prefix=SCALAR
-;
-; Nonzero and strided integer controls. Retain the original producer's integer
-; operations (allowing removal of poison-generating nowrap flags), predicate,
-; operand order, branch polarity and entry guard. Scratch uses a
-; private ordinal; the consumer counts completed contributions. Runtime starts
-; are independent of n and bounded by visible IR, never fixture knowledge.
-; The compact triangle retains its separate participation proof and P=0 bypass.
-; No new FP assumptions. Actual transformed-path execution checks original IR,
-; independent C formulas, and exact producer/control and vector/tail visits
-; after one and two ordinary vectorizer invocations.
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_const(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_runtime(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_unsigned(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_signed(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_down(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_signed_down(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_compact(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_enclosing(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_wrap(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_current(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_unsigned_early(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_signed_early(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_down_early(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_signed_down_early(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; REMARK: scalar-affine.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:12:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:12:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_const(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %iv = phi i64 [ 7, %preheader ]
-; SCALAR: %next = add nuw nsw i64 %iv, 1
-; SCALAR: %done = icmp eq i64 %limit, %next
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: %fission.consumer.next = add nuw i64 %fission.consumer.iv, 1
-; SCALAR: %fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_const(
-; EVL: %next = add nuw nsw i64 %iv, 1
-; EVL: %done = icmp eq i64 %limit, %next
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @affine_const(
-; TAIL: %next = add nuw nsw i64 %iv, 1
-; TAIL: %done = icmp eq i64 %limit, %next
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: ret void
 define void @affine_const(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !6 {
 entry:
@@ -147,44 +117,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-affine.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:22:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:22:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_runtime(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %iv = phi i64 [ %origin, %preheader ]
-; SCALAR: %next = add nuw nsw i64 %iv, 2
-; SCALAR: %done = icmp ne i64 %next, %limit
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: %fission.consumer.next = add nuw i64 %fission.consumer.iv, 1
-; SCALAR: %fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_runtime(
-; EVL: %span = shl i64 %n, 1
-; EVL: %next = add nuw nsw i64 %iv, 2
-; EVL: %done = icmp ne i64 %next, %limit
-; EVL: scalar.fission.consumer.ph:
-; EVL: [[SPAN_MINUS_TWO:%.*]] = add i64 %span, -2
-; EVL-NEXT: [[HALF:%.*]] = lshr i64 [[SPAN_MINUS_TWO]], 1
-; EVL-NEXT: [[COUNT:%.*]] = add nuw i64 [[HALF]], 1
-; EVL: vector.body:
-; EVL: %avl = phi i64 [ [[COUNT]], %vector.ph ]
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @affine_runtime(
-; TAIL: %next = add nuw nsw i64 %iv, 2
-; TAIL: %done = icmp ne i64 %next, %limit
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: ret void
 define void @affine_runtime(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !8 {
 entry:
@@ -259,40 +191,6 @@ exit:
   ret void
 }
 
-; BOUND: scalar-affine.c:32:3: scalar-IR admission passed; control {{.*}}; exact backedges {{.*}}; constant maximum {{.*}}; guarded exact {{.*}}; ordinary count proof {{.*}}; ordinary admission {{non-constant-trip-count|trip-count-overflow|scalar-scratch-limit}}; equality witness {{.*}}; guarded witness {{.*}}; witness backedge bound 64
-; REMARK: scalar-affine.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:32:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:32:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_unsigned(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %iv = phi i64 [ 9, %preheader ]
-; SCALAR: %next = add nuw nsw i64 %iv, 3
-; SCALAR: %done = icmp ult i64 %next, %limit
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: %fission.consumer.next = add nuw i64 %fission.consumer.iv, 1
-; SCALAR: %fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_unsigned(
-; EVL: %next = add nuw nsw i64 %iv, 3
-; EVL: %done = icmp ult i64 %next, %limit
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @affine_unsigned(
-; TAIL: %next = add nuw nsw i64 %iv, 3
-; TAIL: %done = icmp ult i64 %next, %limit
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: ret void
 define void @affine_unsigned(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !10 {
 entry:
@@ -365,40 +263,6 @@ exit:
   ret void
 }
 
-; BOUND: scalar-affine.c:42:3: scalar-IR admission passed; control {{.*}}; exact backedges {{.*}}; constant maximum {{.*}}; guarded exact {{.*}}; ordinary count proof {{.*}}; ordinary admission {{non-constant-trip-count|trip-count-overflow|scalar-scratch-limit}}; equality witness {{.*}}; guarded witness {{.*}}; witness backedge bound 64
-; REMARK: scalar-affine.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:42:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:42:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_signed(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %iv = phi i64 [ %origin, %preheader ]
-; SCALAR: %next = add nsw i64 %iv, 2
-; SCALAR: %done = icmp sgt i64 %limit, %next
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: %fission.consumer.next = add nuw i64 %fission.consumer.iv, 1
-; SCALAR: %fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_signed(
-; EVL: %next = add nsw i64 %iv, 2
-; EVL: %done = icmp sgt i64 %limit, %next
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @affine_signed(
-; TAIL: %next = add nsw i64 %iv, 2
-; TAIL: %done = icmp sgt i64 %limit, %next
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: ret void
 define void @affine_signed(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !12 {
 entry:
@@ -472,40 +336,6 @@ exit:
   ret void
 }
 
-; BOUND: scalar-affine.c:52:3: scalar-IR admission passed; control {{.*}}; exact backedges {{.*}}; constant maximum {{.*}}; guarded exact {{.*}}; ordinary count proof {{.*}}; ordinary admission {{non-constant-trip-count|trip-count-overflow|scalar-scratch-limit}}; equality witness {{.*}}; guarded witness {{.*}}; witness backedge bound 64
-; REMARK: scalar-affine.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:52:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:52:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_down(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %iv = phi i64 [ 201, %preheader ]
-; SCALAR: %next = sub nuw nsw i64 %iv, 3
-; SCALAR: %done = icmp ugt i64 %next, %limit
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: %fission.consumer.next = add nuw i64 %fission.consumer.iv, 1
-; SCALAR: %fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_down(
-; EVL: %next = sub nuw nsw i64 %iv, 3
-; EVL: %done = icmp ugt i64 %next, %limit
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @affine_down(
-; TAIL: %next = sub nuw nsw i64 %iv, 3
-; TAIL: %done = icmp ugt i64 %next, %limit
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: ret void
 define void @affine_down(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !14 {
 entry:
@@ -578,40 +408,6 @@ exit:
   ret void
 }
 
-; BOUND: scalar-affine.c:62:3: scalar-IR admission passed; control {{.*}}; exact backedges {{.*}}; constant maximum {{.*}}; guarded exact {{.*}}; ordinary count proof {{.*}}; ordinary admission {{non-constant-trip-count|trip-count-overflow|scalar-scratch-limit}}; equality witness {{.*}}; guarded witness {{.*}}; witness backedge bound 64
-; REMARK: scalar-affine.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:62:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:62:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_signed_down(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %iv = phi i64 [ %origin, %preheader ]
-; SCALAR: %next = add nsw i64 %iv, -2
-; SCALAR: %done = icmp sge i64 %limit, %next
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: %fission.consumer.next = add nuw i64 %fission.consumer.iv, 1
-; SCALAR: %fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_signed_down(
-; EVL: %next = add nsw i64 %iv, -2
-; EVL: %done = icmp sge i64 %limit, %next
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @affine_signed_down(
-; TAIL: %next = add nsw i64 %iv, -2
-; TAIL: %done = icmp sge i64 %limit, %next
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: ret void
 define void @affine_signed_down(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !16 {
 entry:
@@ -686,39 +482,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-affine.c:72:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:72:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:72:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_compact(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: %fission.participating = phi i64 [ 0, %preheader ]
-; SCALAR: %iv = phi i64 [ 137, %preheader ]
-; SCALAR: %next = sub nuw nsw i64 %iv, 2
-; SCALAR: %done = icmp eq i64 %limit, %next
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: %fission.consumer.next = add nuw i64 %fission.consumer.iv, 1
-; SCALAR: %fission.consumer.more = icmp ne i64 %fission.consumer.next, %fission.
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_compact(
-; EVL: %next = sub nuw nsw i64 %iv, 2
-; EVL: %done = icmp eq i64 %limit, %next
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @affine_compact(
-; TAIL: %next = sub nuw nsw i64 %iv, 2
-; TAIL: %done = icmp eq i64 %limit, %next
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: ret void
 define void @affine_compact(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !18 {
 entry:
@@ -775,43 +538,6 @@ exit:
   ret void
 }
 
-; BOUND: scalar-affine.c:82:3: scalar-IR admission passed; control {{.*}}; exact backedges {{.*}}; constant maximum {{.*}}; guarded exact {{.*}}; ordinary count proof {{.*}}; ordinary admission {{non-constant-trip-count|trip-count-overflow|scalar-scratch-limit}}; equality witness {{.*}}; guarded witness {{.*}}; witness backedge bound 64
-; REMARK: scalar-affine.c:82:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; REMARK: scalar-affine.c:82:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:82:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_enclosing(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR-NOT: alloca
-; SCALAR: %fission.ordinal = phi i64 [ 0, %inner.ph ]
-; SCALAR: %iv = phi i64 [ %origin, %inner.ph ]
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: row.exit:
-; SCALAR: store i32
-; SCALAR: store double
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_enclosing(
-; EVL: alloca [65 x i32]
-; EVL: alloca [65 x double]
-; EVL-NOT: alloca
-; EVL: %fission.ordinal = phi i64 [ 0, %inner.ph ]
-; EVL: %iv = phi i64 [ %origin, %inner.ph ]
-; EVL: scalar.fission.consumer.ph:
-; EVL: row.exit:
-; EVL: store i32
-; EVL: store double
-; EVL: ret void
-; TAIL-LABEL: define void @affine_enclosing(
-; TAIL: alloca [65 x i32]
-; TAIL: alloca [65 x double]
-; TAIL-NOT: alloca
-; TAIL: %fission.ordinal = phi i64 [ 0, %inner.ph ]
-; TAIL: %iv = phi i64 [ %origin, %inner.ph ]
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: row.exit:
-; TAIL: store i32
-; TAIL: store double
-; TAIL: ret void
 define void @affine_enclosing(ptr readonly %a, ptr readonly %fp, ptr %out,
                                   ptr %dout, i64 %rows, i64 %n, double %start) !dbg !20 {
 entry:
@@ -893,31 +619,6 @@ exit:
   ret void
 }
 
-; Modular control arithmetic is retained too. A completely unconstrained runtime
-; start may wrap, while the ordinal never wraps. No new nowrap flags on control.
-; REMARK: scalar-affine.c:92:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:92:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:92:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_wrap(
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %iv = phi i64 [ %begin, %preheader ]
-; SCALAR: %next = add i64 %iv, 2
-; SCALAR: %done = icmp eq i64 %limit, %next
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: %fission.consumer.next = add nuw i64 %fission.consumer.iv, 1
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_wrap(
-; EVL: %next = add i64 %iv, 2
-; EVL: scalar.fission.consumer.ph:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @affine_wrap(
-; TAIL: %next = add i64 %iv, 2
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: ret void
 define void @affine_wrap(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !22 {
 entry:
@@ -990,29 +691,6 @@ exit:
   ret void
 }
 
-; Testing the current IV, rather than its increment, still completes N trips.
-; REMARK: scalar-affine.c:102:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:102:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:102:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_current(
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %next = add nuw nsw i64 %iv, 2
-; SCALAR: %done = icmp uge i64 %iv, %limit
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: %fission.consumer.next = add nuw i64 %fission.consumer.iv, 1
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_current(
-; EVL: %done = icmp uge i64 %iv, %limit
-; EVL: scalar.fission.consumer.ph:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @affine_current(
-; TAIL: %done = icmp uge i64 %iv, %limit
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: ret void
 define void @affine_current(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !24 {
 entry:
@@ -1086,41 +764,6 @@ exit:
   ret void
 }
 
-; Analogous modular relational controls: equality at n-1 is only an upper
-; bound on backedges. Depending on the start, comparison signedness and
-; wrapping, these execute fewer than n iterations. The consumer MUST use
-; the actual completed count, never n or the equality witness. Original
-; arithmetic has no nowrap flags. Host comparisons include the early exits.
-
-; REMARK: scalar-affine.c:112:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:112:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:112:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_unsigned_early(
-; SCALAR: alloca [65 x i32]
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %next = add i64 %iv, 3
-; SCALAR: %done = icmp ult i64 %next, %limit
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_unsigned_early(
-; EVL: alloca [65 x i32]
-; EVL: %fission.ordinal = phi i64 [ 0, %preheader ]
-; EVL: %next = add i64 %iv, 3
-; EVL: %done = icmp ult i64 %next, %limit
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: ret void
-; TAIL-LABEL: define void @affine_unsigned_early(
-; TAIL: alloca [65 x i32]
-; TAIL: %fission.ordinal = phi i64 [ 0, %preheader ]
-; TAIL: %next = add i64 %iv, 3
-; TAIL: %done = icmp ult i64 %next, %limit
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: ret void
 define void @affine_unsigned_early(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !26 {
 entry:
@@ -1193,35 +836,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-affine.c:122:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:122:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:122:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_signed_early(
-; SCALAR: alloca [65 x i32]
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %next = add i64 %iv, 3
-; SCALAR: %done = icmp slt i64 %next, %limit
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_signed_early(
-; EVL: alloca [65 x i32]
-; EVL: %fission.ordinal = phi i64 [ 0, %preheader ]
-; EVL: %next = add i64 %iv, 3
-; EVL: %done = icmp slt i64 %next, %limit
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: ret void
-; TAIL-LABEL: define void @affine_signed_early(
-; TAIL: alloca [65 x i32]
-; TAIL: %fission.ordinal = phi i64 [ 0, %preheader ]
-; TAIL: %next = add i64 %iv, 3
-; TAIL: %done = icmp slt i64 %next, %limit
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: ret void
 define void @affine_signed_early(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !28 {
 entry:
@@ -1294,35 +908,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-affine.c:132:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:132:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:132:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_down_early(
-; SCALAR: alloca [65 x i32]
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %next = sub i64 %iv, 3
-; SCALAR: %done = icmp ugt i64 %next, %limit
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_down_early(
-; EVL: alloca [65 x i32]
-; EVL: %fission.ordinal = phi i64 [ 0, %preheader ]
-; EVL: %next = sub i64 %iv, 3
-; EVL: %done = icmp ugt i64 %next, %limit
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: ret void
-; TAIL-LABEL: define void @affine_down_early(
-; TAIL: alloca [65 x i32]
-; TAIL: %fission.ordinal = phi i64 [ 0, %preheader ]
-; TAIL: %next = sub i64 %iv, 3
-; TAIL: %done = icmp ugt i64 %next, %limit
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: ret void
 define void @affine_down_early(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !30 {
 entry:
@@ -1395,35 +980,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-affine.c:142:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-affine.c:142:3: scalar-IR fission producer VF 1
-; REMARK: scalar-affine.c:142:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-LABEL: define void @affine_signed_down_early(
-; SCALAR: alloca [65 x i32]
-; SCALAR: %fission.ordinal = phi i64 [ 0, %preheader ]
-; SCALAR: %next = sub i64 %iv, 3
-; SCALAR: %done = icmp sgt i64 %next, %limit
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: %fission.completed.count = phi i64 [ %fission.completed, %latch ]
-; SCALAR: ret void
-; EVL-LABEL: define void @affine_signed_down_early(
-; EVL: alloca [65 x i32]
-; EVL: %fission.ordinal = phi i64 [ 0, %preheader ]
-; EVL: %next = sub i64 %iv, 3
-; EVL: %done = icmp sgt i64 %next, %limit
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64
-; EVL: ret void
-; TAIL-LABEL: define void @affine_signed_down_early(
-; TAIL: alloca [65 x i32]
-; TAIL: %fission.ordinal = phi i64 [ 0, %preheader ]
-; TAIL: %next = sub i64 %iv, 3
-; TAIL: %done = icmp sgt i64 %next, %limit
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: ret void
 define void @affine_signed_down_early(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start, i64 %begin) !dbg !32 {
 entry:

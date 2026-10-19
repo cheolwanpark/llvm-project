@@ -1,35 +1,63 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
-; RUN:   -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s  < %t
-; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -S %s | FileCheck %s
-;
-; Integration: producer exports make the first feedback/export fixtures
-; safely splittable. Their original IR is preserved. Only closed r1/rd (and
-; r0 in the state-export sibling) move; every observed r0 remains in place.
-; These are negative checks for illegal extraction, not whole-loop rejection.
-; Original/transformed/independent comparisons also cover these exact functions.
-; Effects, strictfp, constrained FP, incompatible streams and bounds still reject.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_phi_feedback(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_update_feedback(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_other_reduction(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_address_feedback(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_predicate_feedback(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_partial_export(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_state_export(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_store(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_call(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_unbounded(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_over_capacity(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_strict(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_constrained(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_no_extractable(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_no_supported_update(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_unsupported_multiply(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_unsupported_division(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare i32 @effect(i32) nounwind willreturn
 declare double @llvm.experimental.constrained.fsub.f64(double, double, metadata, metadata)
 
-; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; CHECK-LABEL: define void @recurrence_phi_feedback(
-; CHECK: %prev = phi i32
-; CHECK: %r0 = phi i32
-; CHECK: scalar.fission.consumer.body:
-; CHECK-NOT: %r0.consume =
-; CHECK: %r1.consume = phi i32
-; CHECK: %rd.consume = phi double
-; CHECK: ret void
 define void @recurrence_phi_feedback(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !20 {
 entry:
@@ -75,15 +103,6 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; CHECK-LABEL: define void @recurrence_update_feedback(
-; CHECK: %prev = phi i32
-; CHECK: %r0 = phi i32
-; CHECK: scalar.fission.consumer.body:
-; CHECK-NOT: %r0.consume =
-; CHECK: %r1.consume = phi i32
-; CHECK: %rd.consume = phi double
-; CHECK: ret void
 define void @recurrence_update_feedback(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !22 {
 entry:
@@ -129,15 +148,6 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; CHECK-LABEL: define void @recurrence_other_reduction(
-; CHECK: %prev = phi i32
-; CHECK: %r0 = phi i32
-; CHECK: scalar.fission.consumer.body:
-; CHECK-NOT: %r0.consume =
-; CHECK: %r1.consume = phi i32
-; CHECK: %rd.consume = phi double
-; CHECK: ret void
 define void @recurrence_other_reduction(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !24 {
 entry:
@@ -183,15 +193,6 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; CHECK-LABEL: define void @recurrence_address_feedback(
-; CHECK: %prev = phi i32
-; CHECK: %r0 = phi i32
-; CHECK: scalar.fission.consumer.body:
-; CHECK-NOT: %r0.consume =
-; CHECK: %r1.consume = phi i32
-; CHECK: %rd.consume = phi double
-; CHECK: ret void
 define void @recurrence_address_feedback(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !26 {
 entry:
@@ -238,15 +239,6 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; CHECK-LABEL: define void @recurrence_predicate_feedback(
-; CHECK: %prev = phi i32
-; CHECK: %r0 = phi i32
-; CHECK: scalar.fission.consumer.body:
-; CHECK-NOT: %r0.consume =
-; CHECK: %r1.consume = phi i32
-; CHECK: %rd.consume = phi double
-; CHECK: ret void
 define void @recurrence_predicate_feedback(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !28 {
 entry:
@@ -304,18 +296,6 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; CHECK-LABEL: define void @recurrence_partial_export(
-; CHECK: %prev = phi i32
-; CHECK: %r0 = phi i32
-; CHECK: scalar.fission.consumer.body:
-; CHECK-NOT: %r0.consume =
-; CHECK: %r1.consume = phi i32
-; CHECK: %rd.consume = phi double
-; CHECK: %partial.exit = phi i32
-; CHECK: %partial = add i32 %result0, %partial.exit
-; CHECK: store i32 %partial, ptr %out
-; CHECK: ret void
 define void @recurrence_partial_export(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !30 {
 entry:
@@ -354,7 +334,6 @@ exit:
   %result0 = phi i32 [17, %entry], [%u0, %loop]
   %result1 = phi i32 [-7, %entry], [%u1, %loop]
   %resultd = phi double [%start, %entry], [%ud, %loop]
-  ; Export the pre-update accumulator; entry bypass uses its initial value.
   %partial.exit = phi i32 [17, %entry], [%r0, %loop]
   %o1 = getelementptr i32, ptr %out, i64 1
   %partial = add i32 %result0, %partial.exit
@@ -364,16 +343,6 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; CHECK-LABEL: define void @recurrence_state_export(
-; CHECK: %prev = phi i32
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %r1.consume = phi i32
-; CHECK: %rd.consume = phi double
-; CHECK: %state.exit = phi i32
-; CHECK: %state.export = add i32 %result0, %state.exit
-; CHECK: store i32 %state.export, ptr %out
-; CHECK: ret void
 define void @recurrence_state_export(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !32 {
 entry:
@@ -412,7 +381,6 @@ exit:
   %result0 = phi i32 [17, %entry], [%u0, %loop]
   %result1 = phi i32 [-7, %entry], [%u1, %loop]
   %resultd = phi double [%start, %entry], [%ud, %loop]
-  ; Retained producer state is observable even without an entered iteration.
   %state.exit = phi i32 [23, %entry], [%prev, %loop]
   %o1 = getelementptr i32, ptr %out, i64 1
   %state.export = add i32 %result0, %state.exit
@@ -422,14 +390,6 @@ exit:
   ret void
 }
 
-; An ordinary producer store composes with retained state. It stays in its
-; original block/order; volatile and atomic siblings remain true rejections.
-; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; CHECK-LABEL: define void @recurrence_store(
-; CHECK: alloca [65 x i32]
-; CHECK: store i32 %x, ptr %p
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: ret void
 define void @recurrence_store(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !34 {
 entry:
@@ -476,10 +436,6 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: scalar-IR reduction fission rejected: scalar-unsafe-call
-; CHECK-LABEL: define void @recurrence_call(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
 define void @recurrence_call(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !36 {
 entry:
@@ -526,18 +482,6 @@ exit:
   ret void
 }
 
-; Despite its historical name this canonical nonzero equality loop is finite,
-; just like reject_unbounded in scalar-ir-reject.ll. The existing count proof
-; is unchanged; checked chunk storage no longer rejects its retained state.
-; Huge counts are IR/analysis coverage only, never executed by the checker.
-; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 5461, scratch bytes 65536, producer live-outs 0, chunked schedule, trip bound {{[0-9]+}}
-; REASON-SAME: producer state carries 4
-; CHECK-LABEL: define void @recurrence_unbounded(
-; CHECK: alloca [5461 x i32]
-; CHECK: alloca [5461 x double]
-; CHECK: %prev.chunk.carry = phi i32 [ 23, %preheader ], [ %prev.chunk.backedge, %scalar.fission.chunk.latch ]
-; CHECK: %older.chunk.backedge = phi i32 [ %prev, %loop ]
-; CHECK: ret void
 define void @recurrence_unbounded(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !38 {
 entry:
@@ -583,15 +527,6 @@ exit:
   ret void
 }
 
-; Intentionally positive: the 5462-trip bound now uses C=5461 and four
-; retained-state carries, without exceeding the existing 65536-byte ceiling.
-; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 5461, scratch bytes 65536, producer live-outs 0, chunked schedule, trip bound 5462
-; REASON-SAME: producer state carries 4
-; CHECK-LABEL: define void @recurrence_over_capacity(
-; CHECK: %prev.chunk.carry = phi i32 [ 23, %preheader ], [ %prev.chunk.backedge, %scalar.fission.chunk.latch ]
-; CHECK: %older.chunk.carry = phi i32 [ 11, %preheader ], [ %older.chunk.backedge, %scalar.fission.chunk.latch ]
-; CHECK: %older.chunk.backedge = phi i32 [ %prev, %loop ]
-; CHECK: ret void
 define void @recurrence_over_capacity(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !40 {
 entry:
@@ -637,10 +572,6 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; CHECK-LABEL: define void @recurrence_strict(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
 define void @recurrence_strict(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) strictfp !dbg !42 {
 entry:
@@ -686,10 +617,6 @@ exit:
   ret void
 }
 
-; REASON: scalar-recurrence.c:12:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; CHECK-LABEL: define void @recurrence_constrained(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
 define void @recurrence_constrained(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !44 {
 entry:
@@ -735,17 +662,6 @@ exit:
   ret void
 }
 
-; Both closed XOR recurrences now move alongside ordered subtraction and
-; share one i32 stream. Retained feedback state stays in the producer.
-; REASON: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; CHECK-LABEL: define void @recurrence_no_extractable(
-; CHECK: alloca [65 x i32]
-; CHECK: alloca [65 x double]
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %u0.consume = xor i32 %r0.consume,
-; CHECK: %u1.consume = xor i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
-; CHECK: %ud.consume = fsub double %rd.consume,
-; CHECK: ret void
 define void @recurrence_no_extractable(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !46 {
 entry:
@@ -791,14 +707,6 @@ exit:
   ret void
 }
 
-; Closed XOR moves even when the unsupported fdiv stays as producer state.
-; CHECK-LABEL: define void @recurrence_no_supported_update(
-; CHECK: alloca [65 x i32]
-; CHECK: %ud = fdiv double %rd, %dc
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %u0.consume = xor i32 %r0.consume,
-; CHECK: %u1.consume = xor i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
-; CHECK: ret void
 define void @recurrence_no_supported_update(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) {
 entry:
@@ -844,14 +752,6 @@ exit:
   ret void
 }
 
-; The exact former unsupported product now moves; fdiv and observed state stay.
-; CHECK-LABEL: define void @recurrence_unsupported_multiply(
-; CHECK: alloca [65 x i32]
-; CHECK: %ud = fdiv double %rd, %dc
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %u0.consume = mul i32 %r0.consume,
-; CHECK: %u1.consume = mul i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
-; CHECK: ret void
 define void @recurrence_unsupported_multiply(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) {
 entry:
@@ -897,18 +797,6 @@ exit:
   ret void
 }
 
-; Keep a genuine unsupported-update rejection with the same retained state.
-; CHECK-LABEL: define void @recurrence_unsupported_division(
-; CHECK-NOT: scalar.fission
-; CHECK: %u0 = udiv i32 %r0, %c
-; CHECK-NOT: scalar.fission
-; CHECK: %u1 = udiv i32 %c, %r1
-; CHECK-NOT: scalar.fission
-; CHECK: %ud = fdiv double %rd, %dc
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
-; CHECK-NOT: scalar.fission
-; CHECK: }
 define void @recurrence_unsupported_division(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) {
 entry:

@@ -1,49 +1,11 @@
-; RUN: opt -verify-each -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
-; RUN:   -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -S %s -o %t
-; RUN: FileCheck %s < %t
-; RUN: llc -verify-machineinstrs -mtriple=riscv64 -mattr=+v %t -o - \
-; RUN:   | FileCheck %s --check-prefix=ASM
-; RUN: sed 's/llvm.fabs/llvm.sqrt/g' %s | opt -passes=loop-vectorize \
-; RUN:   -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -S -o %t.sqrt
-; RUN: FileCheck %s --check-prefix=SQRT < %t.sqrt
-; RUN: llc -verify-machineinstrs -mtriple=riscv64 -mattr=+v %t.sqrt -o /dev/null
-;
-; fabs is elementwise and must remain valid when stage VFs differ. Exercise it
-; in both the long producer chain and a short chain retained with accumulators.
-; Neither fabs call has fast-math flags: permitting it must not require them.
-; The same general legality check admits vectorizable sqrt at legal stage VFs.
-;
-; CHECK-LABEL: define void @fabs_producer_and_accumulator(
-; CHECK: vector.fission.producer.body:
-; CHECK: call <vscale x 4 x double> @llvm.fabs.nxv4f64
-; CHECK: store <vscale x 4 x double>
-; CHECK: scalar.fission.producer.body:
-; CHECK: call double @llvm.fabs.f64
-; CHECK: call fast double @llvm.fma.f64
-; CHECK: vector.fission.accumulator.body:
-; CHECK: call <vscale x 2 x double> @llvm.fabs.nxv2f64
-; CHECK: @llvm.vector.reduce.fadd.nxv2f64
-; CHECK: scalar.fission.accumulator.body:
-; CHECK: call double @llvm.fabs.f64
-;
-; ASM-LABEL: fabs_producer_and_accumulator:
-; ASM: vfabs.v
-; ASM: vfabs.v
-; ASM: ret
-;
-; SQRT-LABEL: define void @fabs_producer_and_accumulator(
-; SQRT: vector.fission.producer.body:
-; SQRT: @llvm.sqrt.nxv4f64
-; SQRT: vector.fission.accumulator.body:
-; SQRT: @llvm.sqrt.nxv2f64
-; SQRT: ret void
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @fabs_producer_and_accumulator(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @fabs_producer_and_accumulator(ptr noalias readonly %x, ptr noalias readonly %y,
                               double %frequency, ptr noalias writeonly %out) {
 entry:

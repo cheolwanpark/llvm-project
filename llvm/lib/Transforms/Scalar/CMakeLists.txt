@@ -70,6 +70,7 @@ add_llvm_component_library(LLVMScalarOpts
   SCCP.cpp
   SROA.cpp
   Scalar.cpp
+  ScalarFission.cpp
   Scalarizer.cpp
   ScalarizeMaskedMemIntrin.cpp
   SeparateConstOffsetFromGEP.cpp

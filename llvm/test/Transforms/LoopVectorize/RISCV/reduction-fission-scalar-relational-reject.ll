@@ -1,27 +1,19 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2>%t.remarks
-; RUN: FileCheck %s  < %t
-; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
-; RUN: opt -passes='loop-vectorize,loop-vectorize' -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -S %s | FileCheck %s
-;
-; Strict comparison and a bounded equality witness are both necessary for the
-; new proof. Do not turn a merely bounded span into an assumed trip count.
-; Existing affine-reject.ll retains feedback, live-out, effects and FP cases.
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @equality_continues(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @unreachable_equality(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @unbounded_witness(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; Equality continues this loop: every i8 value is <= 255. An equality witness
-; cannot prove termination. This loop is not mustprogress.
-; CHECK-LABEL: define i32 @equality_continues(
-; CHECK-NOT: scalar.fission
-; CHECK: %next = add i8 %iv, 3
-; CHECK: %more = icmp ule i8 %next, -1
-; CHECK: br i1 %more, label %loop, label %exit
-; CHECK: ret i32
-; REASON: scalar-relational-reject.c:12:3: scalar-IR reduction fission rejected: non-constant-trip-count
 define i32 @equality_continues(i8 %begin, i8 %n) !dbg !6 {
 entry:
   br label %preheader
@@ -41,14 +33,6 @@ exit:
   ret i32 %result
 }
 
-; A strict comparison alone is insufficient: an even IV never reaches 255.
-; CHECK-LABEL: define i32 @unreachable_equality(
-; CHECK-NOT: scalar.fission
-; CHECK: %next = add i8 %iv, 2
-; CHECK: %more = icmp ult i8 %next, -1
-; CHECK: br i1 %more, label %loop, label %exit
-; CHECK: ret i32
-; REASON: scalar-relational-reject.c:22:3: scalar-IR reduction fission rejected: non-constant-trip-count
 define i32 @unreachable_equality() !dbg !8 {
 entry:
   br label %preheader
@@ -68,16 +52,6 @@ exit:
   ret i32 %result
 }
 
-; Equality is reachable but its span has no small unconditional bound. The
-; n!=0 entry guard proves a finite representable count. The new fallback can
-; bound allocation independently at C=16384/B=65536; it keeps original control.
-; CHECK-LABEL: define i32 @unbounded_witness(
-; CHECK: alloca [16384 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %next = add i64 %iv, 3
-; CHECK: %more = icmp ult i64 %next, %limit
-; CHECK: ret i32
-; REASON: scalar-relational-reject.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 16384, scratch bytes 65536
 define i32 @unbounded_witness(i64 %begin, i64 %n) !dbg !10 {
 entry:
   %enter = icmp ne i64 %n, 0

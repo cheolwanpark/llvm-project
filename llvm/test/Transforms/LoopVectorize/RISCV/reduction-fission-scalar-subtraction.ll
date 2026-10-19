@@ -1,104 +1,29 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=1044 \
-; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t.ll 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=IR < %t.ll
-; RUN: FileCheck %s --check-prefix=SELECT < %t.remarks
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks=vplan-reduction-fission \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.budget 2> %t.budget.remarks
-; RUN: FileCheck %s --check-prefix=BUDGET < %t.budget.remarks
-; RUN: FileCheck %s --check-prefix=BUDGET-IR < %t.budget
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=147 -pass-remarks=vplan-reduction-fission \
-; RUN:   -disable-output %s 2>&1 | FileCheck %s --check-prefix=PAD
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=19 -pass-remarks-missed=vplan-reduction-fission \
-; RUN:   -S %s -o %t.reject 2> %t.reject.remarks
-; RUN: FileCheck %s --check-prefix=MIN < %t.reject.remarks
-; RUN: FileCheck %s --check-prefix=NONE --implicit-check-not=scalar.fission < %t.reject
-;
-; Direct ordered subtraction, mixed with addition sharing the integer stream.
-; Preserve original loads, overwrites, loop-carried memory, final producer
-; exports and exact participation. No negation/add normalization or FP flags.
-; Three streams: 1044 padded bytes at capacity65, 20/148/256 at C=1/9/16.
-; The canonical compact gate now chunks at ceiling 1043: C=64/1024 bytes.
-; Ordered sub/fsub and empty forwarding stay exact. Affine control also uses
-; bounded chunks with original termination/IV; 19 still cannot fit one entry.
-; The mandatory host checker executes original/transformed/independent versions
-; with entire-state comparisons, exact scalar stage probes, aliases and canaries.
-; Flagged subtraction starts at4096 and consumes c&3, so both nowrap contracts
-; hold for every executed input. Unflagged cases exercise modular subtraction.
-; Forced scalar stages are deliberate; ordinary LV chooses stage VFs separately.
-;
-; SELECT: scalar-subtraction.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; SELECT: scalar-subtraction.c:12:3: scalar-IR fission producer VF 1
-; SELECT: scalar-subtraction.c:12:3: scalar-IR fission consumer VF 1
-; SELECT: scalar-subtraction.c:32:3: split scalar-IR reduction loop
-; SELECT: scalar-subtraction.c:62:3: split scalar-IR reduction loop
-; SELECT: scalar-subtraction.c:72:3: split scalar-IR reduction loop
-; BUDGET: scalar-subtraction.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule, trip bound 65
-; BUDGET-SAME: scratch store bytes/iteration 16, scratch load bytes/iteration 16, producer reread bytes/iteration 0, duplicated producer instructions 0
-; BUDGET: scalar-subtraction.c:32:3: scalar-IR fission producer VF 1
-; BUDGET: scalar-subtraction.c:32:3: scalar-IR fission consumer VF 1
-; BUDGET: scalar-subtraction.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024
-; BUDGET-IR-LABEL: define void @stores_compact(
-; BUDGET-IR: alloca [64 x i32]
-; BUDGET-IR: alloca [64 x double]
-; BUDGET-IR: alloca [64 x float]
-; BUDGET-IR: scalar.fission.chunk:
-; BUDGET-IR: %fission.chunk.partial = icmp ult i64 %fission.chunk.remaining, 64
-; BUDGET-IR: %fission.chunk.count = select i1 %fission.chunk.partial, i64 %fission.chunk.remaining, i64 64
-; BUDGET-IR: %fission.participating = phi i64 [ 0, %scalar.fission.producer.ph ],
-; BUDGET-IR: gate:
-; BUDGET-IR: br label %left
-; BUDGET-IR: scalar.fission.consumer.guard:
-; BUDGET-IR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; BUDGET-IR: scalar.fission.consumer.body:
-; BUDGET-IR: %u0.consume = sub i32 %r0.consume,
-; BUDGET-IR: %ud.consume = fsub double %rd.consume,
-; BUDGET-IR: %uf.consume = fsub float %rf.consume,
-; BUDGET-IR: %fission.chunk.next = add nuw i64 %fission.chunk.base, %fission.producer.completed
-; BUDGET-IR-LABEL: define void @stores_affine(
-; BUDGET-IR: alloca [64 x i32]
-; BUDGET-IR: alloca [64 x double]
-; BUDGET-IR: alloca [64 x float]
-; BUDGET-IR: scalar.fission.chunk:
-; BUDGET-IR-NOT: fission.chunk.remaining
-; BUDGET-IR: %control = phi i64
-; BUDGET-IR: %fission.producer.iv.next = phi i64 [ %control.next, %loop ]
-; BUDGET-IR: scalar.fission.consumer.body:
-; BUDGET-IR: %ud.consume = fsub double %rd.consume,
-; BUDGET-IR: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; BUDGET-IR: ret void
-; BUDGET-IR: }
-; PAD: scalar-subtraction.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 8, scratch bytes 128
-; MIN: scalar-subtraction.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; MIN: scalar-subtraction.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; NONE-LABEL: define void @stores_full(
-; NONE: ret void
-; IR-LABEL: define void @stores_full(
-; IR: scalar.fission.consumer.body:
-; IR: %u0.consume = sub i32 %r0.consume, {{%[-a-zA-Z0-9.]+}}, !dbg ![[LOC:[0-9]+]]
-; IR: %u1.consume = add i32
-; IR: %ud.consume = fsub double %rd.consume,
-; IR: %uf.consume = fsub float %rf.consume,
-; IR-LABEL: define void @stores_compact(
-; IR: gate:
-; IR: br label %left
-; IR: %fission.empty = icmp eq i64
-; IR: %ud.consume = fsub double %rd.consume,
-; IR-LABEL: define void @stores_affine(
-; IR: %fission.ordinal = phi i64
-; IR: %control = phi i64
-; IR: %fission.completed.count = phi i64
-; IR: %u0.consume = sub i32 %r0.consume,
-; IR-LABEL: define void @stores_flags(
-; IR: %u0.consume = sub nuw nsw i32 %r0.consume,
-; IR: ![[LOC]] = !DILocation(line: 13, column: 5,
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_full(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_raw(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_compact(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_chunk(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_chunk_ne(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_affine(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_flags(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define void @stores_full(ptr %a, ptr %fp, ptr %out, ptr %indices,

@@ -1,86 +1,14 @@
-; RUN: opt -enable-scalar-reduction-fission=false -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-force-producer-vf=1 -vplan-reduction-fission-force-accumulator-vf=2 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=16 -pass-remarks=vplan-reduction-fission -S %s -o %t.forward 2> %t.forward.remarks
-; RUN: FileCheck %s --check-prefix=FORWARD < %t.forward
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.forward -o /dev/null
-; RUN: FileCheck %s --check-prefix=REMARK < %t.forward.remarks
-; RUN: opt -enable-scalar-reduction-fission=false -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-force-producer-vf=2 -vplan-reduction-fission-force-accumulator-vf=1 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=16 -S %s -o %t.reverse 2> %t.reverse.remarks
-; RUN: FileCheck %s --check-prefix=REVERSE < %t.reverse
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.reverse -o /dev/null
-; RUN: opt -enable-scalar-reduction-fission=false -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-force-producer-vf=1 -vplan-reduction-fission-force-accumulator-vf=2 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=16 -vplan-reduction-fission-max-scratch-bytes=259 -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.small 2> %t.small.remarks
-; RUN: FileCheck %s --check-prefix=SMALL < %t.small
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.small -o /dev/null
-; RUN: opt -enable-scalar-reduction-fission=false -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-force-producer-vf=1 -vplan-reduction-fission-force-accumulator-vf=2 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=16 -vplan-reduction-fission-max-scratch-bytes=260 -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.capacity 2> %t.capacity.remarks
-; RUN: FileCheck %s --check-prefix=CAPACITY < %t.capacity
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.capacity -o /dev/null
-; RUN: FileCheck %s --check-prefix=LIMIT < %t.small.remarks
-; RUN: opt -enable-scalar-reduction-fission=false -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-force-producer-vf=4 -vplan-reduction-fission-force-accumulator-vf=1 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=16 -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.bad-producer 2> %t.bad-producer.remarks
-; RUN: FileCheck %s --check-prefix=REJECT < %t.bad-producer
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.bad-producer -o /dev/null
-; RUN: FileCheck %s --check-prefix=VF-LIMIT < %t.bad-producer.remarks
-; RUN: opt -enable-scalar-reduction-fission=false -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-force-producer-vf=1 -vplan-reduction-fission-force-accumulator-vf=4 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=16 -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.bad-consumer 2> %t.bad-consumer.remarks
-; RUN: FileCheck %s --check-prefix=REJECT < %t.bad-consumer
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.bad-consumer -o /dev/null
-; RUN: FileCheck %s --check-prefix=VF-LIMIT < %t.bad-consumer.remarks
-
-; Long arithmetic on member zero and short XORs of all other members
-; retain the full group in both vector stages. Depth selects this cut; it
-; does not veto other fission. No contribution arithmetic is duplicated, only the
-; complete group and its address slice. VF4 is illegal in either stage.
-
-; FORWARD-LABEL: define void @interleave5_reread(
-; FORWARD-COUNT-1: alloca [65 x i32]
-; FORWARD: vector.fission.producer.body:
-; FORWARD: @llvm.vector.deinterleave5.nxv5
-; FORWARD-COUNT-1: store <vscale x 1 x i32>
-; FORWARD: scalar.fission.producer.body:
-; FORWARD: load i32
-; FORWARD: vector.fission.accumulator.body:
-; FORWARD: @llvm.vector.deinterleave5.nxv10
-; FORWARD: @llvm.vector.reduce.add.
-; FORWARD: scalar.fission.accumulator.body:
-; FORWARD: add i32
-; REVERSE-LABEL: define void @interleave5_reread(
-; REVERSE-COUNT-1: alloca [65 x i32]
-; REVERSE: vector.fission.producer.body:
-; REVERSE: @llvm.vector.deinterleave5.nxv10
-; REVERSE-COUNT-1: store <vscale x 2 x i32>
-; REVERSE: scalar.fission.producer.body:
-; REVERSE: load i32
-; REVERSE: vector.fission.accumulator.body:
-; REVERSE: @llvm.vector.deinterleave5.nxv5
-; REVERSE: @llvm.vector.reduce.add.
-; REVERSE: scalar.fission.accumulator.body:
-; REVERSE: add i32
-; REMARK: interleave-wide-reread.c:10:5: split reduction loop: baseline VF {{.*}}, producer VF vscale x 1, accumulator VF vscale x 2, trip count bounded-runtime, scratch capacity 65, scratch bytes 260
-; REMARK-SAME: scratch store bytes/iteration 4, scratch load bytes/iteration 4, duplicated recipes {{[1-9][0-9]*}}, reread loads/iteration 5
-; SMALL-LABEL: define void @interleave5_reread(
-; SMALL-NOT: fission
-; SMALL: ret void
-; LIMIT: interleave-wide-reread.c:10:5: reduction fission rejected: scratch byte limit exceeded
-; CAPACITY-LABEL: define void @interleave5_reread(
-; CAPACITY: alloca [65 x i32]
-; CAPACITY: vector.fission.producer.body:
-; REJECT-LABEL: define void @interleave5_reread(
-; REJECT-NOT: fission
-; REJECT: ret void
-; VF-LIMIT: interleave-wide-reread.c:10:5: reduction fission rejected: forced-stage-vf-not-legal
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave5_reread(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave8_reread(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @interleave5_reread(ptr readonly %a, ptr %out, i64 %n) !dbg !5 {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -151,43 +79,6 @@ bypass:
   ret void
 }
 
-; FORWARD-LABEL: define void @interleave8_reread(
-; FORWARD-COUNT-1: alloca [65 x i32]
-; FORWARD: vector.fission.producer.body:
-; FORWARD: @llvm.vector.deinterleave8.nxv8
-; FORWARD-COUNT-1: store <vscale x 1 x i32>
-; FORWARD: scalar.fission.producer.body:
-; FORWARD: load i32
-; FORWARD: vector.fission.accumulator.body:
-; FORWARD: @llvm.vector.deinterleave8.nxv16
-; FORWARD: @llvm.vector.reduce.add.
-; FORWARD: scalar.fission.accumulator.body:
-; FORWARD: add i32
-; REVERSE-LABEL: define void @interleave8_reread(
-; REVERSE-COUNT-1: alloca [65 x i32]
-; REVERSE: vector.fission.producer.body:
-; REVERSE: @llvm.vector.deinterleave8.nxv16
-; REVERSE-COUNT-1: store <vscale x 2 x i32>
-; REVERSE: scalar.fission.producer.body:
-; REVERSE: load i32
-; REVERSE: vector.fission.accumulator.body:
-; REVERSE: @llvm.vector.deinterleave8.nxv8
-; REVERSE: @llvm.vector.reduce.add.
-; REVERSE: scalar.fission.accumulator.body:
-; REVERSE: add i32
-; REMARK: interleave-wide-reread.c:30:5: split reduction loop: baseline VF {{.*}}, producer VF vscale x 1, accumulator VF vscale x 2, trip count bounded-runtime, scratch capacity 65, scratch bytes 260
-; REMARK-SAME: scratch store bytes/iteration 4, scratch load bytes/iteration 4, duplicated recipes {{[1-9][0-9]*}}, reread loads/iteration 8
-; SMALL-LABEL: define void @interleave8_reread(
-; SMALL-NOT: fission
-; SMALL: ret void
-; LIMIT: interleave-wide-reread.c:30:5: reduction fission rejected: scratch byte limit exceeded
-; CAPACITY-LABEL: define void @interleave8_reread(
-; CAPACITY: alloca [65 x i32]
-; CAPACITY: vector.fission.producer.body:
-; REJECT-LABEL: define void @interleave8_reread(
-; REJECT-NOT: fission
-; REJECT: ret void
-; VF-LIMIT: interleave-wide-reread.c:30:5: reduction fission rejected: forced-stage-vf-not-legal
 define void @interleave8_reread(ptr readonly %a, ptr %out, i64 %n) !dbg !7 {
 entry:
   %bounded = icmp ule i64 %n, 65

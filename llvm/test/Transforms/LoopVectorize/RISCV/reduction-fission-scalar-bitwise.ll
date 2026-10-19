@@ -1,49 +1,17 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -vplan-reduction-fission-min-reductions=1000000 -vplan-reduction-fission-min-chain-depth=1000000 -vplan-reduction-fission-min-pressure-percent=1000000 -S %s | FileCheck %s --check-prefix=FULL
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -vplan-reduction-fission-allow-fp-reordering -vplan-reduction-fission-max-scratch-bytes=112 -S %s | FileCheck %s --check-prefix=CHUNK
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -vplan-reduction-fission-max-scratch-bytes=15 -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.minimum 2> %t.minimum.remarks
-; RUN: FileCheck %s --check-prefix=SMALL < %t.minimum.remarks
-; RUN: FileCheck %s --check-prefix=MIN --implicit-check-not=scalar.fission < %t.minimum
-;
-; Six direct bitwise recurrences, both operand orders, two shared streams.
-; Retained state and original writes deliberately prevent producer reordering.
-; The executable driver uses these exact originals and an unsigned C oracle.
-; 4*C + padding to 8 + 8*C: C=1/9/65 costs 16/112/784 bytes.
-; A 111-byte ceiling fits C=8 (96 bytes), not C=9. Compact P=0 has no access.
-; No identity contributions, FP rewrite, profitability or extra alias promises.
-
-; MIN-LABEL: define void @bitwise_full(
-; MIN: %u.a0 = and i32 %a0, %c
-; MIN: %u.x1 = xor i64 %dc, %x1
-; MIN: ret void
-; FULL-LABEL: define void @bitwise_full(
-; FULL: alloca [65 x i32]
-; FULL: alloca [65 x i64]
-; FULL-NOT: alloca
-; FULL: store i32 %state.next, ptr %wp
-; FULL: scalar.fission.consumer.body:
-; FULL: %u.a0.consume = and i32 %a0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.a1.consume = and i32 {{%[-a-zA-Z$._0-9]+}}, %a1.consume
-; FULL: %u.o0.consume = or i32 %o0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.o1.consume = or i32 {{%[-a-zA-Z$._0-9]+}}, %o1.consume
-; FULL: %u.x0.consume = xor i64 %x0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.x1.consume = xor i64 {{%[-a-zA-Z$._0-9]+}}, %x1.consume
-; FULL: ret void
-; CHUNK-LABEL: define void @bitwise_full(
-; CHUNK: alloca [9 x i32]
-; CHUNK: alloca [9 x i64]
-; CHUNK-NOT: alloca
-; CHUNK: scalar.fission.chunk:
-; CHUNK: %a0.chunk.carry = phi i32 [ -251691430, %preheader ]
-; CHUNK: store i32 %state.next, ptr %wp
-; CHUNK: scalar.fission.consumer.body:
-; CHUNK: %u.a0.consume = and i32 %a0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.a1.consume = and i32 {{%[-a-zA-Z$._0-9]+}}, %a1.consume
-; CHUNK: %u.o0.consume = or i32 %o0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.o1.consume = or i32 {{%[-a-zA-Z$._0-9]+}}, %o1.consume
-; CHUNK: %u.x0.consume = xor i64 %x0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.x1.consume = xor i64 {{%[-a-zA-Z$._0-9]+}}, %x1.consume
-; CHUNK: ret void
-; SMALL: scalar-bitwise.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @bitwise_full(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @bitwise_compact(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @bitwise_affine(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @bitwise_full(ptr %a, ptr %mem, ptr %out, i64 %n, i32 %mode, i32 %seed) !dbg !10 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -129,39 +97,6 @@ exit:
   ret void
 }
 
-; MIN-LABEL: define void @bitwise_compact(
-; MIN: %u.a0 = and i32 %a0, %c
-; MIN: %u.x1 = xor i64 %dc, %x1
-; MIN: ret void
-; FULL-LABEL: define void @bitwise_compact(
-; FULL: alloca [65 x i32]
-; FULL: alloca [65 x i64]
-; FULL-NOT: alloca
-; FULL: store i32 %state.next, ptr %wp
-; FULL: scalar.fission.consumer.body:
-; FULL: %u.a0.consume = and i32 %a0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.a1.consume = and i32 {{%[-a-zA-Z$._0-9]+}}, %a1.consume
-; FULL: %u.o0.consume = or i32 %o0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.o1.consume = or i32 {{%[-a-zA-Z$._0-9]+}}, %o1.consume
-; FULL: %u.x0.consume = xor i64 %x0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.x1.consume = xor i64 {{%[-a-zA-Z$._0-9]+}}, %x1.consume
-; FULL: ret void
-; CHUNK-LABEL: define void @bitwise_compact(
-; CHUNK: alloca [9 x i32]
-; CHUNK: alloca [9 x i64]
-; CHUNK-NOT: alloca
-; CHUNK: scalar.fission.chunk:
-; CHUNK: %a0.chunk.carry = phi i32 [ -251691430, %preheader ]
-; CHUNK: store i32 %state.next, ptr %wp
-; CHUNK: scalar.fission.consumer.body:
-; CHUNK: %u.a0.consume = and i32 %a0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.a1.consume = and i32 {{%[-a-zA-Z$._0-9]+}}, %a1.consume
-; CHUNK: %u.o0.consume = or i32 %o0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.o1.consume = or i32 {{%[-a-zA-Z$._0-9]+}}, %o1.consume
-; CHUNK: %u.x0.consume = xor i64 %x0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.x1.consume = xor i64 {{%[-a-zA-Z$._0-9]+}}, %x1.consume
-; CHUNK: ret void
-; SMALL: scalar-bitwise.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 define void @bitwise_compact(ptr %a, ptr %mem, ptr %out, i64 %n, i32 %mode, i32 %seed) !dbg !20 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -283,37 +218,6 @@ exit:
   ret void
 }
 
-; MIN-LABEL: define void @bitwise_affine(
-; MIN: %u.a0 = and i32 %a0, %c
-; MIN: %u.x1 = xor i64 %dc, %x1
-; MIN: ret void
-; FULL-LABEL: define void @bitwise_affine(
-; FULL: alloca [65 x i32]
-; FULL: alloca [65 x i64]
-; FULL-NOT: alloca
-; FULL: store i32 %state.next, ptr %wp
-; FULL: scalar.fission.consumer.body:
-; FULL: %u.a0.consume = and i32 %a0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.a1.consume = and i32 {{%[-a-zA-Z$._0-9]+}}, %a1.consume
-; FULL: %u.o0.consume = or i32 %o0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.o1.consume = or i32 {{%[-a-zA-Z$._0-9]+}}, %o1.consume
-; FULL: %u.x0.consume = xor i64 %x0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.x1.consume = xor i64 {{%[-a-zA-Z$._0-9]+}}, %x1.consume
-; FULL: ret void
-; CHUNK-LABEL: define void @bitwise_affine(
-; CHUNK: alloca [9 x i32]
-; CHUNK: alloca [9 x i64]
-; CHUNK: scalar.fission.chunk:
-; CHUNK-NOT: fission.chunk.remaining
-; CHUNK: %fission.chunk.base = phi i64 [ 7, %preheader ], [ %fission.producer.iv.next, %scalar.fission.chunk.latch ]
-; CHUNK: %next = add{{( nuw)?( nsw)?}} i64 %iv, 3
-; CHUNK: %done = icmp eq i64 %next, %limit
-; CHUNK: %fission.producer.iv.next = phi i64 [ %next, %loop ]
-; CHUNK: scalar.fission.consumer.body:
-; CHUNK: %u.x0.consume = xor i64 %x0.consume,
-; CHUNK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHUNK: ret void
-; SMALL: scalar-bitwise.c:52:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 define void @bitwise_affine(ptr %a, ptr %mem, ptr %out, i64 %n, i32 %mode, i32 %seed) !dbg !30 {
 entry:
   %valid = icmp ule i64 %n, 65

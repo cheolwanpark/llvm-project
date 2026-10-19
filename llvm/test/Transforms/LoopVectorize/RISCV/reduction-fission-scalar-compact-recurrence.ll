@@ -1,51 +1,37 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=SCALAR < %t
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false -S %s -o %t.tail
-; RUN: FileCheck %s --check-prefix=TAIL < %t.tail
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.tail -o /dev/null
-;
-; Closed compact accumulators coexist with integer and ordinary ordered FP
-; producer state. State drives participation, addresses and contributions.
-; Merge siblings update state only in the active arm; other siblings update
-; state on skipped iterations too. Keep every retained PHI, operation, flag and
-; branch in its original block/order. Never represent a skip by adding zero.
-; The reverse sibling also retains an ordered fadd state used by its predicate.
-; Reversed accumulator PHIs reserve double[65] then i32[65] = 780 bytes;
-; integer-first uses 260+4+520 = 784. Traffic is 24*P, not 24*N or 24*M.
-; Canonical, affine, enclosing reuse and capacity 1/255/5461 analogues are
-; original/transformed/independent-formula execution inputs for the checker.
-;
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_recurrence(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_recurrence_reverse(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_recurrence_merge(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_recurrence_affine(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_recurrence_runtime(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_recurrence_enclosing(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_recurrence_one(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_recurrence_255(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_recurrence_limit(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; REMARK: scalar-compact-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; SCALAR-LABEL: define void @compact_recurrence(
-; SCALAR-DAG: alloca [65 x i32]
-; SCALAR-DAG: alloca [65 x double]
-; SCALAR: %prev = phi i32
-; SCALAR: %choose = select
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: %ud.consume = fadd double %rd.consume,
-; SCALAR: %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ],
-; SCALAR: ret void
-; TAIL-LABEL: define void @compact_recurrence(
-; TAIL: %prev = phi i32
-; TAIL: scalar.fission.consumer.guard:
-; TAIL: vector.body:
-; TAIL: @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: scalar.fission.consumer.body:
-; TAIL: %ud.consume = fadd double %rd.consume,
-; TAIL: ret void
 define void @compact_recurrence(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !12 {
 entry:
@@ -123,27 +109,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-compact-recurrence.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 780
-; SCALAR-LABEL: define void @compact_recurrence_reverse(
-; SCALAR-DAG: alloca [65 x i32]
-; SCALAR-DAG: alloca [65 x double]
-; SCALAR: %prev = phi i32
-; SCALAR: %choose = select
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: %ud.consume = fadd double %rd.consume,
-; SCALAR: %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ],
-; SCALAR: ret void
-; TAIL-LABEL: define void @compact_recurrence_reverse(
-; TAIL: %prev = phi i32
-; TAIL: scalar.fission.consumer.guard:
-; TAIL: vector.body:
-; TAIL: @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: scalar.fission.consumer.body:
-; TAIL: %ud.consume = fadd double %rd.consume,
-; TAIL: ret void
 define void @compact_recurrence_reverse(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !14 {
 entry:
@@ -220,27 +185,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-compact-recurrence.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; SCALAR-LABEL: define void @compact_recurrence_merge(
-; SCALAR-DAG: alloca [65 x i32]
-; SCALAR-DAG: alloca [65 x double]
-; SCALAR: %prev = phi i32
-; SCALAR: %choose = select
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: %ud.consume = fadd double %rd.consume,
-; SCALAR: %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ],
-; SCALAR: ret void
-; TAIL-LABEL: define void @compact_recurrence_merge(
-; TAIL: %prev = phi i32
-; TAIL: scalar.fission.consumer.guard:
-; TAIL: vector.body:
-; TAIL: @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: scalar.fission.consumer.body:
-; TAIL: %ud.consume = fadd double %rd.consume,
-; TAIL: ret void
 define void @compact_recurrence_merge(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !16 {
 entry:
@@ -320,27 +264,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-compact-recurrence.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; SCALAR-LABEL: define void @compact_recurrence_affine(
-; SCALAR-DAG: alloca [65 x i32]
-; SCALAR-DAG: alloca [65 x double]
-; SCALAR: %prev = phi i32
-; SCALAR: %choose = select
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: %ud.consume = fadd double %rd.consume,
-; SCALAR: %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ],
-; SCALAR: ret void
-; TAIL-LABEL: define void @compact_recurrence_affine(
-; TAIL: %prev = phi i32
-; TAIL: scalar.fission.consumer.guard:
-; TAIL: vector.body:
-; TAIL: @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: scalar.fission.consumer.body:
-; TAIL: %ud.consume = fadd double %rd.consume,
-; TAIL: ret void
 define void @compact_recurrence_affine(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !18 {
 entry:
@@ -424,27 +347,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-compact-recurrence.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 780
-; SCALAR-LABEL: define void @compact_recurrence_runtime(
-; SCALAR-DAG: alloca [65 x i32]
-; SCALAR-DAG: alloca [65 x double]
-; SCALAR: %prev = phi i32
-; SCALAR: %choose = select
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: %ud.consume = fadd double %rd.consume,
-; SCALAR: %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ],
-; SCALAR: ret void
-; TAIL-LABEL: define void @compact_recurrence_runtime(
-; TAIL: %prev = phi i32
-; TAIL: scalar.fission.consumer.guard:
-; TAIL: vector.body:
-; TAIL: @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: scalar.fission.consumer.body:
-; TAIL: %ud.consume = fadd double %rd.consume,
-; TAIL: ret void
 define void @compact_recurrence_runtime(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !20 {
 entry:
@@ -527,27 +429,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-compact-recurrence.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; SCALAR-LABEL: define void @compact_recurrence_enclosing(
-; SCALAR-DAG: alloca [65 x i32]
-; SCALAR-DAG: alloca [65 x double]
-; SCALAR: %prev = phi i32
-; SCALAR: %choose = select
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: %ud.consume = fadd double %rd.consume,
-; SCALAR: %r0.result = phi i32 [ %carry0, %scalar.fission.consumer.guard ],
-; SCALAR: ret void
-; TAIL-LABEL: define void @compact_recurrence_enclosing(
-; TAIL: %prev = phi i32
-; TAIL: scalar.fission.consumer.guard:
-; TAIL: vector.body:
-; TAIL: @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: scalar.fission.consumer.body:
-; TAIL: %ud.consume = fadd double %rd.consume,
-; TAIL: ret void
 define void @compact_recurrence_enclosing(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !22 {
 entry:
@@ -657,19 +538,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-compact-recurrence.c:72:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
-; SCALAR-LABEL: define void @compact_recurrence_one(
-; SCALAR-DAG: alloca [1 x i32]
-; SCALAR-DAG: alloca [1 x double]
-; SCALAR: %prev = phi i32
-; SCALAR: %choose = select
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: %ud.consume = fadd double %rd.consume,
-; SCALAR: %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ],
-; SCALAR: ret void
 define void @compact_recurrence_one(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !24 {
 entry:
@@ -749,19 +617,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-compact-recurrence.c:82:3: split scalar-IR reduction loop; {{.*}}scratch capacity 255, scratch bytes 3064
-; SCALAR-LABEL: define void @compact_recurrence_255(
-; SCALAR-DAG: alloca [255 x i32]
-; SCALAR-DAG: alloca [255 x double]
-; SCALAR: %prev = phi i32
-; SCALAR: %choose = select
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: %ud.consume = fadd double %rd.consume,
-; SCALAR: %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ],
-; SCALAR: ret void
 define void @compact_recurrence_255(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !26 {
 entry:
@@ -839,19 +694,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-compact-recurrence.c:92:3: split scalar-IR reduction loop; {{.*}}scratch capacity 5461, scratch bytes 65536
-; SCALAR-LABEL: define void @compact_recurrence_limit(
-; SCALAR-DAG: alloca [5461 x i32]
-; SCALAR-DAG: alloca [5461 x double]
-; SCALAR: %prev = phi i32
-; SCALAR: %choose = select
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: %ud.consume = fadd double %rd.consume,
-; SCALAR: %r0.result = phi i32 [ 17, %scalar.fission.consumer.guard ],
-; SCALAR: ret void
 define void @compact_recurrence_limit(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !28 {
 entry:

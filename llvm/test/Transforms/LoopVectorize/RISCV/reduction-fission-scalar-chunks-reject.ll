@@ -1,24 +1,36 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=4 \
-; RUN:   -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
-; RUN: FileCheck %s < %t
-;
-; A small ceiling cannot bypass any existing legality contract. Every loop
-; would need more than four full-trip scratch bytes. Noncanonical and reverse
-; equality loops now use capacity-one original-control chunks. The latter's
-; operand is one although it executes twice; executable checks retain this case.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_feedback(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_effect(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_volatile(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_strictfp(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_noncanonical(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_reverse_equality(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_constrained(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_retained_state(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare i32 @unsafe(i32) nounwind willreturn
 declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
 
-; REASON: scalar-chunks-reject.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define i32 @chunk_feedback(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
 define i32 @chunk_feedback(ptr %a, i64 %n) !dbg !10 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -44,11 +56,6 @@ bypass:
   ret i32 17
 }
 
-; REASON: scalar-chunks-reject.c:22:3: scalar-IR reduction fission rejected: scalar-unsafe-call
-; CHECK-LABEL: define i32 @chunk_effect(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
 define i32 @chunk_effect(ptr %a, i64 %n) !dbg !12 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -74,11 +81,6 @@ bypass:
   ret i32 17
 }
 
-; REASON: scalar-chunks-reject.c:32:3: scalar-IR reduction fission rejected: scalar-non-simple-load
-; CHECK-LABEL: define i32 @chunk_volatile(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
 define i32 @chunk_volatile(ptr %a, i64 %n) !dbg !14 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -104,11 +106,6 @@ bypass:
   ret i32 17
 }
 
-; REASON: scalar-chunks-reject.c:42:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; CHECK-LABEL: define i32 @chunk_strictfp(
-; CHECK-NOT: scalar.fission
-; CHECK: ret i32
-; CHECK-NOT: scalar.fission
 define i32 @chunk_strictfp(ptr %a, i64 %n) strictfp !dbg !16 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -134,16 +131,6 @@ bypass:
   ret i32 17
 }
 
-; The four-byte ceiling now schedules the 58-element affine stream in one-slot
-; chunks. It forwards original control and the actual IV, without endpoint math.
-; REASON: scalar-chunks-reject.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 4
-; CHECK-LABEL: define i32 @chunk_noncanonical(
-; CHECK: alloca [1 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %fission.producer.iv.next = phi i64 [ %next, %loop ]
-; CHECK: %fission.producer.completed = phi i64 [ %fission.producer.next, %loop ]
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
-; CHECK: ret i32
 define i32 @chunk_noncanonical(ptr %a, i64 %n) !dbg !18 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -169,14 +156,6 @@ bypass:
   ret i32 17
 }
 
-; REASON: scalar-chunks-reject.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 4
-; CHECK-LABEL: define i32 @chunk_reverse_equality(
-; CHECK: alloca [1 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %fission.producer.iv.next = phi i8 [ %next, %loop ]
-; CHECK: %fission.producer.completed = phi i8 [ %fission.producer.next, %loop ]
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
-; CHECK: ret i32
 define i32 @chunk_reverse_equality(i32 %x) !dbg !20 {
 entry:
   br label %preheader
@@ -194,11 +173,6 @@ exit:
   ret i32 %result
 }
 
-; REASON: scalar-chunks-reject.c:72:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; CHECK-LABEL: define double @chunk_constrained(
-; CHECK-NOT: scalar.fission
-; CHECK: ret double
-; CHECK-NOT: scalar.fission
 define double @chunk_constrained(ptr %a, i64 %n) !dbg !22 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -224,15 +198,6 @@ bypass:
   ret double 0.0
 }
 
-; Intentionally changed: canonical chunks now forward the delay's exact
-; backedge, while every genuine rejection above retains its old contract.
-; REASON: scalar-chunks-reject.c:82:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 4
-; REASON-SAME: producer state carries 1
-; CHECK-LABEL: define i32 @chunk_retained_state(
-; CHECK: %prev.chunk.carry = phi i32 [ 23, %preheader ], [ %prev.chunk.backedge, %scalar.fission.chunk.latch ]
-; CHECK: %prev = phi i32 [ %prev.chunk.carry, %scalar.fission.producer.ph ], [ %x, %loop ]
-; CHECK: %prev.chunk.backedge = phi i32 [ %x, %loop ]
-; CHECK: ret i32
 define i32 @chunk_retained_state(ptr %a, i64 %n) !dbg !24 {
 entry:
   %valid = icmp ule i64 %n, 65

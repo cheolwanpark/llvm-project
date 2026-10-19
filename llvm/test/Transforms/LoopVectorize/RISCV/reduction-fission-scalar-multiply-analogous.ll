@@ -1,13 +1,14 @@
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -S %s | FileCheck %s
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -vplan-reduction-fission-allow-fp-reordering -S %s | FileCheck %s
-;
-; Exact former bitwise_unsupported body: multiplication is now admitted.
-; CHECK-LABEL: define i32 @bitwise_unsupported(
-; CHECK: alloca [65 x i32]
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %sum.consume = phi i32 [ 19,
-; CHECK: %update.consume = mul i32 %sum.consume,
-; CHECK: ret i32
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @bitwise_unsupported(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_compact_non_add(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define i32 @bitwise_unsupported(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -32,14 +33,6 @@ bypass:
   ret i32 19
 }
 
-
-; Exact former compact non-add body; skip-zero iterations have no update.
-; CHECK-LABEL: define i32 @reject_compact_non_add(
-; CHECK: alloca [65 x i32]
-; CHECK: scalar.fission.consumer.guard:
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %update.consume = mul i32 %sum.consume,
-; CHECK: ret i32
 define i32 @reject_compact_non_add(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65

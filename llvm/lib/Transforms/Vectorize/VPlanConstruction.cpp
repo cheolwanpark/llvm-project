@@ -18,7 +18,6 @@
 #include "VPlanDominatorTree.h"
 #include "VPlanHelpers.h"
 #include "VPlanPatternMatch.h"
-#include "VPlanReductionFissionFPReordering.h"
 #include "VPlanTransforms.h"
 #include "VPlanUtils.h"
 #include "llvm/ADT/SmallVectorExtras.h"
@@ -656,36 +655,36 @@ createWidenInductionRecipe(PHINode *Phi, VPPhi *PhiR, VPIRValue *Start,
   // For an IV that requires SCEV predicate, keep extracting the exit values
   // from the loop directly, as the pre-computed exit value as-is would  be
   // incorrect outside the loop.
-  auto ReplaceExtractsWithExitingIVValueIfPossible = [&](VPWidenInductionRecipe
-                                                             *WideIV) {
-    bool IsPredicated = !WideIV->getNoWrapPredicates().empty();
-    for (VPUser *U : to_vector(BackedgeVal->users())) {
-      if (!match(U, m_ExtractLastPart(m_VPValue())))
-        continue;
-      auto *ExtractLastPart = cast<VPInstruction>(U);
-      VPUser *ExtractLastPartUser = ExtractLastPart->getSingleUser();
-      assert(ExtractLastPartUser && "must have a single user");
-      if (!match(ExtractLastPartUser, m_ExtractLastLane(m_VPValue())))
-        continue;
-      auto *ExtractLastLane = cast<VPInstruction>(ExtractLastPartUser);
-      assert(is_contained(ExtractLastLane->getParent()->successors(),
-                          Plan.getScalarPreheader()) &&
-             "last lane must be extracted in the middle block");
-      // Keep the vector extract for exit-block live-out uses of a predicated
-      // IV.
-      if (IsPredicated &&
-          any_of(ExtractLastLane->users(), [&](VPUser *LaneUser) {
-            auto *R = cast<VPRecipeBase>(LaneUser);
-            return Plan.isExitBlock(R->getParent());
-          }))
-        continue;
-      VPBuilder Builder(ExtractLastLane);
-      ExtractLastLane->replaceAllUsesWith(
-          Builder.createNaryOp(VPInstruction::ExitingIVValue, {WideIV}));
-      ExtractLastLane->eraseFromParent();
-      ExtractLastPart->eraseFromParent();
-    }
-  };
+  auto ReplaceExtractsWithExitingIVValueIfPossible =
+      [&](VPWidenInductionRecipe *WideIV) {
+        bool IsPredicated = !WideIV->getNoWrapPredicates().empty();
+        for (VPUser *U : to_vector(BackedgeVal->users())) {
+          if (!match(U, m_ExtractLastPart(m_VPValue())))
+            continue;
+          auto *ExtractLastPart = cast<VPInstruction>(U);
+          VPUser *ExtractLastPartUser = ExtractLastPart->getSingleUser();
+          assert(ExtractLastPartUser && "must have a single user");
+          if (!match(ExtractLastPartUser, m_ExtractLastLane(m_VPValue())))
+            continue;
+          auto *ExtractLastLane = cast<VPInstruction>(ExtractLastPartUser);
+          assert(is_contained(ExtractLastLane->getParent()->successors(),
+                              Plan.getScalarPreheader()) &&
+                 "last lane must be extracted in the middle block");
+          // Keep the vector extract for exit-block live-out uses of a
+          // predicated IV.
+          if (IsPredicated &&
+              any_of(ExtractLastLane->users(), [&](VPUser *LaneUser) {
+                auto *R = cast<VPRecipeBase>(LaneUser);
+                return Plan.isExitBlock(R->getParent());
+              }))
+            continue;
+          VPBuilder Builder(ExtractLastLane);
+          ExtractLastLane->replaceAllUsesWith(
+              Builder.createNaryOp(VPInstruction::ExitingIVValue, {WideIV}));
+          ExtractLastLane->eraseFromParent();
+          ExtractLastPart->eraseFromParent();
+        }
+      };
 
   if (IndDesc.getKind() == InductionDescriptor::IK_PtrInduction) {
     auto *WideIV = new VPWidenPointerInductionRecipe(
@@ -921,8 +920,7 @@ bool VPlanTransforms::createHeaderPhiRecipes(
     const MapVector<PHINode *, InductionDescriptor> &Inductions,
     const MapVector<PHINode *, RecurrenceDescriptor> &Reductions,
     const SmallPtrSetImpl<const PHINode *> &FixedOrderRecurrences,
-    const SmallPtrSetImpl<PHINode *> &InLoopReductions, bool AllowReordering,
-    const FissionFPReorderingPolicy *FissionFPReordering) {
+    const SmallPtrSetImpl<PHINode *> &InLoopReductions, bool AllowReordering) {
   // Retrieve the header manually from the intial plain-CFG VPlan.
   auto [HeaderVPBB, LatchVPBB] = VPBlockUtils::getPlainCFGHeaderAndLatch(Plan);
   assert(VPDT.dominates(HeaderVPBB, LatchVPBB) &&
@@ -960,9 +958,7 @@ bool VPlanTransforms::createHeaderPhiRecipes(
            "incoming value must match start value");
     // Will be updated later to >1 if reduction is partial.
     unsigned ScaleFactor = 1;
-    bool UseOrderedReductions =
-        !AllowReordering && RdxDesc.isOrdered() &&
-        !(FissionFPReordering && FissionFPReordering->allows(Phi));
+    bool UseOrderedReductions = !AllowReordering && RdxDesc.isOrdered();
     return new VPReductionPHIRecipe(
         Phi, RdxDesc.getRecurrenceKind(), *Start, *BackedgeValue,
         getReductionStyle(InLoopReductions.contains(Phi), UseOrderedReductions,

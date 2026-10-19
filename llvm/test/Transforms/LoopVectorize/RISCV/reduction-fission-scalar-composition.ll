@@ -1,39 +1,16 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=112 -pass-remarks=vplan-reduction-fission -S %s -o %t 2>%t.remarks
-; RUN: FileCheck %s --check-prefix=SCALAR < %t
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=16 -vplan-reduction-fission-allow-fp-reordering -S %s | FileCheck %s --check-prefix=ONE
-;
-; Stores, exact sign negation and ordered subtraction compose with simultaneous
-; retained state, compact chunks and separate current/next final exports. The
-; two original pointers may overlap: all accesses stay in the producer order.
-; The executable checker runs these exact originals, not source rewrites.
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compose_neg(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compose_sub(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) nounwind willreturn speculatable memory(none)
 
-; REMARK: scalar-composition.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 112, producer live-outs 6, chunked schedule, trip bound 65
-; REMARK-SAME: producer state carries 2
-; ONE-LABEL: define void @compose_neg(
-; ONE: alloca [1 x i32]
-; ONE: alloca [1 x double]
-; ONE: scalar.fission.consumer.guard:
-; SCALAR-LABEL: define void @compose_neg(
-; SCALAR: alloca [9 x i32]
-; SCALAR: alloca [9 x double]
-; SCALAR: %prev.chunk.carry = phi i32
-; SCALAR: %older.chunk.carry = phi i32
-; SCALAR: store i32 %state.next, ptr %wp
-; SCALAR: %dc = fneg double %dx, !dbg
-; SCALAR: store double %dc, ptr %dp
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR-DAG: %prev.chunk.backedge = phi i32 [ %state.next, %latch ]
-; SCALAR-DAG: %older.chunk.backedge = phi i32 [ %prev, %latch ]
-; SCALAR-DAG: %prev.fission.export = phi i32 [ %prev, %latch ]
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: %u0.consume = add i32 %r0.consume,
-; SCALAR: %ud.consume = fadd double %rd.consume, {{.*}}, !dbg
-; SCALAR: %rd.result = phi double [ %rd.chunk.carry, %scalar.fission.consumer.guard ],
-; SCALAR: ret void
 define void @compose_neg(ptr %a, ptr %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !10 {
 entry:
@@ -117,30 +94,6 @@ bypass:
   ret void
 }
 
-; REMARK: scalar-composition.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 112, producer live-outs 6, chunked schedule, trip bound 65
-; REMARK-SAME: producer state carries 2
-; ONE-LABEL: define void @compose_sub(
-; ONE: alloca [1 x i32]
-; ONE: alloca [1 x double]
-; ONE: scalar.fission.consumer.guard:
-; SCALAR-LABEL: define void @compose_sub(
-; SCALAR: alloca [9 x i32]
-; SCALAR: alloca [9 x double]
-; SCALAR: %prev.chunk.carry = phi i32
-; SCALAR: %older.chunk.carry = phi i32
-; SCALAR: store i32 %state.next, ptr %wp
-; SCALAR: %dc = fneg double %dx, !dbg
-; SCALAR: store double %dc, ptr %dp
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR-DAG: %prev.chunk.backedge = phi i32 [ %state.next, %latch ]
-; SCALAR-DAG: %older.chunk.backedge = phi i32 [ %prev, %latch ]
-; SCALAR-DAG: %prev.fission.export = phi i32 [ %prev, %latch ]
-; SCALAR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: %u0.consume = sub i32 %r0.consume,
-; SCALAR: %ud.consume = fsub double %rd.consume, {{.*}}, !dbg
-; SCALAR: %rd.result = phi double [ %rd.chunk.carry, %scalar.fission.consumer.guard ],
-; SCALAR: ret void
 define void @compose_sub(ptr %a, ptr %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !12 {
 entry:

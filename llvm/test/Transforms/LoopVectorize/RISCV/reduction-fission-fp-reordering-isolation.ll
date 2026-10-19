@@ -1,77 +1,11 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=520 -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t.on 2> %t.remarks
-; RUN: FileCheck %s < %t.on
-; RUN: FileCheck %s --check-prefix=ISOLATION < %t.on
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.on -o /dev/null
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=520 -vplan-reduction-fission-allow-fp-reordering=false \
-; RUN:   -S %s -o %t.off
-; RUN: FileCheck %s --check-prefix=ORDERED --implicit-check-not=reassoc < %t.off
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.off -o /dev/null
-;
-; The first loop exceeds the scratch limit and falls back to ordered ordinary
-; vectorization. The second loop fits: only its four sums may gain reassoc.
-; Preserve existing ninf on one sum, contract on producer math, and nnan nsz
-; (without reassoc) on the unselected min reduction, including scalar tails.
-;
-; ISOLATION-LABEL: define void @isolated_attempts(
-; ISOLATION-NOT: reassoc
-; ISOLATION-NOT: vector.fission
-; ISOLATION: second.entry:
-; ISOLATION: vector.fission.done:
-; ISOLATION-NOT: reassoc
-; ISOLATION: ret void
-;
-; CHECK-LABEL: define void @isolated_attempts(
-; CHECK: vector.body:
-; CHECK: fmul contract <vscale x 2 x double>
-; CHECK: call nnan nsz <vscale x 2 x double> @llvm.minnum.
-; CHECK-NEXT: {{.*}}call ninf double @llvm.vector.reduce.fadd.
-; CHECK-NEXT: {{.*}}call double @llvm.vector.reduce.fadd.
-; CHECK: second.entry:
-; CHECK: vector.fission.producer.body:
-; CHECK: fmul contract <vscale x 8 x double>
-; CHECK-NEXT: {{.*}}fmul <vscale x 8 x double>
-; CHECK: scalar.fission.producer.body:
-; CHECK: fmul contract double
-; CHECK-NEXT: {{.*}}fmul double
-; CHECK: vector.fission.accumulator.body:
-; CHECK: fadd reassoc ninf <vscale x 4 x double>
-; CHECK-NEXT: {{.*}}fadd reassoc <vscale x 4 x double>
-; CHECK-NEXT: {{.*}}fadd reassoc <vscale x 4 x double>
-; CHECK-NEXT: {{.*}}fadd reassoc <vscale x 4 x double>
-; CHECK-NEXT: {{.*}}call nnan nsz <vscale x 4 x double> @llvm.minnum.
-; CHECK: call reassoc ninf double @llvm.vector.reduce.fadd.{{.*}}(double -0.000000e+00,
-; CHECK: call nnan nsz double @llvm.vector.reduce.fmin.
-; CHECK: scalar.fission.accumulator.body:
-; CHECK: fadd reassoc ninf double
-; CHECK-NEXT: {{.*}}fadd reassoc double
-; CHECK-NEXT: {{.*}}fadd reassoc double
-; CHECK-NEXT: {{.*}}fadd reassoc double
-; CHECK-NEXT: {{.*}}call nnan nsz double @llvm.minnum.
-; CHECK: ret void
-;
-; ORDERED-LABEL: define void @isolated_attempts(
-; ORDERED: second.entry:
-; ORDERED: vector.fission.accumulator.body:
-; ORDERED: call ninf double @llvm.vector.reduce.fadd.
-; ORDERED: scalar.fission.accumulator.body:
-; ORDERED-DAG: fadd ninf double
-; ORDERED-DAG: call nnan nsz double @llvm.minnum.
-; ORDERED: ret void
-;
-; REMARK-NOT: split reduction loop
-; REMARK: split reduction loop: {{.*}}scratch capacity 65, scratch bytes 520
-; REMARK: reduction second.r0: unordered, reordering permission: fission-option
-; REMARK: reduction second.r4: unordered, reordering permission: IR
-; REMARK-NOT: split reduction loop
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @isolated_attempts(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @isolated_attempts(ptr noalias readonly %a, ptr noalias writeonly %out, ptr noalias readonly %b, ptr noalias writeonly %out2) vscale_range(2,2) {
 first.entry:
   br label %first.loop

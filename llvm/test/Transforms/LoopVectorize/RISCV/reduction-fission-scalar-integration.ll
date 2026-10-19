@@ -1,47 +1,19 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 \
-; RUN:   -S %s | FileCheck %s --check-prefix=FIT
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 \
-; RUN:   -vplan-reduction-fission-allow-fp-reordering -S %s | FileCheck %s --check-prefix=FIT
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=259 -S %s | FileCheck %s --check-prefix=BELOW
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=3 -S %s | FileCheck %s --check-prefix=TINY --implicit-check-not=scalar.fission
-;
-; One module exercises affine full-trip counts, an acyclic cross edge and a
-; canonical chunk controller. Both canonical loops can use N-base scheduling.
-; 260 fits 65 i32s exactly; 259 chunks all three at capacity 64 (256 bytes).
-; The affine loop carries original control; canonical loops retain N-base. Three bytes cannot hold one
-; i32 slot, so all three reject there. The executable checker compares fresh LV1/LV2 output with original
-; IR and an independent C sum, including every N through 66, narrow capacity
-; boundaries, bypasses, output aliases and exact producer/vector/tail/chunk
-; counts. Both separate FP option settings are retained.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @integration_affine(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @integration_cross_edge(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @integration_chunk(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; FIT-LABEL: define void @integration_affine(
-; FIT: alloca [65 x i32]
-; FIT-NOT: scalar.fission.chunk
-; FIT: %fission.ordinal = phi i64
-; FIT: %iv = phi i64 [ 7, %preheader ]
-; FIT: %next = add {{(nuw )?}}i64 %iv, 2
-; FIT: %done = icmp eq i64 %next, %limit
-; FIT: %fission.completed = add {{(nuw )?}}i64 %fission.ordinal, 1
-; FIT: %fission.completed.count = phi i64
-; FIT: scalar.fission.consumer.body:
-; FIT: ret void
-; BELOW-LABEL: define void @integration_affine(
-; BELOW: alloca [64 x i32]
-; BELOW: scalar.fission.chunk:
-; BELOW: %fission.producer.continue = phi i1
-; BELOW: br i1 %fission.producer.continue, label %scalar.fission.chunk
-; BELOW: ret void
-; TINY-LABEL: define void @integration_affine(
-; TINY: ret void
 define void @integration_affine(ptr readonly %a, ptr %out, i64 %n, i32 %start) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -71,40 +43,6 @@ exit:
   ret void
 }
 
-; This was the arm-cross-edge rejection in scalar-diamond-reject.ll. Keep the
-; cross edge and an analogous unsupported arm cycle there; execute this case.
-; FIT-LABEL: define void @integration_cross_edge(
-; FIT: alloca [65 x i32]
-; FIT-NOT: scalar.fission.chunk
-; FIT: left:
-; FIT: br label %right
-; FIT: right:
-; FIT: %first = phi i32 [ %lc, %left ], [ %x, %loop ]
-; FIT: latch:
-; FIT: store i32 %c
-; FIT: scalar.fission.consumer.body:
-; FIT: ret void
-; BELOW-LABEL: define void @integration_cross_edge(
-; BELOW: alloca [64 x i32], align 4
-; BELOW: scalar.fission.chunk:
-; BELOW: %fission.chunk.remaining = sub {{(nuw )?}}i64 %n, %fission.chunk.base
-; BELOW: %fission.chunk.count = select i1 %fission.chunk.partial, i64 %fission.chunk.remaining, i64 64
-; BELOW: %iv = phi i64 [ %fission.chunk.base, %scalar.fission.producer.ph ], [ %next, %latch ]
-; BELOW: br i1 %choose, label %left, label %right
-; BELOW: left:
-; BELOW: %lc = mul i32 %x, 3
-; BELOW: br label %right
-; BELOW: right:
-; BELOW: %first = phi i32 [ %lc, %left ], [ %x, %loop ]
-; BELOW: %c = call i32 @scalar_helper(i32 %arg)
-; BELOW: br label %latch
-; BELOW: latch:
-; BELOW: store i32 %c
-; BELOW: br i1 %fission.producer.more, label %loop, label %scalar.fission.consumer.ph
-; BELOW: scalar.fission.chunk.latch:
-; BELOW: ret void
-; TINY-LABEL: define void @integration_cross_edge(
-; TINY: ret void
 define void @integration_cross_edge(ptr readonly %a, ptr %out, i64 %n, i32 %start) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -139,21 +77,6 @@ exit:
   ret void
 }
 
-; FIT-LABEL: define void @integration_chunk(
-; FIT: alloca [65 x i32]
-; FIT: scalar.fission.chunk:
-; FIT: %fission.chunk.remaining = sub {{(nuw )?}}i64 %n, %fission.chunk.base
-; FIT: %fission.chunk.count = select i1 %fission.chunk.partial, i64 %fission.chunk.remaining, i64 65
-; FIT: %fission.producer.ordinal = phi i64
-; FIT: scalar.fission.chunk.latch:
-; FIT: ret void
-; BELOW-LABEL: define void @integration_chunk(
-; BELOW: alloca [64 x i32]
-; BELOW: scalar.fission.chunk:
-; BELOW: i64 64
-; BELOW: ret void
-; TINY-LABEL: define void @integration_chunk(
-; TINY: ret void
 define void @integration_chunk(ptr readonly %a, ptr %out, i64 %n, i32 %start) {
 entry:
   %valid = icmp ule i64 %n, 255

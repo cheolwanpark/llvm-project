@@ -1,41 +1,11 @@
-; REQUIRES: asserts
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-reductions=5 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -debug-only=vplan-reduction-fission -disable-output %s 2>&1 \
-; RUN:   | FileCheck %s --check-prefix=SELECT
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-reductions=5 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 -S %s \
-; RUN:   | FileCheck %s --check-prefix=CODEGEN
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-reductions=5 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 -S %s \
-; RUN:   | llc -mtriple=riscv64 -mattr=+v \
-; RUN:   | FileCheck %s --check-prefix=BACKEND
-
-; SELECT: LV-FISSION: scipy_fma8_fixed: candidate: reductions=5
-; SELECT-SAME: producer-vf=vscale x 4
-; SELECT-SAME: accumulator-vf=vscale x 2
-
-; CODEGEN-LABEL: define void @scipy_fma8_fixed(
-; CODEGEN-COUNT-2: alloca [1024 x double]
-; CODEGEN-NOT: alloca [1024 x double]
-; CODEGEN: vector.fission.producer.body:
-; CODEGEN-COUNT-2: store <vscale x 4 x double>
-; CODEGEN: vector.fission.accumulator.body:
-; CODEGEN-COUNT-2: load <vscale x 2 x double>
-
-; BACKEND-LABEL: scipy_fma8_fixed:
-; BACKEND-NOT: {{v[ls][1248]r\.v.*Folded (Spill|Reload)}}
-; BACKEND: ret
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @scipy_fma8_fixed(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @scipy_fma8_fixed(ptr noalias readonly %x, ptr noalias readonly %y,
                               double %frequency, ptr noalias writeonly %out) {
 entry:

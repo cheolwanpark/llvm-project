@@ -547,6 +547,7 @@ FUNCTION_PASS("reg2mem", RegToMemPass())
 FUNCTION_PASS("safe-stack", SafeStackPass(*TM))
 FUNCTION_PASS("sandbox-vectorizer", SandboxVectorizerPass())
 FUNCTION_PASS("scalarize-masked-mem-intrin", ScalarizeMaskedMemIntrinPass())
+FUNCTION_PASS("scalar-fission", ScalarFissionPass())
 FUNCTION_PASS("sccp", SCCPPass())
 FUNCTION_PASS("select-optimize", SelectOptimizePass(*TM))
 FUNCTION_PASS("separate-const-offset-from-gep",

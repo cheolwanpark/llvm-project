@@ -1,39 +1,11 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-force-producer-vf=16 \
-; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 -S %s -o %t
-; RUN: FileCheck %s < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=8192 -S %s | FileCheck %s
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=8191 -S %s | FileCheck %s --check-prefix=REJECT
-; RUN: sed 's/icmp ule i64 %n, 1024/icmp ule i64 %n, -1/' %s | opt -passes=loop-vectorize -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 -S | FileCheck %s --check-prefix=REJECT
-; REJECT-LABEL: define void @bounded(
-; REJECT-NOT: fission
-; REJECT: ret void
-
-; The entry guard remains in front of all four stages. Capacity is 1024,
-; while both vector bounds and both scalar exits use the same dynamic N.
-; CHECK-LABEL: define void @bounded(
-; CHECK: alloca [1024 x i32]
-; CHECK: br i1 %enter, label %preheader, label %bypass
-; CHECK: [[PN:%.*]] = sub i64 %n,
-; CHECK: vector.fission.producer.body:
-; CHECK: scalar.fission.producer.body:
-; CHECK: icmp eq i64 {{.*}}, %n
-; CHECK: [[AN:%.*]] = sub i64 %n,
-; CHECK: vector.fission.accumulator.body:
-; CHECK: scalar.fission.accumulator.body:
-; CHECK: icmp eq i64 {{.*}}, %n
-; CHECK: bypass:
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @bounded(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @bounded(ptr noalias readonly %a, ptr noalias %out, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 1024

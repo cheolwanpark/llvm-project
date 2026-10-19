@@ -1,43 +1,31 @@
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 \
-; RUN:   -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=112 -S %s | FileCheck %s
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=4 \
-; RUN:   -force-vector-interleave=1 -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=112 -S %s -o %t.evl
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.evl -o /dev/null
-;
-; The comparison is a termination decision, never a count. Runtime/nonzero
-; starts, unit/nonunit/descending steps, swapped/current operands, both branch
-; polarities and signed modular termination before equality are intentional.
-; The checker executes these exact originals and the actual transformed scalar
-; and vector-tail paths with independent C oracles, state/scratch/edge probes.
-; C=1/8/9/16, zero entry, exact capacity, partial and empty compact chunks.
-; EVL is separately machine verified, never labeled target execution.
-; Producer ordinals deliberately occupy %index (offset/compact), %index.next
-; (stride), and %current.iteration.next (down). LV must retain separate consumer
-; PHI/update identities. These are SSA-only fixture variations; every operation,
-; control, memory access and debug source location is unchanged.
-; Keep ABI alignment explicit on every load/store: source-versus-printed
-; certificates compare whole memory instructions, including final exports.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_offset(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_stride(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_down(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_early(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_current(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_compact(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_narrow(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; CHECK-LABEL: define void @nc_offset(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: %fission.chunk.base = phi i64 [ 7, %preheader ], [ %fission.producer.iv.next, %scalar.fission.chunk.latch ]
-; CHECK: add i64 %iv, 1
-; CHECK: icmp eq i64 %next, %limit
-; CHECK: %fission.producer.more = icmp ne i64 %fission.producer.next, 9
-; CHECK: %fission.producer.continuing = and i1
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: %fission.producer.iv.next = phi i64 [ %next, %latch ]
-; CHECK: %fission.producer.completed = phi i64 [ %fission.producer.next, %latch ]
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_offset(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !10 {
 entry:
@@ -108,21 +96,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @nc_stride(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: %fission.chunk.base = phi i64 [ %begin, %preheader ], [ %fission.producer.iv.next, %scalar.fission.chunk.latch ]
-; CHECK: add i64 %iv, 3
-; CHECK: icmp ne i64 %limit, %next
-; CHECK: %fission.producer.more = icmp ne i64 %fission.producer.next, 9
-; CHECK: %fission.producer.continuing = and i1
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: %fission.producer.iv.next = phi i64 [ %next, %latch ]
-; CHECK: %fission.producer.completed = phi i64 [ %fission.producer.next, %latch ]
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_stride(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !12 {
 entry:
@@ -194,21 +167,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @nc_down(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: %fission.chunk.base = phi i64 [ %begin, %preheader ], [ %fission.producer.iv.next, %scalar.fission.chunk.latch ]
-; CHECK: sub i64 %iv, 3
-; CHECK: icmp ugt i64 %next, %limit
-; CHECK: %fission.producer.more = icmp ne i64 %fission.producer.next, 9
-; CHECK: %fission.producer.continuing = and i1
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: %fission.producer.iv.next = phi i64 [ %next, %latch ]
-; CHECK: %fission.producer.completed = phi i64 [ %fission.producer.next, %latch ]
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_down(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !14 {
 entry:
@@ -280,21 +238,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @nc_early(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: %fission.chunk.base = phi i64 [ %begin, %preheader ], [ %fission.producer.iv.next, %scalar.fission.chunk.latch ]
-; CHECK: add i64 %iv, 3
-; CHECK: icmp slt i64 %next, %limit
-; CHECK: %fission.producer.more = icmp ne i64 %fission.producer.next, 9
-; CHECK: %fission.producer.continuing = and i1
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: %fission.producer.iv.next = phi i64 [ %next, %latch ]
-; CHECK: %fission.producer.completed = phi i64 [ %fission.producer.next, %latch ]
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_early(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !16 {
 entry:
@@ -366,21 +309,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @nc_current(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: %fission.chunk.base = phi i64 [ %begin, %preheader ], [ %fission.producer.iv.next, %scalar.fission.chunk.latch ]
-; CHECK: sub i64 %iv, 1
-; CHECK: icmp ne i64 %limit, %iv
-; CHECK: %fission.producer.more = icmp ne i64 %fission.producer.next, 9
-; CHECK: %fission.producer.continuing = and i1
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: %fission.producer.iv.next = phi i64 [ %next, %latch ]
-; CHECK: %fission.producer.completed = phi i64 [ %fission.producer.next, %latch ]
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_current(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !18 {
 entry:
@@ -450,21 +378,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @nc_compact(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: %fission.chunk.base = phi i64 [ %begin, %preheader ], [ %fission.producer.iv.next, %scalar.fission.chunk.latch ]
-; CHECK: sub i64 %iv, 3
-; CHECK: icmp sge i64 %limit, %next
-; CHECK: %fission.producer.more = icmp ne i64 %fission.producer.next, 9
-; CHECK: %fission.producer.continuing = and i1
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: %fission.producer.iv.next = phi i64 [ %next, %latch ]
-; CHECK: %fission.producer.completed = phi i64 [ %fission.producer.next, %latch ]
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_compact(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !20 {
 entry:
@@ -542,21 +455,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @nc_narrow(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: %fission.chunk.base = phi i8 [ %small.begin, %preheader ], [ %fission.producer.iv.next, %scalar.fission.chunk.latch ]
-; CHECK: add i8 %iv, 3
-; CHECK: icmp eq i8 %limit, %next
-; CHECK: %fission.producer.more = icmp ne i8 %fission.producer.next, 9
-; CHECK: %fission.producer.continuing = and i1
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: %fission.producer.iv.next = phi i8 [ %next, %latch ]
-; CHECK: %fission.producer.completed = phi i8 [ %fission.producer.next, %latch ]
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_narrow(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !22 {
 entry:

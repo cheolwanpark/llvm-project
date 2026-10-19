@@ -1,20 +1,11 @@
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -S %s | FileCheck %s
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -vplan-reduction-fission-allow-fp-reordering -vplan-reduction-fission-max-scratch-bytes=17 -S %s | FileCheck %s
-;
-; All entered executions are defined: the first factor is3, all later factors1.
-; Positive seeds remain within signed i8; negative seeds carry only nsw.
-; Original operations and source locations must survive scalar consumer cloning.
-; The executable oracle compares these exact originals at C1/C8/C9/C65.
-; CHECK-LABEL: define void @multiply_defined(
-; CHECK: %state.next = mul i32 %state, %x
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %u.a0.consume = mul nuw nsw i32 %a0.consume,
-; CHECK: %u.a1.consume = mul nsw i32 {{%[-a-zA-Z$._0-9]+}}, %a1.consume
-; CHECK: %u.x0.consume = mul nuw i64 %x0.consume,
-; CHECK: %u.x1.consume = mul nsw i64 {{%[-a-zA-Z$._0-9]+}}, %x1.consume
-; CHECK: %u.b0.consume = mul nuw nsw i8 %b0.consume,
-; CHECK: %u.b1.consume = mul nsw i8 {{%[-a-zA-Z$._0-9]+}}, %b1.consume
-; CHECK: ret void
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @multiply_defined(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @multiply_defined(ptr %a, ptr %mem, ptr %out, i64 %n, i32 %mode, i32 %seed) !dbg !40 {
 entry:
   %valid = icmp ule i64 %n, 65

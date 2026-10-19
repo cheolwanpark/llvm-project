@@ -1,29 +1,17 @@
-; REQUIRES: asserts
-;
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-chain-depth=8 \
-; RUN:   -vplan-reduction-fission-min-reductions=5 \
-; RUN:   -vplan-reduction-fission-min-pressure-percent=100 \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=4096 \
-; RUN:   -vplan-reduction-fission-max-duplicated-recipes=2 \
-; RUN:   -disable-output %s
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -debug-only=vplan-reduction-fission \
-; RUN:   -disable-output %s 2>&1 | FileCheck %s --check-prefix=DEBUG
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-pressure-percent=0 \
-; RUN:   -vplan-reduction-fission-min-reductions=2 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=1 \
-; RUN:   -debug-only=vplan-reduction-fission -disable-output %s 2>&1 \
-; RUN:   | FileCheck %s --check-prefix=ONE
-
-; DEBUG: LV-FISSION: dynamic_trip: rejected: non-constant-trip-count
-; One reduction and a load are sufficient under the explicit enable flag.
-; The historical minimum-count option no longer vetoes this candidate.
-; ONE: LV-FISSION: constant_trip_one: candidate: reductions=1 scratch-bytes=256
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @options_smoke(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @dynamic_trip(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @constant_trip_one(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @options_smoke() {
 entry:
   ret void
@@ -46,7 +34,6 @@ loop:
 exit:
   ret i32 %sum.next
 }
-
 
 define i32 @constant_trip_one(ptr noalias readonly %a) {
 entry:

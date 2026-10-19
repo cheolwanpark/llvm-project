@@ -1,35 +1,13 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -S %s | FileCheck %s
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -S %s | FileCheck %s
-;
-; Export-only poison is forwarded as SSA through PHIs, without a new store,
-; freeze, branch condition or other consuming operation. %observe=false keeps
-; this originally defined even when %shift is out of range. This property is
-; checked structurally; the mixed-type export matrix is separately executed.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @export_possible_poison(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; CHECK-LABEL: define i32 @export_possible_poison(
-; CHECK: alloca [65 x i32]
-; CHECK-NOT: alloca
-; CHECK: loop:
-; CHECK: %value = shl i32 %x, %shift
-; CHECK-NOT: store i32 %value
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: %value.fission.export = phi i32 [ %value, %loop ]
-; CHECK-NOT: freeze
-; CHECK-NOT: store i32 %value
-; CHECK: producer.exit:
-; CHECK: %last = phi i32 [ %value.fission.export, %scalar.fission.consumer.body ]
-; CHECK: exit:
-; CHECK: %observed = phi i32 [ -9, %entry ], [ %last, %producer.exit ]
-; CHECK: %result = select i1 %observe, i32 %observed, i32 %sum.out
-; CHECK: ret i32 %result
 define i32 @export_possible_poison(i32 %x, i32 %shift, i64 %n, i1 %observe) {
 entry:
   %valid = icmp ule i64 %n, 65

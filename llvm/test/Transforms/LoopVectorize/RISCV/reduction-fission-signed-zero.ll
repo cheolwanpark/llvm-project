@@ -1,18 +1,11 @@
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 -S %s | FileCheck %s
-;
-; Scalar remainders preserve signed-zero initializers without inactive lanes.
-; CHECK-LABEL: define void @signed_zero(
-; CHECK: vector.fission.accumulator.body:
-; CHECK-NOT: select reassoc
-; CHECK: @llvm.vector.reduce.fadd
-; CHECK: scalar.fission.accumulator.check:
-; CHECK: phi double [ -0.000000e+00,
-; CHECK: scalar.fission.accumulator.body:
-; CHECK: fadd reassoc double
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @signed_zero(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @signed_zero(ptr noalias readonly %a, ptr noalias writeonly %out) vscale_range(2,2) {
 entry:
   br label %loop

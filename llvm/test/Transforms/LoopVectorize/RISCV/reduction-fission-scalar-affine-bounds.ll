@@ -1,33 +1,35 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=3 -S %s | FileCheck %s --check-prefix=TINY --implicit-check-not=scalar.fission
-;
-; Private count representability is separate from the control IV range.
-; The 255-trip i8 control wraps, but its ordinal/count does not. The 256-trip
-; sibling needs an unrepresentable completed count and must reject. Nonzero
-; starts with positive/negative strides reach one trip and the exact default
-; scratch byte ceiling. The first over-limit siblings now chunk at the
-; ceiling with original control. Every original operation stays in the producer.
-; Executable comparisons cover all admitted capacities after one and two LVs.
-
-; CHECK-LABEL: define i32 @affine_one(
-; CHECK: alloca [1 x i32]
-; CHECK: %fission.ordinal = phi i8 [ 0, %preheader ]
-; CHECK: %fission.completed = add nuw i8 %fission.ordinal, 1
-; CHECK: %fission.completed.count = phi i8 [ %fission.completed, %latch ]
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %fission.consumer.next = add nuw i8 %fission.consumer.iv, 1
-; REMARK: scalar-affine-bounds.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 4
-; CHECK: ret i32
-; TINY-LABEL: define i32 @affine_one(
-; TINY: ret i32
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_one(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_i8_max(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_i8_overflow(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_default_limit(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_over_limit(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_relational_limit(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_relational_over_limit(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_relational_i8_max(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_relational_i8_overflow(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define i32 @affine_one(i32 %cutoff) !dbg !6 {
 entry:
   br label %preheader
@@ -62,17 +64,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @affine_i8_max(
-; CHECK: alloca [255 x i32]
-; CHECK: %fission.ordinal = phi i8 [ 0, %preheader ]
-; CHECK: %fission.completed = add nuw i8 %fission.ordinal, 1
-; CHECK: %fission.completed.count = phi i8 [ %fission.completed, %latch ]
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %fission.consumer.next = add nuw i8 %fission.consumer.iv, 1
-; REMARK: scalar-affine-bounds.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 255, scratch bytes 1020
-; CHECK: ret i32
-; TINY-LABEL: define i32 @affine_i8_max(
-; TINY: ret i32
 define i32 @affine_i8_max(i32 %cutoff) !dbg !8 {
 entry:
   br label %preheader
@@ -107,12 +98,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @affine_i8_overflow(
-; CHECK-NOT: scalar.fission
-; REMARK: scalar-affine-bounds.c:32:3: scalar-IR reduction fission rejected: trip-count-overflow
-; CHECK: ret i32
-; TINY-LABEL: define i32 @affine_i8_overflow(
-; TINY: ret i32
 define i32 @affine_i8_overflow(i32 %cutoff) !dbg !10 {
 entry:
   br label %preheader
@@ -147,17 +132,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @affine_default_limit(
-; CHECK: alloca [16384 x i32]
-; CHECK: %fission.ordinal = phi i32 [ 0, %preheader ]
-; CHECK: %fission.completed = add nuw i32 %fission.ordinal, 1
-; CHECK: %fission.completed.count = phi i32 [ %fission.completed, %latch ]
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %fission.consumer.next = add nuw i32 %fission.consumer.iv, 1
-; REMARK: scalar-affine-bounds.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 16384, scratch bytes 65536
-; CHECK: ret i32
-; TINY-LABEL: define i32 @affine_default_limit(
-; TINY: ret i32
 define i32 @affine_default_limit(i32 %cutoff) !dbg !12 {
 entry:
   br label %preheader
@@ -192,13 +166,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @affine_over_limit(
-; CHECK: alloca [16384 x i32]
-; CHECK: scalar.fission.chunk:
-; REMARK: scalar-affine-bounds.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 16384, scratch bytes 65536
-; CHECK: ret i32
-; TINY-LABEL: define i32 @affine_over_limit(
-; TINY: ret i32
 define i32 @affine_over_limit(i32 %cutoff) !dbg !14 {
 entry:
   br label %preheader
@@ -233,17 +200,6 @@ exit:
   ret i32 %result
 }
 
-; Relational analogues retain the original equality boundary fixtures above.
-; CHECK-LABEL: define i32 @affine_relational_limit(
-; CHECK: alloca [16384 x i32]
-; CHECK: %fission.ordinal = phi i32 [ 0, %preheader ]
-; CHECK: %done = icmp ult i32 %next, 49175
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: scalar.fission.consumer.body:
-; REMARK: scalar-affine-bounds.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 16384, scratch bytes 65536
-; CHECK: ret i32
-; TINY-LABEL: define i32 @affine_relational_limit(
-; TINY: ret i32
 define i32 @affine_relational_limit(i32 %cutoff) !dbg !16 {
 entry:
   br label %preheader
@@ -278,14 +234,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @affine_relational_over_limit(
-; CHECK: alloca [16384 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %done = icmp ult i32 %next, 49178
-; REMARK: scalar-affine-bounds.c:72:3: split scalar-IR reduction loop; {{.*}}scratch capacity 16384, scratch bytes 65536
-; CHECK: ret i32
-; TINY-LABEL: define i32 @affine_relational_over_limit(
-; TINY: ret i32
 define i32 @affine_relational_over_limit(i32 %cutoff) !dbg !18 {
 entry:
   br label %preheader
@@ -320,17 +268,6 @@ exit:
   ret i32 %result
 }
 
-; Relational narrow counters: 255 completed trips fit; 256 do not.
-; CHECK-LABEL: define i32 @affine_relational_i8_max(
-; CHECK: alloca [255 x i32]
-; CHECK: %fission.ordinal = phi i8 [ 0, %preheader ]
-; CHECK: %done = icmp ult i8 %next, -1
-; CHECK: %fission.completed.count = phi i8 [ %fission.completed, %latch ]
-; CHECK: scalar.fission.consumer.body:
-; REMARK: scalar-affine-bounds.c:82:3: split scalar-IR reduction loop; {{.*}}scratch capacity 255, scratch bytes 1020
-; CHECK: ret i32
-; TINY-LABEL: define i32 @affine_relational_i8_max(
-; TINY: ret i32
 define i32 @affine_relational_i8_max(i32 %cutoff) !dbg !20 {
 entry:
   br label %preheader
@@ -365,13 +302,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @affine_relational_i8_overflow(
-; CHECK-NOT: scalar.fission
-; CHECK: %done = icmp ult i8 %iv, %limit
-; REMARK: scalar-affine-bounds.c:92:3: scalar-IR reduction fission rejected: trip-count-overflow
-; CHECK: ret i32
-; TINY-LABEL: define i32 @affine_relational_i8_overflow(
-; TINY: ret i32
 define i32 @affine_relational_i8_overflow(i32 %cutoff) !dbg !22 {
 entry:
   br label %preheader

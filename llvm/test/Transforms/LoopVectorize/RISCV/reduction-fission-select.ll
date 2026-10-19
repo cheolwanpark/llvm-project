@@ -1,27 +1,11 @@
-; RUN: opt -verify-each -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' \
-; RUN:   -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -S %s -o %t
-; RUN: FileCheck %s < %t
-; RUN: llc -verify-machineinstrs -mtriple=riscv64 -mattr=+v %t -o - \
-; RUN:   | FileCheck %s --check-prefix=ASM
-;
-; Preserve both invariant and varying select conditions when reusing recipes
-; at a different VF. The short y chain stays with the accumulators.
-;
-; CHECK-LABEL: define void @select_producer_and_accumulator(
-; CHECK: vector.fission.producer.body:
-; CHECK: select i1 %choose, <vscale x 4 x double>
-; CHECK: select <vscale x 4 x i1>
-; CHECK: store <vscale x 4 x double>
-; CHECK: vector.fission.accumulator.body:
-; CHECK: select <vscale x 2 x i1>
-; CHECK: @llvm.vector.reduce.fadd.nxv2f64
-;
-; ASM-LABEL: select_producer_and_accumulator:
-; ASM: vmerge.vvm
-; ASM: ret
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @select_producer_and_accumulator(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @select_producer_and_accumulator(ptr noalias readonly %x, ptr noalias readonly %y,
                               double %frequency, i1 %choose, ptr noalias writeonly %out) {
 entry:

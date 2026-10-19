@@ -1,39 +1,14 @@
-; RUN: opt -enable-scalar-reduction-fission=false -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=8 \
-; RUN:   -vplan-reduction-fission-force-producer-vf=2 -vplan-reduction-fission-force-accumulator-vf=4 \
-; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s < %t
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-force-producer-vf=4 -vplan-reduction-fission-force-accumulator-vf=2 \
-; RUN:   -S %s -o %t.reverse
-; RUN: FileCheck %s --check-prefix=REVERSE < %t.reverse
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.reverse -o /dev/null
-;
-; A long producer uses member zero; a short consumer uses member one. Keeping
-; the complete group in both stages intentionally reloads both original members.
-; The host checker executes both vector groups and their independent scalar tails.
-; REMARK: scratch capacity 65, scratch bytes 260, scratch store bytes/iteration 4, scratch load bytes/iteration 4, duplicated recipes {{[1-9][0-9]*}}, reread loads/iteration 2
-; CHECK-LABEL: define void @interleave_reread(
-; CHECK: vector.fission.producer.body:
-; CHECK: load <vscale x 4 x i32>
-; CHECK: @llvm.vector.deinterleave2.nxv4i32
-; CHECK: scalar.fission.producer.body:
-; CHECK: load i32
-; CHECK: vector.fission.accumulator.body:
-; CHECK: load <vscale x 8 x i32>
-; CHECK: @llvm.vector.deinterleave2.nxv8i32
-; CHECK: scalar.fission.accumulator.body:
-; CHECK: getelementptr i8, ptr {{.*}}, i64 4
-; CHECK: load i32
-; REVERSE-LABEL: define void @interleave_reread(
-; REVERSE: vector.fission.producer.body:
-; REVERSE: @llvm.vector.deinterleave2.nxv8i32
-; REVERSE: vector.fission.accumulator.body:
-; REVERSE: @llvm.vector.deinterleave2.nxv4i32
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave_reread(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave3_reread(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @interleave_reread(ptr readonly %a, ptr %out, i64 %n) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -80,26 +55,6 @@ bypass:
   ret void
 }
 
-; The same partition with a non-power-of-two stride. Both non-scratch members
-; remain in the consumer, which rereads the complete group in its vector path.
-; REMARK: scratch capacity 65, scratch bytes 260, scratch store bytes/iteration 4, scratch load bytes/iteration 4, duplicated recipes {{[1-9][0-9]*}}, reread loads/iteration 3
-; CHECK-LABEL: define void @interleave3_reread(
-; CHECK: vector.fission.producer.body:
-; CHECK: @llvm.vector.deinterleave3.nxv6i32
-; CHECK: scalar.fission.producer.body:
-; CHECK: load i32
-; CHECK: vector.fission.accumulator.body:
-; CHECK: @llvm.vector.deinterleave3.nxv12i32
-; CHECK: scalar.fission.accumulator.body:
-; CHECK: getelementptr i8, ptr {{.*}}, i64 4
-; CHECK: load i32
-; CHECK: getelementptr i8, ptr {{.*}}, i64 8
-; CHECK: load i32
-; REVERSE-LABEL: define void @interleave3_reread(
-; REVERSE: vector.fission.producer.body:
-; REVERSE: @llvm.vector.deinterleave3.nxv12i32
-; REVERSE: vector.fission.accumulator.body:
-; REVERSE: @llvm.vector.deinterleave3.nxv6i32
 define void @interleave3_reread(ptr readonly %a, ptr %out, i64 %n) {
 entry:
   %bounded = icmp ule i64 %n, 65

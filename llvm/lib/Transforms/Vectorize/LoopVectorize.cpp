@@ -61,8 +61,6 @@
 #include "VPlanCFG.h"
 #include "VPlanHelpers.h"
 #include "VPlanPatternMatch.h"
-#include "VPlanReductionFission.h"
-#include "VPlanReductionFissionFPReordering.h"
 #include "VPlanTransforms.h"
 #include "VPlanUtils.h"
 #include "VPlanVerifier.h"
@@ -72,8 +70,8 @@
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/MapVector.h"
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
@@ -138,6 +136,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/NativeFormatting.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Scalar/ScalarFission.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/InjectTLIMappings.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -271,7 +270,8 @@ static cl::opt<bool> EnableInterleavedMemAccesses(
 /// predication, or in order to mask away gaps.
 static cl::opt<bool> EnableMaskedInterleavedMemAccesses(
     "enable-masked-interleaved-mem-accesses", cl::init(false), cl::Hidden,
-    cl::desc("Enable vectorization on masked interleaved memory accesses in a loop"));
+    cl::desc("Enable vectorization on masked interleaved memory accesses in a "
+             "loop"));
 
 static cl::opt<unsigned> ForceTargetNumScalarRegs(
     "force-target-num-scalar-regs", cl::init(0), cl::Hidden,
@@ -1370,10 +1370,9 @@ private:
   InstructionCost getConsecutiveMemOpCost(Instruction *I, ElementCount VF,
                                           InstWidening Kind);
 
-  /// The cost calculation for Load/Store instruction \p I with uniform pointer -
-  /// Load: scalar load + broadcast.
-  /// Store: scalar store + (loop invariant value stored? 0 : extract of last
-  /// element)
+  /// The cost calculation for Load/Store instruction \p I with uniform pointer
+  /// - Load: scalar load + broadcast. Store: scalar store + (loop invariant
+  /// value stored? 0 : extract of last element)
   InstructionCost getUniformMemOpCost(Instruction *I, ElementCount VF);
 
   /// Estimate the overhead of scalarizing an instruction. This is a
@@ -1941,12 +1940,13 @@ static void collectSupportedLoops(Loop &L, LoopInfo *LI,
 //===----------------------------------------------------------------------===//
 
 /// For the given VF and UF and maximum trip count computed for the loop, return
-/// whether the induction variable might overflow in the vectorized loop. If not,
-/// then we know a runtime overflow check always evaluates to false and can be
-/// removed.
-static bool isIndvarOverflowCheckKnownFalse(
-    const LoopVectorizationCostModel *Cost,
-    ElementCount VF, std::optional<unsigned> UF = std::nullopt) {
+/// whether the induction variable might overflow in the vectorized loop. If
+/// not, then we know a runtime overflow check always evaluates to false and can
+/// be removed.
+static bool
+isIndvarOverflowCheckKnownFalse(const LoopVectorizationCostModel *Cost,
+                                ElementCount VF,
+                                std::optional<unsigned> UF = std::nullopt) {
   // Always be conservative if we don't know the exact unroll factor.
   unsigned MaxUF = UF ? *UF
                       : std::max(Cost->TTI.getMaxInterleaveFactor(VF, false),
@@ -2320,7 +2320,8 @@ void LoopVectorizationCostModel::collectLoopScalars(ElementCount VF) {
   auto ForcedScalar = ForcedScalars.find(VF);
   if (ForcedScalar != ForcedScalars.end())
     for (auto *I : ForcedScalar->second) {
-      LLVM_DEBUG(dbgs() << "LV: Found (forced) scalar instruction: " << *I << "\n");
+      LLVM_DEBUG(dbgs() << "LV: Found (forced) scalar instruction: " << *I
+                        << "\n");
       Worklist.insert(I);
     }
 
@@ -2411,7 +2412,7 @@ bool LoopVectorizationCostModel::isScalarWithPredication(Instruction *I,
 
   // Do we have a non-scalar lowering for this predicated
   // instruction? No - it is scalar with predication.
-  switch(I->getOpcode()) {
+  switch (I->getOpcode()) {
   default:
     return true;
   case Instruction::Call: {
@@ -2470,7 +2471,7 @@ bool LoopVectorizationCostModel::isPredicatedInst(Instruction *I) const {
   // having at least one active lane (the first). If the side-effects of the
   // instruction are invariant, executing it w/o (the tail-folding) mask is safe
   // - it will cause the same side-effects as when masked.
-  switch(I->getOpcode()) {
+  switch (I->getOpcode()) {
   default:
     llvm_unreachable(
         "instruction should have been considered by earlier checks");
@@ -2717,8 +2718,8 @@ void LoopVectorizationCostModel::collectLoopUniforms(ElementCount VF) {
   // where only a single instance out of VF should be formed.
   auto AddToWorklistIfAllowed = [&](Instruction *I) -> void {
     if (IsOutOfScope(I)) {
-      LLVM_DEBUG(dbgs() << "LV: Found not uniform due to scope: "
-                        << *I << "\n");
+      LLVM_DEBUG(dbgs() << "LV: Found not uniform due to scope: " << *I
+                        << "\n");
       return;
     }
     if (isPredicatedInst(I)) {
@@ -3700,7 +3701,8 @@ LoopVectorizationPlanner::selectInterleaveCount(VPlan &Plan, ElementCount VF,
       LoopCost = CM.expectedCost(VF);
     else
       LoopCost = cost(Plan, VF, &R);
-    assert(LoopCost.isValid() && "Expected to have chosen a VF with valid cost");
+    assert(LoopCost.isValid() &&
+           "Expected to have chosen a VF with valid cost");
 
     // Loop body is free and there is no need for interleaving.
     if (LoopCost == 0)
@@ -4005,11 +4007,9 @@ bool LoopVectorizationCostModel::useEmulatedMaskMemRefHack(Instruction *I,
   // from moving "masked load/store" check from legality to cost model.
   // Masked Load/Gather emulation was previously never allowed.
   // Limited number of Masked Store/Scatter emulation was allowed.
-  assert((isPredicatedInst(I)) &&
-         "Expecting a scalar emulated instruction");
+  assert((isPredicatedInst(I)) && "Expecting a scalar emulated instruction");
   return isa<LoadInst>(I) ||
-         (isa<StoreInst>(I) &&
-          NumPredStores > NumberOfStoresToPredicate);
+         (isa<StoreInst>(I) && NumPredStores > NumberOfStoresToPredicate);
 }
 
 void LoopVectorizationCostModel::collectInstsToScalarize(ElementCount VF) {
@@ -4221,10 +4221,9 @@ InstructionCost LoopVectorizationCostModel::expectedCost(ElementCount VF) {
 ///
 /// This SCEV can be sent to the Target in order to estimate the address
 /// calculation cost.
-static const SCEV *getAddressAccessSCEV(
-              Value *Ptr,
-              PredicatedScalarEvolution &PSE,
-              const Loop *TheLoop) {
+static const SCEV *getAddressAccessSCEV(Value *Ptr,
+                                        PredicatedScalarEvolution &PSE,
+                                        const Loop *TheLoop) {
   const SCEV *Addr = PSE.getSCEV(Ptr);
   return vputils::isAddressSCEVForCost(Addr, *PSE.getSE(), TheLoop) ? Addr
                                                                     : nullptr;
@@ -4698,7 +4697,7 @@ void LoopVectorizationCostModel::setCostBasedWideningDecision(ElementCount VF) {
   for (BasicBlock *BB : TheLoop->blocks()) {
     // For each instruction in the old loop.
     for (Instruction &I : *BB) {
-      Value *Ptr =  getLoadStorePointerOperand(&I);
+      Value *Ptr = getLoadStorePointerOperand(&I);
       if (!Ptr)
         continue;
 
@@ -4825,7 +4824,7 @@ void LoopVectorizationCostModel::setCostBasedWideningDecision(ElementCount VF) {
   for (BasicBlock *BB : TheLoop->blocks())
     for (Instruction &I : *BB) {
       Instruction *PtrDef =
-        dyn_cast_or_null<Instruction>(getLoadStorePointerOperand(&I));
+          dyn_cast_or_null<Instruction>(getLoadStorePointerOperand(&I));
       if (PtrDef && TheLoop->contains(PtrDef) &&
           getWideningDecision(&I, VF) != CM_GatherScatter)
         AddrDefs.insert(PtrDef);
@@ -5192,7 +5191,7 @@ LoopVectorizationCostModel::getInstructionCost(Instruction *I,
       const auto [Op1VK, Op1VP] = TTI::getOperandInfo(Op0);
       const auto [Op2VK, Op2VP] = TTI::getOperandInfo(Op1);
       assert(Op0->getType()->getScalarSizeInBits() == 1 &&
-              Op1->getType()->getScalarSizeInBits() == 1);
+             Op1->getType()->getScalarSizeInBits() == 1);
 
       return TTI.getArithmeticInstrCost(
           match(I, m_LogicalOr()) ? Instruction::Or : Instruction::And,
@@ -5903,17 +5902,6 @@ LoopVectorizationPlanner::computeBestVF() {
   return {BestFactor, &BestPlan};
 }
 
-bool LoopVectorizationPlanner::tryReductionFission(ElementCount BaselineVF,
-                                                   AssumptionCache &AC,
-                                                   AAResults &AA) {
-  VPReductionFissionContext Context{
-      *OrigLoop, *LI, *DT,    PSE,  AC,
-      AA,        TTI, *Legal, *ORE, Config.getSmallestAndWidestTypes().second};
-  Context.FPReordering = Config.isFissionOnly();
-  Context.HintReordering = Hints.allowReordering();
-  return llvm::tryReductionFission(ReductionFissionPlans, BaselineVF, Context);
-}
-
 DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
     ElementCount BestVF, unsigned BestUF, VPlan &BestVPlan,
     InnerLoopVectorizer &ILV, DominatorTree *DT,
@@ -6545,16 +6533,13 @@ VPlanPtr LoopVectorizationPlanner::tryToBuildVPlan1() {
 
   // Create recipes for header phis. For outer loops, reductions, recurrences
   // and in-loop reductions are empty since legality doesn't detect them.
-  if (!RUN_VPLAN_PASS(
-          VPlanTransforms::createHeaderPhiRecipes, *VPlan0, PSE, *OrigLoop,
-          VPDT, Legal->getInductionVars(), Legal->getReductionVars(),
-          Legal->getFixedOrderRecurrences(), Config.getInLoopReductions(),
-          Hints.allowReordering(), Config.getFissionFPReorderingPolicy())) {
+  if (!RUN_VPLAN_PASS(VPlanTransforms::createHeaderPhiRecipes, *VPlan0, PSE,
+                      *OrigLoop, VPDT, Legal->getInductionVars(),
+                      Legal->getReductionVars(),
+                      Legal->getFixedOrderRecurrences(),
+                      Config.getInLoopReductions(), Hints.allowReordering())) {
     return nullptr;
   }
-
-  if (const auto *Policy = Config.getFissionFPReorderingPolicy())
-    Policy->applyToPlan(*VPlan0);
 
   if (const LoopAccessInfo *LAI = Legal->getLAI())
     RUN_VPLAN_PASS(VPlanTransforms::replaceSymbolicStrides, *VPlan0, PSE,
@@ -6621,12 +6606,6 @@ void LoopVectorizationPlanner::buildVPlans(VPlan &VPlan1, ElementCount MinVF,
     RUN_VPLAN_PASS(VPlanTransforms::truncateToMinimalBitwidths, *Plan,
                    Config.getMinimalBitwidths());
     RUN_VPLAN_PASS(VPlanTransforms::optimize, *Plan);
-    if (!isReductionFissionStage(*OrigLoop))
-      saveReductionFissionPlan(*Plan, ReductionFissionPlans);
-    // Private relaxed candidates can only be executed by fission. In
-    // particular, they must never become normal vectorizer fallback plans.
-    if (Config.isFissionOnly())
-      continue;
     // TODO: try to put addExplicitVectorLength close to addActiveLaneMask
     if (CM.foldTailWithEVL()) {
       RUN_VPLAN_PASS(VPlanTransforms::addExplicitVectorLength, *Plan,
@@ -7619,8 +7598,8 @@ static SmallVector<Instruction *> preparePlanForEpilogueVectorLoop(
         auto *VPI = dyn_cast<VPInstruction>(R);
         return VPI && VPI->getOpcode() == VPInstruction::ComputeReductionResult;
       };
-      auto *RdxResult = cast<VPInstruction>(
-          vputils::findRecipe(ReductionPhi->getBackedgeValue(), IsReductionResult));
+      auto *RdxResult = cast<VPInstruction>(vputils::findRecipe(
+          ReductionPhi->getBackedgeValue(), IsReductionResult));
       assert(RdxResult && "expected to find reduction result");
 
       VPInstruction *ResumeForEpi = IRPhiToResumeForEpi.at(
@@ -7909,22 +7888,33 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // Function containing loop
   Function *F = L->getHeader()->getParent();
 
-  StringRef FissionStage = getScalarReductionFissionStage(*L);
+  StringRef FissionStage = getScalarFissionStage(*L);
   DebugLoc FissionStageLoc = L->getStartLoc();
   ElementCount FissionStageVF = ElementCount::getFixed(1);
+  unsigned FissionStageIC = 1;
+  unsigned RequestedFissionVF =
+      getIntLoopAttribute(L, "llvm.loop.scalar_fission.requested_vf", 0);
+  unsigned RequestedFissionIC =
+      getIntLoopAttribute(L, "llvm.loop.scalar_fission.requested_ic", 0);
+  bool RequestedFissionScalable =
+      getBooleanLoopAttribute(L, "llvm.loop.scalar_fission.requested_scalable");
   scope_exit EmitFissionStage([&] {
     if (FissionStage.empty())
       return;
     ORE->emit([&]() {
       // Normal VPlan execution may retire the original scalar loop. Retain
       // its source location, but anchor this final remark in a live block.
-      return OptimizationRemark("vplan-reduction-fission", "Stage",
-                                FissionStageLoc, &F->getEntryBlock())
-             << "scalar-IR fission " << ore::NV("Stage", FissionStage)
-             << " VF "
+      return OptimizationRemark("scalar-fission", "Stage", FissionStageLoc,
+                                &F->getEntryBlock())
+             << "scalar-IR fission " << ore::NV("Stage", FissionStage) << " VF "
              << ore::NV(FissionStage == "producer" ? "ProducerVF"
                                                    : "AccumulatorVF",
-                        FissionStageVF);
+                        FissionStageVF)
+             << " IC " << ore::NV("ActualIC", FissionStageIC)
+             << "; requested VF " << ore::NV("RequestedVF", RequestedFissionVF)
+             << "; requested scalable "
+             << ore::NV("RequestedScalable", RequestedFissionScalable)
+             << "; requested IC " << ore::NV("RequestedIC", RequestedFissionIC);
     });
   });
 
@@ -8068,45 +8058,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   else
     AllowOrderedReductions = TTI->enableOrderedReductions();
 
-  auto TryReorderedFission = [&](ElementCount BaselineVF) {
-    if (!FissionFPReorderingPolicy::shouldAttempt(*L, Hints, OptForSize))
-      return false;
-    // This adapter stays with the private LoopVectorizationCostModel. All
-    // mutable planning state belongs to this attempt, leaving normal planning
-    // intact on failure. The policy outlives its config and plans.
-    PredicatedScalarEvolution FissionPSE(*SE, *L);
-    LoopVectorizationRequirements FissionRequirements;
-    LoopVectorizationLegality FissionLegal(
-        L, FissionPSE, DT, TTI, TLI, F, *LAIs, LI, ORE, &FissionRequirements,
-        &Hints, DB, AC,
-        /*AllowRuntimeSCEVChecks=*/false, AA);
-    if (!FissionLegal.canVectorize(false))
-      return false;
-    const auto FissionPolicy = FissionFPReorderingPolicy::create(
-        *L, FissionLegal, FissionPSE, Hints, AllowOrderedReductions);
-    if (!FissionPolicy)
-      return false;
-    VFSelectionContext FissionConfig(*TTI, &FissionLegal, L, *F, FissionPSE, DB,
-                                     ORE, &Hints, OptForSize, &*FissionPolicy);
-    InterleavedAccessInfo FissionIAI(FissionPSE, L, DT, LI,
-                                     FissionLegal.getLAI(), OptForSize);
-    LoopVectorizationCostModel FissionCM(
-        CM_EpilogueAllowed, L, FissionPSE, LI, &FissionLegal, *TTI, TLI, AC,
-        ORE, GetBFI, F, &Hints, FissionIAI, FissionConfig);
-    LoopVectorizationPlanner FissionLVP(L, LI, DT, TLI, *TTI, &FissionLegal,
-                                        FissionCM, FissionConfig, FissionIAI,
-                                        FissionPSE, Hints, ORE);
-    FissionLVP.plan(ElementCount::getFixed(0), 1);
-    if (!FissionLVP.tryReductionFission(BaselineVF, *AC, *AA))
-      return false;
-    ++LoopsVectorized;
-    assert(DT->verify(DominatorTree::VerificationLevel::Fast));
-    assert(!verifyFunction(*F, &dbgs()));
-    return true;
-  };
   if (!LVL.canVectorizeFPMath(AllowOrderedReductions)) {
-    if (TryReorderedFission(ElementCount::getFixed(1)))
-      return true;
     ORE->emit([&]() {
       auto *ExactFPMathInst = Requirements.getExactFPInst();
       return OptimizationRemarkAnalysisFPCommute(DEBUG_TYPE, "CantReorderFPOps",
@@ -8300,16 +8252,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
 
   // Emit diagnostic messages, if any.
   if (!VectorizeLoop && !InterleaveLoop) {
-    if (IsInnerLoop && IC == 1 && !UserVF) {
-      if (TryReorderedFission(VF.Width))
-        return true;
-      if (LVP.tryReductionFission(VF.Width, *AC, *AA)) {
-        ++LoopsVectorized;
-        assert(DT->verify(DominatorTree::VerificationLevel::Fast));
-        assert(!verifyFunction(*F, &dbgs()));
-        return true;
-      }
-    }
     // Do not vectorize or interleaving the loop.
     ORE->emit([&]() {
       return OptimizationRemarkMissed(LV_NAME, VecDiagMsg.first,
@@ -8347,6 +8289,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
 
   // Report the vectorization decision.
   FissionStageVF = VF.Width;
+  FissionStageIC = IC;
   if (VF.Width.isScalar()) {
     using namespace ore;
     assert(IC > 1);
@@ -8438,15 +8381,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                               ResumeValues);
     ++LoopsEpilogueVectorized;
   } else {
-    if (IsInnerLoop && IC == 1 && !UserVF && TryReorderedFission(VF.Width))
-      return true;
-    if (IsInnerLoop && IC == 1 && !UserVF &&
-        LVP.tryReductionFission(VF.Width, *AC, *AA)) {
-      ++LoopsVectorized;
-      assert(DT->verify(DominatorTree::VerificationLevel::Fast));
-      assert(!verifyFunction(*F, &dbgs()));
-      return true;
-    }
     InnerLoopVectorizer LB(L, PSE, LI, DT, TTI, AC, VF.Width, IC, &CM, Checks,
                            BestPlan);
     LVP.addMinimumIterationCheck(BestPlan, VF.Width, IC,
@@ -8509,23 +8443,6 @@ LoopVectorizeResult LoopVectorizePass::runImpl(Function &F) {
     // For the inner loops we actually process, form LCSSA to simplify the
     // transform.
     Changed |= formLCSSARecursively(*L, *DT, LI, SE);
-
-    // Scalar fission has its own bounded legality check and does not require
-    // canVectorize or a VPlan for the original loop. Queue the two scalar
-    // stages for ordinary, independent vectorization without recursively
-    // invoking a pass or rebuilding the surrounding loop worklist.
-    if (isReductionFissionEnabled()) {
-      LoopVectorizeHints Hints(L, InterleaveOnlyWhenForced, *ORE, TTI);
-      if (Hints.allowVectorization(&F, L, VectorizeOnlyWhenForced)) {
-        if (Loop *Consumer = tryScalarReductionFission(*L, *LI, *DT, *SE, *ORE)) {
-          Changed = CFGChanged = true;
-          LAIs->clear();
-          Worklist.push_back(Consumer);
-          Worklist.push_back(L);
-          continue;
-        }
-      }
-    }
 
     Changed |= CFGChanged |= processLoop(L);
 

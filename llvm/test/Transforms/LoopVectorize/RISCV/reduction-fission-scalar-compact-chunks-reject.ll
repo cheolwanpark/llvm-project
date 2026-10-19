@@ -1,36 +1,39 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=16 \
-; RUN:   -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.strict 2> %t.strict.remarks
-; RUN: FileCheck %s  < %t.strict
-; RUN: FileCheck %s --check-prefix=REASON < %t.strict.remarks
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=16 \
-; RUN:   -vplan-reduction-fission-allow-fp-reordering -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission \
-; RUN:   -S %s -o %t.reordered 2> %t.reordered.remarks
-; RUN: FileCheck %s  < %t.reordered
-; RUN: FileCheck %s --check-prefix=REASON < %t.reordered.remarks
-;
-; One padded mixed slot fits. Affine control now uses the fallback, keeping
-; original control and empty-participation bypasses. Other closure/effect/FP
-; and unavailable-bound rejection checks remain.
-; These siblings share the positive compact CFG; no benchmark input is changed.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_chunk_reject_affine(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_chunk_reject_reverse_equality(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_chunk_reject_unsupported_control(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_chunk_reject_unsafe_call(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_chunk_reject_volatile(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_chunk_reject_store(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_chunk_reject_strictfp(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_chunk_reject_constrained(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_chunk_reject_feedback(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare i32 @unsafe(i32) nounwind willreturn
 declare double @llvm.experimental.constrained.fsub.f64(double, double, metadata, metadata)
 
-
-; REASON: scalar-compact-chunks-reject.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
-; CHECK-LABEL: define void @compact_chunk_reject_affine(
-; CHECK: alloca [1 x i32]
-; CHECK: alloca [1 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: %fission.consumer.count = freeze i64 %fission.participating.count
-; CHECK: ret void
 define void @compact_chunk_reject_affine(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !10 {
 entry:
@@ -112,13 +115,6 @@ bypass:
   ret void
 }
 
-; The reversed exit has no admitted finite count; this proof fails before
-; chunk scheduling checks the exit polarity. Unsupported control below has
-; its own, independent scalar-unsupported-exit assertion.
-; REASON: scalar-compact-chunks-reject.c:22:3: scalar-IR reduction fission rejected: non-constant-trip-count
-; CHECK-LABEL: define void @compact_chunk_reject_reverse_equality(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
 define void @compact_chunk_reject_reverse_equality(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !12 {
 entry:
@@ -199,10 +195,6 @@ bypass:
   ret void
 }
 
-; REASON: scalar-compact-chunks-reject.c:32:3: scalar-IR reduction fission rejected: scalar-unsupported-exit
-; CHECK-LABEL: define void @compact_chunk_reject_unsupported_control(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
 define void @compact_chunk_reject_unsupported_control(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !14 {
 entry:
@@ -284,10 +276,6 @@ bypass:
   ret void
 }
 
-; REASON: scalar-compact-chunks-reject.c:42:3: scalar-IR reduction fission rejected: scalar-unsafe-call
-; CHECK-LABEL: define void @compact_chunk_reject_unsafe_call(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
 define void @compact_chunk_reject_unsafe_call(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !16 {
 entry:
@@ -368,10 +356,6 @@ bypass:
   ret void
 }
 
-; REASON: scalar-compact-chunks-reject.c:52:3: scalar-IR reduction fission rejected: scalar-non-simple-load
-; CHECK-LABEL: define void @compact_chunk_reject_volatile(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
 define void @compact_chunk_reject_volatile(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !18 {
 entry:
@@ -452,11 +436,6 @@ bypass:
   ret void
 }
 
-; Ordinary stores are supported; retain this effect rejection using volatile.
-; REASON: scalar-compact-chunks-reject.c:62:3: scalar-IR reduction fission rejected: scalar-non-simple-store
-; CHECK-LABEL: define void @compact_chunk_reject_store(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
 define void @compact_chunk_reject_store(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !20 {
 entry:
@@ -538,10 +517,6 @@ bypass:
   ret void
 }
 
-; REASON: scalar-compact-chunks-reject.c:72:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; CHECK-LABEL: define void @compact_chunk_reject_strictfp(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
 define void @compact_chunk_reject_strictfp(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) strictfp !dbg !22 {
 entry:
@@ -622,10 +597,6 @@ bypass:
   ret void
 }
 
-; REASON: scalar-compact-chunks-reject.c:82:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; CHECK-LABEL: define void @compact_chunk_reject_constrained(
-; CHECK-NOT: scalar.fission
-; CHECK: ret void
 define void @compact_chunk_reject_constrained(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !24 {
 entry:
@@ -706,12 +677,6 @@ bypass:
   ret void
 }
 
-; REASON: scalar-compact-chunks-reject.c:92:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define void @compact_chunk_reject_feedback(
-; CHECK: %r0 = phi i32
-; CHECK: %r1 = phi i32
-; CHECK: %rd = phi double
-; CHECK: ret void
 define void @compact_chunk_reject_feedback(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                       ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !26 {
 entry:

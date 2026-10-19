@@ -13,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "LoopVectorizationPlanner.h"
-#include "VPlanReductionFissionFPReordering.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -339,9 +338,6 @@ bool VFSelectionContext::isScalableVectorizationAllowed() {
 
   // Disable scalable vectorization if the loop contains unsupported reductions.
   if (!all_of(Legal->getReductionVars(), [&](const auto &Reduction) -> bool {
-        if (FissionFPReordering)
-          return FissionFPReordering->isLegalToVectorizeReduction(
-              Reduction.second, MaxScalableVF, TTI);
         return TTI.isLegalToVectorizeReduction(Reduction.second, MaxScalableVF);
       })) {
     reportVectorizationInfo(
@@ -562,10 +558,9 @@ void VFSelectionContext::collectElementTypesForWidening(
           continue;
         const RecurrenceDescriptor &RdxDesc =
             Legal->getRecurrenceDescriptor(PN);
-        if (!canReorderFissionReduction(PN) &&
-            (PreferInLoopReductions || useOrderedReductions(RdxDesc) ||
-             TTI.preferInLoopReduction(RdxDesc.getRecurrenceKind(),
-                                       RdxDesc.getRecurrenceType())))
+        if (PreferInLoopReductions || useOrderedReductions(RdxDesc) ||
+            TTI.preferInLoopReduction(RdxDesc.getRecurrenceKind(),
+                                      RdxDesc.getRecurrenceType()))
           continue;
         T = RdxDesc.getRecurrenceType();
       }
@@ -601,17 +596,7 @@ void VFSelectionContext::initializeVScaleForTuning() {
 
 bool VFSelectionContext::useOrderedReductions(
     const RecurrenceDescriptor &RdxDesc) const {
-  return !Hints->allowReordering() && RdxDesc.isOrdered() &&
-         !canReorderFissionReduction(RdxDesc);
-}
-
-bool VFSelectionContext::canReorderFissionReduction(
-    const RecurrenceDescriptor &Rdx) const {
-  return FissionFPReordering && FissionFPReordering->allows(Rdx);
-}
-
-bool VFSelectionContext::canReorderFissionReduction(const PHINode *Phi) const {
-  return FissionFPReordering && FissionFPReordering->allows(Phi);
+  return !Hints->allowReordering() && RdxDesc.isOrdered();
 }
 
 bool VFSelectionContext::runtimeChecksRequired() {
@@ -663,8 +648,6 @@ void VFSelectionContext::collectInLoopReductions() {
   for (const auto &Reduction : Legal->getReductionVars()) {
     PHINode *Phi = Reduction.first;
     const RecurrenceDescriptor &RdxDesc = Reduction.second;
-    if (canReorderFissionReduction(Phi))
-      continue;
 
     // Multi-use reductions (e.g., used in FindLastIV patterns) are handled
     // separately and should not be considered for in-loop reductions.

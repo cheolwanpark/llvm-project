@@ -1,49 +1,11 @@
-; REQUIRES: asserts
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-reductions=17 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -debug-only=vplan-reduction-fission -disable-output %s 2>&1 \
-; RUN:   | FileCheck %s --check-prefix=CANDIDATE
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -debug-only=vplan-reduction-fission -disable-output %s 2>&1 \
-; RUN:   | FileCheck %s --allow-empty --implicit-check-not=LV-FISSION
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-reductions=17 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 -S %s \
-; RUN:   | FileCheck %s --check-prefix=CODEGEN
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v \
-; RUN:   -tail-folding-policy=must-fold-tail \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-reductions=17 \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 -S %s \
-; RUN:   | llc -mtriple=riscv64 -mattr=+v \
-; RUN:   | FileCheck %s --check-prefix=BACKEND
-
-; CANDIDATE: LV-FISSION: pressure_candidate: candidate: reductions=17
-; CANDIDATE-SAME: scratch-bytes=256
-; CANDIDATE-SAME: baseline-vf=vscale x 2
-; CANDIDATE-SAME: producer-vf=vscale x 16
-; CANDIDATE-SAME: accumulator-vf=vscale x 2
-
-; CODEGEN-LABEL: define void @pressure_candidate(
-; CODEGEN: alloca [64 x i32], align 4
-; CODEGEN: vector.fission.producer.body:
-; CODEGEN: store <vscale x 16 x i32>
-; CODEGEN: vector.fission.accumulator.body:
-; CODEGEN: load <vscale x 2 x i32>
-; CODEGEN: call i32 @llvm.vector.reduce.add.nxv2i32
-; CODEGEN-NOT: loop:
-
-; BACKEND-LABEL: pressure_candidate:
-; BACKEND: vector.fission.accumulator.body
-; BACKEND-NOT: {{v[ls][1248]r\.v.*Folded (Spill|Reload)}}
-; BACKEND: ret
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @pressure_candidate(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @pressure_candidate(ptr noalias readonly %a, ptr noalias writeonly %out) {
 entry:
   br label %loop

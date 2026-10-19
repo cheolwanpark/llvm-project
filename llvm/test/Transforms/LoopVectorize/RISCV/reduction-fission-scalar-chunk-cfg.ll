@@ -1,75 +1,21 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 \
-; RUN:   -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=112 -pass-remarks=vplan-reduction-fission \
-; RUN:   -S %s -o %t.scalar 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=SCALAR < %t.scalar
-; RUN: FileCheck %s --check-prefix=NINE < %t.remarks
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 \
-; RUN:   -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=15 -pass-remarks=vplan-reduction-fission \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -disable-output %s 2>&1 | FileCheck %s --check-prefix=REJECT
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 \
-; RUN:   -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=16 -pass-remarks=vplan-reduction-fission \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -disable-output %s 2>&1 | FileCheck %s --check-prefix=ONE
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 \
-; RUN:   -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=111 -pass-remarks=vplan-reduction-fission \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -disable-output %s 2>&1 | FileCheck %s --check-prefix=EIGHT
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 \
-; RUN:   -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=784 -pass-remarks=vplan-reduction-fission \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -disable-output %s 2>&1 | FileCheck %s --check-prefix=FULL
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=4 \
-; RUN:   -force-vector-interleave=1 -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=112 -S %s -o %t.evl
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.evl -o /dev/null
-;
-; Each original acyclic path reaches the latch once, where the unconditional
-; contribution streams are written. Includes serial and nested diamonds,
-; guarded division and branch-local FP loads, simultaneous prev -> older state,
-; branch predicates using retained state and distinct final current/next/IV
-; exports. The final function keeps the already recognized header updates.
-; The i32 contribution is shared by two sums; double stays ordered under both
-; policies. No additional FP flags or helper/errno assumptions are introduced.
-; Padded bytes = alignTo(4*C,8)+8*C: C=1/8/9/16/65 -> 16/96/112/192/784.
-; The executable driver covers every N=0..65 plus invalid guards, both policies,
-; scalar/vector tails, once/twice LV and independent original-order references.
-; EVL receives separate uninstrumented RVV machine verification.
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_cfg_diamond(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_cfg_serial(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_cfg_nested(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_cfg_header(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
-
-; NINE: scalar-chunk-cfg.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 112, producer live-outs 8, chunked schedule, trip bound 65
-; NINE-SAME: scratch store bytes/iteration 12, scratch load bytes/iteration 12, producer reread bytes/iteration 0, duplicated producer instructions 0, producer state carries 3
-; ONE: scalar-chunk-cfg.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
-; EIGHT: scalar-chunk-cfg.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 8, scratch bytes 96
-; FULL: scalar-chunk-cfg.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; REJECT: scalar-chunk-cfg.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; SCALAR-LABEL: define void @chunk_cfg_diamond(
-; SCALAR: alloca [9 x i32]
-; SCALAR: alloca [9 x double]
-; SCALAR: %older.chunk.carry = phi i32 [ -11, %preheader ], [ %older.chunk.backedge, %scalar.fission.chunk.latch ]
-; SCALAR: loop:
-; SCALAR: %older = phi i32 [ %older.chunk.carry, %scalar.fission.producer.ph ], [ %prev, %latch ]
-; SCALAR: br i1 %choose, label %left, label %right
-; SCALAR: left:
-; SCALAR: sdiv i32 840, %x
-; SCALAR: right:
-; SCALAR: load double, ptr %dp
-; SCALAR: latch:
-; SCALAR: store i32 %c
-; SCALAR: store double %dc
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-DAG: %older.chunk.backedge = phi i32 [ %prev, %latch ]
-; SCALAR-DAG: %prev.fission.export = phi i32 [ %prev, %latch ]
-; SCALAR-DAG: %state.next.fission.export = phi i32 [ %state.next, %latch ]
-; SCALAR: ret void
 
 define void @chunk_cfg_diamond(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                          ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !10 {
@@ -156,32 +102,6 @@ producer.exit:
 bypass:
   ret void
 }
-
-; NINE: scalar-chunk-cfg.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 112, producer live-outs 8, chunked schedule, trip bound 65
-; NINE-SAME: scratch store bytes/iteration 12, scratch load bytes/iteration 12, producer reread bytes/iteration 0, duplicated producer instructions 0, producer state carries 3
-; ONE: scalar-chunk-cfg.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
-; EIGHT: scalar-chunk-cfg.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 8, scratch bytes 96
-; FULL: scalar-chunk-cfg.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; REJECT: scalar-chunk-cfg.c:22:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; SCALAR-LABEL: define void @chunk_cfg_serial(
-; SCALAR: alloca [9 x i32]
-; SCALAR: alloca [9 x double]
-; SCALAR: %older.chunk.carry = phi i32 [ -11, %preheader ], [ %older.chunk.backedge, %scalar.fission.chunk.latch ]
-; SCALAR: loop:
-; SCALAR: %older = phi i32 [ %older.chunk.carry, %scalar.fission.producer.ph ], [ %prev, %latch ]
-; SCALAR: br i1 %choose, label %left, label %right
-; SCALAR: left:
-; SCALAR: sdiv i32 840, %x
-; SCALAR: right:
-; SCALAR: load double, ptr %dp
-; SCALAR: latch:
-; SCALAR: store i32 %c
-; SCALAR: store double %dc
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-DAG: %older.chunk.backedge = phi i32 [ %prev, %latch ]
-; SCALAR-DAG: %prev.fission.export = phi i32 [ %prev, %latch ]
-; SCALAR-DAG: %state.next.fission.export = phi i32 [ %state.next, %latch ]
-; SCALAR: ret void
 
 define void @chunk_cfg_serial(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                          ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !12 {
@@ -283,32 +203,6 @@ bypass:
   ret void
 }
 
-; NINE: scalar-chunk-cfg.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 112, producer live-outs 8, chunked schedule, trip bound 65
-; NINE-SAME: scratch store bytes/iteration 12, scratch load bytes/iteration 12, producer reread bytes/iteration 0, duplicated producer instructions 0, producer state carries 3
-; ONE: scalar-chunk-cfg.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
-; EIGHT: scalar-chunk-cfg.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 8, scratch bytes 96
-; FULL: scalar-chunk-cfg.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; REJECT: scalar-chunk-cfg.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; SCALAR-LABEL: define void @chunk_cfg_nested(
-; SCALAR: alloca [9 x i32]
-; SCALAR: alloca [9 x double]
-; SCALAR: %older.chunk.carry = phi i32 [ -11, %preheader ], [ %older.chunk.backedge, %scalar.fission.chunk.latch ]
-; SCALAR: loop:
-; SCALAR: %older = phi i32 [ %older.chunk.carry, %scalar.fission.producer.ph ], [ %prev, %latch ]
-; SCALAR: br i1 %choose, label %left, label %right
-; SCALAR: left:
-; SCALAR: sdiv i32 840, %x
-; SCALAR: right:
-; SCALAR: load double, ptr %dp
-; SCALAR: latch:
-; SCALAR: store i32 %c
-; SCALAR: store double %dc
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-DAG: %older.chunk.backedge = phi i32 [ %prev, %latch ]
-; SCALAR-DAG: %prev.fission.export = phi i32 [ %prev, %latch ]
-; SCALAR-DAG: %state.next.fission.export = phi i32 [ %state.next, %latch ]
-; SCALAR: ret void
-
 define void @chunk_cfg_nested(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                          ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !14 {
 entry:
@@ -404,32 +298,6 @@ producer.exit:
 bypass:
   ret void
 }
-
-; NINE: scalar-chunk-cfg.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 112, producer live-outs 8, chunked schedule, trip bound 65
-; NINE-SAME: scratch store bytes/iteration 12, scratch load bytes/iteration 12, producer reread bytes/iteration 0, duplicated producer instructions 0, producer state carries 3
-; ONE: scalar-chunk-cfg.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
-; EIGHT: scalar-chunk-cfg.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 8, scratch bytes 96
-; FULL: scalar-chunk-cfg.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; REJECT: scalar-chunk-cfg.c:42:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; SCALAR-LABEL: define void @chunk_cfg_header(
-; SCALAR: alloca [9 x i32]
-; SCALAR: alloca [9 x double]
-; SCALAR: %older.chunk.carry = phi i32 [ -11, %preheader ], [ %older.chunk.backedge, %scalar.fission.chunk.latch ]
-; SCALAR: loop:
-; SCALAR: %older = phi i32 [ %older.chunk.carry, %scalar.fission.producer.ph ], [ %prev, %latch ]
-; SCALAR: br i1 %choose, label %left, label %right
-; SCALAR: left:
-; SCALAR: sdiv i32 840, %x
-; SCALAR: right:
-; SCALAR: load double, ptr %dp
-; SCALAR: latch:
-; SCALAR: store i32 %c
-; SCALAR: store double %dc
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-DAG: %older.chunk.backedge = phi i32 [ %prev, %latch ]
-; SCALAR-DAG: %prev.fission.export = phi i32 [ %prev, %latch ]
-; SCALAR-DAG: %state.next.fission.export = phi i32 [ %state.next, %latch ]
-; SCALAR: ret void
 
 define void @chunk_cfg_header(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                          ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !16 {

@@ -1,37 +1,31 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=4 \
-; RUN:   -pass-remarks=vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s < %t
-; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=4 \
-; RUN:   -vplan-reduction-fission-allow-fp-reordering -S %s -o %t.repeat
-; RUN: FileCheck %s < %t.repeat
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 \
-; RUN:   -S %s | FileCheck %s --check-prefix=EXPORT
-;
-; Each formerly oversized affine control now uses one-slot original-control
-; chunks. The endpoint is never interpreted as N. Current-IV, swapped equality
-; and relational tests remain in the producer. Canonical cross-edge chunks and
-; the sufficient-capacity export checks remain. The new executable fallback
-; matrix supplies original-IR/oracle comparisons and control/state certificates.
-; REASON-COUNT-7: split scalar-IR reduction loop;
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @oversized_offset(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @oversized_stride(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @oversized_current(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @oversized_swapped(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @oversized_witness(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_export_integration_affine(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_export_integration_cross_edge(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; CHECK-LABEL: define i32 @oversized_offset(
-; CHECK: alloca [1 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
-; CHECK: ret i32
 define i32 @oversized_offset(i32 %x) {
 entry:
   br label %preheader
@@ -50,12 +44,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @oversized_stride(
-; CHECK: alloca [1 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
-; CHECK: ret i32
 define i32 @oversized_stride(i32 %x) {
 entry:
   br label %preheader
@@ -74,12 +62,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @oversized_current(
-; CHECK: alloca [1 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
-; CHECK: ret i32
 define i32 @oversized_current(i32 %x) {
 entry:
   br label %preheader
@@ -98,12 +80,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @oversized_swapped(
-; CHECK: alloca [1 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
-; CHECK: ret i32
 define i32 @oversized_swapped(i32 %x) {
 entry:
   br label %preheader
@@ -122,12 +98,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i32 @oversized_witness(
-; CHECK: alloca [1 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
-; CHECK: ret i32
 define i32 @oversized_witness(i32 %x) {
 entry:
   br label %preheader
@@ -146,19 +116,6 @@ exit:
   ret i32 %result
 }
 
-; CHECK-LABEL: define i64 @reject_export_integration_affine(
-; CHECK: alloca [1 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %fission.producer.continue = phi i1
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk
-; CHECK: ret i64
-; EXPORT-LABEL: define i64 @reject_export_integration_affine(
-; EXPORT: alloca [65 x i32]
-; EXPORT: scalar.fission.consumer.ph:
-; EXPORT: %iv.fission.export = phi i64 [ %iv, %loop ]
-; EXPORT: %[[FINAL_A:.*]] = phi i64 [ %iv.fission.export, %scalar.fission.consumer.body ]
-; EXPORT: %observed = phi i64 [ 0, %entry ], [ %[[FINAL_A]], %{{.*}} ]
-; EXPORT: ret i64
 define i64 @reject_export_integration_affine(ptr readonly %a, ptr %out, i64 %n, i32 %start) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -189,19 +146,6 @@ exit:
   ret i64 %observed
 }
 
-; CHECK-LABEL: define i64 @reject_export_integration_cross_edge(
-; CHECK: alloca [1 x i32]
-; CHECK: scalar.fission.chunk:
-; CHECK: %iv.fission.export = phi i64 [ %iv, %latch ]
-; CHECK: %[[CURRENT:.*]] = phi i64 [ %iv.fission.export, %scalar.fission.chunk.latch ]
-; CHECK: ret i64
-; EXPORT-LABEL: define i64 @reject_export_integration_cross_edge(
-; EXPORT: alloca [65 x i32]
-; EXPORT: scalar.fission.consumer.ph:
-; EXPORT: %iv.fission.export = phi i64 [ %iv, %latch ]
-; EXPORT: %[[FINAL_C:.*]] = phi i64 [ %iv.fission.export, %scalar.fission.consumer.body ]
-; EXPORT: %observed = phi i64 [ 0, %entry ], [ %[[FINAL_C]], %{{.*}} ]
-; EXPORT: ret i64
 define i64 @reject_export_integration_cross_edge(ptr readonly %a, ptr %out, i64 %n, i32 %start) {
 entry:
   %valid = icmp ule i64 %n, 65

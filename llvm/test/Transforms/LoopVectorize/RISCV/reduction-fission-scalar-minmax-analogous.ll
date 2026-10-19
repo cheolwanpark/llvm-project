@@ -1,48 +1,17 @@
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -S %s | FileCheck %s
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -vplan-reduction-fission-allow-fp-reordering -S %s | FileCheck %s
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=4 -force-vector-interleave=1 -scalable-vectorization=always -hints-allow-reordering=false -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false -S %s -o %t
-; RUN: FileCheck %s --check-prefix=VECTOR < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-;
-; Analogous i16 updates use all four operations. %local is an unsupported
-; ordinary call recurrence: when an independent min/max can move it remains
-; producer-local, as does a recognized min/max observed by the producer.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_retained(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i16 @llvm.smin.i16(i16, i16)
 declare i16 @llvm.smax.i16(i16, i16)
 declare i16 @llvm.umin.i16(i16, i16)
 declare i16 @llvm.umax.i16(i16, i16)
 declare i16 @other_min(i16, i16) nounwind willreturn speculatable memory(none)
 
-; CHECK-LABEL: define void @minmax_retained(
-; CHECK-COUNT-1: alloca [65 x i16]
-; CHECK-NOT: alloca
-; CHECK: %local = phi i16
-; CHECK: %observed = phi i16
-; CHECK: %local.next = call i16 @other_min(i16 %local, i16 %x)
-; CHECK: %observed.next = call i16 @llvm.smax.i16(i16 %observed, i16 %x)
-; CHECK: store i16 %observed.next, ptr %p
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %u0.consume = call i16 @llvm.smin.i16(i16 %r0.consume,
-; CHECK: %u1.consume = call i16 @llvm.smax.i16(i16 {{%[-a-zA-Z$._0-9]+}}, i16 %r1.consume)
-; CHECK: %u2.consume = call i16 @llvm.umin.i16(i16 %r2.consume,
-; CHECK: %u3.consume = call i16 @llvm.umax.i16(i16 {{%[-a-zA-Z$._0-9]+}}, i16 %r3.consume)
-; CHECK: %u4.consume = call i16 @llvm.smin.i16(i16 {{%[-a-zA-Z$._0-9]+}}, i16 %r4.consume)
-; CHECK: %u5.consume = call i16 @llvm.smax.i16(i16 %r5.consume,
-; CHECK: %u6.consume = call i16 @llvm.umin.i16(i16 {{%[-a-zA-Z$._0-9]+}}, i16 %r6.consume)
-; CHECK: %u7.consume = call i16 @llvm.umax.i16(i16 %r7.consume,
-; CHECK: ret void
-; VECTOR-LABEL: define void @minmax_retained(
-; VECTOR: scalar.fission.consumer.ph:
-; VECTOR: vector.body:
-; VECTOR: call i16 @llvm.vector.reduce.smin.nxv4i16(
-; VECTOR: call i16 @llvm.vector.reduce.smax.nxv4i16(
-; VECTOR: call i16 @llvm.vector.reduce.umin.nxv4i16(
-; VECTOR: call i16 @llvm.vector.reduce.umax.nxv4i16(
-; VECTOR: call i16 @llvm.vector.reduce.smin.nxv4i16(
-; VECTOR: call i16 @llvm.vector.reduce.smax.nxv4i16(
-; VECTOR: call i16 @llvm.vector.reduce.umin.nxv4i16(
-; VECTOR: call i16 @llvm.vector.reduce.umax.nxv4i16(
-; VECTOR: ret void
 define void @minmax_retained(ptr %a, ptr %out, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65

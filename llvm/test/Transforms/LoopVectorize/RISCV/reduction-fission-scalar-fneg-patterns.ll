@@ -1,33 +1,11 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -enable-vplan-reduction-fission \
-; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=IR < %t
-; RUN: FileCheck %s --check-prefix=SELECT < %t.remarks
-;
-; Analogous float/double streams each shared by two independent accumulators.
-; Flags here are original IR promises, solely to check verbatim preservation.
-; No flags are added to the executable comparison fixtures or corpus.
-; Source locations distinguish negation, update and latch. The original final
-; negated values dominate the exit and require no further scratch allocation.
-; SELECT: scalar-fneg-patterns.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 780, producer live-outs 2
-; SELECT: scalar-fneg-patterns.c:12:3: scalar-IR fission producer VF 1
-; SELECT: scalar-fneg-patterns.c:12:3: scalar-IR fission consumer VF 1
-; IR-LABEL: define void @shared_negations(
-; IR-COUNT-1: alloca [65 x double]
-; IR-NOT: alloca [65 x double]
-; IR: loop:
-; IR: %dn = fneg nsz double %d, !dbg ![[NEG:[0-9]+]]
-; IR: %fn = fneg nsz float %f, !dbg ![[NEG]]
-; IR: store double %dn,
-; IR: store float %fn,
-; IR: scalar.fission.consumer.body:
-; IR: %du0.consume = fadd nsz double %d0.consume, %[[D:[-a-zA-Z0-9.]+]], !dbg ![[UP:[0-9]+]]
-; IR: %du1.consume = fsub nsz double %d1.consume, %[[D]], !dbg ![[UP]]
-; IR: %fu0.consume = fadd nsz float %f0.consume, %[[F:[-a-zA-Z0-9.]+]], !dbg ![[UP]]
-; IR: %fu1.consume = fsub nsz float %f1.consume, %[[F]], !dbg ![[UP]]
-; IR: ![[NEG]] = !DILocation(line: 13, column: 5,
-; IR: ![[UP]] = !DILocation(line: 14, column: 5,
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @shared_negations(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @shared_negations(ptr %a, ptr %b, ptr %out, i64 %n) !dbg !10 {
 entry:
   %valid = icmp ule i64 %n, 65

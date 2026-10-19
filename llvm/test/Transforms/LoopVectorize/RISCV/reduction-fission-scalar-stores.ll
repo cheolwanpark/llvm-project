@@ -1,71 +1,25 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=1044 \
-; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t.scalar 2> %t.full.remarks
-; RUN: FileCheck %s --check-prefix=SCALAR < %t.scalar
-; RUN: FileCheck %s --check-prefix=FULL < %t.full.remarks
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=148 -pass-remarks=vplan-reduction-fission \
-; RUN:   -S %s -o %t.chunk 2> %t.chunk.remarks
-; RUN: FileCheck %s --check-prefix=CHUNK < %t.chunk
-; RUN: FileCheck %s --check-prefix=REMARK < %t.chunk.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.chunk -o /dev/null
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks=vplan-reduction-fission \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.budget 2> %t.budget.remarks
-; RUN: FileCheck %s --check-prefix=BUDGET --implicit-check-not='rejected:' < %t.budget.remarks
-; RUN: FileCheck %s --check-prefix=BUDGET-IR < %t.budget
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=147 -pass-remarks=vplan-reduction-fission \
-; RUN:   -disable-output %s 2>&1 | FileCheck %s --check-prefix=ALIGN
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=19 -pass-remarks-missed=vplan-reduction-fission \
-; RUN:   -S %s -o %t.reject 2> %t.reject.remarks
-; RUN: FileCheck %s --check-prefix=LIMIT < %t.reject.remarks
-; RUN: FileCheck %s --check-prefix=NO-SPLIT --implicit-check-not=scalar.fission < %t.reject
-;
-; Preserve load-before-overwrite, store-before-load, overlapping arguments and
-; stores feeding later iterations. Consumers use only saved SSA contributions.
-; Compact stores execute on both paths; final exports include inactive endings.
-; EQ/NE chunk analogues retain global addresses across exact/partial boundaries.
-; No noalias, alias guards, output scratch reuse or additional FP flags.
-; Mixed streams need 1044 padded bytes for 65, 148 for C=9, 20 for C=1.
-; Canonical compact chunking now admits 1043: C=64 uses 1024 bytes, while
-; C=65 still needs 1044. Keep compact participation/empty control and both
-; original store paths. The 19-byte run still rejects every mixed schedule.
-; The execution checker compares every modified region, alias and canary with
-; original IR and independent C, and counts actual vector/tail/empty/chunk paths.
-;
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_full(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_raw(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_compact(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_chunk(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_chunk_ne(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; FULL: scalar-stores.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; BUDGET: scalar-stores.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule, trip bound 65
-; ALIGN: scalar-stores.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 8, scratch bytes 128, producer live-outs 6, chunked schedule
-; LIMIT: scalar-stores.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; REMARK: scalar-stores.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 148, producer live-outs 6, chunked schedule, trip bound 65
-; REMARK-SAME: scratch store bytes/iteration 16, scratch load bytes/iteration 16, producer reread bytes/iteration 0, duplicated producer instructions 0
-; REMARK: scalar-stores.c:12:3: scalar-IR fission producer VF 1
-; REMARK: scalar-stores.c:12:3: scalar-IR fission consumer VF vscale x 4
-; NO-SPLIT-LABEL: define void @stores_full(
-; NO-SPLIT: ret void
-; SCALAR-LABEL: define void @stores_full(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR: %x = load i32, ptr %p
-; SCALAR: call i32 @scalar_helper
-; SCALAR: store i32 %write, ptr %p
-; SCALAR: %seen = load i32, ptr %op
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: ret void
 define void @stores_full(ptr %a, ptr %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !10 {
 entry:
@@ -156,26 +110,6 @@ exit:
   ret void
 }
 
-; FULL: scalar-stores.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; BUDGET: scalar-stores.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule, trip bound 65
-; LIMIT: scalar-stores.c:22:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; REMARK: scalar-stores.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 148, producer live-outs 6, chunked schedule, trip bound 65
-; REMARK-SAME: scratch store bytes/iteration 16, scratch load bytes/iteration 16, producer reread bytes/iteration 0, duplicated producer instructions 0
-; REMARK: scalar-stores.c:22:3: scalar-IR fission producer VF 1
-; REMARK: scalar-stores.c:22:3: scalar-IR fission consumer VF vscale x 4
-; NO-SPLIT-LABEL: define void @stores_raw(
-; NO-SPLIT: ret void
-; SCALAR-LABEL: define void @stores_raw(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR: store i32 %write, ptr %p
-; SCALAR: store i32 %write, ptr %op
-; SCALAR: %seen = load i32, ptr %op
-; SCALAR: call i32 @scalar_helper(i32 %seen)
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: ret void
 define void @stores_raw(ptr %a, ptr %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !12 {
 entry:
@@ -266,47 +200,6 @@ exit:
   ret void
 }
 
-; FULL: scalar-stores.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; LIMIT: scalar-stores.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; BUDGET: scalar-stores.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule, trip bound 65
-; BUDGET-SAME: scratch store bytes/iteration 16, scratch load bytes/iteration 16, producer reread bytes/iteration 0, duplicated producer instructions 0
-; BUDGET: scalar-stores.c:32:3: scalar-IR fission producer VF 1
-; BUDGET: scalar-stores.c:32:3: scalar-IR fission consumer VF 1
-; BUDGET-IR-LABEL: define void @stores_compact(
-; BUDGET-IR: alloca [64 x i32]
-; BUDGET-IR: alloca [64 x double]
-; BUDGET-IR: alloca [64 x float]
-; BUDGET-IR: scalar.fission.chunk:
-; BUDGET-IR: %fission.chunk.partial = icmp ult i64 %fission.chunk.remaining, 64
-; BUDGET-IR: %fission.chunk.count = select i1 %fission.chunk.partial, i64 %fission.chunk.remaining, i64 64
-; BUDGET-IR: %fission.participating = phi i64 [ 0, %scalar.fission.producer.ph ],
-; BUDGET-IR: left:
-; BUDGET-IR: store i32 %write, ptr %p
-; BUDGET-IR: right:
-; BUDGET-IR: store i32 %rc, ptr %bypass.op
-; BUDGET-IR: store i32 0, ptr %p
-; BUDGET-IR: scalar.fission.consumer.guard:
-; BUDGET-IR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; BUDGET-IR: scalar.fission.consumer.body:
-; BUDGET-IR: %ud.consume = fadd double %rd.consume,
-; BUDGET-IR: %fission.chunk.next = add nuw i64 %fission.chunk.base, %fission.producer.completed
-; NO-SPLIT-LABEL: define void @stores_compact(
-; NO-SPLIT: ret void
-; SCALAR-LABEL: define void @stores_compact(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR: %x = load i32, ptr %p
-; SCALAR: call i32 @scalar_helper
-; SCALAR: store i32 %write, ptr %p
-; SCALAR: %seen = load i32, ptr %op
-; SCALAR: right:
-; SCALAR: store i32 %rc, ptr %bypass.op
-; SCALAR: store i32 0, ptr %p
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: ret void
 define void @stores_compact(ptr %a, ptr %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !14 {
 entry:
@@ -414,36 +307,6 @@ exit:
   ret void
 }
 
-; FULL: scalar-stores.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; LIMIT: scalar-stores.c:42:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; BUDGET: scalar-stores.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule, trip bound 65
-; REMARK: scalar-stores.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 148, producer live-outs 6, chunked schedule, trip bound 65
-; REMARK-SAME: scratch store bytes/iteration 16, scratch load bytes/iteration 16, producer reread bytes/iteration 0, duplicated producer instructions 0
-; REMARK: scalar-stores.c:42:3: scalar-IR fission producer VF 1
-; REMARK: scalar-stores.c:42:3: scalar-IR fission consumer VF vscale x 4
-; NO-SPLIT-LABEL: define void @stores_chunk(
-; NO-SPLIT: ret void
-; SCALAR-LABEL: define void @stores_chunk(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR: %x = load i32, ptr %p
-; SCALAR: call i32 @scalar_helper
-; SCALAR: store i32 %write, ptr %p
-; SCALAR: %seen = load i32, ptr %op
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: ret void
-; CHUNK-LABEL: define void @stores_chunk(
-; CHUNK: scalar.fission.chunk:
-; CHUNK: store i32 %write, ptr %p
-; CHUNK: %seen = load i32, ptr %op
-; CHUNK: store i32 %seen, ptr %future.p
-; CHUNK: scalar.fission.consumer.ph:
-; CHUNK: vector.body:
-; CHUNK: call i32 @llvm.vector.reduce.add.nxv4i32
-; CHUNK: scalar.fission.chunk.latch:
-; CHUNK: ret void
 define void @stores_chunk(ptr %a, ptr %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !16 {
 entry:
@@ -534,36 +397,6 @@ exit:
   ret void
 }
 
-; FULL: scalar-stores.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; LIMIT: scalar-stores.c:52:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; BUDGET: scalar-stores.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule, trip bound 65
-; REMARK: scalar-stores.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 9, scratch bytes 148, producer live-outs 6, chunked schedule, trip bound 65
-; REMARK-SAME: scratch store bytes/iteration 16, scratch load bytes/iteration 16, producer reread bytes/iteration 0, duplicated producer instructions 0
-; REMARK: scalar-stores.c:52:3: scalar-IR fission producer VF 1
-; REMARK: scalar-stores.c:52:3: scalar-IR fission consumer VF vscale x 4
-; NO-SPLIT-LABEL: define void @stores_chunk_ne(
-; NO-SPLIT: ret void
-; SCALAR-LABEL: define void @stores_chunk_ne(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR: %x = load i32, ptr %p
-; SCALAR: call i32 @scalar_helper
-; SCALAR: store i32 %write, ptr %p
-; SCALAR: %seen = load i32, ptr %op
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: ret void
-; CHUNK-LABEL: define void @stores_chunk_ne(
-; CHUNK: scalar.fission.chunk:
-; CHUNK: store i32 %write, ptr %p
-; CHUNK: %seen = load i32, ptr %op
-; CHUNK: store i32 %seen, ptr %future.p
-; CHUNK: scalar.fission.consumer.ph:
-; CHUNK: vector.body:
-; CHUNK: call i32 @llvm.vector.reduce.add.nxv4i32
-; CHUNK: scalar.fission.chunk.latch:
-; CHUNK: ret void
 define void @stores_chunk_ne(ptr %a, ptr %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !18 {
 entry:

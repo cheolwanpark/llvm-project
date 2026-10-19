@@ -1,0 +1,1651 @@
+{
+  "schema": 1,
+  "scope": "Audit of ten selected Late targets, both FP policies",
+  "compiler": {
+    "clang": "4abbaaf32856085293dc3599262643454648d6c4f65c92a1beee85f1e9c9b048",
+    "opt": "46f0024cf7c4ba9dc090e187d2427067ea6c51a595ac5dd5b85fdfb5ff44ce51",
+    "llc": "2fd4592339f0185534a1c4e4dd75e3bf1a8cd4f95ab7e60874aef0e22e2741bf"
+  },
+  "artifact_root": "build-fission/scalar-fission-audit",
+  "native_checker_sha256": "c5cf6839175dbd97f633f21ff44106e7b7cf74e5d1fa5855509264feb52805fc",
+  "native_output_comparisons": 62556,
+  "native_mismatches": 0,
+  "native_seeds": [
+    0,
+    1,
+    2,
+    3,
+    17,
+    31,
+    255,
+    1024,
+    4294967295,
+    18446744073709551615
+  ],
+  "native_scope": "Native recompilation of unchanged sources; not execution of RVV assembly",
+  "seeds_not_accepted_by_baseline": {
+    "t000018-vina-non-cache-deriv": [
+      18446744073709551615
+    ]
+  },
+  "rows": [
+    {
+      "id": "t000018-vina-non-cache-deriv",
+      "source": "benchmarks/autodock-vina/non-cache-eval-deriv-neighbors.cpp",
+      "source_sha256": "6fd10ee6738e8e878b716eda8ab1c61571b6687f8928444e42a85e488245dce7",
+      "target_line": 5897,
+      "target_selection": {
+        "Path": "scalar-IR",
+        "ChunkCapacity": "1024",
+        "ScratchBytes": "49152",
+        "Streams": "6",
+        "OriginalLoadInstructionBytes": "88",
+        "OriginalStoreInstructionBytes": "0",
+        "AdditionalLoadInstructionBytesUpperBound": "16",
+        "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+        "ConsumerOriginalLoadInstructionBytes": "16",
+        "ReusedBuffers": "0",
+        "ScratchStoreBytesPerIteration": "48",
+        "ScratchLoadBytesPerIteration": "48"
+      },
+      "final_function_scratch_bytes": 49152,
+      "rvv_max_cfa_offset": 49232,
+      "stream_definitions_whole_kernel": [
+        {
+          "value": "%sub.i62",
+          "definition": "fsub double %adjusted_a_coords.sroa.0.0, %42, !dbg !3286",
+          "type": "double"
+        },
+        {
+          "value": "%sub5.i",
+          "definition": "fsub double %adjusted_a_coords.sroa.6.0, %44, !dbg !3290",
+          "type": "double"
+        },
+        {
+          "value": "%sub9.i",
+          "definition": "fsub double %adjusted_a_coords.sroa.9.0, %46, !dbg !3294",
+          "type": "double"
+        },
+        {
+          "value": "%add6.i",
+          "definition": "fadd double %add.i71, %mul.i5.i, !dbg !3304",
+          "type": "double"
+        },
+        {
+          "value": "%add9.i.i",
+          "definition": "fadd double %51, %mul8.i.i, !dbg !3337",
+          "type": "double"
+        },
+        {
+          "value": "%add14.i.i",
+          "definition": "fadd double %54, %mul13.i.i, !dbg !3343",
+          "type": "double"
+        }
+      ],
+      "consumer_original_loads": [
+        "%.consume = load i64, ptr %add.ptr.i.consume, align 8, !dbg !3222, !tbaa !410",
+        "%.consume124 = load i64, ptr %xs.i61.consume, align 8, !dbg !3227, !tbaa !373"
+      ],
+      "fp_delta": "only consumer fadd gains reassoc; no other instruction changes",
+      "native": {
+        "id": "t000018-vina-non-cache-deriv",
+        "source_sha256": "6fd10ee6738e8e878b716eda8ab1c61571b6687f8928444e42a85e488245dce7",
+        "records": [
+          {
+            "mode": "baseline",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": false,
+            "values_compared": 0,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 36,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 36,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 36,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 36,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 36,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 36,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          }
+        ]
+      },
+      "captured_final_kernel_matches_validated_kernel": true
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "source": "benchmarks/ducc/map2alm-scalar-ring-pair.cpp",
+      "source_sha256": "ecac13f2530563466e5c93fc14fa73b15b04306bee939eb21f8bac3436866701",
+      "target_line": 119,
+      "target_selection": {
+        "Path": "scalar-IR",
+        "ChunkCapacity": "1024",
+        "ScratchBytes": "65536",
+        "Streams": "8",
+        "OriginalLoadInstructionBytes": "56",
+        "OriginalStoreInstructionBytes": "16",
+        "AdditionalLoadInstructionBytesUpperBound": "0",
+        "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+        "ConsumerOriginalLoadInstructionBytes": "0",
+        "ReusedBuffers": "0",
+        "ScratchStoreBytesPerIteration": "64",
+        "ScratchLoadBytesPerIteration": "64"
+      },
+      "final_function_scratch_bytes": 65536,
+      "rvv_max_cfa_offset": 65648,
+      "stream_definitions_whole_kernel": [
+        {
+          "value": "%mul",
+          "definition": "fmul double %13, %14, !dbg !100",
+          "type": "double"
+        },
+        {
+          "value": "%mul4",
+          "definition": "fmul double %13, %16, !dbg !104",
+          "type": "double"
+        },
+        {
+          "value": "%mul9",
+          "definition": "fmul double %13, %18, !dbg !108",
+          "type": "double"
+        },
+        {
+          "value": "%mul14",
+          "definition": "fmul double %13, %20, !dbg !112",
+          "type": "double"
+        },
+        {
+          "value": "%mul27",
+          "definition": "fmul double %14, %add23, !dbg !124",
+          "type": "double"
+        },
+        {
+          "value": "%mul32",
+          "definition": "fmul double %16, %add23, !dbg !125",
+          "type": "double"
+        },
+        {
+          "value": "%mul37",
+          "definition": "fmul double %18, %add23, !dbg !126",
+          "type": "double"
+        },
+        {
+          "value": "%mul42",
+          "definition": "fmul double %20, %add23, !dbg !127",
+          "type": "double"
+        }
+      ],
+      "consumer_original_loads": [],
+      "fp_delta": "only consumer fadd gains reassoc; no other instruction changes",
+      "native": {
+        "id": "t000070-map2alm-scalar-ring-pair",
+        "source_sha256": "ecac13f2530563466e5c93fc14fa73b15b04306bee939eb21f8bac3436866701",
+        "records": [
+          {
+            "mode": "baseline",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": false,
+            "values_compared": 0,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 4100,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 4100,
+            "max_scaled_error": 2.220446049250313e-15,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 4100,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 4100,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 4100,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 4100,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          }
+        ]
+      },
+      "captured_final_kernel_matches_validated_kernel": true
+    },
+    {
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "source": "benchmarks/ducc/map2alm-spin2-ring-pair.cpp",
+      "source_sha256": "2d40b34aaba6b796e44d345202f1bf21f85cbbe54bf727d3647625249d104f7e",
+      "target_line": 156,
+      "target_selection": {
+        "Path": "scalar-IR",
+        "ChunkCapacity": "1024",
+        "ScratchBytes": "65536",
+        "Streams": "8",
+        "OriginalLoadInstructionBytes": "56",
+        "OriginalStoreInstructionBytes": "16",
+        "AdditionalLoadInstructionBytesUpperBound": "0",
+        "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+        "ConsumerOriginalLoadInstructionBytes": "0",
+        "ReusedBuffers": "0",
+        "ScratchStoreBytesPerIteration": "64",
+        "ScratchLoadBytesPerIteration": "64"
+      },
+      "final_function_scratch_bytes": 131072,
+      "rvv_max_cfa_offset": 131312,
+      "stream_definitions_whole_kernel": [
+        {
+          "value": "%mul8",
+          "definition": "fmul double %14, %16, !dbg !110",
+          "type": "double"
+        },
+        {
+          "value": "%mul11",
+          "definition": "fmul double %14, %18, !dbg !114",
+          "type": "double"
+        },
+        {
+          "value": "%mul15",
+          "definition": "fmul double %14, %20, !dbg !118",
+          "type": "double"
+        },
+        {
+          "value": "%mul19",
+          "definition": "fmul double %14, %22, !dbg !122",
+          "type": "double"
+        },
+        {
+          "value": "%mul23",
+          "definition": "fmul double %sub4, %22, !dbg !123",
+          "type": "double"
+        },
+        {
+          "value": "%mul27",
+          "definition": "fmul double %sub4, %20, !dbg !124",
+          "type": "double"
+        },
+        {
+          "value": "%mul31",
+          "definition": "fmul double %sub4, %18, !dbg !125",
+          "type": "double"
+        },
+        {
+          "value": "%mul35",
+          "definition": "fmul double %16, %sub4, !dbg !126",
+          "type": "double"
+        },
+        {
+          "value": "%mul72",
+          "definition": "fmul double %39, %41, !dbg !184",
+          "type": "double"
+        },
+        {
+          "value": "%mul76",
+          "definition": "fmul double %39, %43, !dbg !188",
+          "type": "double"
+        },
+        {
+          "value": "%mul80",
+          "definition": "fmul double %39, %45, !dbg !192",
+          "type": "double"
+        },
+        {
+          "value": "%mul84",
+          "definition": "fmul double %39, %47, !dbg !196",
+          "type": "double"
+        },
+        {
+          "value": "%mul88",
+          "definition": "fmul double %sub68, %47, !dbg !197",
+          "type": "double"
+        },
+        {
+          "value": "%mul92",
+          "definition": "fmul double %sub68, %45, !dbg !198",
+          "type": "double"
+        },
+        {
+          "value": "%mul96",
+          "definition": "fmul double %sub68, %43, !dbg !199",
+          "type": "double"
+        },
+        {
+          "value": "%mul100",
+          "definition": "fmul double %41, %sub68, !dbg !200",
+          "type": "double"
+        }
+      ],
+      "consumer_original_loads": [],
+      "fp_delta": "only consumer fadd gains reassoc; no other instruction changes",
+      "native": {
+        "id": "t000070-map2alm-spin2-ring-pair",
+        "source_sha256": "2d40b34aaba6b796e44d345202f1bf21f85cbbe54bf727d3647625249d104f7e",
+        "records": [
+          {
+            "mode": "baseline",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": false,
+            "values_compared": 0,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 5200,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 5200,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 5200,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 5200,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 5200,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 5200,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          }
+        ]
+      },
+      "captured_final_kernel_matches_validated_kernel": true
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "source": "benchmarks/dlib/lm-numerical-observation-sweep.cpp",
+      "source_sha256": "4046f2b5fc29abc9b259113f11dfb785d06361f184709c808fb305fac65e31ce",
+      "target_line": 1136,
+      "target_selection": {
+        "Path": "scalar-IR",
+        "ChunkCapacity": "1024",
+        "ScratchBytes": "24576",
+        "Streams": "3",
+        "OriginalLoadInstructionBytes": "32",
+        "OriginalStoreInstructionBytes": "0",
+        "AdditionalLoadInstructionBytesUpperBound": "8",
+        "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+        "ConsumerOriginalLoadInstructionBytes": "8",
+        "ReusedBuffers": "0",
+        "ScratchStoreBytesPerIteration": "24",
+        "ScratchLoadBytesPerIteration": "24"
+      },
+      "final_function_scratch_bytes": 24576,
+      "rvv_max_cfa_offset": 24592,
+      "stream_definitions_whole_kernel": [
+        {
+          "value": "%div.i",
+          "definition": "fdiv double %sub6.i, %sub9.i, !dbg !102",
+          "type": "double"
+        },
+        {
+          "value": "%div.1.i",
+          "definition": "fdiv double %sub6.1.i, %sub9.1.i, !dbg !105",
+          "type": "double"
+        },
+        {
+          "value": "%div.2.i",
+          "definition": "fdiv double %sub6.2.i, %sub9.2.i, !dbg !106",
+          "type": "double"
+        }
+      ],
+      "consumer_original_loads": [
+        "%.consume = load double, ptr %arrayidx3.consume, align 8, !dbg !74, !tbaa !29"
+      ],
+      "fp_delta": "only consumer fadd gains reassoc; no other instruction changes",
+      "native": {
+        "id": "t000104-dlib-lm-numerical",
+        "source_sha256": "4046f2b5fc29abc9b259113f11dfb785d06361f184709c808fb305fac65e31ce",
+        "records": [
+          {
+            "mode": "baseline",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": false,
+            "values_compared": 0,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 150,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 150,
+            "max_scaled_error": 1.0114305919716214e-14,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 150,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 150,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 150,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 150,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          }
+        ]
+      },
+      "captured_final_kernel_matches_validated_kernel": true
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "source": "benchmarks/nek5000/drgtrq-3d-face.c",
+      "source_sha256": "e3e2a7fdfc78ddde32091dfe3a00efb13089d47e233aff00896d5b76c028116c",
+      "target_line": 181,
+      "target_selection": {
+        "Path": "scalar-IR",
+        "ChunkCapacity": "1024",
+        "ScratchBytes": "49152",
+        "Streams": "6",
+        "OriginalLoadInstructionBytes": "120",
+        "OriginalStoreInstructionBytes": "0",
+        "AdditionalLoadInstructionBytesUpperBound": "24",
+        "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+        "ConsumerOriginalLoadInstructionBytes": "24",
+        "ReusedBuffers": "0",
+        "ScratchStoreBytesPerIteration": "48",
+        "ScratchLoadBytesPerIteration": "48"
+      },
+      "final_function_scratch_bytes": 49152,
+      "rvv_max_cfa_offset": 49360,
+      "stream_definitions_whole_kernel": [
+        {
+          "value": "%mul53",
+          "definition": "fmul double %mul12, %24, !dbg !341",
+          "type": "double"
+        },
+        {
+          "value": "%mul58",
+          "definition": "fmul double %mul21, %24, !dbg !342",
+          "type": "double"
+        },
+        {
+          "value": "%mul63",
+          "definition": "fmul double %mul30, %24, !dbg !343",
+          "type": "double"
+        },
+        {
+          "value": "%mul71",
+          "definition": "fmul double %add70, %fneg, !dbg !350",
+          "type": "double"
+        },
+        {
+          "value": "%mul80",
+          "definition": "fmul double %add79, %fneg, !dbg !356",
+          "type": "double"
+        },
+        {
+          "value": "%mul89",
+          "definition": "fmul double %add88, %fneg, !dbg !362",
+          "type": "double"
+        }
+      ],
+      "consumer_original_loads": [
+        "%.consume83 = load double, ptr %arrayidx93.consume, align 8, !dbg !266, !tbaa !66",
+        "%.consume84 = load double, ptr %arrayidx95.consume, align 8, !dbg !268, !tbaa !66",
+        "%.consume85 = load double, ptr %arrayidx97.consume, align 8, !dbg !270, !tbaa !66"
+      ],
+      "fp_delta": "only consumer fadd gains reassoc; no other instruction changes",
+      "native": {
+        "id": "t000141-nek5000-drgtrq-3d-face",
+        "source_sha256": "e3e2a7fdfc78ddde32091dfe3a00efb13089d47e233aff00896d5b76c028116c",
+        "records": [
+          {
+            "mode": "baseline",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": false,
+            "values_compared": 0,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 8.326672684688674e-17,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          }
+        ]
+      },
+      "captured_final_kernel_matches_validated_kernel": true
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "source": "benchmarks/nek5000/drgtrq-3d-row.c",
+      "source_sha256": "e80417067ce7c9f6a8e7b8d2837b6bf18665eeef085fd73330a6d50c41188092",
+      "target_line": 183,
+      "target_selection": {
+        "Path": "scalar-IR",
+        "ChunkCapacity": "1024",
+        "ScratchBytes": "49152",
+        "Streams": "6",
+        "OriginalLoadInstructionBytes": "120",
+        "OriginalStoreInstructionBytes": "0",
+        "AdditionalLoadInstructionBytesUpperBound": "24",
+        "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+        "ConsumerOriginalLoadInstructionBytes": "24",
+        "ReusedBuffers": "0",
+        "ScratchStoreBytesPerIteration": "48",
+        "ScratchLoadBytesPerIteration": "48"
+      },
+      "final_function_scratch_bytes": 49152,
+      "rvv_max_cfa_offset": 49456,
+      "stream_definitions_whole_kernel": [
+        {
+          "value": "%mul57",
+          "definition": "fmul double %mul16, %38, !dbg !355",
+          "type": "double"
+        },
+        {
+          "value": "%mul62",
+          "definition": "fmul double %mul25, %38, !dbg !356",
+          "type": "double"
+        },
+        {
+          "value": "%mul67",
+          "definition": "fmul double %mul34, %38, !dbg !357",
+          "type": "double"
+        },
+        {
+          "value": "%mul75",
+          "definition": "fmul double %add74, %fneg, !dbg !364",
+          "type": "double"
+        },
+        {
+          "value": "%mul84",
+          "definition": "fmul double %add83, %fneg, !dbg !370",
+          "type": "double"
+        },
+        {
+          "value": "%mul93",
+          "definition": "fmul double %add92, %fneg, !dbg !376",
+          "type": "double"
+        }
+      ],
+      "consumer_original_loads": [
+        "%.consume107 = load double, ptr %arrayidx97.consume, align 8, !dbg !300, !tbaa !72",
+        "%.consume108 = load double, ptr %arrayidx99.consume, align 8, !dbg !302, !tbaa !72",
+        "%.consume109 = load double, ptr %arrayidx101.consume, align 8, !dbg !304, !tbaa !72"
+      ],
+      "fp_delta": "only consumer fadd gains reassoc; no other instruction changes",
+      "native": {
+        "id": "t000141-nek5000-drgtrq-3d-row",
+        "source_sha256": "e80417067ce7c9f6a8e7b8d2837b6bf18665eeef085fd73330a6d50c41188092",
+        "records": [
+          {
+            "mode": "baseline",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": false,
+            "values_compared": 0,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 5.551115123125783e-17,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          }
+        ]
+      },
+      "captured_final_kernel_matches_validated_kernel": true
+    },
+    {
+      "id": "t000156-gradient-paired-degree",
+      "source": "benchmarks/shtools/gradient-paired-degree.c",
+      "source_sha256": "f8dfa8854e82c2d7e880f5dc3635b5faf31f5828002f9e3bb149e50cd6e3f772",
+      "target_line": 138,
+      "target_selection": {
+        "Path": "scalar-IR",
+        "ChunkCapacity": "409",
+        "ScratchBytes": "65440",
+        "Streams": "20",
+        "OriginalLoadInstructionBytes": "73",
+        "OriginalStoreInstructionBytes": "0",
+        "AdditionalLoadInstructionBytesUpperBound": "1",
+        "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+        "ConsumerOriginalLoadInstructionBytes": "1",
+        "ReusedBuffers": "0",
+        "ScratchStoreBytesPerIteration": "160",
+        "ScratchLoadBytesPerIteration": "160"
+      },
+      "final_function_scratch_bytes": 65440,
+      "rvv_max_cfa_offset": 66000,
+      "stream_definitions_whole_kernel": [
+        {
+          "value": "%mul14",
+          "definition": "fmul double %72, %mul11, !dbg !247",
+          "type": "double"
+        },
+        {
+          "value": "%mul25",
+          "definition": "fmul double %72, %mul22, !dbg !253",
+          "type": "double"
+        },
+        {
+          "value": "%mul51",
+          "definition": "fmul double %72, %mul48, !dbg !258",
+          "type": "double"
+        },
+        {
+          "value": "%mul65",
+          "definition": "fmul double %72, %mul62, !dbg !261",
+          "type": "double"
+        },
+        {
+          "value": "%mul89",
+          "definition": "fmul double %mul87, %conv88, !dbg !264",
+          "type": "double"
+        },
+        {
+          "value": "%mul98",
+          "definition": "fmul double %mul96, %conv88, !dbg !266",
+          "type": "double"
+        },
+        {
+          "value": "%mul123",
+          "definition": "fmul double %mul120, %conv122, !dbg !270",
+          "type": "double"
+        },
+        {
+          "value": "%mul136",
+          "definition": "fmul double %mul87, %conv122, !dbg !271",
+          "type": "double"
+        },
+        {
+          "value": "%mul163",
+          "definition": "fmul double %mul161, %conv88, !dbg !274",
+          "type": "double"
+        },
+        {
+          "value": "%mul175",
+          "definition": "fmul double %mul14, %conv88, !dbg !275",
+          "type": "double"
+        },
+        {
+          "value": "%mul219",
+          "definition": "fmul double %72, %mul216, !dbg !291",
+          "type": "double"
+        },
+        {
+          "value": "%mul228",
+          "definition": "fmul double %72, %mul225, !dbg !293",
+          "type": "double"
+        },
+        {
+          "value": "%mul252",
+          "definition": "fmul double %72, %mul249, !dbg !295",
+          "type": "double"
+        },
+        {
+          "value": "%mul264",
+          "definition": "fmul double %72, %mul261, !dbg !297",
+          "type": "double"
+        },
+        {
+          "value": "%mul288",
+          "definition": "fmul double %mul286, %conv88, !dbg !300",
+          "type": "double"
+        },
+        {
+          "value": "%mul297",
+          "definition": "fmul double %mul219, %conv88, !dbg !301",
+          "type": "double"
+        },
+        {
+          "value": "%add322",
+          "definition": "fsub double %mul321, %101, !dbg !306",
+          "type": "double"
+        },
+        {
+          "value": "%mul327",
+          "definition": "fmul double %add322, %conv31, !dbg !307",
+          "type": "double"
+        },
+        {
+          "value": "%mul333",
+          "definition": "fmul double %70, %72, !dbg !308",
+          "type": "double"
+        },
+        {
+          "value": "%mul341",
+          "definition": "fmul double %72, %fneg, !dbg !309",
+          "type": "double"
+        }
+      ],
+      "consumer_original_loads": [
+        "%.consume = load i8, ptr %arrayidx29.consume, align 1, !dbg !98, !tbaa !26"
+      ],
+      "fp_delta": "only consumer fadd gains reassoc; no other instruction changes",
+      "native": {
+        "id": "t000156-gradient-paired-degree",
+        "source_sha256": "f8dfa8854e82c2d7e880f5dc3635b5faf31f5828002f9e3bb149e50cd6e3f772",
+        "records": [
+          {
+            "mode": "baseline",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": false,
+            "values_compared": 0,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 360,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 360,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 360,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 360,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 360,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 360,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          }
+        ]
+      },
+      "captured_final_kernel_matches_validated_kernel": true
+    },
+    {
+      "id": "t000156-gravity-potential-paired-degree",
+      "source": "benchmarks/shtools/gravity-potential-paired-degree.c",
+      "source_sha256": "5a4ef111a385e6ad24dc25e70033ed98d114058956da657fe6cdab5cb7a32239",
+      "target_line": 128,
+      "target_selection": {
+        "Path": "scalar-IR",
+        "ChunkCapacity": "1024",
+        "ScratchBytes": "65536",
+        "Streams": "8",
+        "OriginalLoadInstructionBytes": "73",
+        "OriginalStoreInstructionBytes": "0",
+        "AdditionalLoadInstructionBytesUpperBound": "1",
+        "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+        "ConsumerOriginalLoadInstructionBytes": "1",
+        "ReusedBuffers": "0",
+        "ScratchStoreBytesPerIteration": "64",
+        "ScratchLoadBytesPerIteration": "64"
+      },
+      "final_function_scratch_bytes": 65536,
+      "rvv_max_cfa_offset": 65728,
+      "stream_definitions_whole_kernel": [
+        {
+          "value": "%mul14",
+          "definition": "fmul double %40, %mul11, !dbg !154",
+          "type": "double"
+        },
+        {
+          "value": "%mul25",
+          "definition": "fmul double %40, %mul22, !dbg !160",
+          "type": "double"
+        },
+        {
+          "value": "%mul46",
+          "definition": "fmul double %40, %mul9, !dbg !161",
+          "type": "double"
+        },
+        {
+          "value": "%mul55",
+          "definition": "fmul double %40, %mul19, !dbg !162",
+          "type": "double"
+        },
+        {
+          "value": "%mul79",
+          "definition": "fmul double %mul77, %conv78, !dbg !165",
+          "type": "double"
+        },
+        {
+          "value": "%mul88",
+          "definition": "fmul double %mul46, %conv78, !dbg !166",
+          "type": "double"
+        },
+        {
+          "value": "%mul132",
+          "definition": "fmul double %40, %mul129, !dbg !182",
+          "type": "double"
+        },
+        {
+          "value": "%mul141",
+          "definition": "fmul double %40, %mul138, !dbg !184",
+          "type": "double"
+        }
+      ],
+      "consumer_original_loads": [
+        "%.consume = load i8, ptr %arrayidx29.consume, align 1, !dbg !77, !tbaa !26"
+      ],
+      "fp_delta": "only consumer fadd gains reassoc; no other instruction changes",
+      "native": {
+        "id": "t000156-gravity-potential-paired-degree",
+        "source_sha256": "5a4ef111a385e6ad24dc25e70033ed98d114058956da657fe6cdab5cb7a32239",
+        "records": [
+          {
+            "mode": "baseline",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": false,
+            "values_compared": 0,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 160,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 160,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 160,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 160,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 160,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 160,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          }
+        ]
+      },
+      "captured_final_kernel_matches_validated_kernel": true
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "source": "benchmarks/pyscf/vv10-hessian-ft-six-trial-grid.c",
+      "source_sha256": "dbe871d4a9e10d7a86422c878b7ec344045d33385e192336f0f42841a4b13c4f",
+      "target_line": 22289,
+      "target_selection": {
+        "Path": "scalar-IR",
+        "ChunkCapacity": "819",
+        "ScratchBytes": "65520",
+        "Streams": "10",
+        "OriginalLoadInstructionBytes": "176",
+        "OriginalStoreInstructionBytes": "0",
+        "AdditionalLoadInstructionBytesUpperBound": "104",
+        "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+        "ConsumerOriginalLoadInstructionBytes": "104",
+        "ReusedBuffers": "0",
+        "ScratchStoreBytesPerIteration": "80",
+        "ScratchLoadBytesPerIteration": "80"
+      },
+      "final_function_scratch_bytes": 65520,
+      "rvv_max_cfa_offset": 66000,
+      "stream_definitions_whole_kernel": [
+        {
+          "value": "%mul108",
+          "definition": "fmul double %mul88, %add107, !dbg !482",
+          "type": "double"
+        },
+        {
+          "value": "%mul115",
+          "definition": "fmul double %mul111, %sub114, !dbg !487",
+          "type": "double"
+        },
+        {
+          "value": "%mul122",
+          "definition": "fmul double %mul118, %sub121, !dbg !493",
+          "type": "double"
+        },
+        {
+          "value": "%mul129",
+          "definition": "fmul double %mul128, %mul98, !dbg !500",
+          "type": "double"
+        },
+        {
+          "value": "%98",
+          "definition": "add nsw i64 %35, %indvars.iv, !dbg !501",
+          "type": "i64"
+        },
+        {
+          "value": "%100",
+          "definition": "add nsw i64 %37, %indvars.iv, !dbg !501",
+          "type": "i64"
+        },
+        {
+          "value": "%102",
+          "definition": "add nsw i64 %39, %indvars.iv, !dbg !501",
+          "type": "i64"
+        },
+        {
+          "value": "%104",
+          "definition": "add nsw i64 %41, %indvars.iv, !dbg !501",
+          "type": "i64"
+        },
+        {
+          "value": "%106",
+          "definition": "add nsw i64 %43, %indvars.iv, !dbg !501",
+          "type": "i64"
+        },
+        {
+          "value": "%108",
+          "definition": "add nsw i64 %45, %indvars.iv, !dbg !501",
+          "type": "i64"
+        }
+      ],
+      "consumer_original_loads": [
+        "%.consume = load double, ptr %arrayidx131.consume, align 8, !dbg !286, !tbaa !247",
+        "%.consume211 = load double, ptr %arrayidx143.consume, align 8, !dbg !288, !tbaa !247",
+        "%.consume212 = load double, ptr %arrayidx148.consume, align 8, !dbg !290, !tbaa !247",
+        "%.consume213 = load double, ptr %arrayidx143.1.consume, align 8, !dbg !301, !tbaa !247",
+        "%.consume214 = load double, ptr %arrayidx148.1.consume, align 8, !dbg !302, !tbaa !247",
+        "%.consume215 = load double, ptr %arrayidx143.2.consume, align 8, !dbg !305, !tbaa !247",
+        "%.consume216 = load double, ptr %arrayidx148.2.consume, align 8, !dbg !306, !tbaa !247",
+        "%.consume217 = load double, ptr %arrayidx143.3.consume, align 8, !dbg !309, !tbaa !247",
+        "%.consume218 = load double, ptr %arrayidx148.3.consume, align 8, !dbg !310, !tbaa !247",
+        "%.consume219 = load double, ptr %arrayidx143.4.consume, align 8, !dbg !313, !tbaa !247",
+        "%.consume220 = load double, ptr %arrayidx148.4.consume, align 8, !dbg !314, !tbaa !247",
+        "%.consume221 = load double, ptr %arrayidx143.5.consume, align 8, !dbg !317, !tbaa !247",
+        "%.consume222 = load double, ptr %arrayidx148.5.consume, align 8, !dbg !318, !tbaa !247"
+      ],
+      "fp_delta": "only consumer fadd gains reassoc; no other instruction changes",
+      "native": {
+        "id": "t000159-vv10-hessian-ft-six-trial-grid",
+        "source_sha256": "dbe871d4a9e10d7a86422c878b7ec344045d33385e192336f0f42841a4b13c4f",
+        "records": [
+          {
+            "mode": "baseline",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": false,
+            "values_compared": 0,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 120,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          }
+        ]
+      },
+      "captured_final_kernel_matches_validated_kernel": true
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "source": "benchmarks/pyscf/vv10-hessian-uwabce-grid.c",
+      "source_sha256": "197c57ef31fa0b575cdea0c57cfae4fd22a4d9cd9516a77e8623fe4c43576bf8",
+      "target_line": 3856,
+      "target_selection": {
+        "Path": "scalar-IR",
+        "ChunkCapacity": "1024",
+        "ScratchBytes": "40960",
+        "Streams": "5",
+        "OriginalLoadInstructionBytes": "56",
+        "OriginalStoreInstructionBytes": "0",
+        "AdditionalLoadInstructionBytesUpperBound": "0",
+        "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+        "ConsumerOriginalLoadInstructionBytes": "0",
+        "ReusedBuffers": "0",
+        "ScratchStoreBytesPerIteration": "40",
+        "ScratchLoadBytesPerIteration": "40"
+      },
+      "final_function_scratch_bytes": 40960,
+      "rvv_max_cfa_offset": 41088,
+      "stream_definitions_whole_kernel": [
+        {
+          "value": "%add57",
+          "definition": "fadd double %add49, %mul56, !dbg !246",
+          "type": "double"
+        },
+        {
+          "value": "%mul68",
+          "definition": "fmul double %mul67, %mul66, !dbg !258",
+          "type": "double"
+        },
+        {
+          "value": "%mul70",
+          "definition": "fmul double %add69, %mul68, !dbg !260",
+          "type": "double"
+        },
+        {
+          "value": "%mul77",
+          "definition": "fmul double %mul68, %add76, !dbg !266",
+          "type": "double"
+        },
+        {
+          "value": "%mul78",
+          "definition": "fmul double %add57, %mul77, !dbg !267",
+          "type": "double"
+        }
+      ],
+      "consumer_original_loads": [],
+      "fp_delta": "only consumer fadd gains reassoc; no other instruction changes",
+      "native": {
+        "id": "t000159-vv10-hessian-uwabce-grid",
+        "source_sha256": "197c57ef31fa0b575cdea0c57cfae4fd22a4d9cd9516a77e8623fe4c43576bf8",
+        "records": [
+          {
+            "mode": "baseline",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": false,
+            "values_compared": 0,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 60,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1024,
+            "selected": true,
+            "values_compared": 60,
+            "max_scaled_error": 9.540979117872439e-18,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 60,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 1,
+            "selected": true,
+            "values_compared": 60,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": false,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 60,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          },
+          {
+            "mode": "fission",
+            "fp_reordering": true,
+            "capacity": 3,
+            "selected": true,
+            "values_compared": 60,
+            "max_scaled_error": 0,
+            "mismatches": [],
+            "mismatch_count": 0
+          }
+        ]
+      },
+      "captured_final_kernel_matches_validated_kernel": true
+    }
+  ],
+  "conclusion": "No observed semantic mismatch; redundant scratch/address streams and stack over-allocation remain. RVV runtime performance unmeasured.",
+  "artifact_hashes": {
+    "capture.py": "6ad0324fad32c9243802ea340eda306364af7c56f980d6e9931fb99543fed975",
+    "check-native.py": "c5cf6839175dbd97f633f21ff44106e7b7cf74e5d1fa5855509264feb52805fc",
+    "native-results.json": "781956ad9fcbcdc1229f7bff5bb85f1949861ec46d907f2f7014f46113587f41",
+    "t000018-vina-non-cache-deriv/late-ordered-after.ll": "290a26a752fd110549012336508f56de3734ccefa1d1abe1f84be33da84c7a28",
+    "t000018-vina-non-cache-deriv/late-ordered-before.ll": "15f5f695edebf7a8b8d2385ddd6ae59b160e918186c9cdad40ebc4e1de9b6ea9",
+    "t000018-vina-non-cache-deriv/late-reordered-after.ll": "2a6ab313f5cad0fb9ceb41e830ae1fb8ea74a20b90dc9593d51873a0ae1cb807",
+    "t000018-vina-non-cache-deriv/late-reordered-before.ll": "15f5f695edebf7a8b8d2385ddd6ae59b160e918186c9cdad40ebc4e1de9b6ea9",
+    "t000018-vina-non-cache-deriv/native/baseline-fp0-c1024.outputs.json": "50b3941e123a3a54ab406a64064585217038488c5277287f4168c403a82d8d3a",
+    "t000018-vina-non-cache-deriv/native/fission-fp0-c1.outputs.json": "50b3941e123a3a54ab406a64064585217038488c5277287f4168c403a82d8d3a",
+    "t000018-vina-non-cache-deriv/native/fission-fp0-c1024.outputs.json": "50b3941e123a3a54ab406a64064585217038488c5277287f4168c403a82d8d3a",
+    "t000018-vina-non-cache-deriv/native/fission-fp0-c3.outputs.json": "50b3941e123a3a54ab406a64064585217038488c5277287f4168c403a82d8d3a",
+    "t000018-vina-non-cache-deriv/native/fission-fp1-c1.outputs.json": "50b3941e123a3a54ab406a64064585217038488c5277287f4168c403a82d8d3a",
+    "t000018-vina-non-cache-deriv/native/fission-fp1-c1024.outputs.json": "50b3941e123a3a54ab406a64064585217038488c5277287f4168c403a82d8d3a",
+    "t000018-vina-non-cache-deriv/native/fission-fp1-c3.outputs.json": "50b3941e123a3a54ab406a64064585217038488c5277287f4168c403a82d8d3a",
+    "t000070-map2alm-scalar-ring-pair/late-ordered-after.ll": "6b45649a0ab2a518cfbeb5d8ff4b057e337adddf063a2c1d3c6899b84722c459",
+    "t000070-map2alm-scalar-ring-pair/late-ordered-before.ll": "79bb049f3b19ae4b5e8fba0fa7382e0d0288de35064b74f76eeb57dd1ddb50b0",
+    "t000070-map2alm-scalar-ring-pair/late-reordered-after.ll": "6de24e8dc67c21a51ea226b98f9490e7e13a842029329e9a2365dd5933f9ceaa",
+    "t000070-map2alm-scalar-ring-pair/late-reordered-before.ll": "79bb049f3b19ae4b5e8fba0fa7382e0d0288de35064b74f76eeb57dd1ddb50b0",
+    "t000070-map2alm-scalar-ring-pair/native/baseline-fp0-c1024.outputs.json": "ebf575256dd57eb88321ea4d0f26fed6b195bab29ef9fa642dc235fe71369ede",
+    "t000070-map2alm-scalar-ring-pair/native/fission-fp0-c1.outputs.json": "ebf575256dd57eb88321ea4d0f26fed6b195bab29ef9fa642dc235fe71369ede",
+    "t000070-map2alm-scalar-ring-pair/native/fission-fp0-c1024.outputs.json": "ebf575256dd57eb88321ea4d0f26fed6b195bab29ef9fa642dc235fe71369ede",
+    "t000070-map2alm-scalar-ring-pair/native/fission-fp0-c3.outputs.json": "ebf575256dd57eb88321ea4d0f26fed6b195bab29ef9fa642dc235fe71369ede",
+    "t000070-map2alm-scalar-ring-pair/native/fission-fp1-c1.outputs.json": "ebf575256dd57eb88321ea4d0f26fed6b195bab29ef9fa642dc235fe71369ede",
+    "t000070-map2alm-scalar-ring-pair/native/fission-fp1-c1024.outputs.json": "22e1ce386053411cf1cef56cede422d04159f402b58188b9a7a8ce9cb5f5c4fa",
+    "t000070-map2alm-scalar-ring-pair/native/fission-fp1-c3.outputs.json": "ebf575256dd57eb88321ea4d0f26fed6b195bab29ef9fa642dc235fe71369ede",
+    "t000070-map2alm-spin2-ring-pair/late-ordered-after.ll": "b6438147cbd5b11373afda4d8cc35d7d6863d93faca0683a531a8038afe93628",
+    "t000070-map2alm-spin2-ring-pair/late-ordered-before.ll": "c339b6235ed15d96d90261fcdff597fb4e83a1e0d29a1ce5b89393eba40ec9d4",
+    "t000070-map2alm-spin2-ring-pair/late-reordered-after.ll": "4132723512a3eb77118d7b8c15ef8c9d7500816d5a4fc33bf3ac0c8092faf35b",
+    "t000070-map2alm-spin2-ring-pair/late-reordered-before.ll": "c339b6235ed15d96d90261fcdff597fb4e83a1e0d29a1ce5b89393eba40ec9d4",
+    "t000070-map2alm-spin2-ring-pair/native/baseline-fp0-c1024.outputs.json": "af2754b3767d206e5eec5fb5700fc587f13bd7c0386fef4a0502d35f61690076",
+    "t000070-map2alm-spin2-ring-pair/native/fission-fp0-c1.outputs.json": "af2754b3767d206e5eec5fb5700fc587f13bd7c0386fef4a0502d35f61690076",
+    "t000070-map2alm-spin2-ring-pair/native/fission-fp0-c1024.outputs.json": "af2754b3767d206e5eec5fb5700fc587f13bd7c0386fef4a0502d35f61690076",
+    "t000070-map2alm-spin2-ring-pair/native/fission-fp0-c3.outputs.json": "af2754b3767d206e5eec5fb5700fc587f13bd7c0386fef4a0502d35f61690076",
+    "t000070-map2alm-spin2-ring-pair/native/fission-fp1-c1.outputs.json": "af2754b3767d206e5eec5fb5700fc587f13bd7c0386fef4a0502d35f61690076",
+    "t000070-map2alm-spin2-ring-pair/native/fission-fp1-c1024.outputs.json": "af2754b3767d206e5eec5fb5700fc587f13bd7c0386fef4a0502d35f61690076",
+    "t000070-map2alm-spin2-ring-pair/native/fission-fp1-c3.outputs.json": "af2754b3767d206e5eec5fb5700fc587f13bd7c0386fef4a0502d35f61690076",
+    "t000104-dlib-lm-numerical/late-ordered-after.ll": "4f262a2462ac1a015189cc979e405c5a803e22a717e05bcce56cb7b201612996",
+    "t000104-dlib-lm-numerical/late-ordered-before.ll": "0125056e64a2faf84980a4dd97aacc7bbdc2bfb407856dd346f0a1b17bae7429",
+    "t000104-dlib-lm-numerical/late-reordered-after.ll": "6dff3feb84936d4444a21cccc388659b279fc590f579e05145063645b740cea7",
+    "t000104-dlib-lm-numerical/late-reordered-before.ll": "0125056e64a2faf84980a4dd97aacc7bbdc2bfb407856dd346f0a1b17bae7429",
+    "t000104-dlib-lm-numerical/native/baseline-fp0-c1024.outputs.json": "77ddc3baede44ea6e6ed61c07cdb937a36df4b61a294a70ad5d4f7bfaf1bbe33",
+    "t000104-dlib-lm-numerical/native/fission-fp0-c1.outputs.json": "77ddc3baede44ea6e6ed61c07cdb937a36df4b61a294a70ad5d4f7bfaf1bbe33",
+    "t000104-dlib-lm-numerical/native/fission-fp0-c1024.outputs.json": "77ddc3baede44ea6e6ed61c07cdb937a36df4b61a294a70ad5d4f7bfaf1bbe33",
+    "t000104-dlib-lm-numerical/native/fission-fp0-c3.outputs.json": "77ddc3baede44ea6e6ed61c07cdb937a36df4b61a294a70ad5d4f7bfaf1bbe33",
+    "t000104-dlib-lm-numerical/native/fission-fp1-c1.outputs.json": "77ddc3baede44ea6e6ed61c07cdb937a36df4b61a294a70ad5d4f7bfaf1bbe33",
+    "t000104-dlib-lm-numerical/native/fission-fp1-c1024.outputs.json": "5b2bf74e89ce3a9350d15089459c88d340278aa842df99cf5891f0031d7c8c19",
+    "t000104-dlib-lm-numerical/native/fission-fp1-c3.outputs.json": "77ddc3baede44ea6e6ed61c07cdb937a36df4b61a294a70ad5d4f7bfaf1bbe33",
+    "t000141-nek5000-drgtrq-3d-face/late-ordered-after.ll": "256e445cf2e7ee5ac48c8f22672e0d027f1fcffba5ceba0bb993a846d7b5b706",
+    "t000141-nek5000-drgtrq-3d-face/late-ordered-before.ll": "d27ac3914701a2d6733ae60cbe01f14c6cb8496ab2953a4ce3c2ef932ddd8cee",
+    "t000141-nek5000-drgtrq-3d-face/late-reordered-after.ll": "7c0af9111ac9abb2411c28ae6b1cd6bcac6f0ae6f72efbd845a3c68c260ccc17",
+    "t000141-nek5000-drgtrq-3d-face/late-reordered-before.ll": "d27ac3914701a2d6733ae60cbe01f14c6cb8496ab2953a4ce3c2ef932ddd8cee",
+    "t000141-nek5000-drgtrq-3d-face/native/baseline-fp0-c1024.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000141-nek5000-drgtrq-3d-face/native/fission-fp0-c1.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000141-nek5000-drgtrq-3d-face/native/fission-fp0-c1024.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000141-nek5000-drgtrq-3d-face/native/fission-fp0-c3.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000141-nek5000-drgtrq-3d-face/native/fission-fp1-c1.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000141-nek5000-drgtrq-3d-face/native/fission-fp1-c1024.outputs.json": "a8d2fcbd479404acfcce2b71643fa091b45d5ced29704569cca85b65453bb3fe",
+    "t000141-nek5000-drgtrq-3d-face/native/fission-fp1-c3.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000141-nek5000-drgtrq-3d-row/late-ordered-after.ll": "4a402432680924860703b024eb1b24c95051f0150e135dbf6906abc5d13b0c47",
+    "t000141-nek5000-drgtrq-3d-row/late-ordered-before.ll": "e9b755905cb3ef4b1eee51cd15ceda7f84612748b9737f9600dcb45d58085716",
+    "t000141-nek5000-drgtrq-3d-row/late-reordered-after.ll": "b6a3e5f4d4e6f74511561e8d6c6a13da4826bbbfaa27450c3decc3be8044f06b",
+    "t000141-nek5000-drgtrq-3d-row/late-reordered-before.ll": "e9b755905cb3ef4b1eee51cd15ceda7f84612748b9737f9600dcb45d58085716",
+    "t000141-nek5000-drgtrq-3d-row/native/baseline-fp0-c1024.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000141-nek5000-drgtrq-3d-row/native/fission-fp0-c1.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000141-nek5000-drgtrq-3d-row/native/fission-fp0-c1024.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000141-nek5000-drgtrq-3d-row/native/fission-fp0-c3.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000141-nek5000-drgtrq-3d-row/native/fission-fp1-c1.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000141-nek5000-drgtrq-3d-row/native/fission-fp1-c1024.outputs.json": "3f832ff984e356095a6fc71dd76485a017f7c5f772ef67098d84884e7477dbf3",
+    "t000141-nek5000-drgtrq-3d-row/native/fission-fp1-c3.outputs.json": "54e6047347c8c70069cabe9485ae5555fbc93a5bb170ef2b157695b47251f157",
+    "t000156-gradient-paired-degree/late-ordered-after.ll": "d49c2bf836908102cd5feeef9f34381ec1a2a11a763608a80858cbd54255c6da",
+    "t000156-gradient-paired-degree/late-ordered-before.ll": "aad224f930bf59f4a7409e8cbacce6d19b35c7b06b3bae1f8823753ce75fd8d2",
+    "t000156-gradient-paired-degree/late-reordered-after.ll": "d015407a33a1297a997f77e34e0d8437241a7a626d24b5722833250bbf61de68",
+    "t000156-gradient-paired-degree/late-reordered-before.ll": "aad224f930bf59f4a7409e8cbacce6d19b35c7b06b3bae1f8823753ce75fd8d2",
+    "t000156-gradient-paired-degree/native/baseline-fp0-c1024.outputs.json": "521a7a9d8a436411982aaef14c48d303e8ede11853c01d3d1e74bf32aaf60015",
+    "t000156-gradient-paired-degree/native/fission-fp0-c1.outputs.json": "521a7a9d8a436411982aaef14c48d303e8ede11853c01d3d1e74bf32aaf60015",
+    "t000156-gradient-paired-degree/native/fission-fp0-c1024.outputs.json": "521a7a9d8a436411982aaef14c48d303e8ede11853c01d3d1e74bf32aaf60015",
+    "t000156-gradient-paired-degree/native/fission-fp0-c3.outputs.json": "521a7a9d8a436411982aaef14c48d303e8ede11853c01d3d1e74bf32aaf60015",
+    "t000156-gradient-paired-degree/native/fission-fp1-c1.outputs.json": "521a7a9d8a436411982aaef14c48d303e8ede11853c01d3d1e74bf32aaf60015",
+    "t000156-gradient-paired-degree/native/fission-fp1-c1024.outputs.json": "521a7a9d8a436411982aaef14c48d303e8ede11853c01d3d1e74bf32aaf60015",
+    "t000156-gradient-paired-degree/native/fission-fp1-c3.outputs.json": "521a7a9d8a436411982aaef14c48d303e8ede11853c01d3d1e74bf32aaf60015",
+    "t000156-gravity-potential-paired-degree/late-ordered-after.ll": "e1f3f6a6c1068b142be2b43afa9ef4ea8e73f6abc7d94925b575eca01c6f1716",
+    "t000156-gravity-potential-paired-degree/late-ordered-before.ll": "8872e650b1267781bfaa7e57c0018bf3c4746e0ad1bdaca644cd6e8622eca82e",
+    "t000156-gravity-potential-paired-degree/late-reordered-after.ll": "c5170ebc95679ebca3e2e5006256fa6606733a236a1bf19f816c8834c5ceceb1",
+    "t000156-gravity-potential-paired-degree/late-reordered-before.ll": "8872e650b1267781bfaa7e57c0018bf3c4746e0ad1bdaca644cd6e8622eca82e",
+    "t000156-gravity-potential-paired-degree/native/baseline-fp0-c1024.outputs.json": "d7dc867f998df3d735f4ce8dac5bba76cff33eeeb50a4b4c4ec5a22005bcb749",
+    "t000156-gravity-potential-paired-degree/native/fission-fp0-c1.outputs.json": "d7dc867f998df3d735f4ce8dac5bba76cff33eeeb50a4b4c4ec5a22005bcb749",
+    "t000156-gravity-potential-paired-degree/native/fission-fp0-c1024.outputs.json": "d7dc867f998df3d735f4ce8dac5bba76cff33eeeb50a4b4c4ec5a22005bcb749",
+    "t000156-gravity-potential-paired-degree/native/fission-fp0-c3.outputs.json": "d7dc867f998df3d735f4ce8dac5bba76cff33eeeb50a4b4c4ec5a22005bcb749",
+    "t000156-gravity-potential-paired-degree/native/fission-fp1-c1.outputs.json": "d7dc867f998df3d735f4ce8dac5bba76cff33eeeb50a4b4c4ec5a22005bcb749",
+    "t000156-gravity-potential-paired-degree/native/fission-fp1-c1024.outputs.json": "d7dc867f998df3d735f4ce8dac5bba76cff33eeeb50a4b4c4ec5a22005bcb749",
+    "t000156-gravity-potential-paired-degree/native/fission-fp1-c3.outputs.json": "d7dc867f998df3d735f4ce8dac5bba76cff33eeeb50a4b4c4ec5a22005bcb749",
+    "t000159-vv10-hessian-ft-six-trial-grid/late-ordered-after.ll": "89ebafbe0899b6619cb9e954251be9a8dc7d0935d7749a5f5bab9a9ad435ad92",
+    "t000159-vv10-hessian-ft-six-trial-grid/late-ordered-before.ll": "96ecf85f3734c6269b8e8823a1a8dc10911883ee7936f3fc11bc5c2ff39dd2cd",
+    "t000159-vv10-hessian-ft-six-trial-grid/late-reordered-after.ll": "6036e4064967250ac21175a9801d504dc83dc1d4b6ce3fea4c25649963ae2e34",
+    "t000159-vv10-hessian-ft-six-trial-grid/late-reordered-before.ll": "96ecf85f3734c6269b8e8823a1a8dc10911883ee7936f3fc11bc5c2ff39dd2cd",
+    "t000159-vv10-hessian-ft-six-trial-grid/native/baseline-fp0-c1024.outputs.json": "e5f98291134a1f2088694a72b062ae649b412a3fed93c6f8ec602eb0bffb4741",
+    "t000159-vv10-hessian-ft-six-trial-grid/native/fission-fp0-c1.outputs.json": "e5f98291134a1f2088694a72b062ae649b412a3fed93c6f8ec602eb0bffb4741",
+    "t000159-vv10-hessian-ft-six-trial-grid/native/fission-fp0-c1024.outputs.json": "e5f98291134a1f2088694a72b062ae649b412a3fed93c6f8ec602eb0bffb4741",
+    "t000159-vv10-hessian-ft-six-trial-grid/native/fission-fp0-c3.outputs.json": "e5f98291134a1f2088694a72b062ae649b412a3fed93c6f8ec602eb0bffb4741",
+    "t000159-vv10-hessian-ft-six-trial-grid/native/fission-fp1-c1.outputs.json": "e5f98291134a1f2088694a72b062ae649b412a3fed93c6f8ec602eb0bffb4741",
+    "t000159-vv10-hessian-ft-six-trial-grid/native/fission-fp1-c1024.outputs.json": "e5f98291134a1f2088694a72b062ae649b412a3fed93c6f8ec602eb0bffb4741",
+    "t000159-vv10-hessian-ft-six-trial-grid/native/fission-fp1-c3.outputs.json": "e5f98291134a1f2088694a72b062ae649b412a3fed93c6f8ec602eb0bffb4741",
+    "t000159-vv10-hessian-uwabce-grid/late-ordered-after.ll": "8c5e9105abb9d78f5c3294adc5fa558daaa881d5ea70a82c8bce28b927aefac8",
+    "t000159-vv10-hessian-uwabce-grid/late-ordered-before.ll": "237800b79929d6687c12803cf0a86ab94a1bfc160501416d39afd7fd139ed400",
+    "t000159-vv10-hessian-uwabce-grid/late-reordered-after.ll": "becdb789654165bdf4f783f9a5767de0e377692e67ed4905686a72530b84635a",
+    "t000159-vv10-hessian-uwabce-grid/late-reordered-before.ll": "237800b79929d6687c12803cf0a86ab94a1bfc160501416d39afd7fd139ed400",
+    "t000159-vv10-hessian-uwabce-grid/native/baseline-fp0-c1024.outputs.json": "2608ce9ed793cd2236102c67ec895bc13038b562002eb6008a611d49667cb93f",
+    "t000159-vv10-hessian-uwabce-grid/native/fission-fp0-c1.outputs.json": "2608ce9ed793cd2236102c67ec895bc13038b562002eb6008a611d49667cb93f",
+    "t000159-vv10-hessian-uwabce-grid/native/fission-fp0-c1024.outputs.json": "2608ce9ed793cd2236102c67ec895bc13038b562002eb6008a611d49667cb93f",
+    "t000159-vv10-hessian-uwabce-grid/native/fission-fp0-c3.outputs.json": "2608ce9ed793cd2236102c67ec895bc13038b562002eb6008a611d49667cb93f",
+    "t000159-vv10-hessian-uwabce-grid/native/fission-fp1-c1.outputs.json": "2608ce9ed793cd2236102c67ec895bc13038b562002eb6008a611d49667cb93f",
+    "t000159-vv10-hessian-uwabce-grid/native/fission-fp1-c1024.outputs.json": "f180daaa4ecaf195fa51f474d1214735c86a0ef0060a369e7a1e2f8013dcc7e4",
+    "t000159-vv10-hessian-uwabce-grid/native/fission-fp1-c3.outputs.json": "2608ce9ed793cd2236102c67ec895bc13038b562002eb6008a611d49667cb93f"
+  },
+  "native_exact_target_attribution": "All 60 fission variants selected bench_kernel at the expected source line, verified from YAML."
+}

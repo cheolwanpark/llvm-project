@@ -18,7 +18,7 @@
 #include "VPlanDominatorTree.h"
 #include "VPlanHelpers.h"
 #include "VPlanPatternMatch.h"
-#include "VPlanReductionFission.h"
+
 #include "VPlanUtils.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
@@ -236,8 +236,6 @@ bool VPlanVerifier::verifyVPBasicBlock(const VPBasicBlock *VPBB) {
     RecipeNumbering[&R] = Cnt++;
 
   for (const VPRecipeBase &R : *VPBB) {
-    if (!verifyReductionFissionRecipe(R))
-      return false;
     if (isa<VPIRInstruction>(&R) && !isa<VPIRBasicBlock>(VPBB)) {
       errs() << "VPIRInstructions ";
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)

@@ -1,123 +1,25 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -force-vector-width=4 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
-; RUN:   -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=EVL < %t
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -force-vector-width=4 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -S %s -o %t.repeat
-; RUN: FileCheck %s --check-prefix=EVL < %t.repeat
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.repeat -o /dev/null
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -force-vector-width=4 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
-; RUN:   -enable-vplan-reduction-fission -S %s -o %t.tail
-; RUN: FileCheck %s --check-prefix=TAIL --implicit-check-not=llvm.vp. --implicit-check-not=llvm.experimental.get.vector.length < %t.tail
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.tail -o /dev/null
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 \
-; RUN:   -scalable-vectorization=off -enable-vplan-reduction-fission \
-; RUN:   -S %s | FileCheck %s --check-prefix=SCALAR
-;
-; Serial/nested/asymmetric producers retain every branch, PHI and operation.
-; Division on the zero arm and FP loads with null all-division inputs would be
-; invalid. Four reductions share three slots. No original-loop vectorizability
-; requirement: scalar_helper has no vector mapping. The execution checker runs
-; actual transformed stages and tails, after one and two LV invocations.
-;
-; REMARK: scalar-acyclic.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-acyclic.c:12:3: scalar-IR fission producer VF 1
-; REMARK: scalar-acyclic.c:12:3: scalar-IR fission consumer VF vscale x 4
-; REMARK: scalar-acyclic.c:22:5: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-acyclic.c:22:5: scalar-IR fission producer VF 1
-; REMARK: scalar-acyclic.c:22:5: scalar-IR fission consumer VF vscale x 4
-; REMARK: scalar-acyclic.c:42:9: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044
-; REMARK: scalar-acyclic.c:42:9: scalar-IR fission producer VF 1
-; REMARK: scalar-acyclic.c:42:9: scalar-IR fission consumer VF vscale x 4
-; REMARK: scalar-acyclic.c:32:7: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; REMARK: scalar-acyclic.c:32:7: scalar-IR fission producer VF 1
-; REMARK: scalar-acyclic.c:32:7: scalar-IR fission consumer VF vscale x 4
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @acyclic_serial(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @acyclic_nested(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @acyclic_three_way(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @acyclic_enclosing(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @acyclic_cross_edge(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; EVL-LABEL: define void @acyclic_serial(
-; EVL: alloca [65 x i32]
-; EVL: alloca [65 x double]
-; EVL: alloca [65 x float]
-; EVL-NOT: alloca
-; EVL: loop:
-; EVL: br i1 %choose, label %left, label %right
-; EVL: left:
-; EVL: sdiv i32 840, %x
-; EVL: call i32 @scalar_helper
-; EVL: latch:
-; EVL: store i32 %c
-; EVL: store double %dc
-; EVL: store float %fc
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: [[SAVL:%.*]] = phi i64 [ %n, %vector.ph ], [ [[SNEXT:%.*]], %vector.body ]
-; EVL: [[SEVL:%.*]] = call i32 @llvm.experimental.get.vector.length.i64(i64 [[SAVL]], i32 4, i1 true)
-; EVL: call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0({{.*}}i32 [[SEVL]])
-; EVL: [[SD:%.*]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0({{.*}}i32 [[SEVL]])
-; EVL: [[SF:%.*]] = call <vscale x 4 x float> @llvm.vp.load.nxv4f32.p0({{.*}}i32 [[SEVL]])
-; EVL-NOT: @llvm.vp.load
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%.*}}, <vscale x 4 x double> [[SD]], <vscale x 4 x i1> splat (i1 true), i32 [[SEVL]])
-; EVL: call float @llvm.vp.reduce.fadd.nxv4f32(float {{%.*}}, <vscale x 4 x float> [[SF]], <vscale x 4 x i1> splat (i1 true), i32 [[SEVL]])
-; EVL: [[SSTEP:%.*]] = zext i32 [[SEVL]] to i64
-; EVL: [[SNEXT]] = sub nuw i64 [[SAVL]], [[SSTEP]]
-; EVL: icmp eq i64 [[SNEXT]], 0
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @acyclic_serial(
-; TAIL: alloca [65 x i32]
-; TAIL: alloca [65 x double]
-; TAIL: alloca [65 x float]
-; TAIL-NOT: alloca
-; TAIL: loop:
-; TAIL: br i1 %choose, label %left, label %right
-; TAIL: left:
-; TAIL: sdiv i32 840, %x
-; TAIL: call i32 @scalar_helper
-; TAIL: latch:
-; TAIL: store i32 %c
-; TAIL: store double %dc
-; TAIL: store float %fc
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: load <vscale x 4 x i32>
-; TAIL: load <vscale x 4 x double>
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: scalar.fission.consumer.body:
-; TAIL: fadd double
-; TAIL: ret void
-; SCALAR-LABEL: define void @acyclic_serial(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: loop:
-; SCALAR: br i1 %choose, label %left, label %right
-; SCALAR: left:
-; SCALAR: sdiv i32 840, %x
-; SCALAR: call i32 @scalar_helper
-; SCALAR: latch:
-; SCALAR: store i32 %c
-; SCALAR: store double %dc
-; SCALAR: store float %fc
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: %u0.consume = add i32 %r0.consume, %fission.contribution
-; SCALAR: %u1.consume = add i32 %fission.contribution, %r1.consume
-; SCALAR: %ud.consume = fadd double %rd.consume, %fission.contribution{{.*}}
-; SCALAR: %uf.consume = fadd float %rf.consume, %fission.contribution{{.*}}
-; SCALAR: ret void
 define void @acyclic_serial(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start) !dbg !4 {
 entry:
@@ -186,79 +88,6 @@ exit:
   ret void
 }
 
-; Inner diamond only visited on the nonzero arm.
-; EVL-LABEL: define void @acyclic_nested(
-; EVL: alloca [65 x i32]
-; EVL: alloca [65 x double]
-; EVL: alloca [65 x float]
-; EVL-NOT: alloca
-; EVL: loop:
-; EVL: br i1 %choose, label %left, label %right
-; EVL: left:
-; EVL: sdiv i32 840, %x
-; EVL: call i32 @scalar_helper
-; EVL: latch:
-; EVL: store i32 %c
-; EVL: store double %dc
-; EVL: store float %fc
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: [[NAVL:%.*]] = phi i64 [ %n, %vector.ph ], [ [[NNEXT:%.*]], %vector.body ]
-; EVL: [[NEVL:%.*]] = call i32 @llvm.experimental.get.vector.length.i64(i64 [[NAVL]], i32 4, i1 true)
-; EVL: call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0({{.*}}i32 [[NEVL]])
-; EVL: [[ND:%.*]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0({{.*}}i32 [[NEVL]])
-; EVL: [[NF:%.*]] = call <vscale x 4 x float> @llvm.vp.load.nxv4f32.p0({{.*}}i32 [[NEVL]])
-; EVL-NOT: @llvm.vp.load
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%.*}}, <vscale x 4 x double> [[ND]], <vscale x 4 x i1> splat (i1 true), i32 [[NEVL]])
-; EVL: call float @llvm.vp.reduce.fadd.nxv4f32(float {{%.*}}, <vscale x 4 x float> [[NF]], <vscale x 4 x i1> splat (i1 true), i32 [[NEVL]])
-; EVL: [[NSTEP:%.*]] = zext i32 [[NEVL]] to i64
-; EVL: [[NNEXT]] = sub nuw i64 [[NAVL]], [[NSTEP]]
-; EVL: icmp eq i64 [[NNEXT]], 0
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @acyclic_nested(
-; TAIL: alloca [65 x i32]
-; TAIL: alloca [65 x double]
-; TAIL: alloca [65 x float]
-; TAIL-NOT: alloca
-; TAIL: loop:
-; TAIL: br i1 %choose, label %left, label %right
-; TAIL: left:
-; TAIL: sdiv i32 840, %x
-; TAIL: call i32 @scalar_helper
-; TAIL: latch:
-; TAIL: store i32 %c
-; TAIL: store double %dc
-; TAIL: store float %fc
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: load <vscale x 4 x i32>
-; TAIL: load <vscale x 4 x double>
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: scalar.fission.consumer.body:
-; TAIL: fadd double
-; TAIL: ret void
-; SCALAR-LABEL: define void @acyclic_nested(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: loop:
-; SCALAR: br i1 %choose, label %left, label %right
-; SCALAR: left:
-; SCALAR: sdiv i32 840, %x
-; SCALAR: call i32 @scalar_helper
-; SCALAR: latch:
-; SCALAR: store i32 %c
-; SCALAR: store double %dc
-; SCALAR: store float %fc
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: %u0.consume = add i32 %r0.consume, %fission.contribution
-; SCALAR: %u1.consume = add i32 %fission.contribution, %r1.consume
-; SCALAR: %ud.consume = fadd double %rd.consume, %fission.contribution{{.*}}
-; SCALAR: %uf.consume = fadd float %rf.consume, %fission.contribution{{.*}}
-; SCALAR: ret void
 define void @acyclic_nested(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start) !dbg !10 {
 entry:
@@ -327,79 +156,6 @@ exit:
   ret void
 }
 
-; Asymmetric nested branches with three distinct latch predecessors.
-; EVL-LABEL: define void @acyclic_three_way(
-; EVL: alloca [65 x i32]
-; EVL: alloca [65 x double]
-; EVL: alloca [65 x float]
-; EVL-NOT: alloca
-; EVL: loop:
-; EVL: br i1 %choose, label %left, label %right
-; EVL: left:
-; EVL: sdiv i32 840, %x
-; EVL: call i32 @scalar_helper
-; EVL: latch:
-; EVL: store i32 %c
-; EVL: store double %dc
-; EVL: store float %fc
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: [[WAVL:%.*]] = phi i64 [ %n, %vector.ph ], [ [[WNEXT:%.*]], %vector.body ]
-; EVL: [[WEVL:%.*]] = call i32 @llvm.experimental.get.vector.length.i64(i64 [[WAVL]], i32 4, i1 true)
-; EVL: call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0({{.*}}i32 [[WEVL]])
-; EVL: [[WD:%.*]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0({{.*}}i32 [[WEVL]])
-; EVL: [[WF:%.*]] = call <vscale x 4 x float> @llvm.vp.load.nxv4f32.p0({{.*}}i32 [[WEVL]])
-; EVL-NOT: @llvm.vp.load
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%.*}}, <vscale x 4 x double> [[WD]], <vscale x 4 x i1> splat (i1 true), i32 [[WEVL]])
-; EVL: call float @llvm.vp.reduce.fadd.nxv4f32(float {{%.*}}, <vscale x 4 x float> [[WF]], <vscale x 4 x i1> splat (i1 true), i32 [[WEVL]])
-; EVL: [[WSTEP:%.*]] = zext i32 [[WEVL]] to i64
-; EVL: [[WNEXT]] = sub nuw i64 [[WAVL]], [[WSTEP]]
-; EVL: icmp eq i64 [[WNEXT]], 0
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @acyclic_three_way(
-; TAIL: alloca [65 x i32]
-; TAIL: alloca [65 x double]
-; TAIL: alloca [65 x float]
-; TAIL-NOT: alloca
-; TAIL: loop:
-; TAIL: br i1 %choose, label %left, label %right
-; TAIL: left:
-; TAIL: sdiv i32 840, %x
-; TAIL: call i32 @scalar_helper
-; TAIL: latch:
-; TAIL: store i32 %c
-; TAIL: store double %dc
-; TAIL: store float %fc
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: load <vscale x 4 x i32>
-; TAIL: load <vscale x 4 x double>
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: scalar.fission.consumer.body:
-; TAIL: fadd double
-; TAIL: ret void
-; SCALAR-LABEL: define void @acyclic_three_way(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: loop:
-; SCALAR: br i1 %choose, label %left, label %right
-; SCALAR: left:
-; SCALAR: sdiv i32 840, %x
-; SCALAR: call i32 @scalar_helper
-; SCALAR: latch:
-; SCALAR: store i32 %c
-; SCALAR: store double %dc
-; SCALAR: store float %fc
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: %u0.consume = add i32 %r0.consume, %fission.contribution
-; SCALAR: %u1.consume = add i32 %fission.contribution, %r1.consume
-; SCALAR: %ud.consume = fadd double %rd.consume, %fission.contribution{{.*}}
-; SCALAR: %uf.consume = fadd float %rf.consume, %fission.contribution{{.*}}
-; SCALAR: ret void
 define void @acyclic_three_way(ptr readonly %a, ptr readonly %fp, ptr %out,
                             ptr %dout, ptr %fout, i64 %n, double %start) !dbg !12 {
 entry:
@@ -464,75 +220,6 @@ exit:
   ret void
 }
 
-; Serial diamond/triangle inside a real enclosing loop.
-; EVL-LABEL: define void @acyclic_enclosing(
-; EVL: alloca [65 x i32]
-; EVL: alloca [65 x double]
-; EVL-NOT: alloca
-; EVL: inner:
-; EVL: br i1 %choose, label %left, label %right
-; EVL: left:
-; EVL: call i32 @scalar_helper
-; EVL: latch:
-; EVL: store i32 %c
-; EVL: store double %dc
-; EVL: scalar.fission.consumer.ph:
-; EVL: vector.body:
-; EVL: [[EAVL:%.*]] = phi i64 [ %n, %vector.ph ], [ [[ENEXT:%.*]], %vector.body ]
-; EVL: [[EEVL:%.*]] = call i32 @llvm.experimental.get.vector.length.i64(i64 [[EAVL]], i32 4, i1 true)
-; EVL: call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0({{.*}}i32 [[EEVL]])
-; EVL: [[ED:%.*]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0({{.*}}i32 [[EEVL]])
-; EVL-NOT: @llvm.vp.load
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%.*}}, <vscale x 4 x double> [[ED]], <vscale x 4 x i1> splat (i1 true), i32 [[EEVL]])
-; EVL: [[ESTEP:%.*]] = zext i32 [[EEVL]] to i64
-; EVL: [[ENEXT]] = sub nuw i64 [[EAVL]], [[ESTEP]]
-; EVL: icmp eq i64 [[ENEXT]], 0
-; EVL: call i32 @llvm.vector.reduce.add.nxv4i32
-; EVL: row.exit:
-; EVL: store i32
-; EVL: store double
-; EVL: ret void
-; TAIL-LABEL: define void @acyclic_enclosing(
-; TAIL: alloca [65 x i32]
-; TAIL: alloca [65 x double]
-; TAIL-NOT: alloca
-; TAIL: inner:
-; TAIL: br i1 %choose, label %left, label %right
-; TAIL: left:
-; TAIL: call i32 @scalar_helper
-; TAIL: latch:
-; TAIL: store i32 %c
-; TAIL: store double %dc
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: vector.body:
-; TAIL: load <vscale x 4 x i32>
-; TAIL: load <vscale x 4 x double>
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64
-; TAIL: call i32 @llvm.vector.reduce.add.nxv4i32
-; TAIL: scalar.fission.consumer.body:
-; TAIL: fadd double
-; TAIL: row.exit:
-; TAIL: store i32
-; TAIL: store double
-; TAIL: ret void
-; SCALAR-LABEL: define void @acyclic_enclosing(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR-NOT: alloca
-; SCALAR: inner:
-; SCALAR: br i1 %choose, label %left, label %right
-; SCALAR: left:
-; SCALAR: call i32 @scalar_helper
-; SCALAR: latch:
-; SCALAR: store i32 %c
-; SCALAR: store double %dc
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR: %update.consume = add i32 %sum.consume, %fission.contribution
-; SCALAR: %dupdate.consume = fadd double %dsum.consume, %fission.contribution{{.*}}
-; SCALAR: row.exit:
-; SCALAR: store i32
-; SCALAR: store double
-; SCALAR: ret void
 define void @acyclic_enclosing(ptr readonly %a, ptr readonly %fp, ptr %out,
                                   ptr %dout, i64 %rows, i64 %n, double %start) !dbg !8 {
 entry:
@@ -609,18 +296,6 @@ exit:
   ret void
 }
 
-; Former cross-edge rejection, preserved as a positive regression.
-; EVL-LABEL: define i32 @acyclic_cross_edge(
-; EVL: scalar.fission.consumer.ph:
-; EVL: ret i32
-; TAIL-LABEL: define i32 @acyclic_cross_edge(
-; TAIL: scalar.fission.consumer.ph:
-; TAIL: ret i32
-; SCALAR-LABEL: define i32 @acyclic_cross_edge(
-; SCALAR: br label %right
-; SCALAR: store i32 %c
-; SCALAR: scalar.fission.consumer.body:
-; SCALAR: ret i32
 define i32 @acyclic_cross_edge(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65

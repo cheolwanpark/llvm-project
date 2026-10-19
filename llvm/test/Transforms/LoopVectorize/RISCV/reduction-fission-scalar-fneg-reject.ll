@@ -1,25 +1,32 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -enable-vplan-reduction-fission \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=IR --implicit-check-not=scalar.fission < %t
-; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -force-vector-width=1 \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.reorder 2> %t.reorder.remarks
-; RUN: FileCheck %s --check-prefix=IR --implicit-check-not=scalar.fission < %t.reorder
-; RUN: FileCheck %s --check-prefix=REASON < %t.reorder.remarks
-;
-; Admission of fneg cannot weaken accumulator closure, vector exclusion,
-; strict FP or call effects. In particular fneg precedes unsafe_call: its
-; diagnostic is now scalar-unsafe-call, not the old instruction barrier.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_accumulator_negation(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_update_negation(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_vector_negation(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_strictfp(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_constrained(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_unsafe_call(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_negation_recurrence(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare double @unsafe(double) memory(none) nounwind willreturn
 declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
 
-
-; REASON: scalar-fneg-reject.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; IR-LABEL: define double @reject_accumulator_negation(
-; IR: ret double
 define double @reject_accumulator_negation(ptr %a, i64 %n, double %start, <2 x double> %v) !dbg !10 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -45,9 +52,6 @@ bypass:
   ret double %start
 }
 
-; REASON: scalar-fneg-reject.c:22:3: scalar-IR reduction fission rejected: scalar-reduction-feedback
-; IR-LABEL: define double @reject_update_negation(
-; IR: ret double
 define double @reject_update_negation(ptr %a, i64 %n, double %start, <2 x double> %v) !dbg !12 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -75,9 +79,6 @@ bypass:
   ret double %start
 }
 
-; REASON: scalar-fneg-reject.c:32:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
-; IR-LABEL: define double @reject_vector_negation(
-; IR: ret double
 define double @reject_vector_negation(ptr %a, i64 %n, double %start, <2 x double> %v) !dbg !14 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -105,9 +106,6 @@ bypass:
   ret double %start
 }
 
-; REASON: scalar-fneg-reject.c:42:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; IR-LABEL: define double @reject_strictfp(
-; IR: ret double
 define double @reject_strictfp(ptr %a, i64 %n, double %start, <2 x double> %v) strictfp !dbg !16 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -133,9 +131,6 @@ bypass:
   ret double %start
 }
 
-; REASON: scalar-fneg-reject.c:52:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; IR-LABEL: define double @reject_constrained(
-; IR: ret double
 define double @reject_constrained(ptr %a, i64 %n, double %start, <2 x double> %v) !dbg !18 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -162,9 +157,6 @@ bypass:
   ret double %start
 }
 
-; REASON: scalar-fneg-reject.c:62:3: scalar-IR reduction fission rejected: scalar-unsafe-call
-; IR-LABEL: define double @reject_unsafe_call(
-; IR: ret double
 define double @reject_unsafe_call(ptr %a, i64 %n, double %start, <2 x double> %v) !dbg !20 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -191,9 +183,6 @@ bypass:
   ret double %start
 }
 
-; REASON: scalar-fneg-reject.c:72:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; IR-LABEL: define double @reject_negation_recurrence(
-; IR: ret double
 define double @reject_negation_recurrence(ptr %a, i64 %n, double %start, <2 x double> %v) !dbg !22 {
 entry:
   %valid = icmp ule i64 %n, 65

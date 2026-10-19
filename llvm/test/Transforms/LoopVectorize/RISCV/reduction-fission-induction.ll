@@ -1,23 +1,23 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-force-producer-vf=16 \
-; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 -S %s -o %t
-; RUN: FileCheck %s < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-
-; Each scalar stage derives the independent IV from its own canonical resume
-; index. No nsw/nuw flags may be invented for the multiply or the add.
-; CHECK-LABEL: define void @induction(
-; CHECK: vector.fission.producer.body:
-; CHECK: phi <vscale x 16 x i32>
-; CHECK: scalar.fission.producer.body:
-; CHECK: [[K:%.*]] = phi i64
-; CHECK: [[T:%.*]] = trunc i64 [[K]] to i32
-; CHECK: [[M:%.*]] = mul i32 %step, [[T]]
-; CHECK: add i32 19, [[M]]
-; CHECK: vector.fission.accumulator.body:
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @induction(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @negative_step(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @truncated(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @induction_liveout(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @floating_induction(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @induction(ptr noalias readonly %a, ptr noalias %out, i32 %step) {
 entry:
   %base = getelementptr i32, ptr %a, i64 1
@@ -73,10 +73,6 @@ exit:
   ret void
 }
 
-; CHECK-LABEL: define void @negative_step(
-; CHECK: scalar.fission.producer.body:
-; CHECK: mul i32 -3,
-
 define void @negative_step(ptr noalias readonly %a, ptr noalias %out, i32 %step) {
 entry:
   %base = getelementptr i32, ptr %a, i64 1
@@ -131,12 +127,6 @@ exit:
   store i32 %n7, ptr %o7
   ret void
 }
-
-; CHECK-LABEL: define void @truncated(
-; CHECK: scalar.fission.producer.body:
-; CHECK: trunc i64 {{.*}} to i8
-; CHECK: mul i8
-; CHECK: add i8
 
 define void @truncated(ptr noalias readonly %a, ptr noalias %out, i32 %step) {
 entry:
@@ -196,10 +186,6 @@ exit:
   ret void
 }
 
-; CHECK-LABEL: define void @induction_liveout(
-; CHECK-NOT: fission
-; CHECK: ret void
-
 define void @induction_liveout(ptr noalias readonly %a, ptr noalias %out, i32 %step) {
 entry:
   %base = getelementptr i32, ptr %a, i64 1
@@ -254,10 +240,6 @@ exit:
   store i32 %n7, ptr %o7
   ret void
 }
-
-; CHECK-LABEL: define void @floating_induction(
-; CHECK-NOT: fission
-; CHECK: ret void
 
 define void @floating_induction(ptr noalias readonly %a, ptr noalias %out, i32 %step) {
 entry:

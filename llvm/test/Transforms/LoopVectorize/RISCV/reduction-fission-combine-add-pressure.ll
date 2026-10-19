@@ -1,28 +1,11 @@
-; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 -S %s -o %t
-; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-min-chain-depth=4 -vplan-reduction-fission-combine-add-contributions=false -S %s -o %t.old
-; RUN: FileCheck %s --check-prefix=ORIGINAL < %t.old
-; RUN: FileCheck %s < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v,+m -verify-machineinstrs %t -o /dev/null
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 -vplan-reduction-fission-force-producer-vf=8 -vplan-reduction-fission-force-accumulator-vf=8 -S %s | FileCheck %s --check-prefix=FORCED
-;
-; Combining six private terms increases estimated producer pressure. Explicit
-; fission now accepts that legal cut, saving five scratch arrays at the selected
-; pair. The uncombined option still exposes all nine original scratch values.
-; CHECK-LABEL: define void @pressure_fallback(
-; CHECK-COUNT-4: alloca [257 x i32]
-; CHECK-NOT: alloca [257 x i32]
-; CHECK: vector.fission.producer.body:
-; CHECK: vector.fission.accumulator.body:
-; ORIGINAL-LABEL: define void @pressure_fallback(
-; ORIGINAL-COUNT-9: alloca [257 x i32]
-; ORIGINAL-NOT: alloca [257 x i32]
-; ORIGINAL: vector.fission.producer.body:
-; ORIGINAL: vector.fission.accumulator.body:
-; Explicit VFs retain the same scratch saving and all stage legality checks.
-; FORCED-COUNT-4: alloca [257 x i32]
-; FORCED-NOT: alloca [257 x i32]
-; FORCED: vector.fission.producer.body:
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @pressure_fallback(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @pressure_fallback(ptr noalias readonly %a, ptr noalias %out) {
 entry:
   br label %loop

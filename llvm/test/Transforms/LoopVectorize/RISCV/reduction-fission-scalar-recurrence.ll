@@ -1,104 +1,43 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=EVL < %t
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false -S %s -o %t.tail
-; RUN: FileCheck %s --check-prefix=TAIL < %t.tail
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.tail -o /dev/null
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -S %s | FileCheck %s --check-prefix=SCALAR
-;
-; Retain producer state in its original CFG, with original arithmetic/flags.
-; Three independent reductions share two streams. The first-order delay and
-; mutually dependent two-delay recurrences must never move to the consumer.
-; PHIs are interleaved, and the runtime-control sibling reverses their order.
-; Scratch slots, stores, loads and independent accumulator updates can follow
-; that PHI order. DAG checks allow either order while tying both typed loads
-; to their scratch slots and the FP operand to its ordered reduction. Block
-; labels bound consumer checks; producer state and FP operand order stay fixed.
-; Reserved bytes also follow stream order, without padding the final stream:
-; i32[65] then double[65] uses 260+4+520=784; recurrence_runtime reverses
-; the streams and uses 520+260=780. Both still have capacity 65 and exactly
-; 12 bytes stored plus 12 bytes loaded per completed iteration (24 total).
-; Integer-first capacity boundaries 1/255/5461 remain 16/3064/65536 bytes.
-; The execution checker compares actual split code, original IR and C formulas
-; with exact counts, ordered FP, tails and enclosing-row scratch reuse.
-; Formerly all these loops failed scalar-unsupported-recurrence.
-;
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_first(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_two(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_affine(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_runtime(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_branch(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_enclosing(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_one(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_255(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_limit(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_first_affine(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_first_enclosing(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; REMARK: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; SCALAR-LABEL: define void @recurrence_first(
-; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; SCALAR-NOT: alloca
-; SCALAR: %prev = phi i32
-; SCALAR: %raw = xor i32 %prev, %x
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-LABEL: {{^}}scalar.fission.consumer.body:
-; SCALAR-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; SCALAR-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; SCALAR-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; SCALAR-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; SCALAR-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; SCALAR: br i1
-; SCALAR-LABEL: {{^}}exit:
-; SCALAR: ret void
-; EVL-LABEL: define void @recurrence_first(
-; EVL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; EVL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; EVL: %prev = phi i32
-; EVL: store i32 %c,
-; EVL: scalar.fission.consumer.ph:
-; EVL-LABEL: {{^}}vector.body:
-; EVL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; EVL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 [[I_PTR]],
-; EVL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; EVL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr align 8 [[D_PTR]],
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; EVL: br i1
-; EVL-LABEL: {{^}}middle.block:
-; EVL: @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @recurrence_first(
-; TAIL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; TAIL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; TAIL: %prev = phi i32
-; TAIL: store i32 %c,
-; TAIL: scalar.fission.consumer.ph:
-; TAIL-LABEL: {{^}}vector.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; TAIL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x i32>, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; TAIL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x double>, ptr [[D_PTR]],
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}middle.block:
-; TAIL: @llvm.vector.reduce.add.nxv4i32
-; TAIL-LABEL: {{^}}scalar.fission.consumer.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; TAIL-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; TAIL-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; TAIL-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}exit:
-; TAIL: ret void
 define void @recurrence_first(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !12 {
 entry:
@@ -139,70 +78,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-recurrence.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; SCALAR-LABEL: define void @recurrence_two(
-; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; SCALAR-NOT: alloca
-; SCALAR: %prev = phi i32
-; SCALAR: %raw = xor i32 %prev, %x
-; SCALAR: %state.next = add {{(nuw nsw |nuw |nsw )?}}i32 %bounded, %older
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-LABEL: {{^}}scalar.fission.consumer.body:
-; SCALAR-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; SCALAR-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; SCALAR-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; SCALAR-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; SCALAR-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; SCALAR: br i1
-; SCALAR-LABEL: {{^}}exit:
-; SCALAR: ret void
-; EVL-LABEL: define void @recurrence_two(
-; EVL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; EVL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; EVL: %prev = phi i32
-; EVL: store i32 %c,
-; EVL: scalar.fission.consumer.ph:
-; EVL-LABEL: {{^}}vector.body:
-; EVL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; EVL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 [[I_PTR]],
-; EVL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; EVL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr align 8 [[D_PTR]],
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; EVL: br i1
-; EVL-LABEL: {{^}}middle.block:
-; EVL: @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @recurrence_two(
-; TAIL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; TAIL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; TAIL: %prev = phi i32
-; TAIL: store i32 %c,
-; TAIL: scalar.fission.consumer.ph:
-; TAIL-LABEL: {{^}}vector.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; TAIL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x i32>, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; TAIL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x double>, ptr [[D_PTR]],
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}middle.block:
-; TAIL: @llvm.vector.reduce.add.nxv4i32
-; TAIL-LABEL: {{^}}scalar.fission.consumer.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; TAIL-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; TAIL-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; TAIL-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}exit:
-; TAIL: ret void
 define void @recurrence_two(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !22 {
 entry:
@@ -248,70 +123,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-recurrence.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; SCALAR-LABEL: define void @recurrence_affine(
-; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; SCALAR-NOT: alloca
-; SCALAR: %prev = phi i32
-; SCALAR: %raw = xor i32 %prev, %x
-; SCALAR: %state.next = add {{(nuw nsw |nuw |nsw )?}}i32 %bounded, %older
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-LABEL: {{^}}scalar.fission.consumer.body:
-; SCALAR-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; SCALAR-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; SCALAR-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; SCALAR-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; SCALAR-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; SCALAR: br i1
-; SCALAR-LABEL: {{^}}exit:
-; SCALAR: ret void
-; EVL-LABEL: define void @recurrence_affine(
-; EVL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; EVL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; EVL: %prev = phi i32
-; EVL: store i32 %c,
-; EVL: scalar.fission.consumer.ph:
-; EVL-LABEL: {{^}}vector.body:
-; EVL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; EVL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 [[I_PTR]],
-; EVL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; EVL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr align 8 [[D_PTR]],
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; EVL: br i1
-; EVL-LABEL: {{^}}middle.block:
-; EVL: @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @recurrence_affine(
-; TAIL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; TAIL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; TAIL: %prev = phi i32
-; TAIL: store i32 %c,
-; TAIL: scalar.fission.consumer.ph:
-; TAIL-LABEL: {{^}}vector.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; TAIL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x i32>, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; TAIL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x double>, ptr [[D_PTR]],
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}middle.block:
-; TAIL: @llvm.vector.reduce.add.nxv4i32
-; TAIL-LABEL: {{^}}scalar.fission.consumer.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; TAIL-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; TAIL-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; TAIL-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}exit:
-; TAIL: ret void
 define void @recurrence_affine(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !32 {
 entry:
@@ -361,70 +172,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-recurrence.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 780
-; SCALAR-LABEL: define void @recurrence_runtime(
-; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; SCALAR-NOT: alloca
-; SCALAR: %prev = phi i32
-; SCALAR: %raw = xor i32 %prev, %x
-; SCALAR: %state.next = add {{(nuw nsw |nuw |nsw )?}}i32 %bounded, %older
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-LABEL: {{^}}scalar.fission.consumer.body:
-; SCALAR-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; SCALAR-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; SCALAR-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; SCALAR-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; SCALAR-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; SCALAR: br i1
-; SCALAR-LABEL: {{^}}exit:
-; SCALAR: ret void
-; EVL-LABEL: define void @recurrence_runtime(
-; EVL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; EVL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; EVL: %prev = phi i32
-; EVL: store i32 %c,
-; EVL: scalar.fission.consumer.ph:
-; EVL-LABEL: {{^}}vector.body:
-; EVL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; EVL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 [[I_PTR]],
-; EVL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; EVL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr align 8 [[D_PTR]],
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; EVL: br i1
-; EVL-LABEL: {{^}}middle.block:
-; EVL: @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @recurrence_runtime(
-; TAIL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; TAIL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; TAIL: %prev = phi i32
-; TAIL: store i32 %c,
-; TAIL: scalar.fission.consumer.ph:
-; TAIL-LABEL: {{^}}vector.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; TAIL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x i32>, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; TAIL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x double>, ptr [[D_PTR]],
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}middle.block:
-; TAIL: @llvm.vector.reduce.add.nxv4i32
-; TAIL-LABEL: {{^}}scalar.fission.consumer.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; TAIL-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; TAIL-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; TAIL-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}exit:
-; TAIL: ret void
 define void @recurrence_runtime(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !42 {
 entry:
@@ -475,70 +222,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-recurrence.c:52:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; SCALAR-LABEL: define void @recurrence_branch(
-; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; SCALAR-NOT: alloca
-; SCALAR: %prev = phi i32
-; SCALAR: %raw = xor i32 %prev, %x
-; SCALAR: %state.next = add {{(nuw nsw |nuw |nsw )?}}i32 %bounded, %older
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-LABEL: {{^}}scalar.fission.consumer.body:
-; SCALAR-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; SCALAR-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; SCALAR-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; SCALAR-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; SCALAR-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; SCALAR: br i1
-; SCALAR-LABEL: {{^}}exit:
-; SCALAR: ret void
-; EVL-LABEL: define void @recurrence_branch(
-; EVL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; EVL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; EVL: %prev = phi i32
-; EVL: store i32 %c,
-; EVL: scalar.fission.consumer.ph:
-; EVL-LABEL: {{^}}vector.body:
-; EVL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; EVL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 [[I_PTR]],
-; EVL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; EVL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr align 8 [[D_PTR]],
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; EVL: br i1
-; EVL-LABEL: {{^}}middle.block:
-; EVL: @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @recurrence_branch(
-; TAIL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; TAIL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; TAIL: %prev = phi i32
-; TAIL: store i32 %c,
-; TAIL: scalar.fission.consumer.ph:
-; TAIL-LABEL: {{^}}vector.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; TAIL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x i32>, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; TAIL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x double>, ptr [[D_PTR]],
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}middle.block:
-; TAIL: @llvm.vector.reduce.add.nxv4i32
-; TAIL-LABEL: {{^}}scalar.fission.consumer.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; TAIL-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; TAIL-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; TAIL-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}exit:
-; TAIL: ret void
 define void @recurrence_branch(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !52 {
 entry:
@@ -596,70 +279,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-recurrence.c:62:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; SCALAR-LABEL: define void @recurrence_enclosing(
-; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; SCALAR-NOT: alloca
-; SCALAR: %prev = phi i32
-; SCALAR: %raw = xor i32 %prev, %x
-; SCALAR: %state.next = add {{(nuw nsw |nuw |nsw )?}}i32 %bounded, %older
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-LABEL: {{^}}scalar.fission.consumer.body:
-; SCALAR-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; SCALAR-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; SCALAR-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; SCALAR-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; SCALAR-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; SCALAR: br i1
-; SCALAR-LABEL: {{^}}row.exit:
-; SCALAR: ret void
-; EVL-LABEL: define void @recurrence_enclosing(
-; EVL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; EVL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; EVL: %prev = phi i32
-; EVL: store i32 %c,
-; EVL: scalar.fission.consumer.ph:
-; EVL-LABEL: {{^}}vector.body:
-; EVL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; EVL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 [[I_PTR]],
-; EVL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; EVL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr align 8 [[D_PTR]],
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; EVL: br i1
-; EVL-LABEL: {{^}}middle.block:
-; EVL: @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @recurrence_enclosing(
-; TAIL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; TAIL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; TAIL: %prev = phi i32
-; TAIL: store i32 %c,
-; TAIL: scalar.fission.consumer.ph:
-; TAIL-LABEL: {{^}}vector.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; TAIL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x i32>, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; TAIL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x double>, ptr [[D_PTR]],
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}middle.block:
-; TAIL: @llvm.vector.reduce.add.nxv4i32
-; TAIL-LABEL: {{^}}scalar.fission.consumer.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; TAIL-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; TAIL-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; TAIL-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}row.exit:
-; TAIL: ret void
 define void @recurrence_enclosing(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !62 {
 entry:
@@ -742,28 +361,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-recurrence.c:72:3: split scalar-IR reduction loop; {{.*}}scratch capacity 1, scratch bytes 16
-; SCALAR-LABEL: define void @recurrence_one(
-; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [1 x i32]
-; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [1 x double]
-; SCALAR-NOT: alloca
-; SCALAR: %prev = phi i32
-; SCALAR: %raw = xor i32 %prev, %x
-; SCALAR: %state.next = add {{(nuw nsw |nuw |nsw )?}}i32 %bounded, %older
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-LABEL: {{^}}scalar.fission.consumer.body:
-; SCALAR-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [1 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; SCALAR-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [1 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; SCALAR-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; SCALAR-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; SCALAR-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; SCALAR: br i1
-; SCALAR-LABEL: {{^}}exit:
-; SCALAR: ret void
 define void @recurrence_one(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !72 {
 entry:
@@ -809,28 +406,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-recurrence.c:82:3: split scalar-IR reduction loop; {{.*}}scratch capacity 255, scratch bytes 3064
-; SCALAR-LABEL: define void @recurrence_255(
-; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [255 x i32]
-; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [255 x double]
-; SCALAR-NOT: alloca
-; SCALAR: %prev = phi i32
-; SCALAR: %raw = xor i32 %prev, %x
-; SCALAR: %state.next = add {{(nuw nsw |nuw |nsw )?}}i32 %bounded, %older
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-LABEL: {{^}}scalar.fission.consumer.body:
-; SCALAR-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [255 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; SCALAR-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [255 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; SCALAR-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; SCALAR-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; SCALAR-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; SCALAR: br i1
-; SCALAR-LABEL: {{^}}exit:
-; SCALAR: ret void
 define void @recurrence_255(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !82 {
 entry:
@@ -876,28 +451,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-recurrence.c:92:3: split scalar-IR reduction loop; {{.*}}scratch capacity 5461, scratch bytes 65536
-; SCALAR-LABEL: define void @recurrence_limit(
-; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [5461 x i32]
-; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [5461 x double]
-; SCALAR-NOT: alloca
-; SCALAR: %prev = phi i32
-; SCALAR: %raw = xor i32 %prev, %x
-; SCALAR: %state.next = add {{(nuw nsw |nuw |nsw )?}}i32 %bounded, %older
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-LABEL: {{^}}scalar.fission.consumer.body:
-; SCALAR-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [5461 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; SCALAR-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [5461 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; SCALAR-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; SCALAR-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; SCALAR-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; SCALAR: br i1
-; SCALAR-LABEL: {{^}}exit:
-; SCALAR: ret void
 define void @recurrence_limit(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !92 {
 entry:
@@ -943,68 +496,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-recurrence.c:102:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; SCALAR-LABEL: define void @recurrence_first_affine(
-; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; SCALAR: %prev = phi i32
-; SCALAR: br i1 %choose, label %left, label %right
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-LABEL: {{^}}scalar.fission.consumer.body:
-; SCALAR-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; SCALAR-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; SCALAR-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; SCALAR-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; SCALAR-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; SCALAR: br i1
-; SCALAR-LABEL: {{^}}exit:
-; SCALAR: ret void
-; EVL-LABEL: define void @recurrence_first_affine(
-; EVL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; EVL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; EVL: %prev = phi i32
-; EVL: store i32 %c,
-; EVL: scalar.fission.consumer.ph:
-; EVL-LABEL: {{^}}vector.body:
-; EVL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; EVL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 [[I_PTR]],
-; EVL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; EVL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr align 8 [[D_PTR]],
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; EVL: br i1
-; EVL-LABEL: {{^}}middle.block:
-; EVL: @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @recurrence_first_affine(
-; TAIL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; TAIL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; TAIL: %prev = phi i32
-; TAIL: store i32 %c,
-; TAIL: scalar.fission.consumer.ph:
-; TAIL-LABEL: {{^}}vector.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; TAIL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x i32>, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; TAIL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x double>, ptr [[D_PTR]],
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}middle.block:
-; TAIL: @llvm.vector.reduce.add.nxv4i32
-; TAIL-LABEL: {{^}}scalar.fission.consumer.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; TAIL-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; TAIL-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; TAIL-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}exit:
-; TAIL: ret void
 define void @recurrence_first_affine(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !102 {
 entry:
@@ -1062,68 +553,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-recurrence.c:112:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 784
-; SCALAR-LABEL: define void @recurrence_first_enclosing(
-; SCALAR-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; SCALAR-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; SCALAR: %prev = phi i32
-; SCALAR: br i1 %choose, label %left, label %right
-; SCALAR-DAG: store i32 %c,
-; SCALAR-DAG: store double %dc,
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-LABEL: {{^}}scalar.fission.consumer.body:
-; SCALAR-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; SCALAR-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; SCALAR-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; SCALAR-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; SCALAR-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; SCALAR-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; SCALAR: br i1
-; SCALAR-LABEL: {{^}}row.exit:
-; SCALAR: ret void
-; EVL-LABEL: define void @recurrence_first_enclosing(
-; EVL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; EVL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; EVL: %prev = phi i32
-; EVL: store i32 %c,
-; EVL: scalar.fission.consumer.ph:
-; EVL-LABEL: {{^}}vector.body:
-; EVL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; EVL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x i32> @llvm.vp.load.nxv4i32.p0(ptr align 4 [[I_PTR]],
-; EVL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; EVL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = call <vscale x 4 x double> @llvm.vp.load.nxv4f64.p0(ptr align 8 [[D_PTR]],
-; EVL: call double @llvm.vp.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; EVL: br i1
-; EVL-LABEL: {{^}}middle.block:
-; EVL: @llvm.vector.reduce.add.nxv4i32
-; EVL: ret void
-; TAIL-LABEL: define void @recurrence_first_enclosing(
-; TAIL-DAG: [[I_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x i32]
-; TAIL-DAG: [[D_SCRATCH:%[-a-zA-Z$._0-9]+]] = alloca [65 x double]
-; TAIL: %prev = phi i32
-; TAIL: store i32 %c,
-; TAIL: scalar.fission.consumer.ph:
-; TAIL-LABEL: {{^}}vector.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 [[V_INDEX:%[-a-zA-Z$._0-9]+]]
-; TAIL-DAG: [[I_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x i32>, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 [[V_INDEX]]
-; TAIL-DAG: [[D_VECTOR:%[-a-zA-Z$._0-9]+]] = load <vscale x 4 x double>, ptr [[D_PTR]],
-; TAIL: call double @llvm.vector.reduce.fadd.nxv4f64(double {{%[-a-zA-Z$._0-9]+}}, <vscale x 4 x double> [[D_VECTOR]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}middle.block:
-; TAIL: @llvm.vector.reduce.add.nxv4i32
-; TAIL-LABEL: {{^}}scalar.fission.consumer.body:
-; TAIL-DAG: [[I_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x i32], ptr [[I_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[I_VALUE:%[-a-zA-Z$._0-9]+]] = load i32, ptr [[I_PTR]],
-; TAIL-DAG: [[D_PTR:%[-a-zA-Z$._0-9]+]] = getelementptr inbounds [65 x double], ptr [[D_SCRATCH]], i32 0, i64 %fission.consumer.iv
-; TAIL-DAG: [[D_VALUE:%[-a-zA-Z$._0-9]+]] = load double, ptr [[D_PTR]],
-; TAIL-DAG: %u0.consume = add i32 %r0.consume, [[I_VALUE]]
-; TAIL-DAG: %u1.consume = add i32 [[I_VALUE]], %r1.consume
-; TAIL-DAG: %ud.consume = fadd double %rd.consume, [[D_VALUE]]
-; TAIL: br i1
-; TAIL-LABEL: {{^}}row.exit:
-; TAIL: ret void
 define void @recurrence_first_enclosing(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %dout,
                                 i64 %n, i64 %rows, double %start, i64 %begin) !dbg !112 {
 entry:

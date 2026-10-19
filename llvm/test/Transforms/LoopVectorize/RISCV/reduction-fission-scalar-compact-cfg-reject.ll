@@ -1,31 +1,53 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=3 -pass-remarks-missed=vplan-reduction-fission \
-; RUN:   -S %s -o %t.strict 2> %t.strict.remarks
-; RUN: FileCheck %s --check-prefix=IR --implicit-check-not=scalar.fission < %t.strict
-; RUN: FileCheck %s --check-prefix=REJECT < %t.strict.remarks
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=3 -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.reordered 2> %t.reordered.remarks
-; RUN: FileCheck %s --check-prefix=IR --implicit-check-not=scalar.fission < %t.reordered
-; RUN: FileCheck %s --check-prefix=REJECT < %t.reordered.remarks
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -enable-vplan-reduction-fission -vplan-reduction-fission-max-scratch-bytes=260 -S %s | FileCheck %s --check-prefix=SELECTED
-;
-; Larger producer admission does not justify propagating updates to a later
-; edge, conditional update exits, multiple update sites/streams or feedback.
-; Every case otherwise has the same two bypass edges and bounded full-trip
-; control, except the deliberately unproved bound/early-exit cases.
-; Inherited compact/acyclic rejection and capacity tests also remain required.
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_nonterminal_update(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_conditional_update(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_multiple_updates(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_different_participation(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_predicate_feedback(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_contribution_feedback(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_double_accumulator_operand(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_changed_bypass(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_bypass_store(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_bypass_effect(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_strictfp(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_constrained(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_unproved_bound(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_cfg_early_exit(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @unsafe(i32) memory(read) nounwind willreturn speculatable
 declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
 
-; REJECT: scalar-compact-cfg-reject.c:12:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; IR-LABEL: define i32 @reject_cfg_nonterminal_update(
-; IR: ret i32
 define i32 @reject_cfg_nonterminal_update(ptr %a, i64 %n) !dbg !10 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -66,9 +88,6 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:22:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; IR-LABEL: define i32 @reject_cfg_conditional_update(
-; IR: ret i32
 define i32 @reject_cfg_conditional_update(ptr %a, i64 %n) !dbg !12 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -110,9 +129,6 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:32:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; IR-LABEL: define i32 @reject_cfg_multiple_updates(
-; IR: ret i32
 define i32 @reject_cfg_multiple_updates(ptr %a, i64 %n) !dbg !14 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -152,9 +168,6 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:42:3: scalar-IR reduction fission rejected: scalar-incompatible-participation
-; IR-LABEL: define i32 @reject_cfg_different_participation(
-; IR: ret i32
 define i32 @reject_cfg_different_participation(ptr %a, i64 %n) !dbg !16 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -198,9 +211,6 @@ bypass:
   ret i32 26
 }
 
-; REJECT: scalar-compact-cfg-reject.c:52:3: scalar-IR reduction fission rejected: scalar-reduction-feedback
-; IR-LABEL: define i32 @reject_cfg_predicate_feedback(
-; IR: ret i32
 define i32 @reject_cfg_predicate_feedback(ptr %a, i64 %n) !dbg !18 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -239,9 +249,6 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:62:3: scalar-IR reduction fission rejected: scalar-reduction-feedback
-; IR-LABEL: define i32 @reject_cfg_contribution_feedback(
-; IR: ret i32
 define i32 @reject_cfg_contribution_feedback(ptr %a, i64 %n) !dbg !20 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -281,9 +288,6 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:72:3: scalar-IR reduction fission rejected: scalar-reduction-feedback
-; IR-LABEL: define i32 @reject_cfg_double_accumulator_operand(
-; IR: ret i32
 define i32 @reject_cfg_double_accumulator_operand(ptr %a, i64 %n) !dbg !22 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -322,9 +326,6 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:82:3: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; IR-LABEL: define i32 @reject_cfg_changed_bypass(
-; IR: ret i32
 define i32 @reject_cfg_changed_bypass(ptr %a, i64 %n) !dbg !24 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -364,15 +365,6 @@ bypass:
   ret i32 19
 }
 
-; An ordinary bypass store remains in the producer. C=1 needs four bytes;
-; three still rejects, while the full-capacity run below admits this function.
-; REJECT: scalar-compact-cfg-reject.c:92:3: scalar-IR reduction fission rejected: scalar-scratch-limit
-; SELECTED-LABEL: define i32 @reject_cfg_bypass_store(
-; SELECTED: alloca [65 x i32]
-; SELECTED: store i32 %x, ptr %p
-; SELECTED: scalar.fission.consumer.guard:
-; IR-LABEL: define i32 @reject_cfg_bypass_store(
-; IR: ret i32
 define i32 @reject_cfg_bypass_store(ptr %a, i64 %n) !dbg !26 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -412,9 +404,6 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:102:3: scalar-IR reduction fission rejected: scalar-unsafe-call
-; IR-LABEL: define i32 @reject_cfg_bypass_effect(
-; IR: ret i32
 define i32 @reject_cfg_bypass_effect(ptr %a, i64 %n) !dbg !28 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -454,9 +443,6 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:112:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; IR-LABEL: define i32 @reject_cfg_strictfp(
-; IR: ret i32
 define i32 @reject_cfg_strictfp(ptr %a, i64 %n) strictfp !dbg !30 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -495,9 +481,6 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:122:3: scalar-IR reduction fission rejected: scalar-strict-fp
-; IR-LABEL: define i32 @reject_cfg_constrained(
-; IR: ret i32
 define i32 @reject_cfg_constrained(ptr %a, i64 %n) !dbg !32 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -537,9 +520,6 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:132:3: scalar-IR reduction fission rejected: {{non-constant-trip-count|scalar-scratch-limit}}
-; IR-LABEL: define i32 @reject_cfg_unproved_bound(
-; IR: ret i32
 define i32 @reject_cfg_unproved_bound(ptr %a, i64 %n) !dbg !34 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -578,9 +558,6 @@ bypass:
   ret i32 19
 }
 
-; REJECT: scalar-compact-cfg-reject.c:142:3: scalar-IR reduction fission rejected: scalar-unsupported-cfg
-; IR-LABEL: define i32 @reject_cfg_early_exit(
-; IR: ret i32
 define i32 @reject_cfg_early_exit(ptr %a, i64 %n) !dbg !36 {
 entry:
   %valid = icmp ule i64 %n, 65

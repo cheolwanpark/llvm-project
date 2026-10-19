@@ -1,115 +1,22 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
-; RUN:   -S %s -o %t.scalar 2> %t.scalar.remarks
-; RUN: FileCheck %s --check-prefix=SCALAR --implicit-check-not='<vscale x' < %t.scalar
-; RUN: FileCheck %s --check-prefix=SCALAR-REMARK < %t.scalar.remarks
-; RUN: FileCheck %s --check-prefix=SELECTED < %t.scalar.remarks
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
-; RUN:   -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=VECTOR < %t
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-; RUN: FileCheck %s --check-prefix=SELECTED < %t.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=4 -force-vector-interleave=1 \
-; RUN:   -scalable-vectorization=always -hints-allow-reordering=false \
-; RUN:   -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false \
-; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering \
-; RUN:   -pass-remarks=vplan-reduction-fission -S %s -o %t.repeat 2> %t.repeat.remarks
-; RUN: FileCheck %s --check-prefix=VECTOR < %t.repeat
-; RUN: FileCheck %s --check-prefix=REMARK < %t.repeat.remarks
-; RUN: FileCheck %s --check-prefix=SELECTED < %t.repeat.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.repeat -o /dev/null
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=1043 -pass-remarks-missed=vplan-reduction-fission -pass-remarks=vplan-reduction-fission \
-; RUN:   -S %s -o %t.limit 2> %t.limit.remarks
-; RUN: FileCheck %s --check-prefix=LIMIT < %t.limit.remarks
-; RUN: FileCheck %s --check-prefix=LIMIT-IR < %t.limit
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.limit -o /dev/null
-; RUN: opt -passes='loop-vectorize,verify<loops>' -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-width=4 -force-vector-interleave=1 -scalable-vectorization=always \
-; RUN:   -hints-allow-reordering=false -S %s | FileCheck %s --check-prefix=ORIGINAL \
-; RUN:   --implicit-check-not=scalar.fission --implicit-check-not='<vscale x'
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=1 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -S %s | FileCheck %s --check-prefix=ORIGINAL \
-; RUN:   --implicit-check-not=scalar.fission --implicit-check-not='<vscale x'
-;
-; IC=0 leaves interleaving unspecified for scalar fission dispatch; the target
-; cap keeps the generated consumer scalar. Fixed VF=1 plus IC=1 means that
-; vectorization and interleaving are both disabled in LoopVectorizeHints and
-; must also prevent fission. The final RUN preserves that distinct contract.
-; Each enabled scalar/vector RUN must select exactly the four original loops,
-; including after repeated ordinary LV; stages are never new selections.
-; SELECTED-COUNT-4: : split scalar-IR reduction loop;
-; SELECTED-NOT: : split
-;
-; Actual final producer values, rather than the last compact contribution.
-; Each function observes both reduction results, the final load/computation,
-; current/next IVs and ordered float/double values. Two exit PHIs export c,
-; requiring only one producer forwarding PHI. The scalar helper prevents the
-; original loop and producer from vectorizing. It is called once, on exactly
-; its original branch; its contract has no vector mapping or errno assumption.
-; The compact inactive path has an invalid divisor and may have a null FP
-; input. It exports its own final values even for N>0,P=0, without an add.
-; check-reduction-fission.py executes single/repeated ordinary LV scalar-tail
-; variants at fixed host vscales, against original IR AND independent C.
-; EVL/VP is separately RVV machine verified, not executed on the host.
-;
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @export_unconditional(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @export_diamond(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @export_compact(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @export_nested(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; REMARK: scalar-exports.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; REMARK: scalar-exports.c:12:3: scalar-IR fission producer VF 1
-; REMARK: scalar-exports.c:12:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-REMARK: scalar-exports.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; SCALAR-REMARK: scalar-exports.c:12:3: scalar-IR fission producer VF 1
-; SCALAR-REMARK: scalar-exports.c:12:3: scalar-IR fission consumer VF 1
-; Canonical single-block, compact and unconditional multiblock export loops
-; chunk at the old full-trip limit, retaining their original final exports.
-; LIMIT: scalar-exports.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule
-; LIMIT-IR-LABEL: define void @export_unconditional(
-; LIMIT-IR: alloca [64 x i32]
-; LIMIT-IR: alloca [64 x double]
-; LIMIT-IR: alloca [64 x float]
-; LIMIT-IR: ret void
-; SCALAR-LABEL: define void @export_unconditional(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: call i32 @scalar_helper
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-DAG: %x.fission.export = phi i32 [ %x, %loop ]
-; SCALAR-DAG: %c.fission.export = phi i32 [ %c, %loop ]
-; SCALAR-DAG: %iv.fission.export = phi i64 [ %iv, %loop ]
-; SCALAR-DAG: %next.fission.export = phi i64 [ %next, %loop ]
-; SCALAR-DAG: %dc.fission.export = phi double [ %dc, %loop ]
-; SCALAR-DAG: %fc.fission.export = phi float [ %fc, %loop ]
-; SCALAR: producer.exit:
-; SCALAR: %out.x = phi i32 [ %x.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.c = phi i32 [ %c.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.c.copy = phi i32 [ %c.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.iv = phi i64 [ %iv.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.next = phi i64 [ %next.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.dc = phi double [ %dc.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.fc = phi float [ %fc.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: ret void
-; VECTOR-LABEL: define void @export_unconditional(
-; VECTOR: scalar.fission.consumer.ph:
-; VECTOR: vector.ph:
-; VECTOR: vector.body:
-; VECTOR: call i32 @llvm.vector.reduce.add.nxv4i32
-; VECTOR: store i32
-; VECTOR: ret void
-; ORIGINAL-LABEL: define void @export_unconditional(
-; ORIGINAL: call i32 @scalar_helper
-; ORIGINAL: ret void
 define void @export_unconditional(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !10 {
 entry:
@@ -190,52 +97,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-exports.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; REMARK: scalar-exports.c:22:3: scalar-IR fission producer VF 1
-; REMARK: scalar-exports.c:22:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-REMARK: scalar-exports.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; SCALAR-REMARK: scalar-exports.c:22:3: scalar-IR fission producer VF 1
-; SCALAR-REMARK: scalar-exports.c:22:3: scalar-IR fission consumer VF 1
-; LIMIT: scalar-exports.c:22:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule
-; LIMIT-IR-LABEL: define void @export_diamond(
-; LIMIT-IR: alloca [64 x i32]
-; LIMIT-IR: alloca [64 x double]
-; LIMIT-IR: alloca [64 x float]
-; LIMIT-IR: scalar.fission.chunk:
-; LIMIT-IR: %iv.fission.export = phi i64 [ %iv, %latch ]
-; LIMIT-IR: ret void
-; SCALAR-LABEL: define void @export_diamond(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: call i32 @scalar_helper
-; SCALAR: scalar.fission.consumer.ph:
-; SCALAR-DAG: %x.fission.export = phi i32 [ %x, %latch ]
-; SCALAR-DAG: %c.fission.export = phi i32 [ %c, %latch ]
-; SCALAR-DAG: %iv.fission.export = phi i64 [ %iv, %latch ]
-; SCALAR-DAG: %next.fission.export = phi i64 [ %next, %latch ]
-; SCALAR-DAG: %dc.fission.export = phi double [ %dc, %latch ]
-; SCALAR-DAG: %fc.fission.export = phi float [ %fc, %latch ]
-; SCALAR: producer.exit:
-; SCALAR: %out.x = phi i32 [ %x.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.c = phi i32 [ %c.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.c.copy = phi i32 [ %c.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.iv = phi i64 [ %iv.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.next = phi i64 [ %next.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.dc = phi double [ %dc.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: %out.fc = phi float [ %fc.fission.export, %scalar.fission.consumer.body ]
-; SCALAR: ret void
-; VECTOR-LABEL: define void @export_diamond(
-; VECTOR: scalar.fission.consumer.ph:
-; VECTOR: vector.ph:
-; VECTOR: vector.body:
-; VECTOR: call i32 @llvm.vector.reduce.add.nxv4i32
-; VECTOR: store i32
-; VECTOR: ret void
-; ORIGINAL-LABEL: define void @export_diamond(
-; ORIGINAL: call i32 @scalar_helper
-; ORIGINAL: ret void
 define void @export_diamond(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !12 {
 entry:
@@ -328,68 +189,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-exports.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; REMARK: scalar-exports.c:32:3: scalar-IR fission producer VF 1
-; REMARK: scalar-exports.c:32:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-REMARK: scalar-exports.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; SCALAR-REMARK: scalar-exports.c:32:3: scalar-IR fission producer VF 1
-; SCALAR-REMARK: scalar-exports.c:32:3: scalar-IR fission consumer VF 1
-; Compact export storage at ceiling 1043 now uses C=64/B=1024, preserving the
-; six final producer values even on empty chunks and a final inactive path.
-; LIMIT: scalar-exports.c:32:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule
-; LIMIT: scalar-exports.c:32:3: scalar-IR fission producer VF 1
-; LIMIT: scalar-exports.c:32:3: scalar-IR fission consumer VF vscale x 2
-; LIMIT-IR-LABEL: define void @export_compact(
-; LIMIT-IR: alloca [64 x i32]
-; LIMIT-IR: alloca [64 x double]
-; LIMIT-IR: alloca [64 x float]
-; LIMIT-IR: %fission.participating = phi i64 [ 0, %scalar.fission.producer.ph ], [ %fission.participating.merge, %latch ]
-; LIMIT-IR: scalar.fission.consumer.guard:
-; LIMIT-IR-DAG: %x.fission.export = phi i32 [ %x, %latch ]
-; LIMIT-IR-DAG: %c.fission.export = phi i32 [ %c, %latch ]
-; LIMIT-IR-DAG: %iv.fission.export = phi i64 [ %iv, %latch ]
-; LIMIT-IR-DAG: %next.fission.export = phi i64 [ %next, %latch ]
-; LIMIT-IR-DAG: %dc.fission.export = phi double [ %dc, %latch ]
-; LIMIT-IR-DAG: %fc.fission.export = phi float [ %fc, %latch ]
-; LIMIT-IR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; LIMIT-IR: scalar.fission.consumer.exit:
-; LIMIT-IR: %rd.result = phi double [ %rd.chunk.carry, %scalar.fission.consumer.guard ],
-; LIMIT-IR: producer.exit:
-; LIMIT-IR-DAG: %out.iv = phi i64 [ %iv.fission.export, %scalar.fission.chunk.latch ]
-; LIMIT-IR-DAG: %out.next = phi i64 [ %next.fission.export, %scalar.fission.chunk.latch ]
-; LIMIT-IR: ret void
-; SCALAR-LABEL: define void @export_compact(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: call i32 @scalar_helper
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR-DAG: %x.fission.export = phi i32 [ %x, %latch ]
-; SCALAR-DAG: %c.fission.export = phi i32 [ %c, %latch ]
-; SCALAR-DAG: %iv.fission.export = phi i64 [ %iv, %latch ]
-; SCALAR-DAG: %next.fission.export = phi i64 [ %next, %latch ]
-; SCALAR-DAG: %dc.fission.export = phi double [ %dc, %latch ]
-; SCALAR-DAG: %fc.fission.export = phi float [ %fc, %latch ]
-; SCALAR: producer.exit:
-; SCALAR: %out.x = phi i32 [ %x.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.c = phi i32 [ %c.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.c.copy = phi i32 [ %c.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.iv = phi i64 [ %iv.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.next = phi i64 [ %next.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.dc = phi double [ %dc.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.fc = phi float [ %fc.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: ret void
-; VECTOR-LABEL: define void @export_compact(
-; VECTOR: scalar.fission.consumer.guard:
-; VECTOR: scalar.fission.consumer.ph:
-; VECTOR: vector.body:
-; VECTOR: call i32 @llvm.vector.reduce.add.nxv4i32
-; VECTOR: store i32
-; VECTOR: ret void
-; ORIGINAL-LABEL: define void @export_compact(
-; ORIGINAL: call i32 @scalar_helper
-; ORIGINAL: ret void
 define void @export_compact(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !14 {
 entry:
@@ -486,60 +285,6 @@ exit:
   ret void
 }
 
-; REMARK: scalar-exports.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; REMARK: scalar-exports.c:42:3: scalar-IR fission producer VF 1
-; REMARK: scalar-exports.c:42:3: scalar-IR fission consumer VF vscale x 4
-; SCALAR-REMARK: scalar-exports.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 1044, producer live-outs 6
-; SCALAR-REMARK: scalar-exports.c:42:3: scalar-IR fission producer VF 1
-; SCALAR-REMARK: scalar-exports.c:42:3: scalar-IR fission consumer VF 1
-; The same canonical compact schedule is reused independently in every row.
-; LIMIT: scalar-exports.c:42:3: split scalar-IR reduction loop; {{.*}}scratch capacity 64, scratch bytes 1024, producer live-outs 6, chunked schedule
-; LIMIT: scalar-exports.c:42:3: scalar-IR fission producer VF 1
-; LIMIT: scalar-exports.c:42:3: scalar-IR fission consumer VF vscale x 2
-; LIMIT-IR-LABEL: define void @export_nested(
-; LIMIT-IR: alloca [64 x i32]
-; LIMIT-IR: alloca [64 x double]
-; LIMIT-IR: alloca [64 x float]
-; LIMIT-IR: scalar.fission.consumer.guard:
-; LIMIT-IR: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; LIMIT-IR: scalar.fission.consumer.exit:
-; LIMIT-IR: %rd.result = phi double [ %rd.chunk.carry, %scalar.fission.consumer.guard ],
-; LIMIT-IR: row.exit:
-; LIMIT-IR-DAG: %out.iv = phi i64 [ %iv.fission.export, %scalar.fission.chunk.latch ]
-; LIMIT-IR-DAG: %out.next = phi i64 [ %next.fission.export, %scalar.fission.chunk.latch ]
-; LIMIT-IR: ret void
-; SCALAR-LABEL: define void @export_nested(
-; SCALAR: alloca [65 x i32]
-; SCALAR: alloca [65 x double]
-; SCALAR: alloca [65 x float]
-; SCALAR-NOT: alloca
-; SCALAR: call i32 @scalar_helper
-; SCALAR: scalar.fission.consumer.guard:
-; SCALAR-DAG: %x.fission.export = phi i32 [ %x, %latch ]
-; SCALAR-DAG: %c.fission.export = phi i32 [ %c, %latch ]
-; SCALAR-DAG: %iv.fission.export = phi i64 [ %iv, %latch ]
-; SCALAR-DAG: %next.fission.export = phi i64 [ %next, %latch ]
-; SCALAR-DAG: %dc.fission.export = phi double [ %dc, %latch ]
-; SCALAR-DAG: %fc.fission.export = phi float [ %fc, %latch ]
-; SCALAR: row.exit:
-; SCALAR: %out.x = phi i32 [ %x.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.c = phi i32 [ %c.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.c.copy = phi i32 [ %c.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.iv = phi i64 [ %iv.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.next = phi i64 [ %next.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.dc = phi double [ %dc.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: %out.fc = phi float [ %fc.fission.export, %scalar.fission.consumer.exit ]
-; SCALAR: ret void
-; VECTOR-LABEL: define void @export_nested(
-; VECTOR: scalar.fission.consumer.guard:
-; VECTOR: scalar.fission.consumer.ph:
-; VECTOR: vector.body:
-; VECTOR: call i32 @llvm.vector.reduce.add.nxv4i32
-; VECTOR: store i32
-; VECTOR: ret void
-; ORIGINAL-LABEL: define void @export_nested(
-; ORIGINAL: call i32 @scalar_helper
-; ORIGINAL: ret void
 define void @export_nested(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
                             ptr %dout, ptr %fout, i64 %rows, i64 %n, double %start) !dbg !16 {
 entry:

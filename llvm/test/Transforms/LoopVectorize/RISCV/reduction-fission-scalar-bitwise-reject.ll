@@ -1,17 +1,25 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -enable-vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --implicit-check-not=scalar.fission < %t
-; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering -S %s | FileCheck %s --implicit-check-not=scalar.fission
-;
-; Bitwise recognition retains accumulator/result edge closure, compatible
-; participation, the exact opcode whitelist and simple-effect requirements.
-; The positive file separately checks the padded below-one-entry ceiling.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @bitwise_feedback(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @multiply_unsupported_division(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @bitwise_unsafe(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @bitwise_volatile(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @bitwise_incompatible(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare void @effect(ptr) nounwind willreturn
 
-; REASON: scalar-IR reduction fission rejected: scalar-reduction-feedback
-; CHECK-LABEL: define i32 @bitwise_feedback(
-; CHECK: %update = xor i32 %sum, %x
-; CHECK: ret i32
 define i32 @bitwise_feedback(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -37,10 +45,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define i32 @multiply_unsupported_division(
-; CHECK: %update = udiv i32 %sum, %x
-; CHECK: ret i32
 define i32 @multiply_unsupported_division(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -65,10 +69,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-unsafe-call
-; CHECK-LABEL: define i32 @bitwise_unsafe(
-; CHECK: %update = and i32 %sum, %x
-; CHECK: ret i32
 define i32 @bitwise_unsafe(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -94,10 +94,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-non-simple-store
-; CHECK-LABEL: define i32 @bitwise_volatile(
-; CHECK: %update = or i32 %sum, %x
-; CHECK: ret i32
 define i32 @bitwise_volatile(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -123,11 +119,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-incompatible-participation
-; CHECK-LABEL: define i32 @bitwise_incompatible(
-; CHECK: %u0 = and i32 %r0, %x
-; CHECK: %u1 = or i32 %x, %r1
-; CHECK: ret i32
 define i32 @bitwise_incompatible(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65

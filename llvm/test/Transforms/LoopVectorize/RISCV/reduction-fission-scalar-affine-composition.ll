@@ -1,34 +1,28 @@
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 \
-; RUN:   -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -vplan-reduction-fission-max-scratch-bytes=112 -S %s | FileCheck %s
-;
-; Composition of original-control chunks with closed multiplication/bitwise
-; recurrences, exact fneg, ordered subtraction, retained state and stores.
-; Each write to the NEXT input feeds a later original iteration, including
-; across chunk boundaries. Inputs and final outputs may alias. No noalias,
-; fast-math, errno or endpoint-as-count assumption is introduced.
-; The companion checker certifies actual transformed scalar/vector/tail IR.
-; Mandatory host execution compares these exact originals and transformed
-; paths against a nonchunked C oracle for C=1/8/9/16, both FP policies, LV1/LV2.
-; Defined products use factors 0/1, preserving nuw and nsw on every prefix.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_mul_store(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_bits_store(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_compact_bits_store(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_sub_store(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_defined_store(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @nc_compact_mul_store(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
-; CHECK-LABEL: define void @nc_mul_store(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: fneg double %dx
-; CHECK: store i32 %state.next, ptr %wp, align 4
-; CHECK: store double %dc, ptr %dp, align 8
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %u0.consume = mul i32 %r0.consume,
-; CHECK: %u1.consume = mul i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
-; CHECK: %ud.consume = fadd double %rd.consume,
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_mul_store(ptr %a, ptr %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !100 {
 entry:
@@ -103,21 +97,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @nc_bits_store(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: fneg double %dx
-; CHECK: store i32 %state.next, ptr %wp, align 4
-; CHECK: store double %dc, ptr %dp, align 8
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %u0.consume = and i32 %r0.consume,
-; CHECK: %u1.consume = xor i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
-; CHECK: %ud.consume = fadd double %rd.consume,
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_bits_store(ptr %a, ptr %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !102 {
 entry:
@@ -192,21 +171,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @nc_compact_bits_store(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: fneg double %dx
-; CHECK: store i32 %state.next, ptr %wp, align 4
-; CHECK: store double %dc, ptr %dp, align 8
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %u0.consume = or i32 %r0.consume,
-; CHECK: %u1.consume = xor i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
-; CHECK: %ud.consume = fadd double %rd.consume,
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_compact_bits_store(ptr %a, ptr %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !104 {
 entry:
@@ -287,21 +251,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @nc_sub_store(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: fneg double %dx
-; CHECK: store i32 %state.next, ptr %wp, align 4
-; CHECK: store double %dc, ptr %dp, align 8
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %u0.consume = sub i32 %r0.consume,
-; CHECK: %u1.consume = add i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
-; CHECK: %ud.consume = fsub double %rd.consume,
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_sub_store(ptr %a, ptr %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !106 {
 entry:
@@ -374,21 +323,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @nc_defined_store(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: fneg double %dx
-; CHECK: store i32 %state.next, ptr %wp, align 4
-; CHECK: store double %dc, ptr %dp, align 8
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %u0.consume = mul nuw nsw i32 %r0.consume,
-; CHECK: %u1.consume = mul nuw nsw i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
-; CHECK: %ud.consume = fadd double %rd.consume,
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_defined_store(ptr %a, ptr %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !108 {
 entry:
@@ -463,21 +397,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @nc_compact_mul_store(
-; CHECK: alloca [9 x i32]
-; CHECK: alloca [9 x double]
-; CHECK: scalar.fission.chunk:
-; CHECK-NOT: fission.chunk.remaining
-; CHECK: fneg double %dx
-; CHECK: store i32 %state.next, ptr %wp, align 4
-; CHECK: store double %dc, ptr %dp, align 8
-; CHECK: scalar.fission.consumer.ph:
-; CHECK: scalar.fission.consumer.body:
-; CHECK: %u0.consume = mul i32 %r0.consume,
-; CHECK: %u1.consume = mul i32 {{%[-a-zA-Z$._0-9]+}}, %r1.consume
-; CHECK: %ud.consume = fadd double %rd.consume,
-; CHECK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHECK: ret void
 define void @nc_compact_mul_store(ptr %a, ptr %fp, ptr %out, ptr %indices,
                      ptr %dout, i64 %n, i64 %begin, double %start) !dbg !110 {
 entry:

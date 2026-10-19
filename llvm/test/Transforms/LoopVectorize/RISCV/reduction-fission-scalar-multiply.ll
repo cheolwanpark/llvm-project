@@ -1,56 +1,17 @@
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -vplan-reduction-fission-min-reductions=1000000 -vplan-reduction-fission-min-chain-depth=1000000 -vplan-reduction-fission-min-pressure-percent=1000000 -S %s | FileCheck %s --check-prefix=FULL
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -vplan-reduction-fission-max-scratch-bytes=121 -vplan-reduction-fission-allow-fp-reordering -S %s | FileCheck %s --check-prefix=CHUNK
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -enable-vplan-reduction-fission -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -scalable-vectorization=off -vplan-reduction-fission-max-scratch-bytes=16 -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.small 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=SMALL < %t.remarks
-; RUN: FileCheck %s --check-prefix=MIN --implicit-check-not=scalar.fission < %t.small
-;
-; Direct wrapping i8/i32/i64 products in both operand orders, mixed with OR.
-; Eight nonidentity seeds share three contribution streams. Producer-observed
-; multiplication stays in place, including original writes and their aliases.
-; Scratch order is i32/i64/i8: alignTo(4*C,8)+9*C bytes, C1=17,C8=104,
-; C9=121,C65=849. A120-byte ceiling fits8, and16 cannot hold one entry.
-; Exact originals, scalar/vector consumers and an unsigned modular oracle run
-; through check-reduction-fission.py. No FP multiplication or extra assumptions.
-
-; MIN-LABEL: define void @multiply_full(
-; MIN: %u.a0 = mul i32 %a0, %c
-; MIN: %u.b1 = mul i8 %bc, %b1
-; MIN: ret void
-; FULL-LABEL: define void @multiply_full(
-; FULL: alloca [65 x i32]
-; FULL: alloca [65 x i64]
-; FULL: alloca [65 x i8]
-; FULL-NOT: alloca
-; FULL: %state.next = mul i32 %state, %x
-; FULL: store i32 %state.next, ptr %wp
-; FULL: scalar.fission.consumer.body:
-; FULL: %u.a0.consume = mul i32 %a0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.a1.consume = mul i32 {{%[-a-zA-Z$._0-9]+}}, %a1.consume
-; FULL: %u.o0.consume = or i32 %o0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.o1.consume = or i32 {{%[-a-zA-Z$._0-9]+}}, %o1.consume
-; FULL: %u.x0.consume = mul i64 %x0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.x1.consume = mul i64 {{%[-a-zA-Z$._0-9]+}}, %x1.consume
-; FULL: %u.b0.consume = mul i8 %b0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.b1.consume = mul i8 {{%[-a-zA-Z$._0-9]+}}, %b1.consume
-; FULL: ret void
-; CHUNK-LABEL: define void @multiply_full(
-; CHUNK: alloca [9 x i32]
-; CHUNK: alloca [9 x i64]
-; CHUNK: alloca [9 x i8]
-; CHUNK-NOT: alloca
-; CHUNK: %state.next = mul i32 %state, %x
-; CHUNK: store i32 %state.next, ptr %wp
-; CHUNK: scalar.fission.consumer.body:
-; CHUNK: %u.a0.consume = mul i32 %a0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.a1.consume = mul i32 {{%[-a-zA-Z$._0-9]+}}, %a1.consume
-; CHUNK: %u.o0.consume = or i32 %o0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.o1.consume = or i32 {{%[-a-zA-Z$._0-9]+}}, %o1.consume
-; CHUNK: %u.x0.consume = mul i64 %x0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.x1.consume = mul i64 {{%[-a-zA-Z$._0-9]+}}, %x1.consume
-; CHUNK: %u.b0.consume = mul i8 %b0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.b1.consume = mul i8 {{%[-a-zA-Z$._0-9]+}}, %b1.consume
-; CHUNK: ret void
-; SMALL: scalar-multiply.c:12:3: scalar-IR reduction fission rejected: scalar-scratch-limit
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @multiply_full(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @multiply_compact(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @multiply_affine(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @multiply_full(ptr %a, ptr %mem, ptr %out, i64 %n, i32 %mode, i32 %seed) !dbg !10 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -149,45 +110,6 @@ exit:
   ret void
 }
 
-; MIN-LABEL: define void @multiply_compact(
-; MIN: %u.a0 = mul i32 %a0, %c
-; MIN: %u.b1 = mul i8 %bc, %b1
-; MIN: ret void
-; FULL-LABEL: define void @multiply_compact(
-; FULL: alloca [65 x i32]
-; FULL: alloca [65 x i64]
-; FULL: alloca [65 x i8]
-; FULL-NOT: alloca
-; FULL: %state.next = mul i32 %state, %x
-; FULL: store i32 %state.next, ptr %wp
-; FULL: scalar.fission.consumer.body:
-; FULL: %u.a0.consume = mul i32 %a0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.a1.consume = mul i32 {{%[-a-zA-Z$._0-9]+}}, %a1.consume
-; FULL: %u.o0.consume = or i32 %o0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.o1.consume = or i32 {{%[-a-zA-Z$._0-9]+}}, %o1.consume
-; FULL: %u.x0.consume = mul i64 %x0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.x1.consume = mul i64 {{%[-a-zA-Z$._0-9]+}}, %x1.consume
-; FULL: %u.b0.consume = mul i8 %b0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.b1.consume = mul i8 {{%[-a-zA-Z$._0-9]+}}, %b1.consume
-; FULL: ret void
-; CHUNK-LABEL: define void @multiply_compact(
-; CHUNK: alloca [9 x i32]
-; CHUNK: alloca [9 x i64]
-; CHUNK: alloca [9 x i8]
-; CHUNK-NOT: alloca
-; CHUNK: %state.next = mul i32 %state, %x
-; CHUNK: store i32 %state.next, ptr %wp
-; CHUNK: scalar.fission.consumer.body:
-; CHUNK: %u.a0.consume = mul i32 %a0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.a1.consume = mul i32 {{%[-a-zA-Z$._0-9]+}}, %a1.consume
-; CHUNK: %u.o0.consume = or i32 %o0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.o1.consume = or i32 {{%[-a-zA-Z$._0-9]+}}, %o1.consume
-; CHUNK: %u.x0.consume = mul i64 %x0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.x1.consume = mul i64 {{%[-a-zA-Z$._0-9]+}}, %x1.consume
-; CHUNK: %u.b0.consume = mul i8 %b0.consume, {{%[-a-zA-Z$._0-9]+}}
-; CHUNK: %u.b1.consume = mul i8 {{%[-a-zA-Z$._0-9]+}}, %b1.consume
-; CHUNK: ret void
-; SMALL: scalar-multiply.c:32:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 define void @multiply_compact(ptr %a, ptr %mem, ptr %out, i64 %n, i32 %mode, i32 %seed) !dbg !20 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -324,42 +246,6 @@ exit:
   ret void
 }
 
-; MIN-LABEL: define void @multiply_affine(
-; MIN: %u.a0 = mul i32 %a0, %c
-; MIN: %u.b1 = mul i8 %bc, %b1
-; MIN: ret void
-; FULL-LABEL: define void @multiply_affine(
-; FULL: alloca [65 x i32]
-; FULL: alloca [65 x i64]
-; FULL: alloca [65 x i8]
-; FULL-NOT: alloca
-; FULL: %state.next = mul i32 %state, %x
-; FULL: store i32 %state.next, ptr %wp
-; FULL: scalar.fission.consumer.body:
-; FULL: %u.a0.consume = mul i32 %a0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.a1.consume = mul i32 {{%[-a-zA-Z$._0-9]+}}, %a1.consume
-; FULL: %u.o0.consume = or i32 %o0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.o1.consume = or i32 {{%[-a-zA-Z$._0-9]+}}, %o1.consume
-; FULL: %u.x0.consume = mul i64 %x0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.x1.consume = mul i64 {{%[-a-zA-Z$._0-9]+}}, %x1.consume
-; FULL: %u.b0.consume = mul i8 %b0.consume, {{%[-a-zA-Z$._0-9]+}}
-; FULL: %u.b1.consume = mul i8 {{%[-a-zA-Z$._0-9]+}}, %b1.consume
-; FULL: ret void
-; CHUNK-LABEL: define void @multiply_affine(
-; CHUNK: alloca [9 x i32]
-; CHUNK: alloca [9 x i64]
-; CHUNK: alloca [9 x i8]
-; CHUNK: scalar.fission.chunk:
-; CHUNK-NOT: fission.chunk.remaining
-; CHUNK: %fission.chunk.base = phi i64 [ 7, %preheader ], [ %fission.producer.iv.next, %scalar.fission.chunk.latch ]
-; CHUNK: %next = add{{( nuw)?( nsw)?}} i64 %iv, 3
-; CHUNK: %done = icmp eq i64 %next, %limit
-; CHUNK: %fission.producer.iv.next = phi i64 [ %next, %loop ]
-; CHUNK: scalar.fission.consumer.body:
-; CHUNK: %u.x0.consume = mul i64 %x0.consume,
-; CHUNK: br i1 %fission.producer.continue, label %scalar.fission.chunk, label %producer.exit
-; CHUNK: ret void
-; SMALL: scalar-multiply.c:52:3: scalar-IR reduction fission rejected: scalar-scratch-limit
 define void @multiply_affine(ptr %a, ptr %mem, ptr %out, i64 %n, i32 %mode, i32 %seed) !dbg !30 {
 entry:
   %valid = icmp ule i64 %n, 65

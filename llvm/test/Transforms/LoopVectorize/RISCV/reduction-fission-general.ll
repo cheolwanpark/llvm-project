@@ -1,52 +1,11 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -tail-folding-policy=must-fold-tail -S %s \
-; RUN:   | FileCheck %s
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 -S %s \
-; RUN:   | FileCheck %s
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 -S %s \
-; RUN:   | llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs -o /dev/null
-; RUN: opt -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
-; RUN:   -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false \
-; RUN:   -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-force-producer-vf=16 \
-; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 -S %s -o %t
-; RUN: FileCheck %s --check-prefix=WIDE < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-;
-; The exploration bound is relative to target register/data width, not the
-; smallest VF in a plan (which can be a fractional register for i32).
-; WIDE: vector.fission.producer.body:
-; WIDE-NOT: @llvm.stepvector
-; WIDE: store <vscale x 16 x i32>
-; WIDE: vector.fission.accumulator.body:
-; WIDE: load <vscale x 2 x i32>
-;
-; No operator-specific recurrence rewriting: preserve the multi-add, bitwise,
-; min/max updates, with a shared producer using scalar-immarg and
-; ordinary elementwise intrinsics. Odd TC tests scalar stage remainders.
-; CHECK-LABEL: define void @general(
-; CHECK: fission.scratch = alloca [257 x i32]
-; CHECK: vector.fission.producer.body:
-; CHECK: call <vscale x {{[0-9]+}} x i32> @llvm.abs.
-; CHECK: store <vscale x
-; CHECK: vector.fission.accumulator.body:
-; CHECK: load <vscale x {{[0-9]+}} x i32>
-; CHECK: add <vscale x
-; CHECK: add <vscale x
-; CHECK: xor <vscale x
-; CHECK: or <vscale x
-; CHECK: and <vscale x
-; CHECK: @llvm.umax.
-; CHECK: @llvm.vector.reduce.xor.
-; CHECK: @llvm.vector.reduce.or.
-; CHECK: @llvm.vector.reduce.and.
-; CHECK: @llvm.vector.reduce.umax.
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @general(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @general(ptr noalias readonly %a, ptr noalias %out) {
 entry:
   %base = getelementptr i32, ptr %a, i64 1

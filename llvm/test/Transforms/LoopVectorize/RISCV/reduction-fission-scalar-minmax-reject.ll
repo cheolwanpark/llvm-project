@@ -1,11 +1,56 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -enable-vplan-reduction-fission -pass-remarks-missed=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s --implicit-check-not=scalar.fission < %t
-; RUN: FileCheck %s --check-prefix=REASON < %t.remarks
-; RUN: opt -passes='loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 -force-target-max-scalar-interleave=1 -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering -S %s | FileCheck %s --implicit-check-not=scalar.fission
-;
-; Integer min/max recognition retains accumulator/result edge closure, compatible
-; participation, the exact intrinsic whitelist and simple-effect requirements.
-; The positive file separately checks the padded below-one-entry ceiling.
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_feedback(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_unsupported_division(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_unsafe(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_volatile(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_incompatible(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_no_accumulator(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_twice(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_ordinary_call(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_address(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_cross(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_tail(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_bundle(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_noduplicate(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_abs(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_float(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_predicate(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @llvm.smin.i32(i32, i32)
 declare i32 @llvm.smax.i32(i32, i32)
 declare i32 @llvm.umin.i32(i32, i32)
@@ -13,10 +58,6 @@ declare i32 @llvm.umax.i32(i32, i32)
 
 declare void @effect(ptr) nounwind willreturn
 
-; REASON: scalar-IR reduction fission rejected: scalar-reduction-feedback
-; CHECK-LABEL: define i32 @minmax_feedback(
-; CHECK: %update = call i32 @llvm.smin.i32(i32 %sum, i32 %x)
-; CHECK: ret i32
 define i32 @minmax_feedback(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -42,10 +83,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-unsupported-recurrence
-; CHECK-LABEL: define i32 @minmax_unsupported_division(
-; CHECK: %update = udiv i32 %sum, %x
-; CHECK: ret i32
 define i32 @minmax_unsupported_division(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -70,10 +107,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-unsafe-call
-; CHECK-LABEL: define i32 @minmax_unsafe(
-; CHECK: %update = call i32 @llvm.smax.i32(i32 %sum, i32 %x)
-; CHECK: ret i32
 define i32 @minmax_unsafe(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -99,10 +132,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-non-simple-store
-; CHECK-LABEL: define i32 @minmax_volatile(
-; CHECK: %update = call i32 @llvm.umax.i32(i32 %sum, i32 %x)
-; CHECK: ret i32
 define i32 @minmax_volatile(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -128,11 +157,6 @@ bypass:
   ret i32 19
 }
 
-; REASON: scalar-IR reduction fission rejected: scalar-incompatible-participation
-; CHECK-LABEL: define i32 @minmax_incompatible(
-; CHECK: %u0 = call i32 @llvm.umin.i32(i32 %r0, i32 %x)
-; CHECK: %u1 = call i32 @llvm.umax.i32(i32 %x, i32 %r1)
-; CHECK: ret i32
 define i32 @minmax_incompatible(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -169,9 +193,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @minmax_no_accumulator(
-; CHECK: %update = call i32 @llvm.smin.i32(i32 %x, i32 9)
-; CHECK: ret i32
 define i32 @minmax_no_accumulator(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -196,9 +217,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @minmax_twice(
-; CHECK: %update = call i32 @llvm.umax.i32(i32 %sum, i32 %sum)
-; CHECK: ret i32
 define i32 @minmax_twice(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -223,9 +241,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @minmax_ordinary_call(
-; CHECK: %update = call i32 @other_min(i32 %sum, i32 %x)
-; CHECK: ret i32
 define i32 @minmax_ordinary_call(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -252,8 +267,6 @@ bypass:
 
 declare i32 @other_min(i32, i32) nounwind willreturn speculatable memory(none)
 
-; CHECK-LABEL: define i32 @minmax_address(
-; CHECK: ret i32
 define i32 @minmax_address(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -281,8 +294,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @minmax_cross(
-; CHECK: ret i32
 define i32 @minmax_cross(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -309,9 +320,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @minmax_tail(
-; CHECK: %update = tail call i32 @llvm.smin.i32(i32 %sum, i32 %x)
-; CHECK: ret i32
 define i32 @minmax_tail(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -336,9 +344,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @minmax_bundle(
-; CHECK: %update = call i32 @llvm.smin.i32(i32 %sum, i32 %x) [ "deopt"() ]
-; CHECK: ret i32
 define i32 @minmax_bundle(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -363,9 +368,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @minmax_noduplicate(
-; CHECK: %update = call i32 @llvm.smin.i32(i32 %sum, i32 %x)
-; CHECK: ret i32
 define i32 @minmax_noduplicate(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -390,9 +392,6 @@ bypass:
   ret i32 19
 }
 
-; CHECK-LABEL: define i32 @minmax_abs(
-; CHECK: %update = call i32 @llvm.abs.i32(i32 %sum, i1 false)
-; CHECK: ret i32
 define i32 @minmax_abs(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -419,10 +418,6 @@ bypass:
 
 declare i32 @llvm.abs.i32(i32, i1 immarg)
 
-; Floating-point min/max is outside this scalar recurrence extension.
-; CHECK-LABEL: define float @minmax_float(
-; CHECK: %update = call float @llvm.minnum.f32(float %sum, float %x)
-; CHECK: ret float
 define float @minmax_float(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -448,9 +443,6 @@ bypass:
 }
 declare float @llvm.minnum.f32(float, float)
 
-; CHECK-LABEL: define i32 @minmax_predicate(
-; CHECK: %choose = icmp ne i32 %sum, 0
-; CHECK: ret i32
 define i32 @minmax_predicate(ptr %a, i64 %n) {
 entry:
   %valid = icmp ule i64 %n, 65

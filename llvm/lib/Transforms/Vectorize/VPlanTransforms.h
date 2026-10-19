@@ -24,7 +24,6 @@
 
 namespace llvm {
 
-class FissionFPReorderingPolicy;
 class InductionDescriptor;
 class Instruction;
 class Loop;
@@ -158,8 +157,7 @@ struct VPlanTransforms {
       const MapVector<PHINode *, InductionDescriptor> &Inductions,
       const MapVector<PHINode *, RecurrenceDescriptor> &Reductions,
       const SmallPtrSetImpl<const PHINode *> &FixedOrderRecurrences,
-      const SmallPtrSetImpl<PHINode *> &InLoopReductions, bool AllowReordering,
-      const FissionFPReorderingPolicy *FissionFPReordering = nullptr);
+      const SmallPtrSetImpl<PHINode *> &InLoopReductions, bool AllowReordering);
 
   /// Finalize SCEV predicates by adding induction predicates from \p Plan to
   /// \p PSE and checking constraints. Returns false if predicated IVs have
@@ -420,7 +418,8 @@ struct VPlanTransforms {
   static void optimizeInductionLiveOutUsers(VPlan &Plan,
                                             PredicatedScalarEvolution &PSE);
 
-  /// Add explicit broadcasts for live-ins and VPValues defined in \p Plan's entry block if they are used as vectors.
+  /// Add explicit broadcasts for live-ins and VPValues defined in \p Plan's
+  /// entry block if they are used as vectors.
   static void materializeBroadcasts(VPlan &Plan);
 
   /// Hoist predicated loads from the same address to the loop entry block, if

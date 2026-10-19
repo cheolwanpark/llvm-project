@@ -1,0 +1,2989 @@
+[
+  {
+    "fixture": "reduction-fission-analysis.ll",
+    "functions": [
+      {
+        "function": "options_smoke",
+        "selected": false
+      },
+      {
+        "function": "dynamic_trip",
+        "selected": false
+      },
+      {
+        "function": "constant_trip_one",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-bounded-trip-count.ll",
+    "functions": [
+      {
+        "function": "bounded",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-call-tail.ll",
+    "functions": [
+      {
+        "function": "call_variant",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-combine-add-pressure.ll",
+    "functions": [
+      {
+        "function": "pressure_fallback",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-combine-add.ll",
+    "functions": [
+      {
+        "function": "aom_blockiness_horizontal",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "'-experimental-smctr' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-ssctr' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqccmp' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcia' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqciac' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcibi' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcibm' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcicli' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcicm' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcics' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcicsr' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqciint' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqciio' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcilb' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcili' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcilia' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcilo' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcilsm' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcisim' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcisls' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcisync' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xrivosvisni' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xrivosvizip' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-zalasr' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-zvqdotq' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-smctr' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-ssctr' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqccmp' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcia' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqciac' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcibi' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcibm' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcicli' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcicm' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcics' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcicsr' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqciint' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqciio' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcilb' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcili' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcilia' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcilo' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcilsm' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcisim' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcisls' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xqcisync' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xrivosvisni' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-xrivosvizip' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-zalasr' is not a recognized feature for this target (ignoring feature)",
+      "'-experimental-zvqdotq' is not a recognized feature for this target (ignoring feature)",
+      "remark: <unknown>:0:0: scalar fission rejected: load-snapshot-required"
+    ],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: load-snapshot-required"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-combined.ll",
+    "functions": [
+      {
+        "function": "combined",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-disabled.ll",
+    "functions": [
+      {
+        "function": "fixed_reduction",
+        "selected": false
+      },
+      {
+        "function": "runtime_reduction",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-dispatch.ll",
+    "functions": [
+      {
+        "function": "interleave2",
+        "selected": true
+      },
+      {
+        "function": "interleave3",
+        "selected": true
+      },
+      {
+        "function": "interleave2_ordered",
+        "selected": true
+      },
+      {
+        "function": "compact_nested",
+        "selected": true
+      },
+      {
+        "function": "dispatch_reject",
+        "selected": false
+      },
+      {
+        "function": "dispatch_marked",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: dispatch.c:70:5: scalar fission rejected: non-simple-memory",
+      "remark: dispatch.c:80:5: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": [
+      "remark: dispatch.c:80:5: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-duplication.ll",
+    "functions": [
+      {
+        "function": "pressure_candidate",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-fabs.ll",
+    "functions": [
+      {
+        "function": "fabs_producer_and_accumulator",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-forced-pair.ll",
+    "functions": [],
+    "rejections": [],
+    "legacy_class": "archived-VPlan-structure-wrapper"
+  },
+  {
+    "fixture": "reduction-fission-fp-reordering-isolation.ll",
+    "functions": [
+      {
+        "function": "isolated_attempts",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-fp-reordering.ll",
+    "functions": [
+      {
+        "function": "fp_reordering",
+        "selected": true
+      },
+      {
+        "function": "strict_fp",
+        "selected": false
+      },
+      {
+        "function": "multiple_updates",
+        "selected": true
+      },
+      {
+        "function": "accumulator_fma",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: strict-fp"
+    ],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-general.ll",
+    "functions": [
+      {
+        "function": "general",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-independent-vfs.ll",
+    "functions": [
+      {
+        "function": "independent_vfs",
+        "selected": true
+      },
+      {
+        "function": "independent_vfs_bounded",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-induction.ll",
+    "functions": [
+      {
+        "function": "induction",
+        "selected": true
+      },
+      {
+        "function": "negative_step",
+        "selected": true
+      },
+      {
+        "function": "truncated",
+        "selected": true
+      },
+      {
+        "function": "induction_liveout",
+        "selected": true
+      },
+      {
+        "function": "floating_induction",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-interleave-duplication.ll",
+    "functions": [
+      {
+        "function": "interleave_reread",
+        "selected": true
+      },
+      {
+        "function": "interleave3_reread",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-interleave-plan.ll",
+    "functions": [],
+    "rejections": [],
+    "legacy_class": "archived-VPlan-structure-wrapper"
+  },
+  {
+    "fixture": "reduction-fission-interleave-reject.ll",
+    "functions": [
+      {
+        "function": "interleave_gap",
+        "selected": true
+      },
+      {
+        "function": "interleave_reverse",
+        "selected": true
+      },
+      {
+        "function": "interleave_store",
+        "selected": true
+      },
+      {
+        "function": "interleave_dependence",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-interleave-wide-ordered.ll",
+    "functions": [
+      {
+        "function": "interleave4_ordered",
+        "selected": true
+      },
+      {
+        "function": "interleave8_ordered",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-interleave-wide-reread.ll",
+    "functions": [
+      {
+        "function": "interleave5_reread",
+        "selected": true
+      },
+      {
+        "function": "interleave8_reread",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-interleave-wide.ll",
+    "functions": [
+      {
+        "function": "interleave4",
+        "selected": true
+      },
+      {
+        "function": "interleave4_members",
+        "selected": true
+      },
+      {
+        "function": "interleave5",
+        "selected": true
+      },
+      {
+        "function": "interleave5_members",
+        "selected": true
+      },
+      {
+        "function": "interleave6",
+        "selected": true
+      },
+      {
+        "function": "interleave6_members",
+        "selected": true
+      },
+      {
+        "function": "interleave7",
+        "selected": true
+      },
+      {
+        "function": "interleave7_members",
+        "selected": true
+      },
+      {
+        "function": "interleave8",
+        "selected": true
+      },
+      {
+        "function": "interleave8_members",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-interleave.ll",
+    "functions": [
+      {
+        "function": "interleave2",
+        "selected": true
+      },
+      {
+        "function": "interleave3",
+        "selected": true
+      },
+      {
+        "function": "interleave2_ordered",
+        "selected": true
+      },
+      {
+        "function": "interleave3_ordered",
+        "selected": true
+      },
+      {
+        "function": "interleave2_members",
+        "selected": true
+      },
+      {
+        "function": "interleave3_members",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-invariant-frontier.ll",
+    "functions": [
+      {
+        "function": "scipy_fma8_fixed",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-legality.ll",
+    "functions": [
+      {
+        "function": "pressure_candidate",
+        "selected": true
+      },
+      {
+        "function": "scipy_fma8_fixed",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-live-out.ll",
+    "functions": [],
+    "rejections": [],
+    "legacy_class": "archived-VPlan-structure-wrapper"
+  },
+  {
+    "fixture": "reduction-fission-ordered.ll",
+    "functions": [
+      {
+        "function": "ordered",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-preview.ll",
+    "functions": [
+      {
+        "function": "pressure_candidate",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-acyclic-bounds.ll",
+    "functions": [
+      {
+        "function": "acyclic_one",
+        "selected": false
+      },
+      {
+        "function": "acyclic_i8_max",
+        "selected": false
+      },
+      {
+        "function": "acyclic_i8_overflow",
+        "selected": false
+      },
+      {
+        "function": "acyclic_default_limit",
+        "selected": false
+      },
+      {
+        "function": "acyclic_over_limit",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-acyclic-reject.ll",
+    "functions": [
+      {
+        "function": "reject_acyclic_early_exit",
+        "selected": false
+      },
+      {
+        "function": "reject_acyclic_internal_cycle",
+        "selected": true
+      },
+      {
+        "function": "reject_acyclic_predicate",
+        "selected": false
+      },
+      {
+        "function": "reject_acyclic_contribution",
+        "selected": true
+      },
+      {
+        "function": "reject_acyclic_result_feedback",
+        "selected": true
+      },
+      {
+        "function": "reject_acyclic_liveout",
+        "selected": true
+      },
+      {
+        "function": "reject_acyclic_store",
+        "selected": true
+      },
+      {
+        "function": "reject_acyclic_unsafe_call",
+        "selected": false
+      },
+      {
+        "function": "reject_acyclic_header_update",
+        "selected": false
+      },
+      {
+        "function": "reject_acyclic_switch",
+        "selected": false
+      },
+      {
+        "function": "reject_acyclic_conditional_serial",
+        "selected": true
+      },
+      {
+        "function": "reject_acyclic_conditional_nested",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: scalar-acyclic-reject.c:12:3: scalar fission rejected: unsupported-iteration-boundary",
+      "remark: scalar-acyclic-reject.c:32:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-acyclic-reject.c:82:3: scalar fission rejected: unsafe-producer-call",
+      "remark: scalar-acyclic-reject.c:92:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-acyclic-reject.c:102:3: scalar fission rejected: unsupported-control"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: scalar-acyclic-reject.c:92:3: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-acyclic.ll",
+    "functions": [
+      {
+        "function": "acyclic_serial",
+        "selected": true
+      },
+      {
+        "function": "acyclic_nested",
+        "selected": true
+      },
+      {
+        "function": "acyclic_three_way",
+        "selected": true
+      },
+      {
+        "function": "acyclic_enclosing",
+        "selected": true
+      },
+      {
+        "function": "acyclic_cross_edge",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-affine-bounds.ll",
+    "functions": [
+      {
+        "function": "affine_one",
+        "selected": false
+      },
+      {
+        "function": "affine_i8_max",
+        "selected": false
+      },
+      {
+        "function": "affine_i8_overflow",
+        "selected": false
+      },
+      {
+        "function": "affine_default_limit",
+        "selected": true
+      },
+      {
+        "function": "affine_over_limit",
+        "selected": true
+      },
+      {
+        "function": "affine_relational_limit",
+        "selected": true
+      },
+      {
+        "function": "affine_relational_over_limit",
+        "selected": true
+      },
+      {
+        "function": "affine_relational_i8_max",
+        "selected": false
+      },
+      {
+        "function": "affine_relational_i8_overflow",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: scalar-affine-bounds.c:12:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-affine-bounds.c:22:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-affine-bounds.c:32:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-affine-bounds.c:82:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-affine-bounds.c:92:3: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: scalar-affine-bounds.c:12:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-affine-bounds.c:22:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-affine-bounds.c:32:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-affine-bounds.c:82:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-affine-bounds.c:92:3: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-affine-chunks.ll",
+    "functions": [
+      {
+        "function": "nc_offset",
+        "selected": true
+      },
+      {
+        "function": "nc_stride",
+        "selected": true
+      },
+      {
+        "function": "nc_down",
+        "selected": true
+      },
+      {
+        "function": "nc_early",
+        "selected": true
+      },
+      {
+        "function": "nc_current",
+        "selected": true
+      },
+      {
+        "function": "nc_compact",
+        "selected": true
+      },
+      {
+        "function": "nc_narrow",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-affine-composition.ll",
+    "functions": [
+      {
+        "function": "nc_mul_store",
+        "selected": false
+      },
+      {
+        "function": "nc_bits_store",
+        "selected": false
+      },
+      {
+        "function": "nc_compact_bits_store",
+        "selected": false
+      },
+      {
+        "function": "nc_sub_store",
+        "selected": false
+      },
+      {
+        "function": "nc_defined_store",
+        "selected": false
+      },
+      {
+        "function": "nc_compact_mul_store",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: scalar-affine-composition.c:12:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-affine-composition.c:32:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-affine-composition.c:52:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-affine-composition.c:72:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-affine-composition.c:92:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-affine-composition.c:112:3: scalar fission rejected: load-snapshot-required"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: scalar-affine-composition.c:12:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-affine-composition.c:32:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-affine-composition.c:52:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-affine-composition.c:72:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-affine-composition.c:92:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-affine-composition.c:112:3: scalar fission rejected: load-snapshot-required"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-affine-reject.ll",
+    "functions": [
+      {
+        "function": "reject_affine_unproved",
+        "selected": true
+      },
+      {
+        "function": "reject_affine_variable_step",
+        "selected": true
+      },
+      {
+        "function": "reject_affine_feedback",
+        "selected": true
+      },
+      {
+        "function": "reject_affine_contribution_feedback",
+        "selected": true
+      },
+      {
+        "function": "reject_affine_unsafe_call",
+        "selected": false
+      },
+      {
+        "function": "reject_affine_store",
+        "selected": false
+      },
+      {
+        "function": "reject_affine_liveout",
+        "selected": true
+      },
+      {
+        "function": "reject_affine_participation",
+        "selected": true
+      },
+      {
+        "function": "reject_affine_strictfp",
+        "selected": false
+      },
+      {
+        "function": "reject_affine_zero_step",
+        "selected": true
+      },
+      {
+        "function": "reject_affine_nonlinear",
+        "selected": true
+      },
+      {
+        "function": "reject_affine_pointer",
+        "selected": true
+      },
+      {
+        "function": "reject_affine_fp_control",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: scalar-affine-reject.c:52:3: scalar fission rejected: unsafe-producer-call",
+      "remark: scalar-affine-reject.c:62:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-affine-reject.c:92:3: scalar fission rejected: strict-fp"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-affine.ll",
+    "functions": [
+      {
+        "function": "affine_const",
+        "selected": true
+      },
+      {
+        "function": "affine_runtime",
+        "selected": true
+      },
+      {
+        "function": "affine_unsigned",
+        "selected": true
+      },
+      {
+        "function": "affine_signed",
+        "selected": true
+      },
+      {
+        "function": "affine_down",
+        "selected": true
+      },
+      {
+        "function": "affine_signed_down",
+        "selected": true
+      },
+      {
+        "function": "affine_compact",
+        "selected": true
+      },
+      {
+        "function": "affine_enclosing",
+        "selected": true
+      },
+      {
+        "function": "affine_wrap",
+        "selected": true
+      },
+      {
+        "function": "affine_current",
+        "selected": true
+      },
+      {
+        "function": "affine_unsigned_early",
+        "selected": true
+      },
+      {
+        "function": "affine_signed_early",
+        "selected": true
+      },
+      {
+        "function": "affine_down_early",
+        "selected": true
+      },
+      {
+        "function": "affine_signed_down_early",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-bitwise-reject.ll",
+    "functions": [
+      {
+        "function": "bitwise_feedback",
+        "selected": false
+      },
+      {
+        "function": "multiply_unsupported_division",
+        "selected": false
+      },
+      {
+        "function": "bitwise_unsafe",
+        "selected": false
+      },
+      {
+        "function": "bitwise_volatile",
+        "selected": false
+      },
+      {
+        "function": "bitwise_incompatible",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-bitwise.ll",
+    "functions": [
+      {
+        "function": "bitwise_full",
+        "selected": true
+      },
+      {
+        "function": "bitwise_compact",
+        "selected": true
+      },
+      {
+        "function": "bitwise_affine",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-chunk-cfg.ll",
+    "functions": [
+      {
+        "function": "chunk_cfg_diamond",
+        "selected": true
+      },
+      {
+        "function": "chunk_cfg_serial",
+        "selected": true
+      },
+      {
+        "function": "chunk_cfg_nested",
+        "selected": true
+      },
+      {
+        "function": "chunk_cfg_header",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-chunk-state.ll",
+    "functions": [
+      {
+        "function": "chunk_state_delay",
+        "selected": true
+      },
+      {
+        "function": "chunk_state_pair",
+        "selected": true
+      },
+      {
+        "function": "chunk_state_fp",
+        "selected": true
+      },
+      {
+        "function": "chunk_state_nested",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-chunks-reject.ll",
+    "functions": [
+      {
+        "function": "chunk_feedback",
+        "selected": false
+      },
+      {
+        "function": "chunk_effect",
+        "selected": false
+      },
+      {
+        "function": "chunk_volatile",
+        "selected": false
+      },
+      {
+        "function": "chunk_strictfp",
+        "selected": false
+      },
+      {
+        "function": "chunk_noncanonical",
+        "selected": true
+      },
+      {
+        "function": "chunk_reverse_equality",
+        "selected": false
+      },
+      {
+        "function": "chunk_constrained",
+        "selected": false
+      },
+      {
+        "function": "chunk_retained_state",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: scalar-chunks-reject.c:12:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-chunks-reject.c:22:3: scalar fission rejected: unsafe-producer-call",
+      "remark: scalar-chunks-reject.c:32:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-chunks-reject.c:42:3: scalar fission rejected: strict-fp",
+      "remark: scalar-chunks-reject.c:62:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-chunks-reject.c:72:3: scalar fission rejected: strict-fp"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: scalar-chunks-reject.c:12:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-chunks-reject.c:62:3: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-chunks.ll",
+    "functions": [
+      {
+        "function": "chunk_mixed",
+        "selected": true
+      },
+      {
+        "function": "chunk_narrow",
+        "selected": true
+      },
+      {
+        "function": "chunk_ne",
+        "selected": true
+      },
+      {
+        "function": "chunk_nested",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-compact-bounds.ll",
+    "functions": [
+      {
+        "function": "compact_i8_max",
+        "selected": true
+      },
+      {
+        "function": "compact_i8_overflow",
+        "selected": true
+      },
+      {
+        "function": "compact_default_limit",
+        "selected": true
+      },
+      {
+        "function": "compact_over_limit",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-compact-cfg-reject.ll",
+    "functions": [
+      {
+        "function": "reject_cfg_nonterminal_update",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_conditional_update",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_multiple_updates",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_different_participation",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_predicate_feedback",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_contribution_feedback",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_double_accumulator_operand",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_changed_bypass",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_bypass_store",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_bypass_effect",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_strictfp",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_constrained",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_unproved_bound",
+        "selected": false
+      },
+      {
+        "function": "reject_cfg_early_exit",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: scalar-compact-cfg-reject.c:12:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:22:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:32:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:42:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:52:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-compact-cfg-reject.c:62:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:72:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:82:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:92:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-compact-cfg-reject.c:102:3: scalar fission rejected: unsafe-producer-call",
+      "remark: scalar-compact-cfg-reject.c:112:3: scalar fission rejected: strict-fp",
+      "remark: scalar-compact-cfg-reject.c:122:3: scalar fission rejected: strict-fp",
+      "remark: scalar-compact-cfg-reject.c:132:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:142:3: scalar fission rejected: unsupported-iteration-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: scalar-compact-cfg-reject.c:12:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:22:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:32:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:42:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:62:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:72:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:82:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-compact-cfg-reject.c:92:3: scalar fission rejected: load-snapshot-required",
+      "remark: scalar-compact-cfg-reject.c:132:3: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-compact-cfg.ll",
+    "functions": [
+      {
+        "function": "compact_cfg_serial",
+        "selected": true
+      },
+      {
+        "function": "compact_cfg_nested",
+        "selected": true
+      },
+      {
+        "function": "compact_cfg_affine",
+        "selected": true
+      },
+      {
+        "function": "compact_cfg_enclosing",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-compact-chunks-reject.ll",
+    "functions": [
+      {
+        "function": "compact_chunk_reject_affine",
+        "selected": true
+      },
+      {
+        "function": "compact_chunk_reject_reverse_equality",
+        "selected": true
+      },
+      {
+        "function": "compact_chunk_reject_unsupported_control",
+        "selected": true
+      },
+      {
+        "function": "compact_chunk_reject_unsafe_call",
+        "selected": false
+      },
+      {
+        "function": "compact_chunk_reject_volatile",
+        "selected": false
+      },
+      {
+        "function": "compact_chunk_reject_store",
+        "selected": false
+      },
+      {
+        "function": "compact_chunk_reject_strictfp",
+        "selected": false
+      },
+      {
+        "function": "compact_chunk_reject_constrained",
+        "selected": false
+      },
+      {
+        "function": "compact_chunk_reject_feedback",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: scalar-compact-chunks-reject.c:42:3: scalar fission rejected: unsafe-producer-call",
+      "remark: scalar-compact-chunks-reject.c:52:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-compact-chunks-reject.c:62:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-compact-chunks-reject.c:72:3: scalar fission rejected: strict-fp",
+      "remark: scalar-compact-chunks-reject.c:82:3: scalar fission rejected: strict-fp",
+      "remark: scalar-compact-chunks-reject.c:92:3: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-compact-chunks.ll",
+    "functions": [
+      {
+        "function": "compact_chunk_diamond",
+        "selected": true
+      },
+      {
+        "function": "compact_chunk_cfg",
+        "selected": true
+      },
+      {
+        "function": "compact_chunk_narrow",
+        "selected": true
+      },
+      {
+        "function": "compact_chunk_rows",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-compact-recurrence-reject.ll",
+    "functions": [
+      {
+        "function": "compact_recurrence_reject_predicate",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_reject_state",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_reject_address",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_reject_state_export",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_reject_incompatible",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_reject_store",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_reject_strict",
+        "selected": false
+      },
+      {
+        "function": "compact_recurrence_reject_constrained",
+        "selected": false
+      },
+      {
+        "function": "compact_recurrence_reject_unbounded",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_reject_over_capacity",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: scalar-compact-recurrence.c:72:3: scalar fission rejected: strict-fp",
+      "remark: scalar-compact-recurrence.c:82:3: scalar fission rejected: strict-fp"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-compact-recurrence.ll",
+    "functions": [
+      {
+        "function": "compact_recurrence",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_reverse",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_merge",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_affine",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_runtime",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_enclosing",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_one",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_255",
+        "selected": true
+      },
+      {
+        "function": "compact_recurrence_limit",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-compact-reject.ll",
+    "functions": [
+      {
+        "function": "reject_compact_predicate_feedback",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_contribution_feedback",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_updated_feedback",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_cross_reduction",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_different_participation",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_mixed_participation",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_changed_bypass",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_partial_state_export",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_producer_export",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_store",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_volatile",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_atomic",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_readonly_call",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_errno_call",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_constrained",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_strictfp",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_unsupported_division",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: producer-state-input",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: load-snapshot-required",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: strict-fp",
+      "remark: <unknown>:0:0: scalar fission rejected: strict-fp",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: load-snapshot-required",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-compact.ll",
+    "functions": [
+      {
+        "function": "compact_triangle",
+        "selected": true
+      },
+      {
+        "function": "compact_diamond",
+        "selected": true
+      },
+      {
+        "function": "compact_integer",
+        "selected": true
+      },
+      {
+        "function": "compact_nested",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-composition-reject.ll",
+    "functions": [
+      {
+        "function": "compose_reject_feedback",
+        "selected": false
+      },
+      {
+        "function": "compose_reject_volatile",
+        "selected": false
+      },
+      {
+        "function": "compose_reject_atomic",
+        "selected": false
+      },
+      {
+        "function": "compose_reject_control",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-composition.ll",
+    "functions": [
+      {
+        "function": "compose_neg",
+        "selected": true
+      },
+      {
+        "function": "compose_sub",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-diamond-reject.ll",
+    "functions": [
+      {
+        "function": "reject_conditional_update",
+        "selected": false
+      },
+      {
+        "function": "reject_accumulator_predicate",
+        "selected": false
+      },
+      {
+        "function": "reject_accumulator_merge",
+        "selected": true
+      },
+      {
+        "function": "reject_updated_accumulator_use",
+        "selected": false
+      },
+      {
+        "function": "reject_extra_exit",
+        "selected": false
+      },
+      {
+        "function": "reject_internal_cycle",
+        "selected": true
+      },
+      {
+        "function": "reject_arm_cycle",
+        "selected": true
+      },
+      {
+        "function": "reject_arm_store",
+        "selected": true
+      },
+      {
+        "function": "reject_arm_volatile",
+        "selected": false
+      },
+      {
+        "function": "reject_arm_atomic",
+        "selected": false
+      },
+      {
+        "function": "reject_arm_readonly_call",
+        "selected": false
+      },
+      {
+        "function": "reject_arm_errno_call",
+        "selected": false
+      },
+      {
+        "function": "reject_arm_constrained",
+        "selected": false
+      },
+      {
+        "function": "reject_merged_liveout",
+        "selected": false
+      },
+      {
+        "function": "reject_induction_liveout",
+        "selected": false
+      },
+      {
+        "function": "reject_header_update_predicate",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: scalar-diamond-reject.c:12:3: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: unsupported-iteration-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: strict-fp",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: scalar-diamond-reject.c:12:3: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-diamond.ll",
+    "functions": [
+      {
+        "function": "scalar_diamond",
+        "selected": true
+      },
+      {
+        "function": "diamond_arithmetic",
+        "selected": false
+      },
+      {
+        "function": "scalar_diamond_nested",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: scalar-diamond.c:42:3: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: scalar-diamond.c:42:3: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-export-controls.ll",
+    "functions": [
+      {
+        "function": "export_offset",
+        "selected": true
+      },
+      {
+        "function": "export_stride",
+        "selected": true
+      },
+      {
+        "function": "export_down",
+        "selected": true
+      },
+      {
+        "function": "export_current",
+        "selected": true
+      },
+      {
+        "function": "export_affine_compact",
+        "selected": true
+      },
+      {
+        "function": "export_serial",
+        "selected": true
+      },
+      {
+        "function": "export_acyclic_nested",
+        "selected": true
+      },
+      {
+        "function": "export_enclosing",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-export-poison.ll",
+    "functions": [
+      {
+        "function": "export_possible_poison",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-exports.ll",
+    "functions": [
+      {
+        "function": "export_unconditional",
+        "selected": true
+      },
+      {
+        "function": "export_diamond",
+        "selected": true
+      },
+      {
+        "function": "export_compact",
+        "selected": true
+      },
+      {
+        "function": "export_nested",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-fneg-patterns.ll",
+    "functions": [
+      {
+        "function": "shared_negations",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-fneg-reject.ll",
+    "functions": [
+      {
+        "function": "reject_accumulator_negation",
+        "selected": false
+      },
+      {
+        "function": "reject_update_negation",
+        "selected": false
+      },
+      {
+        "function": "reject_vector_negation",
+        "selected": false
+      },
+      {
+        "function": "reject_strictfp",
+        "selected": false
+      },
+      {
+        "function": "reject_constrained",
+        "selected": false
+      },
+      {
+        "function": "reject_unsafe_call",
+        "selected": true
+      },
+      {
+        "function": "reject_negation_recurrence",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: scalar-fneg-reject.c:12:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-fneg-reject.c:22:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-fneg-reject.c:32:3: scalar fission rejected: unsupported-instruction",
+      "remark: scalar-fneg-reject.c:42:3: scalar fission rejected: strict-fp",
+      "remark: scalar-fneg-reject.c:52:3: scalar fission rejected: strict-fp",
+      "remark: scalar-fneg-reject.c:72:3: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: scalar-fneg-reject.c:12:3: scalar fission rejected: no-computed-boundary",
+      "remark: scalar-fneg-reject.c:72:3: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-fneg-vector.ll",
+    "functions": [],
+    "rejections": [],
+    "legacy_class": "archived-VPlan-structure-wrapper"
+  },
+  {
+    "fixture": "reduction-fission-scalar-fneg.ll",
+    "functions": [
+      {
+        "function": "stores_full",
+        "selected": true
+      },
+      {
+        "function": "stores_compact",
+        "selected": true
+      },
+      {
+        "function": "stores_chunk",
+        "selected": true
+      },
+      {
+        "function": "stores_chunk_ne",
+        "selected": true
+      },
+      {
+        "function": "stores_affine",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-integration-reject.ll",
+    "functions": [
+      {
+        "function": "oversized_offset",
+        "selected": true
+      },
+      {
+        "function": "oversized_stride",
+        "selected": true
+      },
+      {
+        "function": "oversized_current",
+        "selected": true
+      },
+      {
+        "function": "oversized_swapped",
+        "selected": true
+      },
+      {
+        "function": "oversized_witness",
+        "selected": true
+      },
+      {
+        "function": "reject_export_integration_affine",
+        "selected": true
+      },
+      {
+        "function": "reject_export_integration_cross_edge",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-integration.ll",
+    "functions": [
+      {
+        "function": "integration_affine",
+        "selected": true
+      },
+      {
+        "function": "integration_cross_edge",
+        "selected": true
+      },
+      {
+        "function": "integration_chunk",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-ir-nested.ll",
+    "functions": [
+      {
+        "function": "scalar_nested",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-ir-reject.ll",
+    "functions": [
+      {
+        "function": "reject_side_effect",
+        "selected": false
+      },
+      {
+        "function": "reject_throwing",
+        "selected": false
+      },
+      {
+        "function": "reject_nonterminating",
+        "selected": false
+      },
+      {
+        "function": "reject_nonspeculatable",
+        "selected": true
+      },
+      {
+        "function": "reject_convergent_call",
+        "selected": false
+      },
+      {
+        "function": "reject_readonly_call",
+        "selected": false
+      },
+      {
+        "function": "reject_noduplicate_call",
+        "selected": false
+      },
+      {
+        "function": "reject_feedback",
+        "selected": false
+      },
+      {
+        "function": "reject_update_feedback",
+        "selected": true
+      },
+      {
+        "function": "reject_strictfp",
+        "selected": false
+      },
+      {
+        "function": "reject_unbounded",
+        "selected": true
+      },
+      {
+        "function": "reject_liveout",
+        "selected": true
+      },
+      {
+        "function": "reject_old_accumulator_liveout",
+        "selected": true
+      },
+      {
+        "function": "reject_volatile_load",
+        "selected": false
+      },
+      {
+        "function": "reject_atomic_load",
+        "selected": false
+      },
+      {
+        "function": "reject_write",
+        "selected": true
+      },
+      {
+        "function": "reject_unsupported_exit",
+        "selected": true
+      },
+      {
+        "function": "reject_operand_bundle",
+        "selected": false
+      },
+      {
+        "function": "reject_other_recurrence",
+        "selected": true
+      },
+      {
+        "function": "reject_constrained",
+        "selected": false
+      },
+      {
+        "function": "reject_early_exit",
+        "selected": false
+      },
+      {
+        "function": "reject_trip_overflow",
+        "selected": true
+      },
+      {
+        "function": "reject_reduction_derived_export",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: scalar-reject.c:12:3: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: strict-fp",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: strict-fp",
+      "remark: <unknown>:0:0: scalar fission rejected: unsupported-iteration-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-ir.ll",
+    "functions": [
+      {
+        "function": "scalar_helper_sum",
+        "selected": true
+      },
+      {
+        "function": "arithmetic_sum",
+        "selected": true
+      },
+      {
+        "function": "scalar_mixed",
+        "selected": true
+      },
+      {
+        "function": "narrow_constant",
+        "selected": true
+      },
+      {
+        "function": "one_iteration",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-minmax-analogous.ll",
+    "functions": [
+      {
+        "function": "minmax_retained",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-minmax-reject.ll",
+    "functions": [
+      {
+        "function": "minmax_feedback",
+        "selected": false
+      },
+      {
+        "function": "minmax_unsupported_division",
+        "selected": false
+      },
+      {
+        "function": "minmax_unsafe",
+        "selected": false
+      },
+      {
+        "function": "minmax_volatile",
+        "selected": false
+      },
+      {
+        "function": "minmax_incompatible",
+        "selected": false
+      },
+      {
+        "function": "minmax_no_accumulator",
+        "selected": false
+      },
+      {
+        "function": "minmax_twice",
+        "selected": false
+      },
+      {
+        "function": "minmax_ordinary_call",
+        "selected": false
+      },
+      {
+        "function": "minmax_address",
+        "selected": false
+      },
+      {
+        "function": "minmax_cross",
+        "selected": false
+      },
+      {
+        "function": "minmax_tail",
+        "selected": false
+      },
+      {
+        "function": "minmax_bundle",
+        "selected": false
+      },
+      {
+        "function": "minmax_noduplicate",
+        "selected": false
+      },
+      {
+        "function": "minmax_abs",
+        "selected": false
+      },
+      {
+        "function": "minmax_float",
+        "selected": false
+      },
+      {
+        "function": "minmax_predicate",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-minmax.ll",
+    "functions": [
+      {
+        "function": "minmax_full",
+        "selected": true
+      },
+      {
+        "function": "minmax_compact",
+        "selected": true
+      },
+      {
+        "function": "minmax_affine",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-multiply-analogous.ll",
+    "functions": [
+      {
+        "function": "bitwise_unsupported",
+        "selected": false
+      },
+      {
+        "function": "reject_compact_non_add",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-multiply-defined.ll",
+    "functions": [
+      {
+        "function": "multiply_defined",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: scalar-multiply-defined.c:72:3: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: scalar-multiply-defined.c:72:3: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-multiply-reject.ll",
+    "functions": [
+      {
+        "function": "multiply_feedback",
+        "selected": false
+      },
+      {
+        "function": "multiply_unsupported_division",
+        "selected": false
+      },
+      {
+        "function": "multiply_unsafe",
+        "selected": false
+      },
+      {
+        "function": "multiply_volatile",
+        "selected": false
+      },
+      {
+        "function": "multiply_incompatible",
+        "selected": false
+      },
+      {
+        "function": "multiply_switch",
+        "selected": false
+      },
+      {
+        "function": "multiply_fp",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: unsupported-control",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-scalar-multiply.ll",
+    "functions": [
+      {
+        "function": "multiply_full",
+        "selected": true
+      },
+      {
+        "function": "multiply_compact",
+        "selected": true
+      },
+      {
+        "function": "multiply_affine",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-recipes.ll",
+    "functions": [],
+    "rejections": [],
+    "legacy_class": "archived-VPlan-structure-wrapper"
+  },
+  {
+    "fixture": "reduction-fission-scalar-recurrence-compact-legacy.ll",
+    "functions": [
+      {
+        "function": "recurrence_compact",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-recurrence-reject.ll",
+    "functions": [
+      {
+        "function": "recurrence_phi_feedback",
+        "selected": true
+      },
+      {
+        "function": "recurrence_update_feedback",
+        "selected": true
+      },
+      {
+        "function": "recurrence_other_reduction",
+        "selected": true
+      },
+      {
+        "function": "recurrence_address_feedback",
+        "selected": true
+      },
+      {
+        "function": "recurrence_predicate_feedback",
+        "selected": true
+      },
+      {
+        "function": "recurrence_partial_export",
+        "selected": true
+      },
+      {
+        "function": "recurrence_state_export",
+        "selected": true
+      },
+      {
+        "function": "recurrence_store",
+        "selected": true
+      },
+      {
+        "function": "recurrence_call",
+        "selected": false
+      },
+      {
+        "function": "recurrence_unbounded",
+        "selected": true
+      },
+      {
+        "function": "recurrence_over_capacity",
+        "selected": true
+      },
+      {
+        "function": "recurrence_strict",
+        "selected": false
+      },
+      {
+        "function": "recurrence_constrained",
+        "selected": false
+      },
+      {
+        "function": "recurrence_no_extractable",
+        "selected": true
+      },
+      {
+        "function": "recurrence_no_supported_update",
+        "selected": true
+      },
+      {
+        "function": "recurrence_unsupported_multiply",
+        "selected": true
+      },
+      {
+        "function": "recurrence_unsupported_division",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: scalar-recurrence.c:12:3: scalar fission rejected: unsafe-producer-call",
+      "remark: scalar-recurrence.c:12:3: scalar fission rejected: strict-fp",
+      "remark: scalar-recurrence.c:12:3: scalar fission rejected: strict-fp"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-recurrence.ll",
+    "functions": [
+      {
+        "function": "recurrence_first",
+        "selected": true
+      },
+      {
+        "function": "recurrence_two",
+        "selected": true
+      },
+      {
+        "function": "recurrence_affine",
+        "selected": true
+      },
+      {
+        "function": "recurrence_runtime",
+        "selected": true
+      },
+      {
+        "function": "recurrence_branch",
+        "selected": true
+      },
+      {
+        "function": "recurrence_enclosing",
+        "selected": true
+      },
+      {
+        "function": "recurrence_one",
+        "selected": true
+      },
+      {
+        "function": "recurrence_255",
+        "selected": true
+      },
+      {
+        "function": "recurrence_limit",
+        "selected": true
+      },
+      {
+        "function": "recurrence_first_affine",
+        "selected": true
+      },
+      {
+        "function": "recurrence_first_enclosing",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state",
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-relational-reject.ll",
+    "functions": [
+      {
+        "function": "equality_continues",
+        "selected": true
+      },
+      {
+        "function": "unreachable_equality",
+        "selected": true
+      },
+      {
+        "function": "unbounded_witness",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-remainder-nested.ll",
+    "functions": [
+      {
+        "function": "nested",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-closed-state"
+    ],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-remainder.ll",
+    "functions": [],
+    "rejections": [],
+    "legacy_class": "archived-VPlan-structure-wrapper"
+  },
+  {
+    "fixture": "reduction-fission-scalar-state-cfg.ll",
+    "functions": [
+      {
+        "function": "state_cfg_serial",
+        "selected": true
+      },
+      {
+        "function": "state_cfg_nested",
+        "selected": true
+      },
+      {
+        "function": "state_cfg_affine",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-stores-reject.ll",
+    "functions": [
+      {
+        "function": "reject_store_accumulator_value",
+        "selected": false
+      },
+      {
+        "function": "reject_store_accumulator_address",
+        "selected": false
+      },
+      {
+        "function": "reject_store_update_value",
+        "selected": false
+      },
+      {
+        "function": "reject_store_update_address",
+        "selected": false
+      },
+      {
+        "function": "reject_store_accumulator_predicate",
+        "selected": false
+      },
+      {
+        "function": "reject_store_partial_export",
+        "selected": true
+      },
+      {
+        "function": "reject_store_volatile",
+        "selected": false
+      },
+      {
+        "function": "reject_store_atomic",
+        "selected": false
+      },
+      {
+        "function": "reject_store_vector",
+        "selected": false
+      },
+      {
+        "function": "reject_store_aggregate",
+        "selected": false
+      },
+      {
+        "function": "reject_store_fence",
+        "selected": false
+      },
+      {
+        "function": "reject_store_atomicrmw",
+        "selected": false
+      },
+      {
+        "function": "reject_store_effect",
+        "selected": false
+      },
+      {
+        "function": "reject_store_strictfp",
+        "selected": false
+      },
+      {
+        "function": "reject_store_constrained",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: scalar-stores-reject.c:12:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-stores-reject.c:22:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-stores-reject.c:32:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-stores-reject.c:42:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-stores-reject.c:52:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-stores-reject.c:72:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-stores-reject.c:82:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-stores-reject.c:92:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-stores-reject.c:102:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-stores-reject.c:112:3: scalar fission rejected: unsupported-instruction",
+      "remark: scalar-stores-reject.c:122:3: scalar fission rejected: unsupported-instruction",
+      "remark: scalar-stores-reject.c:132:3: scalar fission rejected: unsafe-producer-call",
+      "remark: scalar-stores-reject.c:142:3: scalar fission rejected: strict-fp",
+      "remark: scalar-stores-reject.c:152:3: scalar fission rejected: strict-fp"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-stores.ll",
+    "functions": [
+      {
+        "function": "stores_full",
+        "selected": true
+      },
+      {
+        "function": "stores_raw",
+        "selected": true
+      },
+      {
+        "function": "stores_compact",
+        "selected": true
+      },
+      {
+        "function": "stores_chunk",
+        "selected": true
+      },
+      {
+        "function": "stores_chunk_ne",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-subtraction-reject.ll",
+    "functions": [
+      {
+        "function": "reject_sub_store_accumulator_value",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_accumulator_address",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_update_value",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_update_address",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_accumulator_predicate",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_partial_export",
+        "selected": true
+      },
+      {
+        "function": "reject_sub_store_volatile",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_atomic",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_vector",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_aggregate",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_fence",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_atomicrmw",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_effect",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_strictfp",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_store_constrained",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_reverse_integer",
+        "selected": true
+      },
+      {
+        "function": "reject_sub_integer_chain",
+        "selected": true
+      },
+      {
+        "function": "reject_sub_reverse_float",
+        "selected": true
+      },
+      {
+        "function": "reject_sub_reverse_double",
+        "selected": true
+      },
+      {
+        "function": "reject_sub_vector_recurrence",
+        "selected": false
+      },
+      {
+        "function": "reject_sub_float_chain",
+        "selected": true
+      },
+      {
+        "function": "reject_sub_float_feedback",
+        "selected": true
+      },
+      {
+        "function": "reject_sub_float_strictfp",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: scalar-subtraction-reject.c:12:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-subtraction-reject.c:22:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-subtraction-reject.c:32:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-subtraction-reject.c:42:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-subtraction-reject.c:52:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-subtraction-reject.c:72:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-subtraction-reject.c:82:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-subtraction-reject.c:92:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-subtraction-reject.c:102:3: scalar fission rejected: non-simple-memory",
+      "remark: scalar-subtraction-reject.c:112:3: scalar fission rejected: unsupported-instruction",
+      "remark: scalar-subtraction-reject.c:122:3: scalar fission rejected: unsupported-instruction",
+      "remark: scalar-subtraction-reject.c:132:3: scalar fission rejected: unsafe-producer-call",
+      "remark: scalar-subtraction-reject.c:142:3: scalar fission rejected: strict-fp",
+      "remark: scalar-subtraction-reject.c:152:3: scalar fission rejected: strict-fp",
+      "remark: scalar-subtraction-reject.c:202:3: scalar fission rejected: no-closed-state",
+      "remark: scalar-subtraction-reject.c:232:3: scalar fission rejected: strict-fp"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scalar-subtraction.ll",
+    "functions": [
+      {
+        "function": "stores_full",
+        "selected": true
+      },
+      {
+        "function": "stores_raw",
+        "selected": true
+      },
+      {
+        "function": "stores_compact",
+        "selected": true
+      },
+      {
+        "function": "stores_chunk",
+        "selected": true
+      },
+      {
+        "function": "stores_chunk_ne",
+        "selected": true
+      },
+      {
+        "function": "stores_affine",
+        "selected": true
+      },
+      {
+        "function": "stores_flags",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scipy-fma8.ll",
+    "functions": [
+      {
+        "function": "scipy_fma8_fixed",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-scipy-same-vf.ll",
+    "functions": [
+      {
+        "function": "kernel",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: unsafe-producer-call"
+    ],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-select.ll",
+    "functions": [
+      {
+        "function": "select_producer_and_accumulator",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-short-producers.ll",
+    "functions": [
+      {
+        "function": "short_one",
+        "selected": true
+      },
+      {
+        "function": "short_two",
+        "selected": true
+      },
+      {
+        "function": "short_ordered",
+        "selected": true
+      },
+      {
+        "function": "short_ordered_two",
+        "selected": true
+      },
+      {
+        "function": "short_dependence",
+        "selected": true
+      },
+      {
+        "function": "short_invariant",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-signed-zero.ll",
+    "functions": [
+      {
+        "function": "signed_zero",
+        "selected": true
+      }
+    ],
+    "rejections": [],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": []
+  },
+  {
+    "fixture": "reduction-fission-speculation.ll",
+    "functions": [],
+    "rejections": [],
+    "legacy_class": "archived-VPlan-structure-wrapper"
+  },
+  {
+    "fixture": "reduction-fission-stage-metadata.ll",
+    "functions": [
+      {
+        "function": "marked_vplan",
+        "selected": false
+      },
+      {
+        "function": "marked_producer",
+        "selected": false
+      },
+      {
+        "function": "marked_consumer",
+        "selected": false
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ],
+    "legacy_class": "scalar-semantics-and-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary",
+      "remark: <unknown>:0:0: scalar fission rejected: no-computed-boundary"
+    ]
+  },
+  {
+    "fixture": "reduction-fission-stores.ll",
+    "functions": [
+      {
+        "function": "stores",
+        "selected": true
+      },
+      {
+        "function": "shifted_input",
+        "selected": false
+      },
+      {
+        "function": "same_iteration",
+        "selected": false
+      },
+      {
+        "function": "overlapping_stores",
+        "selected": true
+      },
+      {
+        "function": "invariant_store",
+        "selected": true
+      },
+      {
+        "function": "volatile_store",
+        "selected": false
+      },
+      {
+        "function": "atomic_store",
+        "selected": false
+      },
+      {
+        "function": "prefix_store",
+        "selected": true
+      }
+    ],
+    "rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: load-snapshot-required",
+      "remark: <unknown>:0:0: scalar fission rejected: load-snapshot-required",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory",
+      "remark: <unknown>:0:0: scalar fission rejected: non-simple-memory"
+    ],
+    "legacy_class": "VPlan-structure",
+    "memory_policy_rejections": [
+      "remark: <unknown>:0:0: scalar fission rejected: load-snapshot-required",
+      "remark: <unknown>:0:0: scalar fission rejected: load-snapshot-required"
+    ]
+  }
+]

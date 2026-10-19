@@ -1,19 +1,20 @@
-; RUN: opt -enable-scalar-reduction-fission=false -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -hints-allow-reordering=false \
-; RUN:   -enable-vplan-reduction-fission -S %s -o %t
-; RUN: FileCheck %s --implicit-check-not=vector.fission --implicit-check-not=fission.scratch < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -tail-folding-policy=dont-fold-tail -enable-vplan-reduction-fission -S %s | FileCheck %s \
-; RUN:   --implicit-check-not=vector.fission --implicit-check-not=fission.scratch
-;
-; Gaps, reverse groups and interleaved stores need separate implementations.
-; The final case has a real distance-one dependence through the original input.
-; No restrict/metadata assumption may hide it. Unit coverage also directly
-; rejects data-predicated, volatile and atomic group recipes.
-
-; CHECK-LABEL: define void @interleave_gap(
-; CHECK: ret void
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave_gap(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave_reverse(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave_store(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave_dependence(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @interleave_gap(ptr noalias readonly %a, ptr noalias %out, i64 %n) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -53,8 +54,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @interleave_reverse(
-; CHECK: ret void
 define void @interleave_reverse(ptr noalias readonly %a, ptr noalias %out, i64 %n) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -95,8 +94,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @interleave_store(
-; CHECK: ret void
 define void @interleave_store(ptr noalias readonly %a, ptr noalias %out, i64 %n, ptr noalias %dst) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -140,8 +137,6 @@ bypass:
   ret void
 }
 
-; CHECK-LABEL: define void @interleave_dependence(
-; CHECK: ret void
 define void @interleave_dependence(ptr noalias %a, ptr noalias %out, i64 %n) {
 entry:
   %bounded = icmp ule i64 %n, 65

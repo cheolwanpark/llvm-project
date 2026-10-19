@@ -1,44 +1,15 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -tail-folding-policy=dont-fold-tail -S %s -o %t
-; RUN: FileCheck %s < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v,+m -verify-machineinstrs %t -o /dev/null
-; RUN: opt -passes=loop-vectorize -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-combine-add-contributions=false -S %s | FileCheck %s --check-prefix=OLD
-; RUN: sed 's/, 1024$/, 257/' %s | opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v,+m -force-vector-interleave=1 -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -S -o %t.tail
-; RUN: FileCheck %s --check-prefix=TAIL < %t.tail
-; RUN: llc -mtriple=riscv64 -mattr=+v,+m -verify-machineinstrs %t.tail -o /dev/null
-;
-; Two unshared integer contributions per filter reduction should be combined
-; in a NEW fission candidate, not stored in four full-length arrays. Short
-; sum/square reductions stay in the accumulator stage.
-; CHECK-LABEL: define {{.*}}@aom_blockiness_horizontal(
-; CHECK-COUNT-2: alloca [1024 x i32]
-; CHECK-NOT: alloca [1024 x i32]
-; CHECK: vector.fission.producer.body:
-; CHECK-COUNT-2: store <vscale x {{[0-9]+}} x i32>
-; CHECK-NOT: store <vscale x
-; CHECK: vector.fission.producer.body.middle:
-; CHECK: vector.fission.accumulator.body:
-; CHECK-COUNT-2: load <vscale x {{[0-9]+}} x i32>
-; CHECK-NOT: load <vscale x {{[0-9]+}} x i32>
-; CHECK: vector.fission.accumulator.body.middle:
-;
-; OLD-COUNT-4: alloca [1024 x i32]
-; OLD-NOT: alloca [1024 x i32]
-; OLD: vector.fission.producer.body:
-; TAIL-COUNT-2: alloca [257 x i32]
-; TAIL-NOT: alloca [257 x i32]
-; TAIL: scalar.fission.producer.body:
-; TAIL-COUNT-2: store i32
-; TAIL-NOT: store i32
-; TAIL: scalar.fission.producer.body.middle:
-; TAIL: scalar.fission.accumulator.body:
-; TAIL-COUNT-2: load i32
-; TAIL-NOT: load i32
-; TAIL: scalar.fission.accumulator.body.middle:
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @aom_blockiness_horizontal(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 source_filename = "reduction-fission-combine-add.c"
 target datalayout = "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"
 target triple = "riscv64-unknown-unknown-elf"
 
-; Function Attrs: nofree noinline norecurse nosync nounwind memory(argmem: read) vscale_range(2,1024)
 define dso_local signext i32 @aom_blockiness_horizontal(ptr noalias noundef readonly captures(none) %0, i32 noundef signext %1, ptr noalias noundef readonly captures(none) %2, i32 noundef signext %3, i32 noundef signext %4, ptr noalias noundef readnone captures(none) %5, ptr noalias noundef readnone captures(none) %6) local_unnamed_addr #0 {
   %8 = sext i32 %1 to i64
   %9 = mul i32 %1, -2
@@ -134,7 +105,6 @@ define dso_local signext i32 @aom_blockiness_horizontal(ptr noalias noundef read
   ret i32 %90
 }
 
-; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
 declare i32 @llvm.abs.i32(i32, i1 immarg) #1
 
 attributes #0 = { nofree noinline norecurse nosync nounwind memory(argmem: read) vscale_range(2,1024) "no-builtins" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="generic-rv64" "target-features"="+64bit,+a,+c,+d,+f,+m,+v,+zaamo,+zalrsc,+zca,+zcd,+zicsr,+zifencei,+zmmul,+zve32f,+zve32x,+zve64d,+zve64f,+zve64x,+zvl128b,+zvl32b,+zvl64b,-b,-e,-experimental-p,-experimental-smctr,-experimental-ssctr,-experimental-svukte,-experimental-xqccmp,-experimental-xqcia,-experimental-xqciac,-experimental-xqcibi,-experimental-xqcibm,-experimental-xqcicli,-experimental-xqcicm,-experimental-xqcics,-experimental-xqcicsr,-experimental-xqciint,-experimental-xqciio,-experimental-xqcilb,-experimental-xqcili,-experimental-xqcilia,-experimental-xqcilo,-experimental-xqcilsm,-experimental-xqcisim,-experimental-xqcisls,-experimental-xqcisync,-experimental-xrivosvisni,-experimental-xrivosvizip,-experimental-xsfmclic,-experimental-xsfsclic,-experimental-zalasr,-experimental-zicfilp,-experimental-zicfiss,-experimental-zvbc32e,-experimental-zvkgs,-experimental-zvqdotq,-h,-q,-relax,-sdext,-sdtrig,-sha,-shcounterenw,-shgatpa,-shlcofideleg,-shtvala,-shvsatpa,-shvstvala,-shvstvecd,-smaia,-smcdeleg,-smcntrpmf,-smcsrind,-smdbltrp,-smepmp,-smmpm,-smnpm,-smrnmi,-smstateen,-ssaia,-ssccfg,-ssccptr,-sscofpmf,-sscounterenw,-sscsrind,-ssdbltrp,-ssnpm,-sspm,-ssqosid,-ssstateen,-ssstrict,-sstc,-sstvala,-sstvecd,-ssu64xl,-supm,-svade,-svadu,-svbare,-svinval,-svnapot,-svpbmt,-svvptc,-xandesbfhcvt,-xandesperf,-xandesvbfhcvt,-xandesvdot,-xandesvpackfph,-xandesvsintload,-xcvalu,-xcvbi,-xcvbitmanip,-xcvelw,-xcvmac,-xcvmem,-xcvsimd,-xmipscbop,-xmipscmov,-xmipslsp,-xsfcease,-xsfmm128t,-xsfmm16t,-xsfmm32a16f,-xsfmm32a32f,-xsfmm32a8f,-xsfmm32a8i,-xsfmm32t,-xsfmm64a64f,-xsfmm64t,-xsfmmbase,-xsfvcp,-xsfvfnrclipxfqf,-xsfvfwmaccqqq,-xsfvqmaccdod,-xsfvqmaccqoq,-xsifivecdiscarddlone,-xsifivecflushdlone,-xtheadba,-xtheadbb,-xtheadbs,-xtheadcmo,-xtheadcondmov,-xtheadfmemidx,-xtheadmac,-xtheadmemidx,-xtheadmempair,-xtheadsync,-xtheadvdot,-xventanacondops,-xwchc,-za128rs,-za64rs,-zabha,-zacas,-zama16b,-zawrs,-zba,-zbb,-zbc,-zbkb,-zbkc,-zbkx,-zbs,-zcb,-zce,-zcf,-zclsd,-zcmop,-zcmp,-zcmt,-zdinx,-zfa,-zfbfmin,-zfh,-zfhmin,-zfinx,-zhinx,-zhinxmin,-zic64b,-zicbom,-zicbop,-zicboz,-ziccamoa,-ziccamoc,-ziccif,-zicclsm,-ziccrse,-zicntr,-zicond,-zihintntl,-zihintpause,-zihpm,-zilsd,-zimop,-zk,-zkn,-zknd,-zkne,-zknh,-zkr,-zks,-zksed,-zksh,-zkt,-ztso,-zvbb,-zvbc,-zvfbfmin,-zvfbfwma,-zvfh,-zvfhmin,-zvkb,-zvkg,-zvkn,-zvknc,-zvkned,-zvkng,-zvknha,-zvknhb,-zvks,-zvksc,-zvksed,-zvksg,-zvksh,-zvkt,-zvl1024b,-zvl16384b,-zvl2048b,-zvl256b,-zvl32768b,-zvl4096b,-zvl512b,-zvl65536b,-zvl8192b" }

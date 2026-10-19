@@ -58,13 +58,6 @@ static cl::opt<bool> VPlanPrintMetadata(
 
 bool VPRecipeBase::mayWriteToMemory() const {
   switch (getVPRecipeID()) {
-  case VPFissionScalarIntrinsicSC:
-  case VPFissionLiveOutSC:
-    return false;
-  case VPFissionScratchStoreSC:
-    return true;
-  case VPFissionScratchLoadSC:
-    return false;
   case VPExpressionSC:
     return cast<VPExpressionRecipe>(this)->mayReadOrWriteMemory();
   case VPInstructionSC: {
@@ -126,13 +119,6 @@ bool VPRecipeBase::mayWriteToMemory() const {
 
 bool VPRecipeBase::mayReadFromMemory() const {
   switch (getVPRecipeID()) {
-  case VPFissionScalarIntrinsicSC:
-  case VPFissionLiveOutSC:
-    return false;
-  case VPFissionScratchLoadSC:
-    return true;
-  case VPFissionScratchStoreSC:
-    return false;
   case VPExpressionSC:
     return cast<VPExpressionRecipe>(this)->mayReadOrWriteMemory();
   case VPInstructionSC:
@@ -186,14 +172,6 @@ bool VPRecipeBase::mayReadFromMemory() const {
 
 bool VPRecipeBase::mayHaveSideEffects() const {
   switch (getVPRecipeID()) {
-  case VPFissionScalarIntrinsicSC:
-    return false;
-  case VPFissionLiveOutSC:
-    return true;
-  case VPFissionScratchStoreSC:
-    return true;
-  case VPFissionScratchLoadSC:
-    return false;
   case VPExpressionSC:
     return cast<VPExpressionRecipe>(this)->mayHaveSideEffects();
   case VPActiveLaneMaskPHISC:

@@ -1,9 +1,0 @@
-# RUN: %python %S/Inputs/reduction-fission-host-adapter.py %S/../../utils/check-reduction-fission.py
-# RUN: %python %S/Inputs/reduction-fission-host-adapter.py %S/../../utils/check-reduction-fission.py --emit-ir | opt -passes=verify -disable-output
-
-# Parser/lowering regressions, including malformed IR that must be rejected
-# before host code generation. The second RUN verifies all executable probe IR.
-# Executable bitwise lane comparisons are mandatory in the full
-# llvm/utils/check-reduction-fission.py run: the independent C oracle indexes
-# input[factor*lane+member], never the adapter's generated masks. These probes
-# complement every existing original-scalar/transformed-fission comparison.

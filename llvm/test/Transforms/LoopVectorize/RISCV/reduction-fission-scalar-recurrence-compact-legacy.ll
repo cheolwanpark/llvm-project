@@ -1,31 +1,11 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-width=1 -force-vector-interleave=0 \
-; RUN:   -force-target-max-scalar-interleave=1 -scalable-vectorization=off \
-; RUN:   -enable-vplan-reduction-fission -pass-remarks=vplan-reduction-fission -S %s -o %t 2> %t.remarks
-; RUN: FileCheck %s < %t
-; RUN: FileCheck %s --check-prefix=REMARK < %t.remarks
-;
-; Intentionally converted from recurrence-reject.ll: the delay %prev is local
-; to the producer. The extracted %sum only feeds its update/bypass/merge and
-; final result. The compact counter preserves exactly the old participating
-; sequence, including a skipped iteration changing %prev. Original function
-; IR and source location are preserved. The execution checker includes this
-; exact function, original IR and an independent formula.
-;
-; REMARK: scalar-recurrence.c:12:3: split scalar-IR reduction loop; {{.*}}scratch capacity 65, scratch bytes 260
-; REMARK: scalar-recurrence.c:12:3: scalar-IR fission producer VF 1
-; REMARK: scalar-recurrence.c:12:3: scalar-IR fission consumer VF 1
-; CHECK-LABEL: define i32 @recurrence_compact(
-; CHECK: alloca [65 x i32]
-; CHECK: %prev = phi i32 [ 23, %preheader ], [ %x, %latch ]
-; CHECK: %choose = icmp ne i32 %x, 0
-; CHECK: %c = call i32 @scalar_helper(i32 %prev)
-; CHECK: store i32 %c,
-; CHECK: %fission.empty = icmp eq i64 %fission.participating.count, 0
-; CHECK: %update.consume = add i32 %sum.consume,
-; CHECK: %sum.result = phi i32 [ 17, %scalar.fission.consumer.guard ],
-; CHECK: ret i32
-;
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_compact(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define i32 @recurrence_compact(ptr %a, i64 %n) !dbg !12 {

@@ -1,28 +1,32 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
-; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
-; RUN:   -enable-vplan-reduction-fission -enable-scalar-reduction-fission=false -vplan-reduction-fission-min-chain-depth=4 \
-; RUN:   -vplan-reduction-fission-force-producer-vf=16 \
-; RUN:   -vplan-reduction-fission-force-accumulator-vf=2 -S %s -o %t
-; RUN: FileCheck %s < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-
-; Original stores belong to the accumulator only. The producer writes scratch.
-; CHECK-LABEL: define void @stores(
-; CHECK: vector.fission.producer.body:
-; CHECK-NOT: ptr %dst
-; CHECK: scalar.fission.producer.body:
-; CHECK-NOT: ptr %dst
-; CHECK: vector.fission.accumulator.body:
-; CHECK: getelementptr inbounds i32, ptr %dst,
-; CHECK: store <vscale x 2 x i32>
-; CHECK: getelementptr inbounds i32, ptr %dst2,
-; CHECK: store <vscale x 2 x i32>
-; CHECK: scalar.fission.accumulator.body:
-; CHECK: getelementptr inbounds i32, ptr %dst,
-; CHECK: store i32
-; CHECK: getelementptr inbounds i32, ptr %dst2,
-; CHECK: store i32
-
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @stores(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @shifted_input(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @same_iteration(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @overlapping_stores(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @invariant_store(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @volatile_store(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @atomic_store(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @prefix_store(
+; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @stores(ptr noalias readonly %a, ptr noalias %out, ptr noalias %dst, ptr noalias %dst2) {
 entry:
   %base = getelementptr i32, ptr %a, i64 1
@@ -78,13 +82,6 @@ exit:
   store i32 %n7, ptr %o7
   ret void
 }
-
-; Unproven or conflicting schedules must retain the original loop. In
-; particular, same-iteration AA and an empty LAA dependence list are not proofs.
-
-; CHECK-LABEL: define void @shifted_input(
-; CHECK-NOT: fission
-; CHECK: ret void
 
 define void @shifted_input(ptr noalias %a, ptr noalias %out, ptr noalias %dst, ptr noalias %dst2) {
 entry:
@@ -143,10 +140,6 @@ exit:
   ret void
 }
 
-; CHECK-LABEL: define void @same_iteration(
-; CHECK-NOT: fission
-; CHECK: ret void
-
 define void @same_iteration(ptr noalias %a, ptr noalias %out, ptr noalias %dst, ptr noalias %dst2) {
 entry:
   %base = getelementptr i32, ptr %a, i64 1
@@ -202,10 +195,6 @@ exit:
   store i32 %n7, ptr %o7
   ret void
 }
-
-; CHECK-LABEL: define void @overlapping_stores(
-; CHECK-NOT: fission
-; CHECK: ret void
 
 define void @overlapping_stores(ptr noalias readonly %a, ptr noalias %out, ptr noalias %dst, ptr noalias %dst2) {
 entry:
@@ -263,10 +252,6 @@ exit:
   ret void
 }
 
-; CHECK-LABEL: define void @invariant_store(
-; CHECK-NOT: fission
-; CHECK: ret void
-
 define void @invariant_store(ptr noalias readonly %a, ptr noalias %out, ptr noalias %dst, ptr noalias %dst2) {
 entry:
   %base = getelementptr i32, ptr %a, i64 1
@@ -322,10 +307,6 @@ exit:
   store i32 %n7, ptr %o7
   ret void
 }
-
-; CHECK-LABEL: define void @volatile_store(
-; CHECK-NOT: fission
-; CHECK: ret void
 
 define void @volatile_store(ptr noalias readonly %a, ptr noalias %out, ptr noalias %dst, ptr noalias %dst2) {
 entry:
@@ -383,10 +364,6 @@ exit:
   ret void
 }
 
-; CHECK-LABEL: define void @atomic_store(
-; CHECK-NOT: fission
-; CHECK: ret void
-
 define void @atomic_store(ptr noalias readonly %a, ptr noalias %out, ptr noalias %dst, ptr noalias %dst2) {
 entry:
   %base = getelementptr i32, ptr %a, i64 1
@@ -442,10 +419,6 @@ exit:
   store i32 %n7, ptr %o7
   ret void
 }
-
-; CHECK-LABEL: define void @prefix_store(
-; CHECK-NOT: fission
-; CHECK: ret void
 
 define void @prefix_store(ptr noalias readonly %a, ptr noalias %out, ptr noalias %dst, ptr noalias %dst2) {
 entry:

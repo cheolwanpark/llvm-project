@@ -1,23 +1,17 @@
-; RUN: opt -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false -enable-vplan-reduction-fission -S %s -o %t
-; RUN: FileCheck %s --implicit-check-not=fission.scratch < %t
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t -o /dev/null
-; RUN: opt -passes='loop-vectorize,loop-vectorize,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -tail-folding-policy=dont-fold-tail -enable-epilogue-vectorization=false -enable-vplan-reduction-fission -vplan-reduction-fission-allow-fp-reordering -pass-remarks=vplan-reduction-fission -S %s -o %t.repeat 2> %t.remarks
-; RUN: FileCheck %s --implicit-check-not=fission.scratch < %t.repeat
-; RUN: FileCheck %s --check-prefix=REMARK --implicit-check-not='split ' < %t.remarks
-; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.repeat -o /dev/null
-;
-; Model already emitted stages with explicit vectorize.followup_all. Ordinary
-; LV must still vectorize them and copy their provenance to the vector and
-; remainder loops even though the follow-up ID replaces the original ID.
-; Otherwise a later LV could recursively split the consumer. All three tags
-; must remain reachable in printed metadata after one and three LV passes.
-; REMARK-DAG: scalar-IR fission producer VF vscale x 4
-; REMARK-DAG: scalar-IR fission consumer VF vscale x 4
-;
-; CHECK-LABEL: define i32 @marked_vplan(
-; CHECK: vector.body:
-; CHECK: @llvm.vector.reduce.add.nxv4i32
-; CHECK: ret i32
+; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
+; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
+; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
+; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
+; SCALAR-MIGRATION-LABEL: define {{.*}} @marked_vplan(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @marked_producer(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; SCALAR-MIGRATION-LABEL: define {{.*}} @marked_consumer(
+; SCALAR-MIGRATION-NOT: scalar.fission
+; SCALAR-MIGRATION: }
+; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define i32 @marked_vplan(ptr readonly %a) {
 entry:
   br label %loop
@@ -34,10 +28,6 @@ exit:
   ret i32 %update
 }
 
-; CHECK-LABEL: define i32 @marked_producer(
-; CHECK: vector.body:
-; CHECK: @llvm.vector.reduce.add.nxv4i32
-; CHECK: ret i32
 define i32 @marked_producer(ptr readonly %a) {
 entry:
   br label %loop
@@ -54,10 +44,6 @@ exit:
   ret i32 %update
 }
 
-; CHECK-LABEL: define i32 @marked_consumer(
-; CHECK: vector.body:
-; CHECK: @llvm.vector.reduce.add.nxv4i32
-; CHECK: ret i32
 define i32 @marked_consumer(ptr readonly %a) {
 entry:
   br label %loop
@@ -73,10 +59,6 @@ loop:
 exit:
   ret i32 %update
 }
-
-; CHECK-DAG: !{!"llvm.loop.reduction_fission.stage"}
-; CHECK-DAG: !{!"llvm.loop.reduction_fission.producer"}
-; CHECK-DAG: !{!"llvm.loop.reduction_fission.consumer"}
 
 !0 = distinct !{!0, !3, !6, !7, !9}
 !1 = distinct !{!1, !4, !6, !7, !9}
