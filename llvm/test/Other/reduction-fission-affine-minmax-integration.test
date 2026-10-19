@@ -23,9 +23,12 @@ spec = importlib.util.spec_from_file_location('checker', utility)
 checker = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = checker
 spec.loader.exec_module(checker)
+checker.command_log_dir = work
 source = checker.keep_functions(Path(fixture).read_text(), ['minmax_affine'])
 clang = Path(shutil.which(opt)).resolve().with_name('clang')
 assert clang.is_file(), clang
+link_flags = (['-isysroot', checker.run(['xcrun', '--show-sdk-path']).stdout.strip()]
+              if sys.platform == 'darwin' else [])
 u32, u64 = (1 << 32) - 1, (1 << 64) - 1
 canary = 0x123456789ABCDEF0
 
@@ -36,10 +39,13 @@ def native(ir, tag):
     assert '<vscale x' not in ir and not re.search(r'<\d+ x ', ir)
     ir = re.sub(r'^target (?:triple|datalayout) = .*\n', '', ir, flags=re.M)
     ir = re.sub(r'"target-(?:features|cpu|tune-cpu)"="[^"]*"', '', ir)
+    for group in re.findall(r'^attributes #(\d+) = \{\s*\}\s*$', ir, re.M):
+        ir = re.sub(r'^attributes #' + group + r' = \{\s*\}\s*$', '', ir, flags=re.M)
+        ir = re.sub(r' #' + group + r'\b', '', ir)
     path = work / (tag + '.ll')
     path.write_text(ir)
     library = work / (tag + '.so')
-    checker.run([str(clang), '-O0', '-shared', '-fPIC', str(path), '-o', str(library)])
+    checker.run([str(clang), '-O0', '-shared', '-fPIC', *link_flags, str(path), '-o', str(library)])
     loaded = ctypes.CDLL(str(library))
     fn = loaded.minmax_affine
     fn.argtypes = [ctypes.c_void_p] * 3 + [ctypes.c_uint64, ctypes.c_uint32, ctypes.c_uint32]
