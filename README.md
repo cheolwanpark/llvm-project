@@ -30,7 +30,6 @@ cmake --build build-vplan-tools --parallel 2 \
 
 cp /path/to/dataset.sqlite ./dataset.sqlite
 cd utils/vplan-tools
-uv run python split-dataset --check
 uv run python evaluate --json-output /tmp/llvm-validation.json --exclude-reasons
 uv run python print-vplans --benchmark lcals/first-diff --detail
 ```
@@ -44,13 +43,12 @@ benchmarks or changing measured cycles.
 
 ```sh
 # Run from utils/vplan-tools.
-uv run python split-dataset  # one-time audited 31 tuning / 174 validation split
 uv run python calibrate --output /tmp/weights.json
 uv run python evaluate-weights --weights /tmp/weights.json \
   --json-output /tmp/fitted-validation.json --exclude-reasons
 ```
 
-`calibrate` reads tuning only. Both evaluation tools read validation only and have
+`calibrate` reads tuning only. `evaluate` and `evaluate-weights` read validation only and have
 no split override. Evaluation defaults to Top-1/regret of the final replayed VF;
 `--metric-mode ranking` retains cost-ranking diagnostics. `evaluate` uses default Python costs; `evaluate-weights` uses fitted
 coefficients in the same model. Fitting preserves the hard-max analytical structure, learns 19
@@ -59,6 +57,33 @@ excludes measured pairs within 1%. Learned coefficients are not installed into
 LLVM; the meta compiler accepts `--weights` and sends only selected IDs to LLVM. Unsupported or ambiguous observations are reported as exclusions; the
 usable population may be smaller than the partition.
 
+## Five-fold cross validation
+
+The current dataset contains **243 benchmarks and 1,685 measurements**, targeting
+XiangShan v2 with VLEN 128. Its existing labels are 35 tuning benchmarks (TSVC,
+241 measurements) and 208 validation benchmarks (1,444 measurements).
+
+`evaluate-cv` is an independent alternative to that fixed partition. It groups
+all measurements of each benchmark ID together, shuffles sorted IDs with a fixed
+seed, and assigns them to five folds. Each fold fits fresh weights on the other
+four folds and evaluates only its held-out IDs. Related kernels with different
+IDs may cross folds; this is benchmark-ID grouping, not source-family grouping.
+The database and its existing labels are never changed.
+
+```sh
+# From the repository root; output directory must be new or empty.
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate-cv \
+  --split-seed 0 --fit-seed 0 --output-dir utils/vplan-tools/.cache/cv-seed0
+```
+
+The held-out sizes are 49/49/49/48/48. Default evaluation verifies the final
+replayed selection; `--metric-mode ranking` runs numerical ranking diagnostics.
+Fitting defaults remain 16 starts and 2,000 steps per fold. `--skip-build` reuses
+existing compiler binaries. Results include `folds.json`, per-fold weights and
+metrics, and `summary.json` with pooled out-of-fold (OOF) metrics and fold
+mean/sample standard deviation. See the [CV guide](utils/vplan-tools/README.md#five-fold-cross-validation)
+for reproducibility, exclusions and output details.
+
 Fitting and weights are supported only on `backend-aware-cost`. On `spill-aware`,
 `--spill-count-unit instruction|register` selects the existing TTI spill counting
 rule (default `instruction`). `spill-reject` has neither weights nor a numerical
@@ -66,7 +91,6 @@ cost ranking. See the tools guide for a common-cohort comparison of all variants
 
 Database precedence is **`--db PATH` > `VPLAN_DB` > checkout/dataset.sqlite**.
 `--llvm-path` selects another compiler checkout without changing the default DB.
-Old schemas are unsupported; `results.sqlite.old` is an archive only.
 
 ```sh
 VPLAN_DB=/path/to/dataset.sqlite uv run python evaluate
@@ -75,9 +99,10 @@ uv run python evaluate --db /path/to/dataset.sqlite
 uv run --project utils/vplan-tools python utils/vplan-tools/evaluate
 ```
 
-Common options include `--benchmark ID`, `--build-dir`, `--llvm-path`, `--jobs`
-(default 2), `--timeout` (120 seconds per invocation), and `--artifacts-dir` on
-evaluation/calibration commands. Printing supports `--detail`. Printing and
+Common options include `--build-dir`, `--llvm-path`, `--jobs` (default 2),
+`--timeout` (120 seconds per invocation), and `--artifacts-dir` on
+evaluation/calibration commands. Fixed-partition commands also accept
+`--benchmark ID`. Printing supports `--detail`. Printing and
 evaluation support `--compiler-mode meta|direct`; calibration always uses raw
 post-RA analytics. O2/O3 options are preserved.
 

@@ -17,7 +17,6 @@ From the repository root:
 ```sh
 uv sync --locked --project utils/vplan-tools
 cd utils/vplan-tools
-uv run python split-dataset --check
 uv run python calibrate --output /tmp/weights.json
 uv run python evaluate --json-output /tmp/llvm-validation.json --exclude-reasons
 uv run python evaluate-weights --weights /tmp/weights.json \
@@ -27,10 +26,11 @@ uv run python print-vplan --benchmark lcals/first-diff
 ```
 
 `print-vplan` aliases `print-vplans`. Printing requires an exact benchmark ID and
-can inspect either partition. Both evaluation commands accept one optional
+can inspect either partition. `evaluate` and `evaluate-weights` accept one optional
 `--benchmark`, but only in **validation**. `calibrate` accepts one optional ID,
 but only in **tuning**. There is no `--split` override. Partition and ID filters
 are applied in SQL before sources and measurements are read or compiled.
+`evaluate-cv` instead reads all benchmark IDs and uses its own five-fold assignment.
 
 To run without changing directory:
 
@@ -38,7 +38,7 @@ To run without changing directory:
 uv run --project utils/vplan-tools python utils/vplan-tools/evaluate
 ```
 
-## Database contract and audited split
+## Database contract and current dataset
 
 Only the `dataset.sqlite` schema is supported:
 
@@ -65,33 +65,105 @@ two VFs are needed for fitting/evaluation, and ranking/fitting additionally requ
 a usable prediction for each VF. Fixed-width VFs are not mapped to scalable VFs.
 
 The database is opened read-only in a transaction. Missing files, wrong schemas,
-invalid selected data, and absent IDs fail before building. Old `summary.sqlite`
-and `results.sqlite` schemas are intentionally unsupported. `results.sqlite.old`
-is an archive, never a fallback.
+invalid selected data, and absent IDs fail before building.
 
 Database precedence is **`--db PATH` > `VPLAN_DB` > checkout/dataset.sqlite**.
 Unset or empty `VPLAN_DB` uses the default. The checkout containing these tools
 determines the default even with another working directory or `--llvm-path`.
 Explicit relative paths use the caller's working directory; `~` is expanded.
 
-The checked-in `dataset-split.json` records all 205 IDs and source hashes,
-75 source families, and the reasons for selecting or holding out each family.
-It assigns 31 benchmarks / 136 measurements to tuning and 174 / 723 to validation.
-Related sizes, partial/full kernels, and known duplicate variants stay together.
-Selection used source structure and operation diversity, not measured winners.
-Normalized source comparison found no cross-partition pair with similarity ≥0.9;
-this is not a proof of semantic independence.
+The current dataset contains **243 benchmark IDs and 1,685 measurements** across
+15 suites. Its existing `split` labels are:
+
+| Partition | Benchmarks | Measurements |
+| --- | ---: | ---: |
+| tuning (TSVC) | 35 | 241 |
+| validation | 208 | 1,444 |
+| total | 243 | 1,685 |
+
+The measurement target is `xiangshan-v2/MinimalConfig` at RTL revision
+`e7bab53e66dfb3c4a1d11cf9519b0396f8576cae`, with VLEN 128 and ELEN 64.
+The metadata records measurement compiler Clang 23.1.3. The representative sample
+is the latest successful attempt for each benchmark/scalable VF, with positive
+integer kernel cycles. There are 238 benchmarks with seven measured VFs, two
+with six, one with three, and two with two. Eligibility still depends on the
+current compiler's candidate VF set, not the number of database rows alone.
+
+The fixed-partition commands consume these labels as supplied. Cross validation
+uses all IDs without updating labels, source, flags, workloads or measurements.
+Compiler exclusions and evaluation results never trigger repartitioning.
+
+## Five-fold cross validation
+
+`evaluate-cv` independently fits and evaluates the fittable backend policy on five
+folds grouped by **benchmark ID**. Every measured VF and candidate of an ID stays
+in the same fold. Different IDs, including related source variants, may appear
+on opposite sides of a fold; there is no source-family separation claim.
 
 ```sh
-uv run python split-dataset          # apply the audited split in one transaction
-uv run python split-dataset --check  # read-only verification
+# From utils/vplan-tools. Choose a new or empty output directory for each run.
+uv run python evaluate-cv --db ../../dataset.sqlite \
+  --split-seed 0 --fit-seed 0 --output-dir .cache/cv-seed0
+
+# Numerical cost ranking instead of final selection replay:
+uv run python evaluate-cv --metric-mode ranking \
+  --split-seed 0 --fit-seed 0 --output-dir .cache/cv-ranking-seed0
 ```
 
-The split command verifies the manifest and existing dataset before changing
-only `benchmarks.split`; it rolls back if any other data changes. It is not run
-automatically by fitting or evaluation. Compiler exclusions and validation
-results never trigger repartitioning. Databases, journals, backups, virtual
-environments, and local caches are ignored by Git.
+The command sorts all IDs, shuffles them with a local `random.Random(split_seed)`,
+then assigns IDs round-robin to five folds. It freezes assignment before fitting
+or checking compiler eligibility. With 243 IDs, held-out sizes are 49/49/49/48/48
+and training sizes are 194/194/194/195/195. At least five unique IDs are required.
+There is no single-ID filter or database split override for this command.
+
+`--split-seed` and `--fit-seed` both default to 0 and control separate RNGs. Each
+fold starts a new optimizer with the same fit seed and initial-state rules.
+Only its four training folds determine pairs, active parameters and the winning
+training objective. Held-out measurements never select weights or stopping
+steps. All fitting settings below also apply, except `--fit-seed` replaces
+`calibrate`'s `--seed`. Defaults remain 16 starts, 2,000 steps, CPU float64.
+Hyperparameters must be fixed before evaluating the held-out folds; this command
+does not perform nested CV or choose hyperparameters from the OOF scores.
+
+Selection mode (default) compiles and verifies the final replay with the current
+fold's weights. Ranking mode uses the existing numerical metrics and raw
+analytics. The measurement-free raw analytics cache is reusable across folds;
+replayed selections and learned weights are fold-specific. `--skip-build` reuses
+the existing `clang` and `llvm-extract`; otherwise the normal build checks run.
+`--artifacts-dir PATH` retains compiler artifacts under fold-specific directories.
+
+Outputs are:
+
+| File | Contents |
+| --- | --- |
+| `folds.json` | Exact held-out IDs, assignment algorithm, seed, dataset metadata and content fingerprint |
+| `fold-N/weights.json` | Existing weights schema 2 plus fold identity, training IDs/fingerprint, fitting diagnostics and exclusions |
+| `fold-N/evaluation.json` | Held-out rows, metrics, fold identity and weight hash |
+| `fold-N/summary.json` | Training/held-out IDs, status, training exclusions and elapsed time |
+| `summary.json` | All OOF rows, pooled metrics, fold statistics, compiler identity and run status |
+
+Fold indices are 0–4. Weight provenance is checked against the exact training IDs,
+held-out IDs, dataset fingerprint, assignment and compiler identity before use.
+Rows use `split: "held-out"`; `source_split` retains the original database label.
+The fingerprint covers source, flags, workloads and measurements, independently
+of database split labels. Keep the manifest and recorded Python/PyTorch versions
+alongside results to reproduce a run.
+
+Each ID contributes exactly one held-out row, even if it is excluded from scoring.
+Pooled OOF metrics give each scored benchmark equal weight; median/p95 are
+recomputed from all OOF regrets. Fold statistics separately report the unweighted
+mean and **sample standard deviation** (`ddof=1`), with a count of defined folds.
+They are not confidence intervals. Ranking mode additionally reports Top-2 and
+Spearman metrics. Coverage and exclusion counts always accompany scores.
+
+Unsupported candidates, missing measurements and unscorable selections remain
+explicit exclusions; membership is never reshuffled to improve coverage. A fold
+with no trainable data, no scoreable held-out data, or a held-out compilation
+failure makes the run unsuccessful (exit 1). `complete` means every ID has an OOF
+row; `successful` additionally requires every fold to succeed. Reports written
+between folds are explicitly partial until the full run finishes. Existing
+nonempty output directories are rejected to avoid mixing runs. This produces
+five evaluation models; it does not select one fold's weights as a final model.
 
 ## Compilation and analytics
 
@@ -224,7 +296,7 @@ subset rule above also applies. This evaluates selections against existing DB
 measurements; it does not execute the generated binaries.
 
 ```sh
-uv run python evaluate-baseline --db ../../vf-xs-run.sqlite --skip-build
+uv run python evaluate-baseline --db ../../dataset.sqlite --skip-build
 ```
 
 `--skip-build` reuses `build-vplan-tools/bin/clang` and `llvm-extract` without
@@ -309,89 +381,8 @@ The comparison audits saved v3 replay artifacts, policy identities, common
 candidate contexts, measurements and splits. It reports metrics on the common
 scoreable cohort and retains individual coverage and every exclusion.
 Compilation failures are rejected unless `--allow-compile-failures` is explicitly
-supplied; such a comparison is marked partial. These metrics use historical
+supplied; such a comparison is marked partial. These metrics use existing
 measurements, not execution timings of the newly generated code.
-
-### Historical coverage verification after the minimal fixes
-
-The following records protocol v2 experiments before the Python selection migration.
-They are preserved as historical results, not reruns of the current compiler.
-
-Fresh analytics from the modified Release/assertions compiler, using the audited
-205-benchmark dataset and unchanged fitting defaults, give:
-
-| Path | Before fixes | After fixes |
-| --- | ---: | ---: |
-| Python tuning | 5/31 | 20/31 |
-| Python validation | 65/174 | 133/174 |
-| LLVM validation | — | 130/174 |
-
-All previously eligible Python benchmarks remain eligible: 15 tuning and 68
-validation IDs were recovered. All 786 retained candidate scores across the
-153 benchmarks are finite and positive; eight benchmarks use no scalar
-reference. Compiler and collector identities changed, and weights were refitted
-against the new context. The database and its split were unchanged.
-
-The 15 recovered tuning IDs are:
-
-```text
-lcals/energy-calc-l03
-media-stats/flac-loose-mid-side-sum-abs
-minimd/force-eam-file2array-l630
-minimd/force-eam-file2array-l658
-minimd/force-eam-file2array-l696
-mlas/mlas-dequant8-perchannel
-mlas/mlas-dequant8-pertensor
-mlas/mlas-linear-query-dk128
-mlas/mlas-linear-query-dk512
-mlas/mlas-sgemm-4acc
-mlas/mlas-sgemm-8acc
-rajaperf/gen-lin-recur-forward
-rajaperf/gen-lin-recur-reverse
-rodinia/rodinia-pathfinder-row
-rodinia/rodinia-pathfinder-traverse
-```
-
-The 145 tuning pairs reduce the regularized objective from 0.438089 to 0.102186
-(start 14, step 1914, zero-based). Coverage gains do not imply better validation
-regret:
-
-| Population and model | Top-1 exact | Mean regret | p95 regret | Mean Spearman |
-| --- | ---: | ---: | ---: | ---: |
-| Tuning 20, default continuous | 45.00% | 11.91% | 51.65% | 0.5727 |
-| Tuning 20, fitted | 80.00% | 0.60% | 3.49% | 0.8382 |
-| Validation 133, default continuous | 29.32% | 12.73% | 56.52% | 0.5657 |
-| Validation 133, fitted | 34.59% | 14.95% | 58.77% | 0.4871 |
-| Common validation 130, LLVM | 28.46% | 12.88% | 56.56% | 0.5637 |
-| Common validation 130, fitted | 34.62% | 14.33% | 53.19% | 0.4938 |
-
-Python additionally scores `lcals/pressure-calc-l01`,
-`media-stats/vtk-ssim-var-covar-u8`, and
-`minimd/force-lj-compute-fullneigh-l410`. LLVM's scalar-first cost probes fail
-on conditional body blocks for these three. LLVM evaluation wrote its report
-and returned 1 with 33 compiler failures and 44 total exclusions.
-
-The remaining Python exclusions are unproved iteration mappings, unsupported
-square-root/segment operations, ambiguous multiple loops, the ADI probe
-materialization failure, and the unsupported early-exit loop in
-`tealeaf/eigenvalue-driver-tqli-l72`. No guards were relaxed to include them.
-
-| Exclusion reported | Tuning | Validation |
-| --- | ---: | ---: |
-| Iteration mapping | 6 | 11 |
-| Square root | 4 | 7 |
-| Segment memory | 0 | 10 |
-| Multiple loops | 0 | 12 |
-| Probe materialization | 0 | 1 |
-| Loop shape / early exit | 1 | 0 |
-
-Local artifacts are kept under `.cache/minimal-fixes/`: `weights.json`,
-`validation-weights.json`, `validation-llvm.json`, and `verification.json`.
-The last file records every recovered ID, exclusions, identity checks, and
-metrics on the common validation set. These artifacts and the raw analytics
-remain ignored by Git. Reproduce the run with the commands above, passing
-`--cache-dir .cache/minimal-fixes/analytics` to the Python cost tools and choosing
-output paths under `.cache/minimal-fixes/`.
 
 ## Tests
 
@@ -405,8 +396,6 @@ The ordinary tests need no external database or LLVM build. Optional integration
 tests verify extraction, analytics-only operation, backend/default formula
 agreement, and the original O2/O3 feedback pipeline.
 
-The minimal-fix verification passed all 87 Python tests with `VPLAN_CLANG` set
-and all 25 LLVM lit tests in `llvm/test/CodeGen/RISCV/vplan-ra/` plus the
-`vplan-ra-checkpoint.ll`, `vplan-ra-iteration-mapping.ll`, and
-`vplan-ra-fixed-vscale.ll` RISCV LoopVectorize tests. The latter exercises a
-STREAM-shaped kernel through actual prepare/resume and machine analytics.
+CV tests additionally cover deterministic ID grouping, training/held-out
+separation, held-out measurement isolation, per-fold replay weights, pooled
+quantiles, failure reporting and read-only database access.
