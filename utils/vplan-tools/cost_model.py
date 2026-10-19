@@ -62,12 +62,31 @@ def value_edge(a, e, fused):
             ("Implicit", "Undef", "SubReg")) and (fused or not use["Tied"]))
 
 
+def needs_scalar_reference(a):
+    """Require a tail reference unless both the loop and score omit its work."""
+    if not a["MaxTripCount"]:
+        return False
+    if not a["ScalarTail"] and (a["ScalableVF"] or a["VF"] != 1):
+        return False
+    # A divisible upper bound alone cannot prove that the real tail is empty.
+    return not (a["ExactTripCount"] > 0
+                and a["ExactTripCount"] % a["Width"] == 0
+                and a["MaxTripCount"] % a["Width"] == 0)
+
+
+def same_context(a, b):
+    return (all(a[k] == b[k] for k in
+                ("RunID", "Function", "CPU", "VLen", "MaxTripCount", "ExactTripCount"))
+            and a["Candidate"].rsplit(":", 2)[0] == b["Candidate"].rsplit(":", 2)[0])
+
+
 def validate_analytics(a):
     try:
         if a["Version"] != 2 or a["Stage"] != "post-ra-cleanup" or a["Error"]:
             raise ValueError("invalid analytics: " + str(a.get("Error", "")))
         if (a["CPU"] != "xiangshan-kunminghu" or not 0 < a["VLen"] <= 65536
-                or not 0 < a["Width"] <= 2**32 - 1 or a["MaxTripCount"] < 0 or a["VF"] <= 0):
+                or not 0 < a["Width"] <= 2**32 - 1 or a["MaxTripCount"] < 0
+                or a["ExactTripCount"] < 0 or a["VF"] <= 0):
             raise ValueError("unsupported target or loop configuration")
         instructions = a["Instructions"]
         for index, i in enumerate(instructions):
@@ -302,20 +321,30 @@ class CostModel:
                               r[:, :, 6] + self.scalar_fixed, r[:, :, 7], recurrence, load_use), -1)
         return (bounds.amax(-1) + r[:, :, 8] + r[:, :, 9]) / 16
 
-    def scores(self, multipliers, scalar_indices):
+    def scores(self, multipliers, scalar_indices: list[int | None]):
         body = self.bodies(multipliers)
-        main, tail = [], []
-        for a, si in zip(self.observations, scalar_indices, strict=True):
-            scalar = self.observations[si]
-            if (scalar["ScalableVF"] or scalar["VF"] != 1 or any(a[k] != scalar[k] for k in
-                    ("RunID", "Function", "CPU", "VLen", "MaxTripCount"))
-                    or a["Candidate"].rsplit(":", 2)[0] != scalar["Candidate"].rsplit(":", 2)[0]):
-                raise ToolError("scalar analytics context mismatch")
+        main, tail, destinations, references = [], [], [], []
+        for index, (a, si) in enumerate(zip(self.observations, scalar_indices, strict=True)):
+            if si is None:
+                if needs_scalar_reference(a):
+                    raise ToolError("missing scalar reference for scalar tail")
+            else:
+                scalar = self.observations[si]
+                if scalar["ScalableVF"] or scalar["VF"] != 1 or not same_context(a, scalar):
+                    raise ToolError("scalar analytics context mismatch")
             t, w = a["MaxTripCount"], a["Width"]
             if not t:
-                main.append(1 / w); tail.append(0)
+                main.append(1 / w)
             elif a["ScalarTail"] or not a["ScalableVF"] and a["VF"] == 1:
-                main.append(t // w); tail.append((t % w) / scalar["Width"])
+                main.append(t // w)
+                if t % w:
+                    destinations.append(index)
+                    references.append(si)
+                    tail.append((t % w) / self.observations[si]["Width"])
             else:
-                main.append((t + w - 1) // w); tail.append(0)
-        return body * torch.tensor(main, dtype=DTYPE) + body[:, scalar_indices] * torch.tensor(tail, dtype=DTYPE)
+                main.append((t + w - 1) // w)
+        scores = body * torch.tensor(main, dtype=DTYPE)
+        if destinations:
+            scores = scores.index_add(1, torch.tensor(destinations),
+                body[:, references] * torch.tensor(tail, dtype=DTYPE))
+        return scores

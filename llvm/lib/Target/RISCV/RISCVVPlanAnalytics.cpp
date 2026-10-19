@@ -361,7 +361,8 @@ static OperationKind arithmeticKind(StringRef Family) {
               "VMSLTU",   "VMSLE",  "VMSLEU",  "VMSGT",  "VMSGTU",  "VMERGE",
               "VMV",      "VID",    "VWADD",   "VWADDU", "VWSUB",   "VWSUBU",
               "VWMUL",    "VWMULU", "VWMULSU", "VWMACC", "VWMACCU", "VWMACCSU",
-              "VWMACCUS", "VNSRL",  "VNSRA",   "VNCLIP", "VNCLIPU"},
+              "VWMACCUS", "VNSRL",  "VNSRA",   "VNCLIP", "VNCLIPU",
+              "VAADD",    "VWSLL",  "VSEXT",   "VZEXT"},
              OperationKind::Integer)
       .Default(OperationKind::Unsupported);
 }

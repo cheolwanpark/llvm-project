@@ -1,0 +1,50 @@
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+zvbb -run-pass=riscv-vplan-analytics,riscv-vplan-cost -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=integer:0:0:f1 -vplan-analytics-output=%t.analytics.json -vplan-cost-output=%t.cost.json %s -o /dev/null
+# RUN: %python %S/Inputs/legacy-view.py %t.analytics.json | FileCheck %s --check-prefix=OPS
+# RUN: FileCheck %s --check-prefix=COST < %t.cost.json
+# RUN: %python -c "import json; a=json.load(open('%t.analytics.json')); i=[i for i in a['Instructions'] if i['Category']=='integer']; assert len(i)==4; assert all(not x['Barrier'] for x in i); assert [x['Group8'] for x in i]==[8,8,16,16]"
+#
+# Use a self-referencing f1 cost probe to check the C++ body calculation.
+# VAADD has M1 work. VWSLL has source M1 / destination M2 work. The extension
+# pseudos already describe destination M2, and must not double it again.
+# Integer service is (8+16+16+16)*2/16 = 7, above scalar loop control.
+# OPS-DAG: "supported":true
+# OPS-DAG: "integer8":56
+# OPS-DAG: {"group8":8,"index_group8":0,"index_sew":0,"kind":"integer","masked":false,"sew":32,"work8":8}
+# OPS-DAG: {"group8":16,"index_group8":0,"index_sew":0,"kind":"integer","masked":false,"sew":32,"work8":16}
+# COST-DAG: "supported":true
+# COST-DAG: "body_quarters":28
+# COST-DAG: "score_quarters":28
+--- |
+  define void @integer() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit, !llvm.loop !0
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="1" "vplan.ra.vf"="1" "vplan.ra.scalable"="0" "vplan.ra.candidate"="integer:0:0:f1" }
+  !0 = distinct !{!0, !1}
+  !1 = !{!"llvm.loop.vplan.candidate", !"integer:0:0:f1"}
+...
+---
+name: integer
+tracksRegLiveness: false
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    $v8 = PseudoVAADD_VV_M1 undef $v8, $v10, $v11, 0, $noreg, 5, 1, implicit $vxrm, implicit $vl, implicit $vtype
+    early-clobber $v8m2 = PseudoVWSLL_VI_M1 undef $v8m2, $v12, 1, $noreg, 5, 1, implicit $vl, implicit $vtype
+    early-clobber $v8m2 = PseudoVSEXT_VF2_M2 undef $v8m2, $v12, $noreg, 5, 1, implicit $vl, implicit $vtype
+    early-clobber $v8m2 = PseudoVZEXT_VF2_M2 undef $v8m2, $v12, $noreg, 5, 1, implicit $vl, implicit $vtype
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    PseudoRET
+...

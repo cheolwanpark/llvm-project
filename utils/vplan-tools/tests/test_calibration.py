@@ -14,7 +14,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import calibration as cal
-from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P
+from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P, needs_scalar_reference
 import vplan_tools as vt
 
 
@@ -35,7 +35,7 @@ def analytics(instructions=None, vf=1, scalable=False, **kwargs):
     ins = instructions if instructions is not None else [instruction()]
     return {"Version": 2, "Stage": "post-ra-cleanup", "Error": "", "RunID": "run",
         "Function": "selected_kernel", "CPU": "xiangshan-kunminghu", "VLen": 128,
-        "Width": vf, "VF": vf, "ScalableVF": scalable, "MaxTripCount": 0,
+        "Width": vf, "VF": vf, "ScalableVF": scalable, "MaxTripCount": 0, "ExactTripCount": 0,
         "ScalarTail": False, "Candidate": f"selected_kernel:0:0:{'s' if scalable else 'f'}{vf}",
         "DependencyCoverage": "single-block-distance-0-1", "Blocks": [{"ID": 0, "Role": "body"}],
         "Instructions": [i | {"ID": n} for n, i in enumerate(ins)], "Edges": [], **kwargs}
@@ -117,6 +117,48 @@ class ModelTests(unittest.TestCase):
         with self.assertRaisesRegex(vt.ToolError, "scalar analytics context"):
             CostModel([a, b]).scores(torch.ones(P, dtype=DTYPE), [0, 0])
 
+    def test_optional_scalar_reference(self):
+        for tail, maximum, exact, expected in (
+                (False, 11, 0, 3.), (True, 0, 0, .25),
+                (True, 12, 12, 3.), (True, 12, 0, None),
+                (True, 12, 11, None), (True, 11, 12, None),
+                (True, 11, 11, None)):
+            with self.subTest(tail=tail, maximum=maximum, exact=exact):
+                a = analytics([instruction("integer")], vf=4, scalable=True,
+                              ScalarTail=tail, MaxTripCount=maximum, ExactTripCount=exact)
+                model = CostModel([a])
+                self.assertEqual(needs_scalar_reference(a), expected is None)
+                if expected is None:
+                    with self.assertRaisesRegex(vt.ToolError, "missing scalar reference"):
+                        model.scores(torch.ones(P, dtype=DTYPE), [None])
+                else:
+                    self.assertEqual(float(model.scores(torch.ones(P, dtype=DTYPE), [None])[0, 0]), expected)
+
+    def test_mixed_scalar_references_scores_and_gradients(self):
+        scalar = analytics(MaxTripCount=11, ExactTripCount=11)
+        tail = analytics([instruction("integer")], vf=4, scalable=True,
+                         MaxTripCount=11, ExactTripCount=11, ScalarTail=True)
+        no_tail = analytics([instruction("fp", Base="VFADD_VV")], vf=2, scalable=True,
+                            RunID="another-run")
+        model = CostModel([scalar, tail, no_tail])
+        w = torch.ones((2, P), dtype=DTYPE, requires_grad=True)
+        scores = model.scores(w, [0, 0, None])
+        self.assertEqual(scores.tolist(), [[5.5, 3.5, 1.]] * 2)
+        scores.sum().backward()
+        self.assertEqual(w.grad[:, 5].tolist(), [2., 2.])
+        self.assertEqual(w.grad[:, 6].tolist(), [1., 1.])
+        self.assertTrue(torch.isfinite(w.grad).all())
+
+    def test_new_integer_families_use_existing_group_work_only(self):
+        for family, group, expected in (("VAADD", 8, 1.), ("VWSLL", 8, 2.),
+                                         ("VSEXT", 16, 2.), ("VZEXT", 16, 2.)):
+            with self.subTest(family=family):
+                a = analytics([instruction("integer", Base=family + "_VV", Group8=group)],
+                              Edges=[edge(0, 0, 1)])
+                model = CostModel([a])
+                self.assertEqual(self.body(a), expected)
+                self.assertEqual(model.active, {5})  # No new dependency latency eligibility.
+
 
 class RankingTests(unittest.TestCase):
     def test_threshold_inclusive_ties_orientation_and_saturation(self):
@@ -174,6 +216,19 @@ class RankingTests(unittest.TestCase):
                 with self.assertRaises(vt.ToolError):
                     cal.load_weights(path)
 
+    def test_fitting_with_and_without_scalar_references(self):
+        model, scalars, examples = self.example()
+        vectors = [a | {"RunID": "other-run"} for a in model.observations[1:]]
+        mixed = CostModel(model.observations + vectors)
+        examples.append(cal.Example(examples[0].benchmark, [[3], [4]], [1, 2], examples[0].pairs))
+        args = SimpleNamespace(seed=0, starts=2, steps=30, min_multiplier=.25,
+            max_multiplier=4., temperature=.1, regularization=.001, learning_rate=.03)
+        with patch("sys.stderr", new_callable=io.StringIO):
+            weights, info = cal.fit(mixed, scalars + [None, None], examples, args)
+        self.assertLess(info["objective"], info["initial_objective"])
+        scores = mixed.scores(weights, scalars + [None, None])[0]
+        self.assertTrue(torch.equal(scores[1:3], scores[3:5]))
+
     def test_float_results_are_serializable(self):
         model, scalars, examples = self.example()
         r = cal.results_for(model, scalars, examples, torch.ones(P, dtype=DTYPE))[0]
@@ -183,6 +238,70 @@ class RankingTests(unittest.TestCase):
 
 
 class CollectionTests(unittest.TestCase):
+    def prepare(self, observations, measured=None):
+        b = vt.Benchmark("test", "tuning", "source", ["-O3"], {}, measured or {1: 100, 2: 150})
+        rows = [{"candidate": {"id": a["Candidate"], "function": a["Function"], "loop": 0,
+                                "vf": ("s" if a["ScalableVF"] else "f") + str(a["VF"])},
+                 "analytics": a} for a in observations]
+        bundle = {"key": "key", "run_id": "run", "rows": rows}
+        args = SimpleNamespace(pair_threshold=.01, weight_saturation=1.25)
+        with patch.object(cal, "collect", return_value=bundle), patch("sys.stderr", new_callable=io.StringIO) as log:
+            try:
+                result = cal.prepare([b], None, args, {}, {"measurement_protocol": {"vlen_bits": 128}}, True)
+            except vt.ToolError as exc:
+                raise vt.ToolError(log.getvalue()) from exc
+        return result
+
+    def test_prepare_without_scalar_and_with_unsupported_alternative(self):
+        vectors = [analytics(vf=vf, scalable=True) for vf in (1, 2)]
+        bad = analytics(vf=2, scalable=True, ScalarTail=True, MaxTripCount=8)
+        # Same context, but only one alternative has a usable no-tail formula.
+        vectors = [a | {"MaxTripCount": 8} for a in vectors]
+        for scalar in ([], [analytics(Error="missing loop")]):
+            result = self.prepare(scalar + [bad] + vectors)
+            self.assertEqual(result[1], [None, None])
+            self.assertEqual(result[2][0].groups, [[0], [1]])
+        exact = [a | {"ScalarTail": True, "ExactTripCount": 8} for a in vectors]
+        self.assertEqual(self.prepare(exact)[1], [None, None])
+
+    def test_prepare_rejects_missing_vf_and_ambiguous_scalar(self):
+        vectors = [analytics(vf=vf, scalable=True, MaxTripCount=8) for vf in (1, 2)]
+        for observations in (vectors[:1], [vectors[0], vectors[1] | {"ScalarTail": True}]):
+            with self.assertRaisesRegex(vt.ToolError, "missing predicted costs.*s2"):
+                self.prepare(observations)
+        with self.assertRaisesRegex(vt.ToolError, "ambiguous scalar reference"):
+            self.prepare([analytics(), analytics(Candidate="selected_kernel:0:1:f1")] + vectors)
+
+    def test_prepare_checks_context_without_scalar(self):
+        a, b = [analytics(vf=vf, scalable=True) for vf in (1, 2)]
+        for key, value in (("RunID", "other"), ("Function", "other"), ("CPU", "other"),
+                           ("VLen", 256), ("MaxTripCount", 8), ("ExactTripCount", 8),
+                           ("Candidate", "selected_kernel:1:0:s2")):
+            with self.subTest(key=key), self.assertRaises(vt.ToolError):
+                self.prepare([a, b | {key: value}])
+        with self.assertRaisesRegex(vt.ToolError, "VLEN differs"):
+            self.prepare([a | {"VLen": 256}, b | {"VLen": 256}])
+
+    def test_prepare_batches_optional_scalar_indices_with_offsets(self):
+        benchmarks = [vt.Benchmark(name, "tuning", "source", ["-O3"], {}, {1: 100, 2: 150})
+                      for name in ("no-scalar", "scalar")]
+        bundles = []
+        for b in benchmarks:
+            observations = ([analytics()] if b.id == "scalar" else []) + [
+                analytics(vf=vf, scalable=True) for vf in (1, 2)]
+            rows = [{"candidate": {"vf": ("s" if a["ScalableVF"] else "f") + str(a["VF"])},
+                     "analytics": a | {"RunID": b.id}} for a in observations]
+            bundles.append({"key": b.id, "run_id": b.id, "rows": rows})
+        args = SimpleNamespace(pair_threshold=.01, weight_saturation=1.25)
+        with patch.object(cal, "collect", side_effect=bundles), patch("sys.stderr", new_callable=io.StringIO):
+            model, scalars, examples, excluded, _ = cal.prepare(
+                benchmarks, None, args, {}, {"measurement_protocol": {}}, True)
+        self.assertEqual(scalars, [None, None, 2, 2, 2])
+        self.assertEqual([e.groups for e in examples], [[[0], [1]], [[3], [4]]])
+        self.assertEqual(excluded, [])
+        scores = model.scores(torch.ones(P, dtype=DTYPE), scalars)[0]
+        self.assertTrue(torch.equal(scores[:2], scores[3:]))
+
     def test_warm_cache_never_recompiles_and_source_or_tool_change_invalidates(self):
         b = vt.Benchmark("test", "tuning", "source", ["-O3"], {}, {1: 10, 2: 20})
         a = analytics()

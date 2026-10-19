@@ -359,9 +359,19 @@ void llvm::finalizeVPlanRAIterationMapping(Function &F,
       continue;
     auto Step = stepFactor(AR->getStepRecurrence(SE));
     auto *Scalable = mdconst::dyn_extract<ConstantInt>(MD->getOperand(1));
-    if (!Step.first || !Scalable || Scalable->isOne() != Step.second)
+    if (!Step.first || !Scalable)
       continue;
     uint64_t B = Base->getZExtValue(), S = Step.first;
+    if (Scalable->isOne() != Step.second) {
+      // A fixed vscale may have been folded since the witness was recorded.
+      // Compare both steps in scalar iterations, including the original step,
+      // so folding vscale alone does not increase the observed width.
+      unsigned VScale = F.getVScaleValue();
+      uint64_t &ScalableFactor = Scalable->isOne() ? B : S;
+      if (!VScale || ScalableFactor > UINT64_MAX / VScale)
+        continue;
+      ScalableFactor *= VScale;
+    }
     if (B && S % B == 0)
       Ratio = S / B;
   }

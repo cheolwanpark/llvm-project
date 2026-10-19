@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 
 import vplan_tools as vt
-from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P
+from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P, needs_scalar_reference, same_context
 
 CACHE_VERSION = 1
 
@@ -127,7 +127,8 @@ def make_pairs(measured, threshold, saturation):
 
 
 def prepare(benchmarks, clang, args, identity, metadata, fitting):
-    observations, scalar_indices, examples, excluded, provenance = [], [], [], [], []
+    observations, examples, excluded, provenance = [], [], [], []
+    scalar_indices: list[int | None] = []
     for index, b in enumerate(benchmarks, 1):
         print(f"[{index}/{len(benchmarks)}] {b.id}", file=sys.stderr, flush=True)
         try:
@@ -151,24 +152,37 @@ def prepare(benchmarks, clang, args, identity, metadata, fitting):
                 except vt.ToolError as exc:
                     unsupported[vf] = str(exc)
             scalars = [i for i, r in enumerate(rows) if r["candidate"]["vf"] == "f1"]
-            if len(scalars) != 1:
-                raise vt.ToolError("missing or ambiguous scalar reference: " + unsupported.get("f1", ""))
+            if len(scalars) > 1:
+                raise vt.ToolError("ambiguous scalar reference")
             local = [r["analytics"] for r in rows]
+            if any(not same_context(a, local[0]) for a in local):
+                raise vt.ToolError("candidate analytics context mismatch")
             expected_vlen = metadata["measurement_protocol"].get("vlen_bits")
             if expected_vlen and any(a["VLen"] != expected_vlen for a in local):
                 raise vt.ToolError("analytics VLEN differs from measured VLEN")
+            if not scalars:
+                usable = []
+                for row in rows:
+                    if needs_scalar_reference(row["analytics"]):
+                        unsupported[row["candidate"]["vf"]] = (
+                            "missing scalar reference for scalar tail: " + unsupported.get("f1", ""))
+                    else:
+                        usable.append(row)
+                rows = usable
+                local = [r["analytics"] for r in rows]
+            scalar_index = scalars[0] if scalars else None
             groups = [[i for i, r in enumerate(rows) if r["candidate"]["vf"] == f"s{vf}"] for vf in sorted(b.measured)]
             missing = [vf for vf, g in zip(sorted(b.measured), groups) if not g]
             if missing:
                 raise vt.ToolError("missing predicted costs for measured VF(s): " + ", ".join(
                     f"s{v} ({unsupported.get(f's{v}', 'not generated')})" for v in missing))
             model = CostModel(local)
-            base = model.scores(torch.ones(P, dtype=DTYPE), [scalars[0]] * len(local))
+            base = model.scores(torch.ones(P, dtype=DTYPE), [scalar_index] * len(local))
             if not torch.isfinite(base).all() or not (base > 0).all():
                 raise vt.ToolError("nonpositive or nonfinite candidate score")
             offset = len(observations)
             observations.extend(local)
-            scalar_indices.extend([offset + scalars[0]] * len(local))
+            scalar_indices.extend([offset + scalar_index if scalar_index is not None else None] * len(local))
             examples.append(Example(b, [[offset + i for i in g] for g in groups], sorted(b.measured), pairs))
             provenance.append({"id": b.id, "cache_key": bundle["key"], "run_id": bundle["run_id"]})
         except (vt.ToolError, OSError, ValueError, KeyError, TypeError) as exc:
