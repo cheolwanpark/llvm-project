@@ -25,6 +25,29 @@ def fixture(factor=5, lanes=2, element='i32'):
 
 
 class AdapterTests(unittest.TestCase):
+    def test_mixed_fixed_scalable_declarations(self):
+        for operation, ty, code in (('fadd', 'double', 'f64'),
+                                    ('mul', 'i32', 'i32'),
+                                    ('smin', 'i64', 'i64')):
+            prefix = ty + ', ' if operation == 'fadd' else ''
+            scalable = (f'declare {ty} @llvm.vector.reduce.{operation}.nxv4{code}'
+                        f'({prefix}<vscale x 4 x {ty}>) #2\n')
+            fixed = scalable.replace('.nxv4', '.v4').replace('<vscale x 4 x ', '<4 x ')
+            for source in (scalable + fixed, fixed + scalable):
+                self.assertEqual(checker.specialize(source, 1), fixed)
+                widened = checker.specialize(source, 2)
+                self.assertEqual(widened.count('declare '), 2)
+                self.assertIn(f'.v8{code}', widened)
+                self.assertIn(f'.v4{code}', widened)
+            with self.assertRaisesRegex(ValueError, 'duplicate intrinsic declaration'):
+                checker.specialize(scalable + scalable, 1)
+            with self.assertRaisesRegex(ValueError, 'duplicate intrinsic declaration'):
+                checker.specialize(scalable + fixed + fixed, 1)
+            with self.assertRaisesRegex(ValueError, 'incompatible specialized declarations'):
+                checker.specialize(scalable + fixed.replace('#2', '#3'), 1)
+            with self.assertRaisesRegex(ValueError, 'incompatible specialized declarations'):
+                checker.specialize(scalable + fixed.replace('<4 x ', '<8 x '), 1)
+
     def test_factors_types_widths_and_boundary_lanes(self):
         for factor, lanes, element in product(
             range(2, 9), (1, 2, 3, 8, 128), ('i1', 'i8', 'i32', 'i64', 'float', 'double')

@@ -187,11 +187,34 @@ def specialize(ir, scale):
     if unsupported:
         raise ValueError(f'fixed-vscale host specialization does not support '
                          f'{unsupported[0]}; use the scalar-remainder variant')
+    original_lines = ir.splitlines(keepends=True)
     ir = re.sub(r"<vscale x (\d+) x ", lambda m: f"<{int(m[1]) * scale} x ", ir)
     ir = re.sub(r"\.nxv(\d+)", lambda m: f".v{int(m[1]) * scale}", ir)
     ir = re.sub(r"call i(\d+) @llvm.vscale.i\d+\(\)",
                 lambda m: f"add i{m[1]} 0, {scale}", ir)
-    return ir
+    # Mixed fixed/scalable consumers can use distinct overloads that become
+    # the same intrinsic at this vscale. Coalesce only identical declarations
+    # whose ORIGINAL names differ. Do not hide malformed duplicate inputs or
+    # reconcile incompatible signatures/attributes by choosing one arbitrarily.
+    declaration = re.compile(r'^declare\b[^\n]*@(llvm\.[-\w.$]+)\(')
+    declarations, original_names, lines = {}, set(), []
+    for original, line in zip(original_lines, ir.splitlines(keepends=True)):
+        before, after = declaration.match(original), declaration.match(line)
+        if before and after:
+            name = after[1]
+            if before[1] in original_names:
+                raise ValueError(f'duplicate intrinsic declaration: {before[1]}')
+            original_names.add(before[1])
+            if name in declarations:
+                previous_name, previous_line = declarations[name]
+                if previous_name == before[1]:
+                    raise ValueError(f'duplicate intrinsic declaration: {name}')
+                if previous_line != line:
+                    raise ValueError(f'incompatible specialized declarations: {name}')
+                continue
+            declarations[name] = (before[1], line)
+        lines.append(line)
+    return ''.join(lines)
 
 
 # LLVM prints the closing function brace at the start of a line. Match whole
