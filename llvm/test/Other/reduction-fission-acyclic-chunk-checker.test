@@ -204,9 +204,9 @@ rejection_edits = [
                    '  %dx = load volatile double, ptr %dp, align 8')], 'scalar-non-simple-load'),
     ('effects', [(helper_declaration, effect_declaration)],
      'scalar-unsafe-call'),
-    ('store', [('  %dnext = fadd double %dstate, %delta',
-                '  store i32 %x, ptr %out\n  %dnext = fadd double %dstate, %delta')],
-     'scalar-unsupported-instruction'),
+    ('volatile-store', [('  %dnext = fadd double %dstate, %delta',
+                '  store volatile i32 %x, ptr %out\n  %dnext = fadd double %dstate, %delta')],
+     'scalar-non-simple-store'),
     ('constrained', [('  %dnext = fadd double %dstate, %delta',
                       '  %dnext = call double @llvm.experimental.constrained.fadd.f64('
                       'double %dstate, double %delta, metadata !"round.dynamic", '

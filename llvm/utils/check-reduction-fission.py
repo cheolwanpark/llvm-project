@@ -576,7 +576,8 @@ def check_compact_count(producer, consumer, name, evl, starts=None,
     }[name]
     if reduction_opcodes is not None:
         assert not evl and set(reduction_opcodes) == {value for value, _, _ in starts}
-        assert all(op in ('and', 'or', 'xor', 'mul', 'fadd') for op in reduction_opcodes.values())
+        assert all(op in ('and', 'or', 'xor', 'mul', 'add', 'fadd', 'smin', 'smax', 'umin', 'umax')
+                   for op in reduction_opcodes.values())
     exit_block = block(consumer, 'scalar.fission.consumer.exit')
     need(sorted(predecessors['scalar.fission.consumer.exit']) == [
         'scalar.fission.consumer.guard', 'scalar.fission.consumer.loopexit'],
@@ -761,8 +762,12 @@ def check_compact_count(producer, consumer, name, evl, starts=None,
                 assert set(incoming) == {'%scalar.ph', '%' + tail_label}, tail
                 update = incoming['%' + tail_label]
                 operation = (reduction_opcodes or {}).get(value, 'add' if ty.startswith('i') else 'fadd')
-                operands = require(rf'^  {re.escape(update)} = {operation} {ty} '
-                                   r'(%[-\w.$]+), (%[-\w.$]+)(?:, ![^\n]*)?$', tail)
+                if operation in MINMAX_OPS:
+                    operands = require(rf'^  {re.escape(update)} = call {ty} @llvm\.{operation}\.{ty}'
+                                       rf'\({ty} (%[-\w.$]+), {ty} (%[-\w.$]+)\)(?: #\d+)?(?:, ![^\n]*)?$', tail)
+                else:
+                    operands = require(rf'^  {re.escape(update)} = {operation} {ty} '
+                                       r'(%[-\w.$]+), (%[-\w.$]+)(?:, ![^\n]*)?$', tail)
                 assert [operands[1], operands[2]].count(accumulator) == 1, tail
                 if not ty.startswith('i'):
                     assert operands[1] == accumulator, tail
@@ -799,7 +804,7 @@ def check_compact_count(producer, consumer, name, evl, starts=None,
             # The default remains exact add-only. Integer fixtures opt into
             # a complete per-recurrence opcode list; types/order/results and
             # every existing entry/tail/empty/forwarding obligation still hold.
-            operations = 'and|or|xor|mul' if reduction_opcodes is not None else 'add'
+            operations = 'and|or|xor|mul|add|smin|smax|umin|umax' if reduction_opcodes is not None else 'add'
             suffix = 'nxv4' if vector_shape is None or vector_shape.scalable else 'v4'
             integers = re.findall(r'^  (%[-\w.$]+) = call (i8|i32|i64) '
                                   r'@llvm\.vector\.reduce\.(' + operations + r')\.' + suffix +
@@ -6418,6 +6423,37 @@ MULTIPLY_DEFINED_REDUCTIONS = (
 MULTIPLY_DECLARATIONS = BITWISE_DECLARATIONS.replace('record_bw_', 'record_mul_').replace(
     '(ptr, ptr, ptr, ptr,', '(ptr, ptr, ptr, ptr, ptr, ptr,')
 
+MINMAX_OPS = ('smin', 'smax', 'umin', 'umax')
+MINMAX_DECLARATIONS = MULTIPLY_DECLARATIONS
+MINMAX_FUNCTIONS = ('minmax_full', 'minmax_compact', 'minmax_affine')
+MINMAX_REDUCTIONS = tuple(
+    (r, ty, seed, op, reverse) for (r, ty, seed, _, _), op, reverse in zip(
+        MULTIPLY_REDUCTIONS,
+        ('smin', 'smin', 'smax', 'smax', 'umin', 'umax', 'umin', 'umax'),
+        (False, True, False, True, False, True, True, False))) + (
+            ('q0', 'i32', '17', 'add', False), ('q1', 'i32', '-7', 'mul', True))
+
+
+def check_minmax_initializer(body, value, shape, ty, start):
+    """LV broadcasts a min/max seed: idempotence permits it in every lane.
+
+    Unlike add/mul, no lane may contain an unrelated identity or zero. Check
+    the exact constant splat or the two real preheader instructions forming
+    an SSA chunk-carry splat. This is fixture certification, not evaluation.
+    """
+    vty = shape.vector_type(ty)
+    if not start.startswith('%'):
+        assert value == f'splat ({ty} {start})', (value, ty, start)
+        return
+    assert value.startswith('%'), (value, start)
+    mask = shape.vector_type('i32')
+    shuffle = re.findall(r'^  ' + re.escape(value) + r' = shufflevector ' + re.escape(vty) +
+                         r' (%[-\w.$]+), ' + re.escape(vty) + r' poison, ' + re.escape(mask) +
+                         r' zeroinitializer(?:, ![^\n]*)?$', body, re.M)
+    assert len(shuffle) == 1, (value, start)
+    require_chunk_instruction(body, 'vector.ph', f'{value} = shufflevector {vty} {shuffle[0]}, {vty} poison, {mask} zeroinitializer')
+    require_chunk_instruction(body, 'vector.ph', f'{shuffle[0]} = insertelement {vty} poison, {ty} {start}, i64 0')
+
 
 def check_bitwise_affine_count(body, value):
     """Certify this fixture's bounded affine count, following actual SSA uses.
@@ -6491,7 +6527,7 @@ def check_integer_reduction_initializer(body, value, shape, ty, start, op):
     lane zero is the original seed (or this chunk's carry), and every other
     lane is exactly the operation's neutral element.
     """
-    assert ty in ('i8', 'i32', 'i64') and op in ('and', 'or', 'xor', 'mul')
+    assert ty in ('i8', 'i32', 'i64') and op in ('and', 'or', 'xor', 'mul', 'add')
     assert re.fullmatch(r'%[-\w.$]+|-?\d+', start), start
     vty = shape.vector_type(ty)
     neutral = '-1' if op == 'and' else '1' if op == 'mul' else '0'
@@ -6511,28 +6547,30 @@ def check_integer_reduction_initializer(body, value, shape, ty, start, op):
         assert value == expected, (value, expected)
 
 
-def check_bitwise(ir, source, name, capacity, scalar, probe=False, *, multiply=False):
+def check_bitwise(ir, source, name, capacity, scalar, probe=False, *, multiply=False, minmax=False):
     """Small exact fixture certificate; no arithmetic opcode normalization.
 
     Reuse the inherited checked controller, PHI, instruction and provenance
     certificates. Executable hooks additionally observe every stored/loaded
     contribution, real vector entry, retained state and final output byte.
     """
-    reductions = (MULTIPLY_DEFINED_REDUCTIONS if multiply == 'defined' else
+    assert not (multiply and minmax)
+    reductions = (MINMAX_REDUCTIONS if minmax else
+                  MULTIPLY_DEFINED_REDUCTIONS if multiply == 'defined' else
                   MULTIPLY_REDUCTIONS if multiply else BITWISE_REDUCTIONS)
     if multiply == 'defined':
         assert scalar and name == 'multiply_defined'
-    streams = [('i32', 'c'), ('i64', 'dc')] + ([('i8', 'bc')] if multiply else [])
+    streams = [('i32', 'c'), ('i64', 'dc')] + ([('i8', 'bc')] if multiply or minmax else [])
     types = [ty for ty, _ in streams]
     groups = list(dict.fromkeys((op, ty) for _, ty, _, op, _ in reductions))
     recurrence_names = '|'.join(re.escape(r) for r, *_ in reductions)
     recurrence = rf'(?:{recurrence_names}|[mu]\.(?:{recurrence_names}))'
-    hook = 'record_mul_' if multiply else 'record_bw_'
+    hook = 'record_mul_' if multiply or minmax else 'record_bw_'
     body = function_definition(ir, name)
     blocks = loop_blocks(body)
     original = loop_blocks(function_definition(source, name))
-    compact = name == ('multiply_compact' if multiply else 'bitwise_compact')
-    affine = name == ('multiply_affine' if multiply else 'bitwise_affine')
+    compact = name == ('minmax_compact' if minmax else 'multiply_compact' if multiply else 'bitwise_compact')
+    affine = name == ('minmax_affine' if minmax else 'multiply_affine' if multiply else 'bitwise_affine')
     chunked = capacity < 65
     assert not (affine and chunked)
     latch = 'latch' if compact else 'loop'
@@ -6543,7 +6581,7 @@ def check_bitwise(ir, source, name, capacity, scalar, probe=False, *, multiply=F
     vectors = [label for label in blocks if label.startswith('vector.body')]
     assert len(vectors) <= 1 and (not scalar or not vectors), body
     vectorized = bool(vectors)
-    shape = consumer_vf4(body, allow_fixed=bool(multiply))
+    shape = consumer_vf4(body, allow_fixed=bool(multiply or minmax))
     assert vectorized == bool(shape)
     predecessors = {label: {p for p, code in blocks.items()
                            if label in re.findall(r'\blabel %([-\w.$]+)', chunk_instructions(code)[-1])}
@@ -6657,7 +6695,17 @@ def check_bitwise(ir, source, name, capacity, scalar, probe=False, *, multiply=F
             loads = typed_loads
             for r, ty, seed, op, reverse in reductions:
                 operands = (f'{loads[ty]}, %{r}.consume' if reverse else f'%{r}.consume, {loads[ty]}')
-                instruction = f'%u.{r}.consume = {op} {ty} {operands}'
+                if op in MINMAX_OPS:
+                    args = (f'{ty} {loads[ty]}, {ty} %{r}.consume' if reverse else
+                            f'{ty} %{r}.consume, {ty} {loads[ty]}')
+                    attr = re.findall(r'^  %u\.' + r + r'\.consume = call [^\n]+\) (#\d+), !dbg', body, re.M)
+                    assert len(attr) == 1, (name, r)
+                    original_attrs = re.findall(r'^attributes #0 = (.+)$', source, re.M)
+                    cloned_attrs = re.findall(r'^attributes ' + attr[0] + r' = (.+)$', ir, re.M)
+                    assert len(original_attrs) == len(cloned_attrs) == 1 and original_attrs == cloned_attrs
+                    instruction = f'%u.{r}.consume = call {ty} @llvm.{op}.{ty}({args}) {attr[0]}'
+                else:
+                    instruction = f'%u.{r}.consume = {op} {ty} {operands}'
                 need(tail, instruction)
                 if multiply == 'defined':
                     # Check cloning's applicable flags exactly on this scalar
@@ -6673,7 +6721,9 @@ def check_bitwise(ir, source, name, capacity, scalar, probe=False, *, multiply=F
             vector_loads = typed_loads
             for op, ty in groups:
                 expected = sum((op, ty) == (o, t) for _, t, _, o, _ in reductions)
-                assert len(re.findall(rf'^  %[-\w.$]+ = {op} {re.escape(shape.vector_type(ty))} ', code, re.M)) == expected, code
+                prefix = (rf'call {re.escape(shape.vector_type(ty))} @llvm\.{op}\.{shape.suffix(ty)}\('
+                          if op in MINMAX_OPS else rf'{op} {re.escape(shape.vector_type(ty))} ')
+                assert len(re.findall(rf'^  %[-\w.$]+ = {prefix}', code, re.M)) == expected, code
                 assert len(re.findall(rf'call {ty} @llvm.vector.reduce\.{op}\.{shape.suffix(ty)}\(', consumer)) == expected, body
     if not vectorized:
         need(ph, 'br label %' + tail)
@@ -6790,8 +6840,14 @@ def check_bitwise(ir, source, name, capacity, scalar, probe=False, *, multiply=F
                 assert len(forwarded) == 1 and forwarding, (name, r)
                 need('middle.block', forwarded[0])
                 update = forwarding[1]
-            operation = re.search(r'^  ' + re.escape(update) + ' = ' + op + ' ' + re.escape(vty) +
-                                  r' (%[-\w.$]+), (%[-\w.$]+)(?:, ![^\n]*)?$', blocks['vector.body'], re.M)
+            if op in MINMAX_OPS:
+                operation = re.search(r'^  ' + re.escape(update) + r' = call ' + re.escape(vty) +
+                                      r' @llvm\.' + op + r'\.' + shape.suffix(ty) + r'\(' + re.escape(vty) +
+                                      r' (%[-\w.$]+), ' + re.escape(vty) + r' (%[-\w.$]+)\)(?: #\d+)?(?:, ![^\n]*)?$',
+                                      blocks['vector.body'], re.M)
+            else:
+                operation = re.search(r'^  ' + re.escape(update) + ' = ' + op + ' ' + re.escape(vty) +
+                                      r' (%[-\w.$]+), (%[-\w.$]+)(?:, ![^\n]*)?$', blocks['vector.body'], re.M)
             assert operation, (name, r)
             acc, contribution = operation.groups()[::-1] if reverse else operation.groups()
             assert contribution == vector_loads[ty], (name, r)
@@ -6802,7 +6858,10 @@ def check_bitwise(ir, source, name, capacity, scalar, probe=False, *, multiply=F
             assert vector_phi, (name, r)
             need('vector.body', vector_phi[0].strip().split(', !', 1)[0])
             start = f'%{r}.chunk.carry' if chunked else seed
-            check_integer_reduction_initializer(body, vector_phi[1], shape, ty, start, op)
+            if op in MINMAX_OPS:
+                check_minmax_initializer(body, vector_phi[1], shape, ty, start)
+            else:
+                check_integer_reduction_initializer(body, vector_phi[1], shape, ty, start, op)
         start = f'%{r}.chunk.carry' if chunked else seed
         seen = set()
 
@@ -6896,9 +6955,9 @@ def check_multiply_analogous(ir, name, capacity):
     return body[:offset] + '  call void @record_mul_analogous()\n' + body[offset:]
 
 
-def bitwise_execution_counts(stdout, configurations, *, multiply=False):
+def bitwise_execution_counts(stdout, configurations, *, multiply=False, minmax=False):
     rows = {}
-    family = 'Multiply' if multiply else 'Bitwise'
+    family = 'Minmax' if minmax else 'Multiply' if multiply else 'Bitwise'
     for name, fields in re.findall(r'^' + family + r' (\S+): (.+)$', stdout, re.M):
         assert name in configurations and name not in rows, name
         tokens = re.findall(r'([-a-z]+)=(\d+)', fields)
@@ -8819,6 +8878,76 @@ def check(args, work):
                                         original_reference=references[function], logical_store_bytes_per_participant=13,
                                         logical_load_bytes_per_participant=13, rereads=0, duplication=0))
 
+    # Integer min/max: exact signedness, original seeds, compact participation,
+    # chunk carries and mixed add/mul share the inherited provenance proof.
+    minmax_rows, minmax_configurations = [], {}
+    fixture = 'reduction-fission-scalar-minmax.ll'
+    functions = MINMAX_FUNCTIONS
+    minmax_source = (tests / fixture).read_text()
+    reference, references = rename_execution_functions(
+        minmax_source, {name: f'ref_{name}' for name in functions}, used_symbols)
+    declarations.extend(f'extern BitwiseFn {name};' for name in references.values())
+    compile_ir('reference_minmax', reference)
+    for capacity, ceiling in ((1, 17), (8, 104), (9, 121), (65, 849)):
+        for function, repeated, relaxed, scalar in product(
+                functions, (False, True), (False, True), (True, False)):
+            if function == 'minmax_affine' and capacity < 65:
+                continue
+            options = (subtraction_options(ceiling, relaxed, repeated) if scalar else
+                       fneg_vector_options(ceiling, relaxed, repeated))
+            result = run([opt, *options], input=keep_functions(minmax_source, [function]))
+            tag = (f'minmax_{function}_c{capacity}_lv{2 if repeated else 1}_'
+                   f'{"reordered" if relaxed else "strict"}_{"scalar" if scalar else "tail"}')
+            (work / f'{tag}.rvv.ll').write_text(result.stdout)
+            (work / f'{tag}.remarks').write_text(result.stderr)
+            body = function_definition(result.stdout, function)
+            vector_shape = consumer_vf4(body, allow_fixed=True)
+            vectorized = bool(vector_shape)
+            assert not scalar or not vectorized, body
+            assert scalar or vectorized or capacity == 1, body
+            loc = f'scalar-minmax.c:{12 + 20 * MINMAX_FUNCTIONS.index(function)}:3:'
+            chunk = ', chunked schedule, trip bound 65' if capacity < 65 else ''
+            carry = ', producer state carries 1' if capacity < 65 else ''
+            assert len(re.findall(
+                rf'{re.escape(loc)} split scalar-IR reduction loop;[^\n]*scratch capacity {capacity}, '
+                rf'scratch bytes {ceiling}, producer live-outs 6{chunk}, '
+                r'scratch store bytes/iteration 13, scratch load bytes/iteration 13, '
+                rf'producer reread bytes/iteration 0, duplicated producer instructions 0{carry}\n',
+                result.stderr)) == 1, result.stderr
+            for role, vf in [('producer', '1'), ('consumer', vector_shape.remark if vectorized else '1')]:
+                assert f'{loc} scalar-IR fission {role} VF {vf}\n' in result.stderr, result.stderr
+            for line in result.stderr.splitlines():
+                if 'scalar-IR fission ' in line:
+                    assert line.startswith('remark: ' + loc + ' scalar-IR fission '), line
+            checked = check_bitwise(result.stdout, minmax_source, function, capacity, scalar, probe=True, minmax=True)
+            instrumented = result.stdout.replace(body, checked, 1) + MINMAX_DECLARATIONS
+            (work / f'{tag}.instrumented.ll').write_text(instrumented)
+            run([opt, '-passes=verify', '-disable-output'], input=instrumented)
+            run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
+                 '-o', str(work / f'{tag}.s')], input=result.stdout)
+            for scale in (vector_shape.scales(args.vscales) if vector_shape else (1,)):
+                fixed, names = rename_execution_functions(
+                    specialize(instrumented, scale), {function: f'{function}_{tag}_s{scale}'}, used_symbols)
+                name = names[function]
+                lanes = vector_shape.lanes(scale) if vectorized else 0
+                declarations.append(f'extern BitwiseFn {name};')
+                shape = MINMAX_FUNCTIONS.index(function)
+                config = BitwiseExecutionConfig(shape, capacity, vector_shape, scale)
+                minmax_rows.append(f'{{"{name}", {name}, {references[function]}, {shape}, {capacity}, {lanes}, false, {str(config.scalable).lower()}, {scale}, true}}')
+                minmax_configurations[name] = config
+                (work / f'{tag}_s{scale}.probe.ll').write_text(fixed)
+                compile_ir(f'{tag}_s{scale}', fixed)
+                records.append(dict(fixture='scalar-minmax', function=function,
+                                    capacity=capacity, scratch_bytes=ceiling, options=options,
+                                    policy='reordered' if relaxed else 'strict', lv_invocations=2 if repeated else 1,
+                                    execution_symbol=name, vscale=scale, consumer_lanes=lanes,
+                                    emitted_consumer_shape=vector_shape.remark if vector_shape else None,
+                                    scalable_execution=config.scalable,
+                                    vector_entry_observed_only_in_runtime_counts=True,
+                                    selection_remarks=result.stderr, probe_module=f'{tag}.instrumented.ll',
+                                    original_reference=references[function], logical_store_bytes_per_participant=13,
+                                    logical_load_bytes_per_participant=13, rereads=0, duplication=0))
+
     # Execute the exact formerly rejected original bodies as well. VF1 isolates
     # scalar consumer cloning; the wider products above certify actual vectors.
     multiply_analogous_rows, multiply_analogous_configurations = [], set()
@@ -9335,6 +9464,7 @@ def check(args, work):
                       ('COMPOSITIONS', composition_rows),
                       ('BITWISE', bitwise_rows),
                       ('MULTIPLY', multiply_rows),
+                      ('MINMAX', minmax_rows),
                       ('MULTIPLY_ANALOGOUS', multiply_analogous_rows),
                       ('AOS_CHUNKS', aos_chunk_rows),
                       ('SHORT_INT', short_int_rows), ('SHORT_FP', short_fp_rows),
@@ -9410,10 +9540,13 @@ def check(args, work):
     observed_execution['bitwise'] = bitwise_execution_counts(result.stdout, bitwise_configurations)
     observed_execution['multiply'] = bitwise_execution_counts(
         result.stdout, multiply_configurations, multiply=True)
+    observed_execution['minmax'] = bitwise_execution_counts(
+        result.stdout, minmax_configurations, minmax=True)
     # Count actual entries separately from code emission and specialization.
     # Fixed VF4 runs once; its lane count cannot inflate scalable coverage.
     for family, configurations in (('bitwise', bitwise_configurations),
-                                    ('multiply', multiply_configurations)):
+                                    ('multiply', multiply_configurations),
+                                    ('minmax', minmax_configurations)):
         rows = observed_execution[family]
         observed_execution[family + '_coverage'] = dict(
             completed_configurations=len(configurations),

@@ -1,0 +1,225 @@
+# REQUIRES: riscv-registered-target
+# RUN: split-file %s %t
+# RUN: %python %t/check.py %S/../../utils/check-reduction-fission.py opt llc %S/../Transforms/LoopVectorize/RISCV %t
+
+# These certificates inspect real transformed bodies and reject focused
+# corruptions. Executable original/transformed/C-oracle comparisons, with real
+# producer/store/consumer probes, are added to check-reduction-fission.py's
+# mandatory host matrix. Codegen and fixed-vscale host execution are distinct.
+
+#--- check.py
+import importlib.util
+from itertools import product
+import json
+from pathlib import Path
+import re
+import sys
+
+spec = importlib.util.spec_from_file_location('fission_checker', sys.argv[1])
+checker = importlib.util.module_from_spec(spec)
+sys.dont_write_bytecode = True
+sys.modules[spec.name] = checker
+spec.loader.exec_module(checker)
+opt, llc = sys.argv[2:4]
+fixtures, work = map(Path, sys.argv[4:6])
+source = (fixtures / 'reduction-fission-scalar-minmax.ll').read_text()
+counts = dict(complete=False, modules=0, bodies=0, mutations=0, probe_mutations=0,
+              scalar=0, fixed=0, scalable=0, initializer_sites=0)
+
+
+def save():
+    (work / 'minmax-checker-counts.json').write_text(json.dumps(counts, indent=2) + '\n')
+
+
+def one(text, old, new):
+    assert old != new and text.count(old) == 1, old
+    return text.replace(old, new, 1)
+
+
+for capacity, ceiling in ((1, 17), (8, 104), (9, 121), (65, 849)):
+    functions = [name for name in checker.MINMAX_FUNCTIONS
+                 if capacity == 65 or name != 'minmax_affine']
+    for scalar, reordered, repeated in product((True, False), (False, True), (False, True)):
+        options = (checker.subtraction_options(ceiling, reordered, repeated) if scalar else
+                   checker.fneg_vector_options(ceiling, reordered, repeated))
+        result = checker.run([opt, *options], input=checker.keep_functions(source, functions))
+        tag = f'c{capacity}-s{int(scalar)}-r{int(reordered)}-lv{1 + repeated}'
+        ir = result.stdout
+        (work / (tag + '.ll')).write_text(ir)
+        (work / (tag + '.remarks')).write_text(result.stderr)
+        checker.run([llc, '-mtriple=riscv64', '-mattr=+v', '-verify-machineinstrs',
+                     '-o', str(work / (tag + '.s'))], input=ir)
+        probed = ir
+        for name in functions:
+            body = checker.check_bitwise(ir, source, name, capacity, scalar, minmax=True)
+            blocks = checker.loop_blocks(body)
+            shape = checker.consumer_vf4(body, allow_fixed=True)
+            assert scalar or shape or capacity == 1, body
+            counts['scalar' if not shape else 'scalable' if shape.scalable else 'fixed'] += 1
+            loc = f'scalar-minmax.c:{12 + 20 * checker.MINMAX_FUNCTIONS.index(name)}:3:'
+            for role, vf in (('producer', '1'), ('consumer', shape.remark if shape else '1')):
+                assert f'{loc} scalar-IR fission {role} VF {vf}\n' in result.stderr, result.stderr
+            assert len(re.findall(re.escape(loc) + r' split scalar-IR reduction loop;[^\n]*'
+                                 rf'scratch capacity {capacity}, scratch bytes {ceiling}, producer live-outs 6',
+                                 result.stderr)) == 1, result.stderr
+            assert 'scratch store bytes/iteration 13, scratch load bytes/iteration 13, ' in result.stderr
+            assert 'producer reread bytes/iteration 0, duplicated producer instructions 0' in result.stderr
+
+            def reject(candidate):
+                assert candidate != body
+                module = one(ir, body, candidate)
+                try:
+                    checker.check_bitwise(module, source, name, capacity, scalar, minmax=True)
+                except AssertionError:
+                    counts['mutations'] += 1
+                else:
+                    failure = tag + '.' + name + '.accepted-mutation.ll'
+                    (work / failure).write_text(module)
+                    counts['failure'] = failure
+                    save()
+                    raise AssertionError('accepted min/max mutation: ' + failure)
+
+            def change(value, old, new):
+                anchor = re.findall(r'^  %' + re.escape(value) + r' = [^\n]*$', body, re.M)
+                assert len(anchor) == 1, (value, name)
+                reject(one(body, anchor[0], one(anchor[0], old, new)))
+
+            for r, ty, seed, op, reverse in checker.MINMAX_REDUCTIONS:
+                start = f'%{r}.chunk.carry' if capacity < 65 else seed
+                if op in checker.MINMAX_OPS:
+                    wrong = dict(smin='umin', smax='umax', umin='smin', umax='smax')[op]
+                    change('u.' + r + '.consume', '@llvm.' + op, '@llvm.' + wrong)
+                    # Both argument positions must retain the original call.
+                    update = re.findall(r'^  %u\.' + r + r'\.consume = [^\n]*$', body, re.M)[0]
+                    args = re.search(r'\(' + ty + r' (%[-\w.$]+), ' + ty + r' (%[-\w.$]+)\)', update)
+                    assert args and args[1] != args[2]
+                    flipped = update[:args.start()] + f'({ty} {args[2]}, {ty} {args[1]})' + update[args.end():]
+                    reject(one(body, update, flipped))
+                    attrs = re.search(r' (#\d+), !dbg', update)
+                    assert attrs
+                    reject(one(body, update, one(update, attrs[1], '')))
+                else:
+                    change('u.' + r + '.consume', op + ' ' + ty, 'xor ' + ty)
+                if not shape:
+                    change(r + '.consume', '[ ' + start + ',', '[ 0,')
+                if capacity < 65:
+                    result_value = f'%{r}.result' if name == 'minmax_compact' else f'%{r}.chunk.result'
+                    change(r + '.chunk.carry', '[ ' + result_value + ',', '[ ' + seed + ',')
+
+            # Certify seed splats on the real vector PHIs, without relying on
+            # their SSA numbering. Each min/max recurrence has its own seed.
+            if shape:
+                for r, ty, seed, op, reverse in checker.MINMAX_REDUCTIONS:
+                    if op not in checker.MINMAX_OPS:
+                        # The mixed add/mul lanes still need exact neutral
+                        # elements and lane-zero seeds, independently of the
+                        # min/max seed broadcasts.
+                        start = f'%{r}.chunk.carry' if capacity < 65 else seed
+                        vty = shape.vector_type(ty)
+                        neutral = '1' if op == 'mul' else '0'
+                        base = 'zeroinitializer' if neutral == '0' else f'splat ({ty} {neutral})'
+                        expression = f'insertelement ({vty} {base}, {ty} {start}, i32 0)'
+                        literal = '<' + ', '.join(f'{ty} {v}' for v in (start, neutral, neutral, neutral)) + '>'
+                        anchors = []
+                        for phi, value in re.findall(r'^(  %[-\w.$]+ = phi ' + re.escape(vty) +
+                                                     r' \[ (.+), %vector.ph \], \[ %[-\w.$]+, %vector.body \][^\n]*)$',
+                                                     body, re.M):
+                            instruction = f'insertelement {vty} {base}, {ty} {start}, i32 0'
+                            if value.startswith('%'):
+                                definition = re.findall(r'^  ' + re.escape(value) + r' = [^\n]*$', body, re.M)
+                                assert len(definition) == 1
+                                if definition[0].split(' = ', 1)[1].split(', !', 1)[0] == instruction:
+                                    anchors.append((definition[0], instruction, False))
+                            elif value == expression:
+                                anchors.append((phi, value, False))
+                            elif not shape.scalable and capacity == 65 and value == literal:
+                                anchors.append((phi, value, True))
+                        assert len(anchors) == 1, (name, r, anchors)
+                        anchor, value, explicit = anchors[0]
+                        if explicit:
+                            bad_seed = '<' + ', '.join(f'{ty} {v}' for v in (neutral,) * 4) + '>'
+                            reject(one(body, anchor, one(anchor, value, bad_seed)))
+                            for lane in range(1, 4):
+                                lanes = [start, neutral, neutral, neutral]
+                                lanes[lane] = '0' if neutral == '1' else '1'
+                                damaged = '<' + ', '.join(f'{ty} {v}' for v in lanes) + '>'
+                                reject(one(body, anchor, one(anchor, value, damaged)))
+                        else:
+                            damaged = one(value, f'{ty} {start}, i32 0', f'{ty} {neutral}, i32 0')
+                            reject(one(body, anchor, one(anchor, value, damaged)))
+                            damaged = one(value, base, 'zeroinitializer' if neutral == '1' else f'splat ({ty} 1)')
+                            reject(one(body, anchor, one(anchor, value, damaged)))
+                        continue
+                    start = f'%{r}.chunk.carry' if capacity < 65 else seed
+                    vty = shape.vector_type(ty)
+                    if capacity == 65:
+                        anchor = f'splat ({ty} {seed})'
+                        assert body.count(anchor) == 1, (name, anchor)
+                        reject(one(body, anchor, f'splat ({ty} 0)'))
+                    else:
+                        anchor = re.findall(r'^  (%[-\w.$]+) = insertelement ' + re.escape(vty) +
+                                            r' poison, ' + ty + ' ' + re.escape(start) +
+                                            r', i64 0[^\n]*$', body, re.M)
+                        assert len(anchor) == 1, (name, start)
+                        change(anchor[0][1:], f'{ty} {start}, i64 0', f'{ty} 0, i64 0')
+                        change(anchor[0][1:], ', i64 0', ', i64 1')
+                    counts['initializer_sites'] += 1
+                change('index.next', 'add ', 'sub ')
+                change('n.mod.vf', 'urem ', 'udiv ')
+                change('bc.resume.val', '[ %n.vec,', '[ 0,')
+                for op, ty in dict.fromkeys((op, ty) for _, ty, _, op, _ in checker.MINMAX_REDUCTIONS
+                                           if op in checker.MINMAX_OPS):
+                    vty = shape.vector_type(ty)
+                    updates = re.findall(r'^  (%[-\w.$]+) = call ' + re.escape(vty) +
+                                         r' @llvm\.' + op + r'\.' + shape.suffix(ty) + r'\(',
+                                         blocks['vector.body'], re.M)
+                    assert updates
+                    wrong = dict(smin='umin', smax='umax', umin='smin', umax='smax')[op]
+                    for update in updates:
+                        change(update[1:], '@llvm.' + op, '@llvm.' + wrong)
+            change('fission.consumer.next', 'add ', 'sub ')
+            if name == 'minmax_full' and capacity == 65:
+                change('fission.consumer.done', 'icmp eq', 'icmp ne')
+            else:
+                change('fission.consumer.more', 'icmp ne', 'icmp eq')
+            for ty in ('i32', 'i64', 'i8'):
+                slot = re.findall(r'^  (%[-\w.$]+) = alloca \[' + str(capacity) + ' x ' + ty + r'\][^\n]*$', body, re.M)
+                assert len(slot) == 1
+                change(slot[0][1:], f'[{capacity} x {ty}]', f'[{capacity + 1} x {ty}]')
+                address = re.findall(r'^  (%[-\w.$]+) = getelementptr inbounds \[' +
+                                     str(capacity) + ' x ' + ty + r'\][^\n]+, i64 %fission.consumer.iv',
+                                     blocks['scalar.fission.consumer.body'], re.M)
+                assert len(address) == 1
+                change(address[0][1:], 'i64 %fission.consumer.iv', 'i64 0')
+            if name == 'minmax_compact':
+                change('fission.participating.next', ', 1', ', 2')
+                change('fission.empty', 'icmp eq', 'icmp ne')
+            checked = checker.check_bitwise(ir, source, name, capacity, scalar, probe=True, minmax=True)
+            probed = one(probed, body, checked)
+            checker.check_consumer_lane_probes(checked, shape, 'record_mul_')
+            scalar_probe = re.findall(r'^  call void @record_mul_consume\([^\n]+, i64 1, i1 false\)[^\n]*$', checked, re.M)
+            assert len(scalar_probe) == 1
+            damaged = one(checked, scalar_probe[0], one(scalar_probe[0], 'i64 1, i1 false', 'i64 2, i1 false'))
+            assert damaged != checked
+            try:
+                checker.check_consumer_lane_probes(damaged, shape, 'record_mul_')
+            except AssertionError:
+                counts['probe_mutations'] += 1
+            else:
+                raise AssertionError('accepted min/max scalar lane-probe corruption')
+            counts['bodies'] += 1
+            save()
+        probed += checker.MINMAX_DECLARATIONS
+        (work / (tag + '.probe.ll')).write_text(probed)
+        checker.run([opt, '-passes=verify', '-disable-output'], input=probed)
+        counts['modules'] += 1
+        save()
+
+limited = checker.run([opt, *checker.subtraction_options(120)], input=source)
+for name in ('minmax_full', 'minmax_compact'):
+    checker.check_bitwise(limited.stdout, source, name, 8, True, minmax=True)
+assert 'scratch capacity 8, scratch bytes 104' in limited.stderr
+assert counts['modules'] == 32 and counts['bodies'] == 72
+assert counts['probe_mutations'] == 72 and counts['mutations'] > 2000
+counts['complete'] = True
+save()

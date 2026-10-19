@@ -346,7 +346,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
                         Compare->getOperand(0) == Next;
   struct Reduction {
     PHINode *Phi;
-    BinaryOperator *Update;
+    Instruction *Update;
     // Conditional recurrences merge an arm-local update with the unchanged
     // header accumulator. This merge, rather than Update, is their live-out.
     PHINode *Merge;
@@ -369,7 +369,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     };
     Value *Backedge = Phi.getIncomingValueForBlock(Latch);
     auto *Merge = dyn_cast<PHINode>(Backedge);
-    BinaryOperator *Update = nullptr;
+    Instruction *Update = nullptr;
     if (Merge) {
       if (Merge->getParent() != Latch || Merge->getNumIncomingValues() < 2)
         return Fail("scalar-unsupported-recurrence");
@@ -389,14 +389,14 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
         return Fail("scalar-unsupported-recurrence");
       BasicBlock *Arm = Merge->getIncomingBlock(*UpdateEdge);
       auto *ArmBranch = dyn_cast<BranchInst>(Arm->getTerminator());
-      Update = dyn_cast<BinaryOperator>(Merge->getIncomingValue(*UpdateEdge));
+      Update = dyn_cast<Instruction>(Merge->getIncomingValue(*UpdateEdge));
       if (!Update || Update->getParent() != Arm || Arm == Header || Arm == Latch ||
           !L.contains(Arm) || !ArmBranch || !ArmBranch->isUnconditional() ||
           ArmBranch->getSuccessor(0) != Latch || !Update->hasOneUse() ||
           *Update->user_begin() != Merge)
         return Fail("scalar-unsupported-recurrence");
     } else {
-      Update = dyn_cast<BinaryOperator>(Backedge);
+      Update = dyn_cast<Instruction>(Backedge);
       if (!Update ||
           (Update->getParent() != Latch &&
            !(SingleDiamond && Update->getParent() == Header)) ||
@@ -405,10 +405,21 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
     }
     Type *Ty = Phi.getType();
     unsigned Opcode = Update->getOpcode();
+    // Only direct scalar integer min/max intrinsics join the binary updates.
+    // Their two arguments occupy operands 0 and 1, so the same exact use-edge
+    // closure and clone/substitute emission apply. The ordinary call checks
+    // below still reject bundles, tail calls and every unsafe call attribute.
+    bool IntegerMinMax = false;
+    if (auto *II = dyn_cast<IntrinsicInst>(Update))
+      IntegerMinMax = II->arg_size() == 2 &&
+                      (II->getIntrinsicID() == Intrinsic::smin ||
+                       II->getIntrinsicID() == Intrinsic::smax ||
+                       II->getIntrinsicID() == Intrinsic::umin ||
+                       II->getIntrinsicID() == Intrinsic::umax);
     bool Subtract = Opcode == Instruction::Sub || Opcode == Instruction::FSub;
     if (!((Ty->isIntegerTy() &&
-           (Opcode == Instruction::Add || Opcode == Instruction::Sub ||
-            Opcode == Instruction::Mul ||
+           (IntegerMinMax || Opcode == Instruction::Add ||
+            Opcode == Instruction::Sub || Opcode == Instruction::Mul ||
             Opcode == Instruction::And || Opcode == Instruction::Or ||
             Opcode == Instruction::Xor)) ||
           ((Ty->isFloatTy() || Ty->isDoubleTy()) &&
@@ -416,7 +427,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
         (Update->getOperand(0) != &Phi &&
          (Subtract || Update->getOperand(1) != &Phi)))
       return Fail("scalar-unsupported-recurrence");
-    // Integer multiply and bitwise updates accept either accumulator operand.
+    // Integer min/max, multiply and bitwise accept either accumulator operand.
     // Multiplication needs no identity or reassociation here: the scalar
     // consumer clones the update (including nowrap flags) in original order.
     // All updates use the same edge-closure and participation proof; skipped
@@ -557,7 +568,8 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
         // No name-based libm contracts, errno assumptions, or vector mappings.
         // speculatable excludes observable effects beyond memory (e.g. FP
         // environment observation); willreturn and nounwind exclude termination
-        // and exception ordering changes. Keep calls once in the producer.
+        // and exception ordering changes. Retained calls stay in the producer;
+        // moved integer min/max updates must satisfy these same restrictions.
         if (!Call->getCalledFunction() || Call->isInlineAsm() ||
             Call->hasOperandBundles() || Call->isTailCall() ||
             Call->isConvergent() || Call->cannotDuplicate() ||
@@ -1033,7 +1045,7 @@ Loop *llvm::tryScalarReductionFission(Loop &L, LoopInfo &LI, DominatorTree &DT,
         B.CreateLoad(Contribution->getType(), Address, "fission.contribution");
   }
   for (Reduction &R : Reductions) {
-    // clone keeps flags, operand order, rounding/grouping and source location.
+    // clone keeps flags, intrinsic attributes, operand order and grouping.
     Instruction *Update = R.Update->clone();
     Update->setOperand(R.ContributionOperand, Contributions[R.Contribution]);
     Update->setOperand(1 - R.ContributionOperand, R.ConsumerPhi);

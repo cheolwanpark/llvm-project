@@ -164,7 +164,9 @@ for reordered in (False, True):
     counts['source_rejections'] += len(checker.NC_COMPOSITIONS)
     for name in checker.NC_COMPOSITIONS:
         original = checker.keep_functions(source, [name])
-        volatile = replace_one(original, 'store double %dc, ptr %dp', 'store volatile double %dc, ptr %dp')
+        anchors = re.findall(r'^  store double %dc, ptr %dp[^\n]*$', original, re.M)
+        assert len(anchors) == 1, (name, anchors)
+        volatile = replace_one(original, anchors[0], anchors[0].replace('store double', 'store volatile double', 1))
         rejected = checker.run([opt, *checker.subtraction_options(112, reordered, True)], input=volatile).stdout
         assert 'scalar.fission' not in rejected
         counts['source_rejections'] += 1

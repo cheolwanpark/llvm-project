@@ -452,7 +452,8 @@ bypass:
   ret void
 }
 
-; REASON: scalar-compact-chunks-reject.c:62:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
+; Ordinary stores are supported; retain this effect rejection using volatile.
+; REASON: scalar-compact-chunks-reject.c:62:3: scalar-IR reduction fission rejected: scalar-non-simple-store
 ; CHECK-LABEL: define void @compact_chunk_reject_store(
 ; CHECK-NOT: scalar.fission
 ; CHECK: ret void
@@ -494,7 +495,7 @@ left:
   %ud = fadd double %rd, %dc
   br label %latch
 right:
-  store i32 %x, ptr %out, align 4
+  store volatile i32 %x, ptr %out, align 4
   br label %latch
 latch:
   %m0 = phi i32 [%r0, %right], [%u0, %left]

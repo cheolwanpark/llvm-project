@@ -217,7 +217,8 @@ static const struct {
   unsigned Shape, Capacity, Lanes;
   bool Multiply, Scalable;
   unsigned VScale;
-} Bitwise[] = {@BITWISE@, @MULTIPLY@};
+  bool MinMax;
+} Bitwise[] = {@BITWISE@, @MULTIPLY@, @MINMAX@};
 static const struct {
   const char *Name;
   CompactDelayFn *Fn, *Reference;
@@ -3502,12 +3503,14 @@ static void check_vector_negation(void) {
 // (including canaries and +/-1 overlapping input/write layouts) are observed.
 // Multiplication also observes two byte products and reuses the same bounded
 // state/participation/order checks; its unsigned products wrap at each width.
+// Integer min/max additionally observes mixed add/mul, with signed comparison
+// defined by a sign-bit bias and unsigned comparisons at the original widths.
 static uint32_t BWC[65], BWState[65];
 static uint64_t BWDC[65];
 static bool BWActive[65];
 static unsigned BWSaved[65], BWProduced, BWBase, BWCount, BWStored, BWConsumed;
 static unsigned BWCapacity, BWLanes, BWVector, BWTail;
-static bool BWMultiply;
+static bool BWMultiply, BWMinMax;
 static bool BWOpen, BWGuarded;
 static uint64_t BWCaseConsumer, BWCaseChunks, BWCaseEmpty, BWCaseVector;
 static uint64_t BWCaseVectorIterations, BWCaseTail, BWCaseFallback;
@@ -3539,6 +3542,13 @@ static bool bitwise_active(unsigned Shape, unsigned Mode, unsigned I,
   bitwise_probe_failure(__func__);
 }
 
+// Signed ordering via a sign-bit bias avoids implementation-defined casts.
+// Min/max ties select the same integer bits regardless of argument position.
+static uint32_t minmax_signed32(uint32_t A, uint32_t B, bool Maximum) {
+  bool Less = (A ^ UINT32_C(0x80000000)) < (B ^ UINT32_C(0x80000000));
+  return (Less != Maximum) ? A : B;
+}
+
 static void bitwise_oracle(uint32_t *A, uint32_t *Mem, uint64_t *Out,
                            uint64_t N, unsigned Mode, uint32_t Seed,
                            unsigned Shape) {
@@ -3547,6 +3557,7 @@ static void bitwise_oracle(uint32_t *A, uint32_t *Mem, uint64_t *Out,
   uint32_t O0 = 324508639, O1 = 610839776, State = Seed, Previous = Seed, C = 0;
   uint64_t X0 = UINT64_C(81985529216486895), X1 = ~UINT64_C(81985529216486895), DC = 0;
   uint8_t B0 = 13, B1 = (uint8_t)-27;
+  uint32_t Q0 = 17, Q1 = (uint32_t)-7;
   if (Shape == 3) {
     A0 = 5; A1 = (uint32_t)-7;
     X0 = UINT64_C(1073741824); X1 = (uint64_t)-19;
@@ -3562,11 +3573,22 @@ static void bitwise_oracle(uint32_t *A, uint32_t *Mem, uint64_t *Out,
     BWDC[I] = DC;
     BWState[I] = State;
     BWActive[I] = bitwise_active(Shape, Mode, I, N, State);
-    if (BWMultiply) State *= X;
+    if (BWMultiply || BWMinMax) State *= X;
     else State += X;
     Mem[I] = State;
     if (BWActive[I]) {
-      if (BWMultiply) {
+      if (BWMinMax) {
+        A0 = minmax_signed32(A0, C, false);
+        A1 = minmax_signed32(C, A1, false);
+        O0 = minmax_signed32(O0, C, true);
+        O1 = minmax_signed32(C, O1, true);
+        X0 = X0 < DC ? X0 : DC;
+        X1 = DC > X1 ? DC : X1;
+        B0 = (uint8_t)C < B0 ? (uint8_t)C : B0;
+        B1 = B1 > (uint8_t)C ? B1 : (uint8_t)C;
+        Q0 += C;
+        Q1 = C * Q1;
+      } else if (BWMultiply) {
         A0 *= C;
         A1 = C * A1;
         X0 *= DC;
@@ -3579,15 +3601,18 @@ static void bitwise_oracle(uint32_t *A, uint32_t *Mem, uint64_t *Out,
         X0 ^= DC;
         X1 = DC ^ X1;
       }
-      O0 |= C;
-      O1 = C | O1;
+      if (!BWMinMax) {
+        O0 |= C;
+        O1 = C | O1;
+      }
     }
   }
   uint64_t Result[] = {A0, A1, O0, O1, X0, X1, Previous, State, C, DC,
                       Shape == 2 ? 7 + 3 * (N - 1) : N - 1,
                       Shape == 2 ? 7 + 3 * N : N};
   memcpy(Out, Result, sizeof(Result));
-  if (BWMultiply) { Out[12] = B0; Out[13] = B1; }
+  if (BWMultiply || BWMinMax) { Out[12] = B0; Out[13] = B1; }
+  if (BWMinMax) { Out[14] = Q0; Out[15] = Q1; }
 }
 
 void record_bw_begin(uint64_t Base, uint64_t Count, uint32_t State) {
@@ -3687,12 +3712,13 @@ void record_mul_consume(const void *IB, const void *IP, const void *DB,
 void record_mul_end(void) { record_bw_end(); }
 
 static void check_bitwise_execution(void) {
-  uint64_t Total = 0, MultiplyTotal = 0;
+  uint64_t Total = 0, MultiplyTotal = 0, MinMaxTotal = 0;
   for (unsigned Cfg = 0; Cfg < sizeof(Bitwise) / sizeof(Bitwise[0]); ++Cfg) {
     uint64_t Runs = 0, Producer = 0, Consumer = 0, Chunks = 0, Empty = 0;
     uint64_t Vector = 0, VectorIterations = 0, Tail = 0, Fallback = 0, Zero = 0;
     BWName = Bitwise[Cfg].Name;
     BWMultiply = Bitwise[Cfg].Multiply;
+    BWMinMax = Bitwise[Cfg].MinMax;
     BWShape = Bitwise[Cfg].Shape;
     BWCapacity = Bitwise[Cfg].Capacity;
     BWLanes = Bitwise[Cfg].Lanes;
@@ -3707,7 +3733,7 @@ static void check_bitwise_execution(void) {
             for (unsigned SeedCase = 0; SeedCase < 2; ++SeedCase) {
               uint64_t N = Case == 67 ? UINT64_MAX : Case;
               uint32_t Seed = SeedCase ? UINT32_C(0xfedcba98) : UINT32_C(0x13579bdf);
-              struct { uint32_t Memory[140]; uint64_t Out[16]; } Init, Ref, Actual, Oracle;
+              struct { uint32_t Memory[140]; uint64_t Out[18]; } Init, Ref, Actual, Oracle;
               // Trial-dependent persistent high/low bits keep AND/OR cases
               // informative; short trips and XOR also expose missing chunks.
               for (unsigned I = 0; I < 140; ++I)
@@ -3717,7 +3743,7 @@ static void check_bitwise_execution(void) {
               // disjoint/equal/backward-alias trials retain chosen contribution
               // bits for the entire trip, so wrong neutral lanes cannot hide
               // behind random AND-to-zero / OR-to-all-ones saturation.
-              if (!BWMultiply && Trial < 3) {
+              if (!BWMultiply && !BWMinMax && Trial < 3) {
                 uint32_t State = Seed;
                 for (unsigned I = 0; I < 65; ++I) {
                   uint32_t Contribution = Trial == 0 ? UINT32_C(0x5aa5c33c) :
@@ -3745,7 +3771,29 @@ static void check_bitwise_execution(void) {
                   State *= X;
                 }
               }
-              for (unsigned I = 0; I < 16; ++I)
+              if (BWMinMax) {
+                // Constant contributions exercise nonidentity seed ties;
+                // extreme first lanes expose signedness and bad seed splats.
+                // The two 64-bit tie trials use both original high-word seeds.
+                if (Trial == 2) Seed = 0;
+                if (Trial == 3) Seed = UINT32_MAX;
+                if (Trial == 6) Seed = UINT32_C(0x01234567);
+                if (Trial == 7) Seed = UINT32_C(0xfedcba98);
+                uint32_t State = Seed;
+                for (unsigned I = 0; I < 65; ++I) {
+                  static const uint32_t ByteCases[] = {0, 255, 13, 229, 127, 128};
+                  uint32_t C = Trial == 0 ? (uint32_t)-251691430 :
+                      Trial == 1 ? UINT32_C(1515890085) :
+                      Trial == 2 ? 0 : Trial == 3 ? UINT32_MAX :
+                      Trial == 4 ? (I & 1 ? UINT32_C(0x7fffffff) : UINT32_C(0x80000000)) :
+                      Trial == 5 ? ByteCases[I % 6] :
+                      Trial == 6 ? UINT32_C(0x89abcdef) : UINT32_C(0x76543210);
+                  uint32_t X = State ^ C;
+                  Init.Memory[I + 2] = X;
+                  State *= X;
+                }
+              }
+              for (unsigned I = 0; I < 18; ++I)
                 Init.Out[I] = UINT64_C(0xbad0cafe12340000) + I;
               BWInputN = N; BWMode = Mode; BWAlias = Alias;
               BWTrial = Trial; BWSeed = Seed;
@@ -3754,13 +3802,13 @@ static void check_bitwise_execution(void) {
               bool Enter = N && N <= 65;
               bitwise_oracle(Oracle.Memory + 2, Oracle.Memory + Offset, Oracle.Out + 1,
                              N, Mode, Seed, Bitwise[Cfg].Shape);
-              Bitwise[Cfg].Reference(BWMultiply && !Enter ? NULL : Ref.Memory + 2,
-                                    BWMultiply && !Enter ? NULL : Ref.Memory + Offset, Ref.Out + 1,
+              Bitwise[Cfg].Reference((BWMultiply || BWMinMax) && !Enter ? NULL : Ref.Memory + 2,
+                                    (BWMultiply || BWMinMax) && !Enter ? NULL : Ref.Memory + Offset, Ref.Out + 1,
                                     N, Mode, Seed);
               BWProduced = 0;
               BWOpen = false;
-              Bitwise[Cfg].Fn(BWMultiply && !Enter ? NULL : Actual.Memory + 2,
-                             BWMultiply && !Enter ? NULL : Actual.Memory + Offset, Actual.Out + 1,
+              Bitwise[Cfg].Fn((BWMultiply || BWMinMax) && !Enter ? NULL : Actual.Memory + 2,
+                             (BWMultiply || BWMinMax) && !Enter ? NULL : Actual.Memory + Offset, Actual.Out + 1,
                              N, Mode, Seed);
               if (BWOpen || BWProduced != (Enter ? N : 0) ||
                   memcmp(Ref.Memory, Oracle.Memory, sizeof(Ref.Memory)) ||
@@ -3791,18 +3839,21 @@ static void check_bitwise_execution(void) {
     printf("%s %s: comparisons=%llu producer=%llu consumer=%llu chunks=%llu empty=%llu "
            "vector=%llu vector-iterations=%llu tail=%llu fallback=%llu zero=%llu "
            "lanes=%u scalable=%u vscale=%u\n",
-           BWMultiply ? "Multiply" : "Bitwise", Bitwise[Cfg].Name, (unsigned long long)Runs, (unsigned long long)Producer,
+           BWMinMax ? "Minmax" : BWMultiply ? "Multiply" : "Bitwise", Bitwise[Cfg].Name, (unsigned long long)Runs, (unsigned long long)Producer,
            (unsigned long long)Consumer, (unsigned long long)Chunks, (unsigned long long)Empty,
            (unsigned long long)Vector, (unsigned long long)VectorIterations,
            (unsigned long long)Tail, (unsigned long long)Fallback, (unsigned long long)Zero,
            BWLanes, (unsigned)Bitwise[Cfg].Scalable, Bitwise[Cfg].VScale);
-    if (BWMultiply) MultiplyTotal += Runs;
+    if (BWMinMax) MinMaxTotal += Runs;
+    else if (BWMultiply) MultiplyTotal += Runs;
     else Total += Runs;
   }
   printf("Bitwise: %llu original/transformed/unsigned-oracle host comparisons (not RVV)\n",
          (unsigned long long)Total);
   printf("Multiply: %llu original/transformed/unsigned-oracle host comparisons (not RVV)\n",
          (unsigned long long)MultiplyTotal);
+  printf("Minmax: %llu original/transformed/unsigned-oracle host comparisons (not RVV)\n",
+         (unsigned long long)MinMaxTotal);
 }
 
 static unsigned MultiplyAnalogousParticipants;

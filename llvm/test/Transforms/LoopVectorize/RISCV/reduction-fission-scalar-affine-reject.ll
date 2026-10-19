@@ -406,7 +406,8 @@ exit:
   ret void
 }
 
-; REASON: scalar-affine-reject.c:62:3: scalar-IR reduction fission rejected: scalar-unsupported-instruction
+; Ordinary stores are supported; retain this effect rejection using volatile.
+; REASON: scalar-affine-reject.c:62:3: scalar-IR reduction fission rejected: scalar-non-simple-store
 ; CHECK-LABEL: define void @reject_affine_store(
 ; CHECK-NOT: scalar.fission
 ; CHECK: ret void
@@ -464,7 +465,7 @@ latch:
   %u1 = add i32 %c, %r1
   %ud = fadd double %rd, %dc
   %uf = fadd float %rf, %fc
-  store i32 %c, ptr %out
+  store volatile i32 %c, ptr %out
   %next = add nuw nsw i64 %iv, 1
   %done = icmp eq i64 %limit, %next
   br i1 %done, label %exit, label %loop, !dbg !17
