@@ -23,12 +23,20 @@
 ; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
 ; RUN:   -hints-allow-reordering=false -S %s \
 ; RUN:   | FileCheck %s --check-prefix=REJECT --implicit-check-not=vector.fission --implicit-check-not=fission.scratch
+; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v \
+; RUN:   -force-vector-interleave=1 -hints-allow-reordering=false -enable-vplan-reduction-fission \
+; RUN:   -vplan-reduction-fission-max-scalable-vf-multiplier=1 -pass-remarks=vplan-reduction-fission \
+; RUN:   -S %s -o %t.limited 2> %t.limited.remarks
+; RUN: FileCheck %s < %t.limited
+; RUN: FileCheck %s --check-prefix=LIMITED < %t.limited.remarks
 ;
 ; Explicit fission now accepts one or two short, low-pressure producers, with
 ; no pressure/FP cost win required. The depth flag is a cut preference and the
 ; old reduction/pressure minima are compatibility no-ops. These functions are
 ; also executed against scalar IR by utils/check-reduction-fission.py.
 ; Scratch capacity is 65, execution uses guarded N, and each stage owns a tail.
+; LIMITED-COUNT-2: producer VF vscale x 4, accumulator VF vscale x 4
+; LIMITED-COUNT-2: producer VF vscale x 2, accumulator VF vscale x 2
 ; REMARK: split reduction loop: baseline VF {{.*}}, producer VF {{.*}}, accumulator VF {{.*}}, trip count bounded-runtime, scratch capacity 65, scratch bytes 260
 ; REMARK-SAME: scratch store bytes/iteration 4, scratch load bytes/iteration 4, duplicated recipes 0, reread loads/iteration 0
 ; REMARK: reduction sum: ordered, reordering permission: IR

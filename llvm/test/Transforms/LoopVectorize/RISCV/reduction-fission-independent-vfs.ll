@@ -30,6 +30,21 @@
 ; RUN: opt -enable-scalar-reduction-fission=false -passes='loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each \
 ; RUN:   -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 -enable-vplan-reduction-fission=false -S %s -o %t.disabled
 ; RUN: diff %t.baseline %t.disabled
+; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
+; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-force-producer-vf=2 \
+; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.producer-only 2> %t.producer-only.remarks
+; RUN: FileCheck %s --check-prefix=REJECT --implicit-check-not=vector.fission --implicit-check-not=fission.scratch < %t.producer-only
+; RUN: FileCheck %s --check-prefix=INVALID-PAIR < %t.producer-only.remarks
+; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
+; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-force-accumulator-vf=8 \
+; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.accumulator-only 2> %t.accumulator-only.remarks
+; RUN: FileCheck %s --check-prefix=REJECT --implicit-check-not=vector.fission --implicit-check-not=fission.scratch < %t.accumulator-only
+; RUN: FileCheck %s --check-prefix=INVALID-PAIR < %t.accumulator-only.remarks
+; RUN: opt -enable-scalar-reduction-fission=false -passes=loop-vectorize -verify-each -mtriple=riscv64 -mattr=+v -force-vector-interleave=1 \
+; RUN:   -enable-vplan-reduction-fission -vplan-reduction-fission-force-producer-vf=3 -vplan-reduction-fission-force-accumulator-vf=8 \
+; RUN:   -pass-remarks-missed=vplan-reduction-fission -S %s -o %t.non-power-of-two 2> %t.non-power-of-two.remarks
+; RUN: FileCheck %s --check-prefix=REJECT --implicit-check-not=vector.fission --implicit-check-not=fission.scratch < %t.non-power-of-two
+; RUN: FileCheck %s --check-prefix=INVALID-PAIR < %t.non-power-of-two.remarks
 ;
 ; Scalable VFABI 'x' derives the VF from the widest vector argument or return
 ; element, using 128 bits. i32(i32) would require nxv4, regardless of the vector
@@ -41,6 +56,8 @@
 ;
 ; REMARK: independent-vfs.c:10:5: split reduction loop: baseline VF {{.*}}, producer VF vscale x 2, accumulator VF vscale x 8, trip count constant, scratch capacity 65, scratch bytes 260
 ; REMARK-SAME: scratch store bytes/iteration 4, scratch load bytes/iteration 4, duplicated recipes 0, reread loads/iteration 0
+; INVALID-PAIR: independent-vfs.c:10:5: reduction fission rejected: invalid-forced-stage-vf-pair
+; INVALID-PAIR: independent-vfs.c:30:7: reduction fission rejected: invalid-forced-stage-vf-pair
 ; REJECT-REMARK: independent-vfs.c:10:5: reduction fission rejected: forced-stage-vf-not-legal
 ; REJECT-REMARK: independent-vfs.c:30:7: reduction fission rejected: forced-stage-vf-not-legal
 ; CHECK-LABEL: define void @independent_vfs(
