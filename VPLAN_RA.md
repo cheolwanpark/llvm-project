@@ -2,8 +2,11 @@
 
 LLVM checkpoints IR before LoopVectorize, enumerates vector candidates, collects
 post-register-allocation facts, and reproduces explicitly selected candidates.
-`utils/vplan-tools/cost_model.py` is the single implementation of costs used by
-calibration, evaluation, and `utils/vplan-meta-compile`. No measurements or dataset
+`utils/vplan-tools/selection_policy.py` supplies this checkout's policy to
+evaluation, printing and `utils/vplan-meta-compile`. On `backend-aware-cost`,
+`cost_model.py` supplies the same backend costs to selection and calibration.
+The two ablation branches replace only the policy, not the compiler pipeline.
+No measurements or dataset
 are read by the meta compiler. Scores are heuristic model units, not CPU cycles.
 
 ```text
@@ -28,11 +31,16 @@ redundant-copy elimination when enabled. It preserves the MachineFunction and
 only collects and writes facts. Observation precedes post-RA sinking, frame
 lowering, later pseudo expansion and scheduling; it is not final assembly.
 
-Raw analytics version 2 is unchanged: instructions, register geometry, operand
+Raw analytics version 2 contains instructions, register geometry, operand
 flags, memory direction, spill objects, predicate identities, regions and proven
 physical RAW dependency edges. Instructions outside the selected body remain
 visible but are not costed. Single-block regions have distance-0/1 dependency
 coverage; other regions expose block-local coverage. Unknown facts are explicit.
+
+Operands additionally expose `Bank` (`gpr`, `fpr`, `vector`, or `unknown`). Each
+instruction's `SpillSlotAccess` checks both frame-index operands and fixed-stack
+MMOs, independently of recognized `Spill` transfers. The shared Python spill
+projection rejects incomplete coverage rather than interpreting it as zero.
 
 IR metadata identifies the selected loop. Induction witnesses verify its
 post-optimization iteration mapping, including fixed-vscale folding and provable
@@ -105,6 +113,13 @@ candidate has `id`, `function`, `loop`, `vf`, `estimated_width`, `probeable`, an
 `scalar_tail` (false uses folded-tail scoring). Scalar VPlans are never probed.
 Discovery emits no vector selections and performs no vectorization.
 
+Each candidate also carries `middle_end`: `precomputed`, `vector_region`,
+`estimated_spill`, `original`, `pressure`, `spill_units`, `reload_units`, and
+`cost_scale: 4`. Costs are exact integer quarter units, or null if invalid;
+unit arrays use GPR/FPR/vector order. These are ordinary middle-end/TTI facts,
+not backend scores. Invalid middle-end costs do not remove common probe candidates.
+The full context is checked again during discovery, probing and final replay.
+
 Selection input contains `version: 3`, `run_id`, the full original `loops` and
 `candidates` context, and one `selections` row per loop:
 
@@ -129,7 +144,8 @@ never becomes a scalar fallback.
 
 Protocol v2 manifests/feedback, old cache bundles, and old weights are rejected.
 Recollect and refit; there is no compatibility mode. Raw analytics remain v2,
-cache bundles are v3, and weights schema 2 uses model `rvv-python-19-v3`.
+cache bundles are v4, and weights schema 2 uses model `rvv-python-19-v3`.
+Existing caches must be recollected for the added common observations.
 
 ## Verification
 

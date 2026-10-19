@@ -1,6 +1,6 @@
 # VPlan tools
 
-These tools compile embedded kernels and compare cost rankings with measured
+These tools compile embedded kernels and compare replayed VF selections with measured
 scalable VFs. They do not execute benchmarks, update measurements, or install
 learned coefficients into LLVM. Cost values are model units, not predicted CPU
 cycles.
@@ -106,10 +106,11 @@ costed. Each vector candidate is observed after RA cleanup. Compiler
 analytics limitations remain explicit, including unsupported instructions,
 conditional regions, and unprovable iteration mappings.
 
-`evaluate`, `evaluate-weights`, and `calibrate` share raw collection, validation,
-and the Python model. Evaluation skips final replay. `print-vplans` and its alias
-show Python scores and selections; `--detail` adds ordinary VPlan diagnostics.
-Printing accepts `--weights PATH`. `--compiler-mode direct` uses ordinary LLVM
+`evaluate`, `evaluate-weights`, and `calibrate` share observation formats and the
+checkout's policy interface. Default evaluation verifies final replay before
+scoring its selected VF. `print-vplans` and its alias show policy scores or
+acceptance/rejection reasons and selections; `--detail` adds ordinary VPlan diagnostics.
+Printing accepts `--weights PATH` for a fittable policy. `--compiler-mode direct` uses ordinary LLVM
 costs and the text report parser; meta mode uses structured JSON only.
 
 Scalar tail cost comes from the manifest's middle-end scalar iteration cost.
@@ -120,11 +121,13 @@ empty actual tail. Missing required scalar cost excludes that candidate explicit
 Candidates must agree on run, function/loop, CPU, VLEN and trip-count context.
 See [VPLAN_RA.md](../../VPLAN_RA.md) for the protocol and final compilation usage.
 
-Analytics are cached under `.cache/analytics` (override with `--cache-dir`). Keys
+Calibration and backend `--metric-mode ranking` cache analytics under
+`.cache/analytics` (override with `--cache-dir`). Default selection evaluation
+runs the full driver and does not reuse a raw-only cache as evidence of replay. Keys
 include source, recorded flags, compiler/extractor binaries, driver/collection
 code, and local headers. Cache entries contain no measurements or learned scores.
 Changing fitting options reuses the facts. `--artifacts-dir` retains source, IR,
-MIR, commands and diagnostics on cache misses; otherwise intermediate files are
+MIR, commands and diagnostics (on cache misses for cached commands); otherwise intermediate files are
 temporary. Invalid cache entries report their path instead of silently falling
 back. Weight files bind the model and extraction context; refit after changing
 that context.
@@ -202,7 +205,18 @@ JSON file, not a pickle or an LLVM configuration file.
 
 ## Evaluation and exclusions
 
-Only measured scalable VFs participate. Multiple usable plans for one VF use the
+The default `--metric-mode selection` selects from all generated candidates before
+joining to measurements. Top-1 exact compares the replayed VF with the measured
+winner (smaller VF breaks measured ties). Regret is its measured cycles divided
+by the best measured cycles, minus one. Scalar choices, unmeasured or fixed VFs,
+VLEN mismatches, multiple-loop kernels and compilation failures remain explicit
+exclusions. At least two measured VFs are required. Unavailable alternative
+candidate costs do not exclude a successfully replayed, measured choice.
+Results use schema 3 and include the policy identity, actual choice, coverage,
+exclusions and metrics, without fabricated candidate rankings.
+
+`--metric-mode ranking` is available for numerical policies. Only measured scalable
+VFs participate in this diagnostic. Multiple usable plans for one VF use the
 minimum score. A benchmark is excluded if any measured VF lacks a usable score,
 the selected loop is ambiguous, or fewer than two VFs were measured. Unsupported
 unmeasured VFs do not invalidate the ranking. Final compilation selects each loop
@@ -220,17 +234,53 @@ average ranks and excludes constant rankings. p95 uses linear interpolation.
 Each benchmark has equal metric weight. Reports include denominators, exclusions,
 coverage and the ten largest regrets. `--exclude-reasons` prints individual reasons.
 
-Both meta evaluation commands write schema 2 with model provenance, float scores,
-metrics and exclusions. Default and fitted evaluation share coverage policy and
-collection. Direct evaluation retains rational LLVM report scores. No eligible
-benchmarks or invalid configuration returns 1; successful evaluation returns 0.
+Ranking commands write schema 2 with provenance, scores, metrics and exclusions.
+Default and fitted selection evaluation use the same replay/coverage rules.
+Direct evaluation retains rational LLVM report scores. No eligible benchmarks,
+invalid configuration, or a compilation failure returns 1; completed successful evaluation returns 0.
 All commands return 130 on interruption.
 
 `tail_scale` is the nineteenth positive multiplier and has its own search bounds.
 It defaults to 1 and stays fixed when no nonzero tail term is observed. Body
 multipliers retain [0.25, 4] bounds. Scores and diagnostic breakdown come from the
-same code. Model `rvv-python-19-v3`, weights schema 2 and cache bundle v3 reject
+same code. Model `rvv-python-19-v3`, weights schema 2 and cache bundle v4 reject
 older artifacts; recollect and refit without automatic conversion.
+
+## Ablation branches and common comparison
+
+`backend-aware-cost` is the parent and the only fittable variant. `spill-reject`
+and `spill-aware` branch directly from the same common compiler/tools commit.
+Each checkout's `selection_policy.py` implements candidate evaluation and loop
+selection plus capability declarations. The common driver, projection, tail
+formula, dataset partition and CLI implementation are identical across branches.
+`--llvm-path` chooses the target checkout's policy as well as its compiler;
+the default database still belongs to the invoking checkout.
+
+`spill-reject` accepts complete zero-vector-spill scalable candidates and chooses
+the largest VF, ignoring GPR/FPR traffic. It does not require a valid middle-end
+cost or invent a ranking. `spill-aware` replaces only the pressure-policy spill
+term with TTI-priced observed transfers. Its `--spill-count-unit` defaults to
+`instruction`; `register` multiplies vector transfers by their register group.
+Incomplete spill facts or needed TTI units use the old estimate, but unproven
+iteration mappings and failed probes are excluded. Both policies use v3 replay,
+IC=1 and no separate vector epilogue; neither compares vector profitability with
+scalar execution. They reject fitting/weights requests as fixed ablations.
+
+Run `evaluate --llvm-path CHECKOUT --artifacts-dir RESULTS/VARIANT
+--json-output RESULTS/VARIANT.json` separately for each variant, using the same
+database. The three names are `backend-aware-cost`, `spill-reject`, and
+`spill-aware`. Then run:
+
+```sh
+uv run python compare-vf-selection RESULTS
+```
+
+The comparison audits saved v3 replay artifacts, policy identities, common
+candidate contexts, measurements and splits. It reports metrics on the common
+scoreable cohort and retains individual coverage and every exclusion.
+Compilation failures are rejected unless `--allow-compile-failures` is explicitly
+supplied; such a comparison is marked partial. These metrics use historical
+measurements, not execution timings of the newly generated code.
 
 ### Historical coverage verification after the minimal fixes
 

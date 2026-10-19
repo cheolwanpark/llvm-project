@@ -57,7 +57,8 @@ public:
   bool hasRequest() const;
   void setLoopInfo(InstructionCost Scalar, unsigned Max, unsigned Exact);
   void failure(StringRef Reason);
-  void recordCandidate(const VPlan &Plan, ElementCount VF, unsigned Width);
+  void recordCandidate(const VPlan &Plan, ElementCount VF, unsigned Width,
+                       json::Object MiddleEnd);
   void selection(const VPlan &Plan, ElementCount VF, unsigned IC,
                  ElementCount EpilogueVF, bool Emitted);
 };

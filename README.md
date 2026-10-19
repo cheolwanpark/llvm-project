@@ -1,5 +1,13 @@
 # Backend-aware VPlan cost tools
 
+Active variant: **backend-aware-cost**, the full Python backend cost model.
+
+`spill-reject` and `spill-aware` are fixed-policy ablation branches derived
+directly from this branch. All three share middle-end/backend observations,
+protocol v3, the meta compiler and tools; only the Python selection policy and
+its tests/documentation differ. `--llvm-path` selects that checkout's compiler
+and policy together.
+
 Use Linux or macOS with [uv](https://docs.astral.sh/uv/), CMake 3.20+, Ninja, and a
 host C/C++ compiler. `utils/vplan-tools` is an independent Python 3.12 uv project.
 Supply an external `dataset.sqlite`; databases are not committed.
@@ -43,12 +51,18 @@ uv run python evaluate-weights --weights /tmp/weights.json \
 ```
 
 `calibrate` reads tuning only. Both evaluation tools read validation only and have
-no split override. `evaluate` uses default Python costs; `evaluate-weights` uses fitted
+no split override. Evaluation defaults to Top-1/regret of the final replayed VF;
+`--metric-mode ranking` retains cost-ranking diagnostics. `evaluate` uses default Python costs; `evaluate-weights` uses fitted
 coefficients in the same model. Fitting preserves the hard-max analytical structure, learns 19
 shared internal coefficient multipliers with weighted pairwise ranking, and
 excludes measured pairs within 1%. Learned coefficients are not installed into
 LLVM; the meta compiler accepts `--weights` and sends only selected IDs to LLVM. Unsupported or ambiguous observations are reported as exclusions; the
 usable population may be smaller than the partition.
+
+Fitting and weights are supported only on `backend-aware-cost`. On `spill-aware`,
+`--spill-count-unit instruction|register` selects the existing TTI spill counting
+rule (default `instruction`). `spill-reject` has neither weights nor a numerical
+cost ranking. See the tools guide for a common-cohort comparison of all variants.
 
 Database precedence is **`--db PATH` > `VPLAN_DB` > checkout/dataset.sqlite**.
 `--llvm-path` selects another compiler checkout without changing the default DB.

@@ -6304,19 +6304,51 @@ LoopVectorizationPlanner::precomputeCosts(VPlan &Plan, ElementCount VF,
   return Cost;
 }
 
+// Transport exact quarter units, including saturated costs. Invalid costs are
+// facts about the middle-end model, not a reason to remove a probe candidate.
+static json::Value quarterCost(InstructionCost Cost) {
+  if (!Cost.isValid() || Cost < 0)
+    return nullptr;
+  int64_t Whole = Cost.getValue();
+  return Whole * 4 + ((Cost - Whole) * 4).getValue();
+}
+
 InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
-                                               VPRegisterUsage *RU) const {
+                                              VPRegisterUsage *RU,
+                                              json::Object *Observation) const {
   VPCostContext CostCtx(CM.TTI, *CM.TLI, Plan, CM, Config.CostKind, PSE,
                         OrigLoop);
   CostCtx.Report = Config.CostReport;
   if (CostCtx.Report)
     CostCtx.Report->beginEvaluation(Plan, VF);
   InstructionCost Cost = precomputeCosts(Plan, VF, CostCtx);
+  if (Observation)
+    (*Observation)["precomputed"] = quarterCost(Cost);
   VP_COST_REPORT(CostCtx.Report,
                  OS << "      legacy_precomputed=" << Cost << '\n');
 
   // Now compute and add the VPlan-based cost.
   InstructionCost RegionCost = Plan.cost(VF, CostCtx);
+  if (Observation) {
+    (*Observation)["cost_scale"] = 4;
+    (*Observation)["vector_region"] = quarterCost(RegionCost);
+    (*Observation)["pressure"] =
+        bool(RU && Config.shouldConsiderRegPressureForVF(VF));
+    (*Observation)["estimated_spill"] = 0;
+    json::Array SpillUnits, ReloadUnits;
+    auto &Context = OrigLoop->getHeader()->getContext();
+    for (unsigned RC :
+         {CM.TTI.getRegisterClassForType(false, Type::getInt64Ty(Context)),
+          CM.TTI.getRegisterClassForType(false, Type::getFloatTy(Context)),
+          CM.TTI.getRegisterClassForType(true)}) {
+      SpillUnits.push_back(
+          quarterCost(CM.TTI.getRegisterClassSpillCost(RC, Config.CostKind)));
+      ReloadUnits.push_back(
+          quarterCost(CM.TTI.getRegisterClassReloadCost(RC, Config.CostKind)));
+    }
+    (*Observation)["spill_units"] = std::move(SpillUnits);
+    (*Observation)["reload_units"] = std::move(ReloadUnits);
+  }
   VP_COST_REPORT(CostCtx.Report,
                  OS << "      vector_region=" << RegionCost << '\n');
   Cost += RegionCost;
@@ -6325,6 +6357,8 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
   if (RU && Config.shouldConsiderRegPressureForVF(VF)) {
     InstructionCost SpillCost = RU->spillCost(
         CM.TTI, Config.CostKind, ForceTargetNumVectorRegs, CostCtx.Report);
+    if (Observation)
+      (*Observation)["estimated_spill"] = quarterCost(SpillCost);
     VP_COST_REPORT(CostCtx.Report,
                    OS << "      register_pressure=considered "
                          "policy=shouldConsiderRegPressureForVF spill_cost="
@@ -6365,6 +6399,8 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
     LLVM_DEBUG(dbgs() << "Invalid");
   LLVM_DEBUG(dbgs() << ")\n");
 #endif
+  if (Observation)
+    (*Observation)["original"] = quarterCost(Cost);
   return Cost;
 }
 
@@ -6373,9 +6409,23 @@ void LoopVectorizationPlanner::registerRACandidates() {
     return;
   for (const auto &P : VPlans) {
     Config.RA->registerPlan(*P);
-    for (ElementCount VF : P->vectorFactors())
-      Config.RA->recordCandidate(*P, VF,
-          estimateElementCount(VF, Config.getVScaleForTuning()));
+    SmallVector<ElementCount> VFs(P->vectorFactors());
+    bool Pressure = any_of(VFs, [this](ElementCount VF) {
+      return Config.shouldConsiderRegPressureForVF(VF);
+    });
+    SmallVector<VPRegisterUsage, 8> RUs;
+    if (Pressure)
+      RUs = calculateRegisterUsageForPlan(*P, VFs, TTI, CM.ValuesToIgnore);
+    for (unsigned I = 0; I < VFs.size(); ++I) {
+      ElementCount VF = VFs[I];
+      if (VF.isScalar())
+        continue;
+      json::Object MiddleEnd;
+      cost(*P, VF, Pressure ? &RUs[I] : nullptr, &MiddleEnd);
+      Config.RA->recordCandidate(
+          *P, VF, estimateElementCount(VF, Config.getVScaleForTuning()),
+          std::move(MiddleEnd));
+    }
   }
 }
 

@@ -6,6 +6,7 @@ import math
 import torch
 
 from model_errors import ToolError
+from observations import needs_scalar_cost, validate_scalar_cost, iteration_factors
 
 MODEL_VERSION = "rvv-python-19-v3"
 PARAMETERS = (
@@ -58,18 +59,6 @@ def value_edge(a, e, fused):
             ("Implicit", "Undef", "SubReg")) and (fused or not use["Tied"]))
 
 
-def needs_scalar_cost(a):
-    """Require a tail reference unless both the loop and score omit its work."""
-    if not a["MaxTripCount"]:
-        return False
-    if not a["ScalarTail"]:
-        return False
-    # A divisible upper bound alone cannot prove that the real tail is empty.
-    return not (a["ExactTripCount"] > 0
-                and a["ExactTripCount"] % a["Width"] == 0
-                and a["MaxTripCount"] % a["Width"] == 0)
-
-
 def same_context(a, b):
     return (all(a[k] == b[k] for k in
                 ("RunID", "Function", "CPU", "VLen", "MaxTripCount", "ExactTripCount"))
@@ -117,10 +106,7 @@ class CostModel:
         for ci, a in enumerate(observations):
             validate_analytics(a)
             scalar = a.get("ScalarCost")
-            if needs_scalar_cost(a) and scalar is None:
-                raise ToolError("missing middle-end scalar cost for scalar tail")
-            if scalar is not None and (type(scalar) not in (int, float) or not math.isfinite(scalar) or scalar < 0):
-                raise ToolError("invalid middle-end scalar cost")
+            validate_scalar_cost(a)
             if a["MaxTripCount"] and a["ScalarTail"] and a["MaxTripCount"] % a["Width"] and scalar:
                 self.active.add(P - 1)
             try:
@@ -340,9 +326,9 @@ class CostModel:
         result = self.body_breakdown(multipliers)
         main, tail = [], []
         for a in self.observations:
-            t, w = a["MaxTripCount"], a["Width"]
-            main.append(1 / w if not t else t // w if a["ScalarTail"] else (t + w - 1) // w)
-            tail.append((t % w) * (a.get("ScalarCost") or 0) if t and a["ScalarTail"] else 0)
+            iterations, scalar_tail = iteration_factors(a)
+            main.append(iterations)
+            tail.append(scalar_tail)
         result["body_iterations"] = torch.tensor(main, dtype=DTYPE).expand(multipliers.shape[0], -1)
         result["tail"] = multipliers[:, -1:] * torch.tensor(tail, dtype=DTYPE)
         result["score"] = result["body"] * result["body_iterations"] + result["tail"]

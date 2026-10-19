@@ -14,6 +14,7 @@ namespace vplan {
 struct Operand {
   int64_t Reg = 0;
   std::string Name;
+  std::string Bank = "unknown";
   std::vector<int64_t> Units;
   int64_t Group8 = 0;
   bool Vector = false;
@@ -43,6 +44,7 @@ struct InstructionInfo {
   bool ScalableBytes = false;
   bool Stack = false;
   bool Spill = false;
+  bool SpillSlotAccess = false;
   bool Load = false;
   bool Store = false;
   bool Masked = false;

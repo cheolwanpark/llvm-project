@@ -16,6 +16,9 @@
 ; RESUME-NOT: llvm.vplan.checkpoint
 ; MANIFEST-DAG: "run_id":"test"
 ; MANIFEST-DAG: "scalar_cost":
+; MANIFEST-DAG: "middle_end":
+; MANIFEST-DAG: "cost_scale":4
+; MANIFEST-DAG: "spill_units":
 ; MANIFEST-DAG: "version":3
 ; MANIFEST-DAG: "selections":
 ; MANIFEST-NOT: "vf":"f1"

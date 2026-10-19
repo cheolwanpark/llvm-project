@@ -1,0 +1,43 @@
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=kernel:0:0:s4 -vplan-analytics-output=%t.raw.json %s -o %t.mir
+# RUN: %python %S/Inputs/project-spills.py %t.raw.json 16 > %t.json
+# RUN: FileCheck %s --implicit-check-not=resource_demand < %t.json
+# CHECK-COUNT-6: "reloads":0,"spills":0
+# CHECK: "supported":true
+--- |
+  define void @kernel() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit, !llvm.loop !0
+  exit:
+    ret void
+  }
+  attributes #0 = { "vplan.ra.iteration-mapping"="1" "vplan.ra.vf"="4" "vplan.ra.scalable"="1" "vplan.ra.width"="16" "vplan.ra.candidate"="kernel:0:0:s4" }
+  !0 = distinct !{!0, !1}
+  !1 = !{!"llvm.loop.vplan.candidate", !"kernel:0:0:s4"}
+...
+---
+name: kernel
+tracksRegLiveness: false
+stack:
+  - { id: 0, type: spill-slot, size: 64, alignment: 8, stack-id: scalable-vector }
+  - { id: 1, type: spill-slot, size: 8, alignment: 8 }
+  - { id: 2, type: default, size: 8, alignment: 8 }
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    SD $x11, %stack.1, 0
+    PseudoBR %bb.1
+
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    SD $x11, %stack.2, 0
+    $x11 = LD %stack.2, 0
+    $x12 = ADDI $x12, -1
+    BNE $x12, $x0, %bb.1
+    PseudoBR %bb.2
+
+  bb.2.exit:
+    $x11 = LD %stack.1, 0
+    PseudoRET
+...

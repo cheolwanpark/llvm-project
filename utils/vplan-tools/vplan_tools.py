@@ -278,7 +278,7 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                    compiler_mode: str = "meta", meta_script: Path | None = None,
                    artifacts_dir: Path | None = None,
                    *, stop_after_ra: bool = False, analytics_only: bool = False,
-                   weights: Path | None = None) -> subprocess.CompletedProcess:
+                   weights: Path | None = None, spill_count_unit: str | None = None) -> subprocess.CompletedProcess:
     flags = benchmark_flags(benchmark)
     with tempfile.TemporaryDirectory(prefix="vplan-tools-") as temporary:
         root = Path(temporary)
@@ -307,6 +307,8 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                 command += ["--analytics-only"]
             if weights:
                 command += ["--weights", str(weights)]
+            if spill_count_unit:
+                command += ["--spill-count-unit", spill_count_unit]
             if detail:
                 command.append("--detail")
             command += ["--", *flags]
@@ -315,9 +317,12 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                 result = subprocess.run(command, capture_output=True, text=True, errors="replace")
                 result.artifact_root = root
                 if result.returncode == 0:
+                    result.manifest = json.loads((root / "backend/candidates.json").read_text())
                     result.candidate_status = json.loads((root / "backend/candidate-status.json").read_text())
                     if not analytics_only:
                         result.selection = json.loads((root / "backend/selection.json").read_text())
+                    if not stop_after_ra:
+                        result.final_manifest = json.loads((root / "backend/final.manifest.json").read_text())
                     if detail:
                         result.stderr += (root / "backend/discover.stderr").read_text()
                         for log in sorted((root / "backend").glob("probe-*.stderr")):
@@ -680,16 +685,23 @@ def print_vplans_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--benchmark", required=True, help="exact benchmark ID")
     parser.add_argument("--detail", action="store_true", help="include detailed cost calculations")
     parser.add_argument("--weights", type=resolved_path)
+    parser.add_argument("--spill-count-unit", choices=("instruction", "register"))
     args = parser.parse_args(argv)
+    from selection import load_policy
+    if args.compiler_mode == "direct" and (args.weights or args.spill_count_unit):
+        raise ToolError("direct compilation does not consume policy weights/options")
     benchmarks, _ = load_database(args.db, benchmark_id=args.benchmark)
     benchmark = next((b for b in benchmarks if b.id == args.benchmark), None)
     if benchmark is None:
         raise ToolError(f"unknown benchmark: {args.benchmark}")
+    if args.compiler_mode == "meta":
+        load_policy(args.llvm_path, args.weights, args.spill_count_unit)
     clang = ensure_compiler(args.llvm_path, args.build_dir, args.jobs)
     result = compile_report(clang, benchmark, args.detail, args.timeout,
                             compiler_mode=args.compiler_mode,
                             meta_script=args.llvm_path.resolve() / "utils/vplan-meta-compile",
-                            stop_after_ra=args.compiler_mode == "meta", weights=args.weights)
+                            stop_after_ra=args.compiler_mode == "meta", weights=args.weights,
+                            spill_count_unit=args.spill_count_unit)
     if args.compiler_mode == "meta" and result.returncode == 0:
         for row in result.candidate_status["candidates"]:
             print(f"{row['id']}: {row['status']} " + (f"score={row['score']:.12g}" if 'score' in row else row.get('reason', '')))
@@ -712,8 +724,8 @@ def evaluate_main(argv: list[str] | None = None) -> int:
     mode_parser.add_argument("--compiler-mode", default="meta")
     mode, _ = mode_parser.parse_known_args(argv)
     if mode.compiler_mode == "meta":
-        from calibration import evaluate_model_main
-        return evaluate_model_main(argv)
+        from selection_evaluation import evaluate_main as evaluate_policy
+        return evaluate_policy(argv)
     parser = argument_parser("Compare VPlan cost rankings with measured cycle rankings.")
     parser.add_argument("--benchmark", action="append", metavar="BENCHMARK",
                         help="one exact benchmark ID (default: all benchmarks; specify only once)")

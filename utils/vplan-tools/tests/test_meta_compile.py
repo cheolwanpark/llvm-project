@@ -10,6 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 DRIVER = ROOT / 'utils' / 'vplan-meta-compile'
 API = runpy.run_path(str(DRIVER))
+from selection import load_policy, select_loops
 CLANG = os.environ.get('VPLAN_CLANG')
 SOURCE = '''void add(float *restrict d, const float *restrict a,
                      const float *restrict b, unsigned n) {
@@ -55,8 +56,14 @@ class MetaCompilerTests(unittest.TestCase):
         self.assertEqual(final['selections'], selection['selections'])
         self.assertGreater(len(manifest['candidates']), 1)
         self.assertFalse(any('body_cost' in c for c in manifest['candidates']))
-        scores = {c['id']: c['score'] for c in statuses if c['status'] == 'scored'}
-        self.assertEqual(scores[final['selections'][0]['id']], min(scores.values()))
+        self.assertEqual(final['selections'], select_loops(load_policy(), manifest, statuses))
+        for candidate in manifest['candidates']:
+            middle = candidate['middle_end']
+            self.assertEqual(middle['cost_scale'], 4)
+            self.assertEqual(len(middle['spill_units']), 3)
+            if middle['original'] is not None:
+                self.assertEqual(middle['original'], min(2**63 - 1,
+                    middle['precomputed'] + middle['vector_region'] + middle['estimated_spill']))
         for selection in final['selections']:
             self.assertEqual(selection['ic'], 1)
             self.assertEqual(selection['epilogue_vf'], 'f0')
@@ -123,6 +130,11 @@ class MetaCompilerTests(unittest.TestCase):
             weights.write_text(json.dumps({'schema_version': 2, 'model_version': MODEL_VERSION,
                 'multipliers': dict.fromkeys(PARAMETERS, 2.)}))
             result = self.compile(root, ['-O3'], extra=['--weights', str(weights)])
+            if not load_policy().supports_fit:
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('fixed ablation policy', result.stderr)
+                self.assertFalse((root / 'work').exists())
+                return
             self.check_result(root, result)
             work = root / 'work'
             manifest = json.loads((work / 'candidates.json').read_text())

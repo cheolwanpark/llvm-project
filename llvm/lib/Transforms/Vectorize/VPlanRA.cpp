@@ -168,7 +168,7 @@ bool VPlanRAContext::hasRequest() const {
   return probesThisLoop() || !SelectedID.empty();
 }
 void VPlanRAContext::recordCandidate(const VPlan &Plan, ElementCount VF,
-                                     unsigned Width) {
+                                     unsigned Width, json::Object MiddleEnd) {
   if (VF.isScalar())
     return;
   state().Candidates.push_back(
@@ -177,6 +177,7 @@ void VPlanRAContext::recordCandidate(const VPlan &Plan, ElementCount VF,
                    {"loop", LoopIndex},
                    {"vf", vfName(VF)},
                    {"estimated_width", Width},
+                   {"middle_end", std::move(MiddleEnd)},
                    {"probeable", true},
                    {"scalar_tail", Plan.hasScalarTail()}});
 }

@@ -13,6 +13,7 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Transforms/Vectorize/VPlanRA.h"
@@ -21,6 +22,7 @@ using namespace llvm::vplan;
 json::Value llvm::vplan::toJSON(const Operand &V) {
   return json::Object{{"Reg", json::Value(V.Reg)},
                       {"Name", json::Value(V.Name)},
+                      {"Bank", json::Value(V.Bank)},
                       {"Units", json::Value(V.Units)},
                       {"Group8", json::Value(V.Group8)},
                       {"Vector", json::Value(V.Vector)},
@@ -49,6 +51,7 @@ json::Value llvm::vplan::toJSON(const InstructionInfo &V) {
                       {"ScalableBytes", json::Value(V.ScalableBytes)},
                       {"Stack", json::Value(V.Stack)},
                       {"Spill", json::Value(V.Spill)},
+                      {"SpillSlotAccess", json::Value(V.SpillSlotAccess)},
                       {"Load", json::Value(V.Load)},
                       {"Store", json::Value(V.Store)},
                       {"Masked", json::Value(V.Masked)},
@@ -357,6 +360,8 @@ InstructionInfo observeInstruction(const MachineInstr &MI, int64_t ID,
     if (MO.isFI()) {
       I.Stack = true;
       I.StackSlot = MO.getIndex();
+      I.SpillSlotAccess |=
+          MI.getMF()->getFrameInfo().isSpillSlotObjectIndex(MO.getIndex());
     }
     if (!MO.isReg() || !MO.getReg())
       continue;
@@ -370,6 +375,14 @@ InstructionInfo observeInstruction(const MachineInstr &MI, int64_t ID,
     for (auto U : TRI.regunits(MO.getReg()))
       O.Units.push_back(static_cast<int64_t>(U));
     O.Vector = isVectorRegister(MO.getReg());
+    if (O.Vector)
+      O.Bank = "vector";
+    else if (RISCV::GPRRegClass.contains(MO.getReg()))
+      O.Bank = "gpr";
+    else if (RISCV::FPR16RegClass.contains(MO.getReg()) ||
+             RISCV::FPR32RegClass.contains(MO.getReg()) ||
+             RISCV::FPR64RegClass.contains(MO.getReg()))
+      O.Bank = "fpr";
     O.Group8 = physicalGroup8(MO);
     O.Def = MO.isDef();
     O.Use = MO.isUse();
@@ -382,6 +395,11 @@ InstructionInfo observeInstruction(const MachineInstr &MI, int64_t ID,
     I.Operands.push_back(std::move(O));
   }
   int FI = 0;
+  for (const auto *MMO : MI.memoperands())
+    if (const auto *S = dyn_cast_or_null<FixedStackPseudoSourceValue>(
+            MMO->getPseudoValue()))
+      I.SpillSlotAccess |=
+          MI.getMF()->getFrameInfo().isSpillSlotObjectIndex(S->getFrameIndex());
   TypeSize Bytes = TypeSize::getZero();
   Register StackReg = TII.isLoadFromStackSlot(MI, FI, Bytes);
   if (!StackReg)

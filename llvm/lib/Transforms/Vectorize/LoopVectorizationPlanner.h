@@ -28,6 +28,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Support/InstructionCost.h"
+#include "llvm/Support/JSON.h"
 
 namespace {
 class GeneratedRTChecks;
@@ -884,7 +885,8 @@ class LoopVectorizationPlanner {
   ///
   /// TODO: Move to VPlan::cost once the use of LoopVectorizationLegality has
   /// been retired.
-  InstructionCost cost(VPlan &Plan, ElementCount VF, VPRegisterUsage *RU) const;
+  InstructionCost cost(VPlan &Plan, ElementCount VF, VPRegisterUsage *RU,
+                       json::Object *Observation = nullptr) const;
 
   /// Precompute costs for certain instructions using the legacy cost model. The
   /// function is used to bring up the VPlan-based cost model to initially avoid

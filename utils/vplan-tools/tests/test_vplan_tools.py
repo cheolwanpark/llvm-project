@@ -568,7 +568,9 @@ class StandaloneTests(unittest.TestCase):
             root = Path(temporary)
             tool_dir = root / "utils/vplan-tools"
             tool_dir.mkdir(parents=True)
-            for name in ("vplan_tools.py", "model_errors.py", "calibration.py", "cost_model.py", "observations.py", "evaluate", "print-vplans", "print-vplan"):
+            for name in ("vplan_tools.py", "model_errors.py", "calibration.py", "cost_model.py", "observations.py",
+                         "selection.py", "selection_policy.py", "selection_evaluation.py", "spill_observations.py",
+                         "evaluate", "print-vplans", "print-vplan"):
                 shutil.copy2(vt.TOOLS / name, tool_dir / name)
             env = dict(os.environ, VPLAN_DB="", PYTHONDONTWRITEBYTECODE="1")
             for name in ("evaluate", "print-vplans", "print-vplan"):

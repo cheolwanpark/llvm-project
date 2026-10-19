@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Compare the three variants' replayed choices on a common validation cohort."""
+import argparse
+from itertools import combinations
+import json
+from pathlib import Path
+
+from model_errors import ToolError
+from selection_evaluation import summarize_rows
+from vplan_tools import cli, write_json
+
+NAMES = ("backend-aware-cost", "spill-reject", "spill-aware")
+
+
+def read(path):
+    return json.loads(Path(path).read_text())
+
+
+def audit(row):
+    if row["compile_failed"]:
+        return None
+    if not row.get("artifact"):
+        raise ToolError("comparison requires evaluation with --artifacts-dir: " + row["id"])
+    root = Path(row["artifact"])
+    before, choice, final = [read(root / name) for name in
+                             ("candidates.json", "selection.json", "final.manifest.json")]
+    statuses = read(root / "candidate-status.json")
+    if (any(v["version"] != 3 for v in (before, choice, final, statuses))
+            or len({v["run_id"] for v in (before, choice, final, statuses)}) != 1
+            or before["candidates"] != final["candidates"] or before["candidates"] != choice["candidates"]
+            or before["loops"] != final["loops"] or before["loops"] != choice["loops"]
+            or choice["selections"] != final["selections"] or final["failures"]):
+        raise ToolError("replay audit failed: " + row["id"])
+    if [s["id"] for s in statuses["candidates"]] != [c["id"] for c in before["candidates"]]:
+        raise ToolError("candidate status coverage mismatch: " + row["id"])
+    actual = row.get("actual_selection")
+    if actual:
+        emitted = next((s for s in final["selections"] if s["function"] == actual["function"] and s["loop"] == actual["loop"]), None)
+        if emitted is None or any(actual.get(k) != v for k, v in emitted.items()):
+            raise ToolError("reported choice differs from replay: " + row["id"])
+    return before["candidates"], before["loops"], statuses["policy"]
+
+
+def compare(data, allow_compile_failures=False):
+    tables = {}
+    for name, value in data.items():
+        if value.get("schema_version") != 3 or value.get("metric_mode") != "selection" or value["policy"]["name"] != name:
+            raise ToolError("expected v3 selection evaluation for " + name)
+        tables[name] = {r["id"]: r for r in value["benchmarks"]}
+        if len(tables[name]) != len(value["benchmarks"]):
+            raise ToolError("duplicate benchmark: " + name)
+    first = next(iter(tables.values()))
+    metadata = next(iter(data.values()))["metadata"]
+    audited = {}
+    for name, table in tables.items():
+        if table.keys() != first.keys() or data[name]["metadata"] != metadata:
+            raise ToolError("attempted benchmarks or dataset metadata differ: " + name)
+        for key, row in table.items():
+            if row["measured_cycles"] != first[key]["measured_cycles"] or row["split"] != first[key]["split"]:
+                raise ToolError("measurements or splits differ: " + key)
+            if row["compile_failed"] and not allow_compile_failures:
+                raise ToolError("compilation failures: " + name + "/" + key)
+            context = audit(row)
+            if context is not None:
+                candidates, loops, policy = context
+                if policy != data[name]["policy"]:
+                    raise ToolError("artifact policy mismatch: " + key)
+                if key in audited and audited[key] != (candidates, loops):
+                    raise ToolError("common candidate/context mismatch: " + key)
+                audited[key] = candidates, loops
+    common = sorted(k for k in first if all(t[k]["eligible"] for t in tables.values()))
+    pairwise = {}
+    for a, b in combinations(tables, 2):
+        pairwise[a + " -> " + b] = [dict(id=k, before_vf=tables[a][k]["selected_vf"],
+            after_vf=tables[b][k]["selected_vf"],
+            regret_delta=tables[b][k]["top1_regret"] - tables[a][k]["top1_regret"]) for k in common]
+    return dict(schema_version=3, common_ids=common,
+                contains_compile_failures=any(r["compile_failed"] for t in tables.values() for r in t.values()),
+                common={n: summarize_rows([t[k] for k in common]) for n, t in tables.items()},
+                per_model={n: v["metrics"] for n, v in data.items()}, pairwise=pairwise,
+                excluded_from_common=[dict(id=k, statuses={n: t[k]["status"] for n, t in tables.items()})
+                                      for k in sorted(first.keys() - set(common))])
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("directory", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--allow-compile-failures", action="store_true")
+    args = parser.parse_args()
+    result = compare({n: read(args.directory / (n + ".json")) for n in NAMES}, args.allow_compile_failures)
+    write_json(args.output or args.directory / "comparison.json", result)
+    print(json.dumps(result["common"], indent=2))
+
+
+if __name__ == "__main__":
+    cli(main)
