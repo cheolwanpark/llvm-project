@@ -1,8 +1,6 @@
 """Selection metrics, checkout policy isolation and spill observation coverage."""
 import copy
-import json
 from pathlib import Path
-import runpy
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -12,7 +10,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from model_errors import ToolError
 from selection import load_policy, select_loops, PolicyBase
-from selection_evaluation import selection_row, summarize_rows, evaluate_main
+from selection_evaluation import selection_row, summarize_rows
+import cross_validation as cv
 from spill_observations import project_spills, iteration_ratio
 import vplan_tools as vt
 from test_calibration import analytics, instruction, operand
@@ -130,8 +129,8 @@ class SelectionTests(unittest.TestCase):
             with self.assertRaisesRegex(ToolError, 'fixed ablation'):
                 load_policy(Path(td), Path('nonexistent-weights.json'))
             with patch.object(vt, 'ensure_compiler') as build, patch.object(vt, 'load_database') as db:
-                with self.assertRaisesRegex(ToolError, 'fixed ablation'):
-                    evaluate_main(['--llvm-path', td, '--weights', 'nonexistent.json'], fitted=True)
+                with self.assertRaisesRegex(ToolError, 'fittable policy'):
+                    cv.main(['--llvm-path', td, '--output-dir', str(Path(td) / 'cv')])
                 build.assert_not_called()
                 db.assert_not_called()
 
@@ -174,39 +173,6 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(choice['scalar'])
                 self.assertNotIn('id', choice)
                 self.assertEqual(choice['reason'], 'no evaluable scalable vector candidates')
-
-
-class ComparisonTests(unittest.TestCase):
-    def test_comparison_audits_context_and_preserves_exclusions(self):
-        api = runpy.run_path(str(vt.TOOLS / 'compare-vf-selection'))
-        b = vt.Benchmark('kernel', 'validation', '', [], {}, {1: 100, 2: 150})
-        with tempfile.TemporaryDirectory() as td:
-            data = {}
-            for name in api['NAMES']:
-                root = Path(td) / name
-                root.mkdir()
-                r = result(scalar=name == 'spill-reject', candidate_vfs=('s1', 's2'))
-                policy = {'name': name}
-                r.candidate_status.update(version=3, run_id='run', policy=policy)
-                for filename, value in (('candidates.json', r.manifest), ('selection.json', r.selection),
-                        ('final.manifest.json', r.final_manifest), ('candidate-status.json', r.candidate_status)):
-                    (root / filename).write_text(json.dumps(value))
-                row = selection_row(b, r) | {'artifact': str(root)}
-                data[name] = dict(schema_version=3, metric_mode='selection', policy=policy,
-                                 metadata={}, benchmarks=[row], metrics={})
-            compared = api['compare'](data)
-            self.assertEqual(compared['common_ids'], [])
-            self.assertEqual(compared['excluded_from_common'][0]['statuses']['spill-reject'], 'scalar-selection')
-            changed = copy.deepcopy(data)
-            changed['spill-aware']['benchmarks'][0]['measured_cycles']['1'] += 1
-            with self.assertRaisesRegex(ToolError, 'measurements'):
-                api['compare'](changed)
-            path = Path(td) / 'spill-aware/final.manifest.json'
-            bad = json.loads(path.read_text())
-            bad['selections'][0]['ic'] = 2
-            path.write_text(json.dumps(bad))
-            with self.assertRaisesRegex(ToolError, 'replay audit'):
-                api['compare'](data)
 
 
 if __name__ == '__main__':

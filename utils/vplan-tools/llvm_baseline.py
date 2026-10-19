@@ -109,7 +109,7 @@ def selection_row(benchmark, result):
 def print_summary(rows, elapsed):
     summary = summarize_rows(rows)
     percentage = lambda value: f'{value:.2%}' if value is not None else 'N/A'
-    print('\nLLVM baseline: validation')
+    print('\nLLVM baseline')
     print(f"  total={summary['total']} scored={summary['scored']} excluded={summary['excluded']} "
           f"compile_failed={summary['compile_failed']}")
     print(f"  Coverage              {percentage(summary['coverage'])}")
@@ -129,16 +129,16 @@ def print_summary(rows, elapsed):
 
 
 def main(argv=None):
-    parser = vt.argument_parser('Evaluate actual LLVM middle-end VF selections on validation data.')
+    parser = vt.argument_parser('Evaluate actual LLVM middle-end VF selections on all benchmark IDs, including TSVC.')
     parser.set_defaults(compiler_mode='direct')
-    parser.add_argument('--benchmark')
+    parser.add_argument('--benchmark', help='diagnose one exact ID instead of the full CV population')
     parser.add_argument('--skip-build', action='store_true', help='use existing compiler binaries without running CMake/Ninja')
     args = parser.parse_args(argv)
     if args.compiler_mode != 'direct':
         parser.error('LLVM baseline requires --compiler-mode direct')
-    benchmarks, metadata = vt.load_database(args.db, split='validation', benchmark_id=args.benchmark)
+    benchmarks, metadata = vt.load_database(args.db, benchmark_id=args.benchmark)
     if not benchmarks:
-        raise vt.ToolError('no benchmarks in validation partition')
+        raise vt.ToolError(f'unknown benchmark: {args.benchmark}' if args.benchmark else 'database contains no benchmarks')
     if args.skip_build:
         clang = (args.build_dir or args.llvm_path / 'build-vplan-tools') / 'bin/clang'
         if not all(p.is_file() and os.access(p, os.X_OK) for p in (clang, clang.parent / 'llvm-extract')):

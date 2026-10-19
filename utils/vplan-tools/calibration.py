@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 
 import vplan_tools as vt
-from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P, same_context, load_weights
+from cost_model import CostModel, DTYPE, P, same_context
 from observations import validate_manifest, bind_observation
 
 CACHE_VERSION = 4
@@ -363,14 +363,6 @@ def results_for(model, examples, weights):
              for vf, g in zip(e.vfs, e.groups, strict=True)}) for e in examples]
 
 
-def common_parser(description):
-    parser = vt.argument_parser(description)
-    parser.add_argument("--benchmark", help="one exact ID in the tool's fixed partition")
-    parser.add_argument("--cache-dir", type=vt.resolved_path, default=vt.TOOLS / ".cache/analytics")
-    parser.add_argument("--artifacts-dir", type=vt.resolved_path, help="retain raw compiler artifacts on cache misses")
-    return parser
-
-
 def finite_float(text):
     value = float(text)
     if not math.isfinite(value):
@@ -378,97 +370,15 @@ def finite_float(text):
     return value
 
 
-def initialize(args, split):
-    if args.compiler_mode != "meta":
-        raise vt.ToolError("raw analytics require --compiler-mode meta")
-    benchmarks, metadata = vt.load_database(args.db, split=split, benchmark_id=args.benchmark)
-    if not benchmarks:
-        raise vt.ToolError(f"no benchmarks in {split} partition" + (f": {args.benchmark}" if args.benchmark else ""))
-    clang = vt.ensure_compiler(args.llvm_path, args.build_dir, args.jobs)
-    return benchmarks, metadata, clang, collector_identity(clang, args.llvm_path / "utils/vplan-meta-compile")
-
-
-def calibrate_main(argv=None):
-    parser = common_parser("Fit shared analytical coefficients using tuning data only.")
-    parser.add_argument("--output", required=True, type=vt.resolved_path, help="weights and tuning diagnostics JSON")
-    add_fit_options(parser)
-    parser.add_argument("--seed", type=int, default=0)
-    args = parser.parse_args(argv)
-    from selection import load_policy
-    if not load_policy(args.llvm_path).supports_fit:
-        raise vt.ToolError("this is a fixed ablation policy; fitting and weights are unsupported")
-    validate_fit_options(parser, args)
-    benchmarks, metadata, clang, identity = initialize(args, "tuning")
-    model, examples, excluded, provenance = prepare(benchmarks, clang, args, identity, metadata, True)
-    weights, diagnostics = fit(model, examples, args)
-    results = results_for(model, examples, weights)
-    initial = results_for(model, examples, torch.ones(P, dtype=DTYPE))
-    artifact = {"schema_version": 2, "model_version": MODEL_VERSION,
-        "multipliers": dict(zip(PARAMETERS, weights.tolist(), strict=True)),
-        "default_multipliers": dict.fromkeys(PARAMETERS, 1.),
-        "fixed": {"scalar_instruction": .5,
-                  "unobserved_parameters": [p for i, p in enumerate(PARAMETERS) if i not in model.active]},
-        **fit_metadata(args),
-        "dataset": metadata, "compiler_identity": identity,
-        "tuning_ids": [b.id for b in benchmarks],
-        "tuning_fingerprint": digest_json([{"id": b.id, "source": b.source, "args": b.compile_args,
-            "workload": b.workload, "measurements": b.measured} for b in benchmarks]),
-        "provenance": provenance, "excluded": excluded, "fitting": diagnostics,
-        "initial_metrics": vt.summary_json(initial), "fitted_metrics": vt.summary_json(results),
-        "benchmarks": [vt.result_json(r) for r in results]}
-    vt.write_json(args.output, artifact)
-    vt.print_summary("Tuning: initial continuous model", initial)
-    vt.print_summary("Tuning: fitted continuous model", results)
-    print(f"Excluded before fitting: {len(excluded)}; weights: {args.output}")
-    return 0
-
-
-def evaluate_model_main(argv=None, *, fitted=False):
-    parser = common_parser("Evaluate a fitted analytical model on validation data only.")
-    parser.add_argument("--weights", required=fitted, type=vt.resolved_path)
-    parser.add_argument("--json-output", type=vt.resolved_path)
-    parser.add_argument("--exclude-reasons", action="store_true")
-    args = parser.parse_args(argv)
-    from selection import load_policy
-    if not load_policy(args.llvm_path).supports_fit:
-        raise vt.ToolError("this is a fixed ablation policy; fitting and weights are unsupported")
-    artifact, weights = (load_weights(args.weights) if args.weights else
-                         (None, torch.ones(P, dtype=DTYPE)))
-    benchmarks, metadata, clang, identity = initialize(args, "validation")
-    validate_weight_provenance(artifact, metadata, identity, benchmarks)
-    model, examples, excluded, provenance = prepare(benchmarks, clang, args, identity, metadata, False)
-    results = results_for(model, examples, weights)
-    by_id = {b.id: b for b in benchmarks}
-    results += [vt.Result(by_id[e["id"]], reason=e["reason"]) for e in excluded]
-    results.sort(key=lambda r: r.benchmark.id)
-    vt.print_summary("Validation: " + ("fitted" if artifact else "default") + " Python model", results)
-    vt.print_worst_regrets(results)
-    if args.exclude_reasons:
-        for e in excluded:
-            print(f"{e['id']}: {e['reason']}")
-    if args.json_output:
-        vt.write_json(args.json_output, {"schema_version": 2, "metric_mode": "ranking",
-            "policy": load_policy(args.llvm_path, args.weights).identity, "model_version": MODEL_VERSION,
-            "weights_sha256": digest_file(args.weights) if args.weights else None, "metadata": metadata,
-            "metrics": vt.summary_json(results), "provenance": provenance,
-            "benchmarks": [vt.result_json(r) for r in results]})
-    return 0 if examples else 1
-
-
-def evaluate_weights_main(argv=None):
-    from selection_evaluation import evaluate_main
-    return evaluate_main(argv, fitted=True)
-
-
 def validate_weight_provenance(artifact, metadata, identity, benchmarks):
     if artifact is None:
         return
     if not all(k in artifact for k in ("dataset", "compiler_identity", "tuning_ids")):
-        raise vt.ToolError("weights lack training provenance required for validation")
+        raise vt.ToolError("weights lack training provenance required for held-out evaluation")
     if artifact["dataset"] != metadata:
         raise vt.ToolError("weights were fitted against different dataset metadata")
     if artifact["compiler_identity"] != identity:
         raise vt.ToolError("weights/compiler extraction context differs; refit with this toolchain")
     overlap = sorted(set(artifact["tuning_ids"]) & {b.id for b in benchmarks})
     if overlap:
-        raise vt.ToolError("validation contains IDs used to fit these weights: " + ", ".join(overlap))
+        raise vt.ToolError("held-out evaluation contains IDs used to fit these weights: " + ", ".join(overlap))

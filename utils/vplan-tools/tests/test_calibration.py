@@ -14,7 +14,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import calibration as cal
-from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P, needs_scalar_cost
+from cost_model import CostModel, DTYPE, MODEL_VERSION, PARAMETERS, P, needs_scalar_cost, load_weights
 import vplan_tools as vt
 
 
@@ -214,12 +214,12 @@ class RankingTests(unittest.TestCase):
                      "multipliers": dict.fromkeys(PARAMETERS, 1.),
                      "dataset": {}, "compiler_identity": {}, "tuning_ids": ["train"]}
             path.write_text(json.dumps(valid))
-            self.assertEqual(cal.load_weights(path)[1].tolist(), [1.] * P)
+            self.assertEqual(load_weights(path)[1].tolist(), [1.] * P)
             for value in (0, -1, float('nan'), True):
                 invalid = copy.deepcopy(valid); invalid["multipliers"][PARAMETERS[0]] = value
                 path.write_text(json.dumps(invalid))
                 with self.assertRaises(vt.ToolError):
-                    cal.load_weights(path)
+                    load_weights(path)
 
     def test_tail_scale_has_independent_fit_bounds(self):
         a = analytics(vf=2, scalable=True, Width=4, MaxTripCount=11,
@@ -323,16 +323,6 @@ class CollectionTests(unittest.TestCase):
                 b.source = "source"
                 with self.assertRaisesRegex(vt.ToolError, "cache miss"):
                     cal.collect(b, Path("/clang"), args, {"compiler": "two"})
-
-    def test_wrong_partition_rejected_before_build(self):
-        with patch.object(vt, "load_database", return_value=([], {})) as load, \
-                patch.object(vt, "ensure_compiler") as build:
-            args = SimpleNamespace(compiler_mode="meta", db=Path("db"), benchmark="validation-only")
-            with self.assertRaises(vt.ToolError):
-                cal.initialize(args, "tuning")
-            load.assert_called_once_with(Path("db"), split="tuning", benchmark_id="validation-only")
-            build.assert_not_called()
-
 
 if __name__ == "__main__":
     unittest.main()

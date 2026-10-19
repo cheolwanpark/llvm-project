@@ -4,9 +4,9 @@ Active variant: **backend-aware-cost**, the full Python backend cost model.
 
 `spill-reject` and `spill-aware` are fixed-policy ablation branches derived
 directly from this branch. All three share middle-end/backend observations,
-protocol v3, the meta compiler and tools; only the Python selection policy and
-its tests/documentation differ. `--llvm-path` selects that checkout's compiler
-and policy together.
+protocol v3 and the meta compiler. `--llvm-path` selects that checkout's compiler
+and policy together. Cross-validation fitting requires `backend-aware-cost`;
+the fixed policies can still be inspected with `print-vplans`.
 
 Use Linux or macOS with [uv](https://docs.astral.sh/uv/), CMake 3.20+, Ninja, and a
 host C/C++ compiler. `utils/vplan-tools` is an independent Python 3.12 uv project.
@@ -30,7 +30,8 @@ cmake --build build-vplan-tools --parallel 2 \
 
 cp /path/to/dataset.sqlite ./dataset.sqlite
 cd utils/vplan-tools
-uv run python evaluate --json-output /tmp/llvm-validation.json --exclude-reasons
+uv run python evaluate --output-dir .cache/cv-seed0
+uv run python evaluate-baseline
 uv run python print-vplans --benchmark lcals/first-diff --detail
 ```
 
@@ -39,36 +40,13 @@ and recorded C/C++ flags come from the new dataset schema. The tools isolate
 `selected_kernel` from preparation functions and compile without running target
 benchmarks or changing measured cycles.
 
-## Calibrate and evaluate weights
-
-```sh
-# Run from utils/vplan-tools.
-uv run python calibrate --output /tmp/weights.json
-uv run python evaluate-weights --weights /tmp/weights.json \
-  --json-output /tmp/fitted-validation.json --exclude-reasons
-```
-
-`calibrate` reads tuning only. `evaluate` and `evaluate-weights` read validation only and have
-no split override. Evaluation defaults to Top-1/regret of the final replayed VF;
-`--metric-mode ranking` retains cost-ranking diagnostics. `evaluate` uses default Python costs; `evaluate-weights` uses fitted
-coefficients in the same model. Fitting preserves the hard-max analytical structure, learns 19
-shared internal coefficient multipliers with selectable weighted pairwise ranking,
-within-loop centered log-cycle regression, or soft regret. Pairwise remains the
-default and excludes measured pairs within 1%. Learned coefficients are not installed into
-LLVM; the meta compiler accepts `--weights` and sends only selected IDs to LLVM. Unsupported or ambiguous observations are reported as exclusions; the
-usable population may be smaller than the partition.
-
-The backend-aware policy selects only scalable VFs with both default and fitted
-weights. Fixed VFs remain available for diagnostics but cannot be selected;
-loops without a scoreable scalable candidate fall back to scalar.
-
 ## Five-fold cross validation
 
 The current dataset contains **243 benchmarks and 1,685 measurements**, targeting
-XiangShan v2 with VLEN 128. Its existing labels are 35 tuning benchmarks (TSVC,
-241 measurements) and 208 validation benchmarks (1,444 measurements).
+XiangShan v2 with VLEN 128. All benchmark IDs, including TSVC, participate.
+Existing database split labels are retained as metadata only.
 
-`evaluate-cv` is an independent alternative to that fixed partition. It groups
+`evaluate` is the model fitting/evaluation command. It groups
 all measurements of each benchmark ID together, shuffles sorted IDs with a fixed
 seed, and assigns them to five folds. Each fold fits fresh weights on the other
 four folds and evaluates only its held-out IDs. Related kernels with different
@@ -77,7 +55,7 @@ The database and its existing labels are never changed.
 
 ```sh
 # From the repository root; output directory must be new or empty.
-uv run --project utils/vplan-tools python utils/vplan-tools/evaluate-cv \
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate \
   --split-seed 0 --fit-seed 0 --output-dir utils/vplan-tools/.cache/cv-seed0
 ```
 
@@ -90,27 +68,36 @@ metrics, and `summary.json` with pooled out-of-fold (OOF) metrics and fold
 mean/sample standard deviation. See the [CV guide](utils/vplan-tools/README.md#five-fold-cross-validation)
 for reproducibility, exclusions and output details.
 
-Fitting and weights are supported only on `backend-aware-cost`. On `spill-aware`,
-`--spill-count-unit instruction|register` selects the existing TTI spill counting
-rule (default `instruction`). `spill-reject` has neither weights nor a numerical
-cost ranking. See the tools guide for a common-cohort comparison of all variants.
+Fitting learns 19 shared coefficient multipliers while preserving the hard-max
+analytical model. Objectives include weighted pairwise ranking (default, excluding
+measured pairs within 1%), within-loop centered log-cycle regression and soft regret.
+Learned coefficients are not installed into LLVM. Only scalable VFs can be selected;
+loops without a scoreable scalable candidate fall back to scalar.
+
+`evaluate-baseline` evaluates ordinary LLVM's final VF selection once per benchmark
+over the same full set of IDs as pooled CV evaluation. Each evaluator reports its
+own coverage and exclusions. Baseline needs no fitting and prints results to the
+terminal; `--benchmark ID` optionally limits it to one diagnostic case.
+
+The old fixed-partition evaluation and tuning commands are removed. The former
+CV command is now named `evaluate`, with no old-name alias. Its `--output-dir` is
+required; old `evaluate` options such as `--json-output`, `--weights` and
+`--benchmark` are unsupported.
 
 Database precedence is **`--db PATH` > `VPLAN_DB` > checkout/dataset.sqlite**.
 `--llvm-path` selects another compiler checkout without changing the default DB.
 
 ```sh
-VPLAN_DB=/path/to/dataset.sqlite uv run python evaluate
-uv run python evaluate --db /path/to/dataset.sqlite
+VPLAN_DB=/path/to/dataset.sqlite uv run python evaluate --output-dir .cache/cv-env
+uv run python evaluate --db /path/to/dataset.sqlite --output-dir .cache/cv-explicit
 # From any repository-root shell:
-uv run --project utils/vplan-tools python utils/vplan-tools/evaluate
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate --output-dir /tmp/vplan-cv
 ```
 
 Common options include `--build-dir`, `--llvm-path`, `--jobs` (default 2),
-`--timeout` (120 seconds per invocation), and `--artifacts-dir` on
-evaluation/calibration commands. Fixed-partition commands also accept
-`--benchmark ID`. Printing supports `--detail`. Printing and
-evaluation support `--compiler-mode meta|direct`; calibration always uses raw
-post-RA analytics. O2/O3 options are preserved.
+`--timeout` (120 seconds per invocation), and `--artifacts-dir` on `evaluate`.
+Printing supports `--detail` and `--compiler-mode meta|direct`. CV requires meta
+mode; baseline requires direct mode. O2/O3 options are preserved.
 
 See the [tools guide](utils/vplan-tools/README.md) for the database contract,
 model, fitting options, metrics, caching, exclusions and tests;

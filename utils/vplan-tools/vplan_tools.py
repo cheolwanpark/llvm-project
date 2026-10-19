@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
-from collections import Counter
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
@@ -57,11 +56,8 @@ def restrict_measurements(benchmark: Benchmark, candidate_vfs: set[int]) -> Benc
                        if vf not in candidate_vfs})
 
 
-def load_database(path: Path, split: str | None = None,
-                  benchmark_id: str | None = None) -> tuple[list[Benchmark], dict]:
-    """Read only the requested partition, including its measurements."""
-    if split not in (None, "tuning", "validation"):
-        raise ToolError(f"invalid split: {split}")
+def load_database(path: Path, benchmark_id: str | None = None) -> tuple[list[Benchmark], dict]:
+    """Read all benchmarks (or one exact ID); split labels are metadata only."""
     path = path.expanduser().resolve()
     if not path.is_file():
         raise ToolError(f"database does not exist: {path}")
@@ -80,9 +76,6 @@ def load_database(path: Path, split: str | None = None,
                     or not isinstance(metadata["measurement_protocol"], dict)):
                 raise ValueError("invalid dataset metadata")
             conditions, params = [], []
-            if split:
-                conditions.append("b.split=?")
-                params.append(split)
             if benchmark_id:
                 conditions.append("b.id=?")
                 params.append(benchmark_id)
@@ -383,75 +376,6 @@ def fields(line: str) -> dict[str, str]:
     return dict(re.findall(r"\b([a-z][a-z_-]*)=([^\s]+)", line))
 
 
-def parse_report(text: str, candidate_vfs: set[int] | None = None) -> dict[int, Fraction]:
-    """Parse bounded reports and observed main-selection candidate table scores.
-
-    Recipe costs, validation costs, epilogue costs, and placeholder zero costs
-    are deliberately not usable predictions. Fraction keeps cost-per-lane ties exact.
-    """
-    reports = []
-    current = None
-    for line in text.splitlines():
-        if line.startswith("VPlan report_version="):
-            if current is not None:
-                raise ReportError("nested or truncated VPlan report")
-            header = fields(line)
-            if header.get("report_version") != "2":
-                raise ReportError(f"unsupported report version: {header.get('report_version')}")
-            current = (header, [])
-        elif line == "End VPlan report":
-            if current is None:
-                raise ReportError("VPlan report end without header")
-            reports.append(current)
-            current = None
-        elif current is not None:
-            current[1].append(line)
-    if current is not None:
-        raise ReportError("truncated VPlan report")
-    kernels = [lines for header, lines in reports if header.get("function") == "selected_kernel"]
-    if not kernels:
-        raise ReportError("no VPlan report for selected_kernel (loop may be rejected before planning)")
-    if len(kernels) != 1:
-        raise ReportError(f"ambiguous selected_kernel reports: {len(kernels)} loop attempts")
-    lines = kernels[0]
-    kinds = [fields(line).get("cost_kind") for line in lines if line.startswith("  cost_kind=")]
-    if kinds != ["reciprocal_throughput"]:
-        raise ReportError(f"unsupported or missing cost kind: {kinds}")
-
-    scores: dict[int, Fraction] = {}
-    in_candidates = False
-    for line in lines:
-        if line == "  candidates:":
-            in_candidates = True
-            continue
-        if not line.startswith("    "):
-            in_candidates = False
-        if not in_candidates or not line.startswith("    main | "):
-            continue
-        columns = [column.strip() for column in line.split("|")]
-        if len(columns) != 10:
-            raise ReportError(f"malformed candidate row: {line}")
-        _, _, vf, _, body_cost, score, score_kind, _, _, _ = columns
-        if candidate_vfs is not None and re.fullmatch(r"s[1-9][0-9]*", vf):
-            candidate_vfs.add(int(vf[1:]))
-        if (not re.fullmatch(r"s[1-9][0-9]*", vf)
-                or body_cost in ("Invalid", "not-evaluated")
-                or score in ("Invalid", "not-evaluated")
-                or score_kind not in ("cost-per-lane", "whole-loop")):
-            continue
-        try:
-            # InstructionCost can print fractional numerators, e.g. 1.5/4.
-            numerator, separator, denominator = score.partition("/")
-            value = Fraction(numerator) / (int(denominator) if separator else 1)
-        except (ValueError, ZeroDivisionError) as exc:
-            raise ReportError(f"malformed candidate score: {score}") from exc
-        width = int(vf[1:])
-        scores[width] = min(scores.get(width, value), value)
-    if not scores:
-        raise ReportError("no usable scalable main-selection costs")
-    return scores
-
-
 def average_ranks(values: list) -> list[float]:
     indices = sorted(range(len(values)), key=values.__getitem__)
     ranks = [0.0] * len(values)
@@ -557,50 +481,8 @@ def aggregate(results: list[Result]) -> dict:
     return metrics
 
 
-def print_summary(label: str, results: list[Result]) -> None:
-    metric = aggregate(results)
-    print(f"\n{label}")
-    print(f"  Benchmarks: total={metric['total']} measured={metric['measured']} "
-          f"scored={metric['scored']} excluded={metric['excluded']} "
-          f"compile_failed={metric['compile_failed']}")
-    print("  Metric                  Value       Benchmarks")
-    for k, values in metric["topk"].items():
-        for name in ("overlap", "exact"):
-            value = "N/A" if values[name] is None else f"{values[name]:.2%}"
-            print(f"  Top-{k} {name:<17} {value:>9}   {values['n']:>6}")
-    correlations = metric["correlations"]
-    for name, function in (("mean", statistics.mean), ("median", statistics.median)):
-        value = f"{function(correlations):.4f}" if correlations else "N/A"
-        print(f"  Spearman {name:<14} {value:>9}   {len(correlations):>6}")
-    print(f"  Spearman undefined: {metric['scored'] - len(correlations)}")
-    regrets = metric["regrets"]
-    for name, function in (("mean", statistics.mean), ("median", statistics.median),
-                           ("p95", lambda values: percentile(values, 0.95))):
-        value = f"{function(regrets):.2%}" if regrets else "N/A"
-        print(f"  Top-1 regret {name:<10} {value:>9}   {len(regrets):>6}")
-    print(f"  Regret undefined (zero best cycles): {metric['scored'] - len(regrets)}")
-    print(f"  Benchmarks with ties: predicted={metric['predicted_ties']} "
-          f"measured={metric['measured_ties']} out of {metric['scored']}")
-
-
-def print_worst_regrets(results: list[Result]) -> None:
-    ranked = []
-    for result in results:
-        regret = result.top1_regret
-        if regret is not None:
-            ranked.append((result.benchmark.id, regret))
-    ranked.sort(key=lambda item: (-item[1], item[0]))
-    print("\nWorst top-1 regrets (top 10):")
-    if not ranked:
-        print("  N/A (no benchmarks with defined regret)")
-        return
-    print(f"  {'Benchmark':<40} {'Regret':>10}")
-    for benchmark_id, regret in ranked[:10]:
-        print(f"  {benchmark_id:<40} {regret:>10.2%}")
-
-
 def summary_json(results: list[Result]) -> dict:
-    """The same populations and definitions as the human-readable summary."""
+    """Summarize numerical rankings with benchmark-level denominators."""
     metrics = aggregate(results)
     correlations = metrics.pop("correlations")
     regrets = metrics.pop("regrets")
@@ -639,59 +521,6 @@ def write_json(path: Path, value: dict) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
     temporary.replace(path)
-
-
-def evaluate_benchmarks(clang: Path, benchmarks: list[Benchmark], timeout: int,
-                        artifacts_dir: Path | None = None,
-                        compiler_mode: str = "meta", meta_script: Path | None = None,
-                        *, detail_all: bool = False) -> list[Result]:
-    if compiler_mode != "direct":
-        raise ToolError("meta evaluation uses the shared Python model collector")
-    results = []
-    for index, benchmark in enumerate(benchmarks, 1):
-        print(f"[{index}/{len(benchmarks)}] {benchmark.id}", file=sys.stderr, flush=True)
-        # IDs originate in the database, but must never become arbitrary paths.
-        name = report_name(benchmark.id)
-        report_path = artifacts_dir / benchmark.kind / f"{name}.txt" if artifacts_dir else None
-        try:
-            compiled = compile_report(clang, benchmark,
-                                      bool(artifacts_dir and detail_all), timeout,
-                                      compiler_mode=compiler_mode, meta_script=meta_script,
-                                      artifacts_dir=report_path.with_suffix(".ra") if report_path else None)
-            if report_path:
-                report_path.parent.mkdir(parents=True, exist_ok=True)
-                report_path.write_text(compiled.stderr)
-            if compiled.returncode:
-                print(compiled.stderr.strip(), file=sys.stderr)
-                diagnostics = [line.strip() for line in compiled.stderr.splitlines()
-                               if "error:" in line or "meta-compiler:" in line]
-                reason = f"compilation failed (exit {compiled.returncode})"
-                if diagnostics:
-                    reason += ": " + diagnostics[-1]
-                result = Result(benchmark, reason=reason,
-                                compile_failed=True)
-            else:
-                try:
-                    candidate_vfs = set()
-                    scores = parse_report(compiled.stderr, candidate_vfs)
-                    result = score_benchmark(restrict_measurements(benchmark, candidate_vfs), scores)
-                except ToolError as exc:
-                    result = Result(benchmark, reason=str(exc))
-        except ToolError as exc:
-            result = Result(benchmark, reason=str(exc), compile_failed=True)
-            if report_path:
-                report_path.parent.mkdir(parents=True, exist_ok=True)
-                report_path.write_text(str(exc) + "\n")
-        results.append(result)
-    return results
-
-
-def evaluation_json(results: list[Result], metadata: dict) -> dict:
-    return {
-        "schema_version": 2, "metadata": metadata,
-        "metrics": {"validation": summary_json(results)},
-        "benchmarks": [result_json(r) for r in results],
-    }
 
 
 def report_name(benchmark_id: str) -> str:
@@ -736,65 +565,6 @@ def print_vplans_main(argv: list[str] | None = None) -> int:
     if args.compiler_mode == "direct" and "VPlan report_version=" not in result.stderr:
         print(f"{benchmark.id}: compilation succeeded but LLVM emitted no VPlan report", file=sys.stderr)
     return 0
-
-
-def evaluate_main(argv: list[str] | None = None) -> int:
-    mode_parser = argparse.ArgumentParser(add_help=False)
-    mode_parser.add_argument("--compiler-mode", default="meta")
-    mode, _ = mode_parser.parse_known_args(argv)
-    if mode.compiler_mode == "meta":
-        from selection_evaluation import evaluate_main as evaluate_policy
-        return evaluate_policy(argv)
-    parser = argument_parser("Compare VPlan cost rankings with measured cycle rankings.")
-    parser.add_argument("--benchmark", action="append", metavar="BENCHMARK",
-                        help="one exact benchmark ID (default: all benchmarks; specify only once)")
-    parser.add_argument("--exclude-reasons", action="store_true",
-                        help="list excluded benchmarks and their exclusion reasons")
-    parser.add_argument("--json-output", type=resolved_path, help="write machine-readable results")
-    parser.add_argument("--artifacts-dir", type=resolved_path, help="save compiler reports and artifacts")
-    args = parser.parse_args(argv)
-    if args.benchmark and len(args.benchmark) > 1:
-        parser.error("--benchmark may be specified only once")
-    benchmarks, metadata = load_database(args.db, split="validation",
-                                         benchmark_id=args.benchmark[0] if args.benchmark else None)
-    benchmarks = [b for b in benchmarks if b.kind == "validation"]
-    if args.benchmark:
-        benchmark_id = args.benchmark[0]
-        benchmarks = [b for b in benchmarks if b.id == benchmark_id]
-        if not benchmarks:
-            raise ToolError(f"unknown benchmark: {benchmark_id} in validation partition")
-    if not benchmarks:
-        raise ToolError("database contains no benchmarks")
-    clang = ensure_compiler(args.llvm_path, args.build_dir, args.jobs)
-    print(f"Database: {args.db.expanduser().resolve()}")
-    if args.benchmark:
-        print(f"Benchmark: {args.benchmark[0]}")
-    print(f"Compiler: {clang}")
-    version = subprocess.run([str(clang), "--version"], capture_output=True, text=True, check=True)
-    print(version.stdout.splitlines()[0])
-    print(f"Measured target: {metadata['target']}; "
-          f"measurement compiler: {metadata['measurement_compiler']}")
-    print("Ranking: compiler scalable VF set; full DB coverage required; extra DB VFs ignored; LMUL search=8.")
-    print("Top-k eligibility: compiler VF count > k, with a measurement and valid prediction for every compiler VF.")
-    print("Ties: smaller VF first for top-k; average ranks for Spearman. Each benchmark has equal weight.")
-    results = evaluate_benchmarks(
-        clang, benchmarks, args.timeout, args.artifacts_dir, args.compiler_mode,
-        args.llvm_path.resolve() / "utils/vplan-meta-compile")
-    if args.json_output:
-        write_json(args.json_output, evaluation_json(results, metadata))
-    print_summary("Validation", results)
-    print_worst_regrets(results)
-    print("\nSuccessful measured VF counts (before prediction exclusions):")
-    for count, number in sorted(Counter(len(b.measured) for b in benchmarks).items()):
-        print(f"  {count} VFs: {number} benchmarks")
-    excluded = [r for r in results if not r.eligible]
-    if args.exclude_reasons and excluded:
-        print("\nExcluded benchmarks:")
-        for result in excluded:
-            print(f"  {result.benchmark.id}: measured_vfs={len(result.benchmark.measured)}; {result.reason}")
-    # Missing measurements/costs are reported evaluation outcomes. Compiler
-    # failures or an entirely unscorable run must also be visible to automation.
-    return 1 if any(r.compile_failed for r in results) or not any(r.eligible for r in results) else 0
 
 
 def cli(main) -> None:

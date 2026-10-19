@@ -1,6 +1,0 @@
-#!/usr/bin/env python3
-from vplan_tools import cli
-from calibration import evaluate_weights_main
-
-if __name__ == "__main__":
-    cli(evaluate_weights_main)

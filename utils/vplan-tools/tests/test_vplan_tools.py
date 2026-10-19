@@ -16,6 +16,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import vplan_tools as vt
+import cross_validation as cv
+import llvm_baseline as baseline
 
 
 def benchmark(cycles=(10, 20, 30, 40)):
@@ -47,86 +49,6 @@ def report(candidates, *, trip_count=64, function="selected_kernel", version=2):
         kind = "whole-loop" if trip_count else "cost-per-lane"
         lines.append(f"    main | {plan} | {vf} | {width} | {cost} | {score} | {kind} | yes (plan=0 vf=f1; known-trip-count) | yes (scalar; known-trip-count) | -")
     return "\n".join(lines + ["  outcome=vectorization-emitted", "End VPlan report", ""])
-
-
-class ReportTests(unittest.TestCase):
-    def test_known_trip_count_uses_comparison_not_raw_body_cost(self):
-        parsed = vt.parse_report(report([(0, "s2", 10, 4, 160), (1, "s4", 15, 8, 120)]))
-        self.assertEqual(parsed, {2: 160, 4: 120})
-
-    def test_unknown_trip_count_and_scalable_one(self):
-        parsed = vt.parse_report(report([(0, "s1", 5, 2, 0), (1, "f1", 1, 1, 0)], trip_count=0))
-        self.assertEqual(parsed, {1: Fraction(5, 2)})
-
-    def test_multiple_plans_for_same_vf_choose_minimum(self):
-        self.assertEqual(vt.parse_report(report([(0, "s2", 9, 4, 145), (1, "s2", 8, 4, 129)])), {2: 129})
-
-    def test_epilogue_and_unavailable_scores_are_not_predictions(self):
-        text = report([(0, "s2", 4, 4, 64)])
-        for invalid in (text.replace("    main |", "    epilogue |"),
-                        text.replace("| 64 | whole-loop", "| not-evaluated | not-evaluated"),
-                        text.replace("| 4 | 64 |", "| not-evaluated | 64 |"),
-                        text.replace("whole-loop", "code-size")):
-            with self.subTest(text=invalid), self.assertRaisesRegex(vt.ReportError, "no usable"):
-                vt.parse_report(invalid)
-
-    def test_fractional_body_cost_and_whole_loop_score(self):
-        self.assertEqual(vt.parse_report(report([(0, "s2", "1.5", 4, 0)], trip_count=0)),
-                         {2: Fraction(3, 8)})
-        self.assertEqual(vt.parse_report(report([(0, "s2", "1.5", 4, "24.25")])),
-                         {2: Fraction(97, 4)})
-
-    def test_invalid_candidate_is_ignored(self):
-        text = report([(0, "s2", "Invalid", 4, "Invalid"), (1, "s4", 8, 8, 64)])
-        self.assertEqual(vt.parse_report(text), {4: 64})
-
-    def test_compiler_subset_keeps_unavailable_candidates_for_coverage(self):
-        text = report([(0, "s2", "Invalid", 4, "Invalid"), (1, "s4", 8, 8, 64)])
-        candidate_vfs = set()
-        scores = vt.parse_report(text, candidate_vfs)
-        self.assertEqual(candidate_vfs, {2, 4})
-        result = vt.score_benchmark(vt.restrict_measurements(benchmark(), candidate_vfs), scores)
-        self.assertFalse(result.eligible)
-        self.assertIn('s2', result.reason)
-
-    def test_direct_compiler_subset_ignores_db_extras_but_requires_coverage(self):
-        candidate_vfs = set()
-        scores = vt.parse_report(report([(0, 's2', 4, 4, 64), (1, 's4', 8, 8, 128)]), candidate_vfs)
-        b = benchmark((1, 100, 200, 1))
-        result = vt.score_benchmark(vt.restrict_measurements(b, candidate_vfs), scores)
-        self.assertEqual(result.top1_regret, 0)
-        self.assertEqual(result.benchmark.ignored_measured, {1: 1, 8: 1})
-        with self.assertRaisesRegex(vt.ToolError, 'missing measurements.*s4'):
-            vt.restrict_measurements(benchmark((100, 200)), candidate_vfs)
-
-    def test_report_boundaries_and_unrelated_functions(self):
-        unrelated = report([(0, "s2", 100, 4, 1600)], function="other")
-        text = "warning: diagnostics\n" + unrelated + report([(0, "s2", 4, 4, 64)]) + "remark: end\n"
-        self.assertEqual(vt.parse_report(text), {2: 64})
-
-    def test_rejects_truncation_version_ambiguity_and_wrong_cost_kind(self):
-        text = report([(0, "s2", 4, 4, 64)])
-        for invalid in (text.replace("End VPlan report", ""), text + text,
-                        text.replace("report_version=2", "report_version=1"),
-                        text.replace("reciprocal_throughput", "code_size")):
-            with self.subTest(text=invalid[:60]), self.assertRaises(vt.ReportError):
-                vt.parse_report(invalid)
-
-    def test_detailed_evaluations_do_not_override_summary_scores(self):
-        text = report([(0, "s2", 4, 4, 64)])
-        details = ("  details:\n  plan=0\n"
-                   "    evaluation=0 plan=0 vf=s2 phase=outside-loop-profitability\n"
-                   "      candidate_cost=1 status=evaluated\n")
-        self.assertEqual(vt.parse_report(text.replace("End VPlan report", details + "End VPlan report")),
-                         {2: 64})
-
-    def test_malformed_candidate_rows_and_scores_are_rejected(self):
-        text = report([(0, "s2", 4, 4, 64)])
-        for invalid in (text.replace("| s2 |", "| s2"),
-                        *(text.replace("| 64 |", f"| {score} |")
-                          for score in ("bad", "1/0", "1/", "1/2/3"))):
-            with self.subTest(text=invalid), self.assertRaisesRegex(vt.ReportError, "malformed candidate"):
-                vt.parse_report(invalid)
 
 
 class MetricTests(unittest.TestCase):
@@ -177,61 +99,34 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(metric["regrets"], [])
         self.assertEqual(metric["correlations"], [1])
 
-    def test_summary_na_and_denominators(self):
-        with patch("sys.stdout", new_callable=io.StringIO) as output:
-            vt.print_summary("Test", [self.score((1, 2), (10, 20))])
-        self.assertIn("Top-2 overlap                 N/A        0", output.getvalue())
-        self.assertIn("total=1 measured=1 scored=1 excluded=0", output.getvalue())
-
-    def test_worst_regrets_orders_and_limits_to_ten(self):
-        results = []
-        for index in range(12):
-            result = self.score((2, 1), (100, 100 + index))
-            result.benchmark.id = f"bench-{index:02d}"
-            results.append(result)
-        with patch("sys.stdout", new_callable=io.StringIO) as output:
-            vt.print_worst_regrets(results)
-        rows = [line.split() for line in output.getvalue().splitlines() if line.strip().startswith("bench-")]
-        self.assertEqual(rows, [[f"bench-{index:02d}", f"{index:.2f}%"] for index in range(11, 1, -1)])
-
-    def test_worst_regrets_ties_exclusions_and_fewer_than_ten(self):
-        first, second = self.score((1, 2), (10, 20)), self.score((1, 2), (10, 20))
-        first.benchmark.id, second.benchmark.id = "alpha", "beta"
-        excluded = vt.Result(benchmark(), reason="missing prediction")
-        undefined = self.score((1, 2), (0, 10))
-        with patch("sys.stdout", new_callable=io.StringIO) as output:
-            vt.print_worst_regrets([second, excluded, undefined, first])
-        rows = output.getvalue().splitlines()[3:]
-        self.assertEqual([line.split() for line in rows], [["alpha", "0.00%"], ["beta", "0.00%"]])
-        with patch("sys.stdout", new_callable=io.StringIO) as output:
-            vt.print_worst_regrets([excluded, undefined])
-        self.assertIn("N/A (no benchmarks with defined regret)", output.getvalue())
-
-
 class DatabaseTests(unittest.TestCase):
-    def test_dataset_partition_and_read_only(self):
+    def test_all_labels_and_exact_id_are_read_only(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "dataset.sqlite"
             database(path)
             before = path.read_bytes()
-            rows, metadata = vt.load_database(path, split="validation")
-            self.assertEqual([r.id for r in rows], ["example"])
+            rows, metadata = vt.load_database(path)
+            self.assertEqual([r.id for r in rows], ["example", "train"])
+            self.assertEqual([r.kind for r in rows], ["validation", "tuning"])
             self.assertEqual(rows[0].measured, {1: 20, 2: 30})
+            self.assertEqual(rows[1].measured, {1: 99})
             self.assertEqual(metadata["target"], "xiangshan")
-            self.assertEqual(vt.load_database(path, split="tuning")[0][0].id, "train")
-            self.assertEqual(vt.load_database(path, split="validation", benchmark_id="train")[0], [])
+            self.assertEqual([r.id for r in vt.load_database(path, benchmark_id="train")[0]], ["train"])
+            self.assertEqual(vt.load_database(path, benchmark_id="absent")[0], [])
             self.assertEqual(path.read_bytes(), before)
 
-    def test_other_partition_payload_is_not_read_or_parsed(self):
+    def test_exact_id_filter_does_not_parse_other_benchmarks(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "dataset.sqlite"
             database(path)
             with sqlite3.connect(path) as db:
                 db.execute("UPDATE benchmarks SET compile_args_json='bad' WHERE split='tuning'")
                 db.execute("UPDATE measurements SET cycles=-1 WHERE benchmark_id='train'")
-            self.assertEqual(len(vt.load_database(path, split="validation")[0]), 1)
+            self.assertEqual(len(vt.load_database(path, benchmark_id="example")[0]), 1)
             with self.assertRaises(vt.ToolError):
-                vt.load_database(path, split="tuning")
+                vt.load_database(path, benchmark_id="train")
+            with self.assertRaises(vt.ToolError):
+                vt.load_database(path)
 
     def test_old_schema_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -412,81 +307,6 @@ class CLITests(unittest.TestCase):
                 vt.print_vplans_main(["--llvm-path", "/llvm", "--benchmark", "absent"])
             build.assert_not_called()
 
-    def test_evaluation_builds_once_and_continues_after_compile_failure(self):
-        rows = [benchmark(), benchmark(), benchmark()]
-        rows[0].id, rows[1].id, rows[2].id = "first", "failed", "last"
-        text = report([(0, "s1", 4, 2, 128), (1, "s2", 4, 4, 64),
-                       (2, "s4", 4, 8, 32), (3, "s8", 4, 16, 16)])
-        successful = subprocess.CompletedProcess([], 0, "", text)
-        failed = subprocess.CompletedProcess([], 1, "", "error: compiler failure")
-        metadata = {"target": "xiangshan", "measurement_compiler": "original"}
-        with patch.object(vt, "load_database", return_value=(rows, metadata)), \
-                patch.object(vt, "ensure_compiler", return_value=Path("/custom/clang")) as build, \
-                patch.object(vt, "compile_report", side_effect=[successful, failed, successful]) as compile_, \
-                patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "clang version test", "")), \
-                patch("sys.stdout", new_callable=io.StringIO) as output, \
-                patch("sys.stderr", new_callable=io.StringIO):
-            self.assertEqual(vt.evaluate_main(["--compiler-mode", "direct", "--llvm-path", "/llvm"]), 1)
-        build.assert_called_once()
-        self.assertEqual(compile_.call_count, 3)
-        self.assertIn("total=3 measured=3 scored=2 excluded=1 compile_failed=1", output.getvalue())
-        self.assertNotIn("Excluded benchmarks:", output.getvalue())
-        self.assertNotIn("failed: measured_vfs=4; compilation failed", output.getvalue())
-
-    def test_exclusion_details_require_flag(self):
-        metadata = {"target": "xiangshan", "measurement_compiler": "original"}
-        for flags in ([], ["--exclude-reasons"]):
-            with self.subTest(flags=flags), \
-                    patch.object(vt, "load_database", return_value=([benchmark()], metadata)), \
-                    patch.object(vt, "ensure_compiler", return_value=Path("/custom/clang")), \
-                    patch.object(vt, "compile_report", return_value=subprocess.CompletedProcess([], 0, "", "")), \
-                    patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "clang version test", "")), \
-                    patch("sys.stdout", new_callable=io.StringIO) as output, \
-                    patch("sys.stderr", new_callable=io.StringIO):
-                self.assertEqual(vt.evaluate_main(["--compiler-mode", "direct", "--llvm-path", "/llvm", *flags]), 1)
-            self.assertIn("total=1 measured=1 scored=0 excluded=1", output.getvalue())
-            self.assertEqual("Excluded benchmarks:" in output.getvalue(), bool(flags))
-            self.assertEqual("example: measured_vfs=4; no VPlan report" in output.getvalue(), bool(flags))
-
-    def test_evaluation_selects_only_one_benchmark(self):
-        rows = [benchmark(), benchmark()]
-        rows[0].id, rows[1].id = "first", "selected"
-        text = report([(0, "s1", 4, 2, 128), (1, "s2", 4, 4, 64),
-                       (2, "s4", 4, 8, 32), (3, "s8", 4, 16, 16)])
-        metadata = {"target": "xiangshan", "measurement_compiler": "original"}
-        with patch.object(vt, "load_database", return_value=(rows, metadata)), \
-                patch.object(vt, "ensure_compiler", return_value=Path("/custom/clang")), \
-                patch.object(vt, "compile_report", return_value=subprocess.CompletedProcess([], 0, "", text)) as compile_, \
-                patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, "clang version test", "")), \
-                patch("sys.stdout", new_callable=io.StringIO) as output, \
-                patch("sys.stderr", new_callable=io.StringIO):
-            self.assertEqual(vt.evaluate_main(["--compiler-mode", "direct", "--llvm-path", "/llvm", "--benchmark", "selected"]), 0)
-        compile_.assert_called_once_with(Path("/custom/clang"), rows[1], False, 120,
-                                             compiler_mode="direct",
-                                             meta_script=Path("/llvm/utils/vplan-meta-compile"),
-                                             artifacts_dir=None)
-        self.assertIn("Benchmark: selected", output.getvalue())
-        self.assertIn("total=1 measured=1 scored=1 excluded=0", output.getvalue())
-        self.assertIn("Worst top-1 regrets (top 10):", output.getvalue())
-        self.assertRegex(output.getvalue(), r"selected\s+300\.00%")
-
-    def test_evaluation_unknown_benchmark_fails_before_build(self):
-        with patch.object(vt, "load_database", return_value=([benchmark()], {})), \
-                patch.object(vt, "ensure_compiler") as build:
-            with self.assertRaisesRegex(vt.ToolError, "unknown benchmark: absent"):
-                vt.evaluate_main(["--compiler-mode", "direct", "--llvm-path", "/llvm", "--benchmark", "absent"])
-            build.assert_not_called()
-
-    def test_evaluation_rejects_multiple_benchmarks(self):
-        for args in (["--benchmark", "first", "second"],
-                     ["--benchmark", "first", "--benchmark", "second"]):
-            with self.subTest(args=args), patch("sys.stderr", new_callable=io.StringIO), \
-                    patch.object(vt, "load_database") as load:
-                with self.assertRaises(SystemExit) as exc:
-                    vt.evaluate_main(["--compiler-mode", "direct", "--llvm-path", "/llvm", *args])
-                self.assertEqual(exc.exception.code, 2)
-                load.assert_not_called()
-
     def test_required_flags(self):
         with patch("sys.stderr", new_callable=io.StringIO), \
                 patch.object(vt, "load_database") as load:
@@ -541,7 +361,8 @@ class StandaloneTests(unittest.TestCase):
                 db.execute("CREATE TABLE dataset(id)")
             for path in (root / "missing.sqlite", invalid, wrong):
                 before = path.read_bytes() if path.exists() else None
-                for main, flags in ((vt.evaluate_main, []),
+                for main, flags in ((cv.main, ["--output-dir", str(root / "cv")]),
+                                    (baseline.main, []),
                                     (vt.print_vplans_main, ["--benchmark", "example"])):
                     with self.subTest(path=path, main=main.__name__), \
                             patch.object(vt, "ensure_compiler") as build:
@@ -589,10 +410,11 @@ class StandaloneTests(unittest.TestCase):
             tool_dir.mkdir(parents=True)
             for name in ("vplan_tools.py", "model_errors.py", "calibration.py", "cost_model.py", "observations.py",
                          "selection.py", "selection_policy.py", "selection_evaluation.py", "spill_observations.py",
-                         "evaluate", "print-vplans", "print-vplan"):
+                         "cross_validation.py", "llvm_baseline.py",
+                         "evaluate", "evaluate-baseline", "print-vplans", "print-vplan"):
                 shutil.copy2(vt.TOOLS / name, tool_dir / name)
             env = dict(os.environ, VPLAN_DB="", PYTHONDONTWRITEBYTECODE="1")
-            for name in ("evaluate", "print-vplans", "print-vplan"):
+            for name in ("evaluate", "evaluate-baseline", "print-vplans", "print-vplan"):
                 command = [sys.executable, "-I", "-B", "-c",
                            "import runpy,sys; sys.path.insert(0,sys.argv[1]); "
                            "sys.argv=sys.argv[2:]; runpy.run_path(sys.argv[0],run_name='__main__')",
@@ -602,7 +424,8 @@ class StandaloneTests(unittest.TestCase):
                 self.assertEqual(help_.returncode, 0, help_.stderr)
                 self.assertIn("--db", help_.stdout)
                 self.assertNotIn("--run", help_.stdout)
-                flags = [] if name == "evaluate" else ["--benchmark", "example"]
+                flags = (["--output-dir", str(root / "cv")] if name == "evaluate" else
+                         [] if name == "evaluate-baseline" else ["--benchmark", "example"])
                 missing = subprocess.run([*command, *flags], cwd=root, env=env,
                                          capture_output=True, text=True)
                 self.assertEqual(missing.returncode, 1)

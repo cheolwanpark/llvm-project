@@ -185,7 +185,7 @@ def main(argv=None):
     policy = load_policy(args.llvm_path)
     if not policy.supports_fit:
         raise vt.ToolError("cross validation fitting requires a fittable policy")
-    benchmarks, metadata = vt.load_database(args.db, split=None)
+    benchmarks, metadata = vt.load_database(args.db)
     folds = make_folds([b.id for b in benchmarks], args.split_seed)
     dataset_fingerprint = fingerprint(benchmarks)
     manifest = dict(schema_version=1, group_by="benchmark_id", n_folds=FOLDS,

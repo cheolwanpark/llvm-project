@@ -3,6 +3,7 @@ import copy
 import io
 import json
 from pathlib import Path
+import runpy
 import sqlite3
 import sys
 import tempfile
@@ -13,9 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import calibration as cal
 import cross_validation as cv
 import vplan_tools as vt
+import llvm_baseline as baseline
 from selection import load_policy
 from test_calibration import analytics
 from test_selection import result as replay_result
+from test_llvm_baseline import emitted
 
 
 class FoldTests(unittest.TestCase):
@@ -67,7 +70,7 @@ class CVTests(unittest.TestCase):
                 INSERT INTO dataset VALUES(1, 'test', 'test-clang', '{"vlen_bits":128}');
             """)
             for i in range(11):
-                name = f"kernel-{i:02d}"
+                name = "tsvc/tsvc-s000-l00" if i == 2 else f"kernel-{i:02d}"
                 con.execute("INSERT INTO benchmarks VALUES(?,?,?,?,?)",
                             (name, "tuning" if i < 3 else "validation", name, '[]', '{}'))
                 con.executemany("INSERT INTO measurements VALUES(?,?,?)",
@@ -95,9 +98,11 @@ class CVTests(unittest.TestCase):
              patch.object(cal, "collect", side_effect=collect or self.collect), \
              patch.object(vt, "compile_report", side_effect=replay or self.replay), \
              patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
-            code = cv.main(["--db", str(self.db), "--output-dir", str(out),
-                            "--metric-mode", mode, "--objective", objective, "--starts", "2", "--steps", "4"])
-        return code, json.loads((out / "summary.json").read_text()), out
+            with patch("sys.argv", ["evaluate", "--db", str(self.db), "--output-dir", str(out),
+                                   "--metric-mode", mode, "--objective", objective,
+                                   "--starts", "2", "--steps", "4"]), self.assertRaises(SystemExit) as exit_:
+                runpy.run_path(str(vt.TOOLS / "evaluate"), run_name="__main__")
+        return exit_.exception.code, json.loads((out / "summary.json").read_text()), out
 
     def test_each_new_objective_supports_ranking_and_selection(self):
         before = self.db.read_bytes()
@@ -214,7 +219,55 @@ class CVTests(unittest.TestCase):
     def test_existing_results_are_not_overwritten(self):
         self.run_cv("existing")
         with self.assertRaisesRegex(vt.ToolError, "never overwritten"):
-            self.run_cv("existing")
+            cv.main(["--db", str(self.db), "--output-dir", str(self.root / "existing")])
+
+    def test_split_labels_do_not_affect_population_folds_or_weights(self):
+        _, first, out = self.run_cv("before-labels")
+        with sqlite3.connect(self.db) as con:
+            con.execute("UPDATE benchmarks SET split = CASE split "
+                        "WHEN 'tuning' THEN 'validation' ELSE 'tuning' END")
+        before = self.db.read_bytes()
+        _, second, out2 = self.run_cv("after-labels")
+        self.assertEqual(self.db.read_bytes(), before)
+        self.assertEqual(first["dataset_fingerprint"], second["dataset_fingerprint"])
+        self.assertEqual((out / "folds.json").read_bytes(), (out2 / "folds.json").read_bytes())
+        for i in range(cv.FOLDS):
+            self.assertEqual((out / f"fold-{i}/weights.json").read_bytes(),
+                             (out2 / f"fold-{i}/weights.json").read_bytes())
+        for a, b in zip(first["benchmarks"], second["benchmarks"], strict=True):
+            self.assertNotEqual(a.pop("source_split"), b.pop("source_split"))
+            self.assertEqual(a, b)
+
+    def test_baseline_uses_the_same_full_population_including_tsvc(self):
+        from types import SimpleNamespace
+        _, summary, _ = self.run_cv("population")
+        before = self.db.read_bytes()
+        with patch.object(vt, "ensure_compiler", return_value=Path("/fake/clang")), \
+             patch.object(baseline.subprocess, "run", return_value=SimpleNamespace(stdout="test clang")), \
+             patch.object(vt, "compile_report", return_value=SimpleNamespace(returncode=0, stderr=emitted())) as compile_, \
+             patch("sys.stdout", new_callable=io.StringIO), patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual(baseline.main(["--db", str(self.db)]), 0)
+        ids = [call.args[1].id for call in compile_.call_args_list]
+        self.assertEqual(ids, [r["id"] for r in summary["benchmarks"]])
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertIn("tsvc/tsvc-s000-l00", ids)
+        self.assertEqual(self.db.read_bytes(), before)
+
+
+class CLITests(unittest.TestCase):
+    def test_requires_output_directory_and_rejects_old_evaluation_options(self):
+        invalid = [[], *(["--output-dir", "unused", *option] for option in (
+            ["--benchmark", "tsvc/tsvc-s000-l00"], ["--weights", "weights.json"],
+            ["--json-output", "results.json"], ["--exclude-reasons"],
+            ["--compiler-mode", "direct"], ["--split", "validation"]))]
+        for argv in invalid:
+            with self.subTest(argv=argv), patch.object(vt, "load_database") as load, \
+                 patch.object(vt, "ensure_compiler") as build, patch("sys.stderr", new_callable=io.StringIO):
+                with self.assertRaises(SystemExit) as exit_:
+                    cv.main(argv)
+                self.assertEqual(exit_.exception.code, 2)
+                load.assert_not_called()
+                build.assert_not_called()
 
 
 if __name__ == "__main__":

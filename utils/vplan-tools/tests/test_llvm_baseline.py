@@ -1,13 +1,17 @@
 """Ordinary LLVM final-selection parsing and measurement population tests."""
 from pathlib import Path
+import io
+import sqlite3
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import llvm_baseline as baseline
 import vplan_tools as vt
-from test_vplan_tools import report
+from test_vplan_tools import database, report
 
 
 def emitted(vf='s2', outcome='vectorization-emitted', ic='1', epilogue='not-evaluated'):
@@ -71,6 +75,50 @@ class LLVMSelectionTests(unittest.TestCase):
             with self.subTest(status=status):
                 self.assertEqual(self.row(text)['status'], status)
         self.assertTrue(self.row('compiler error', code=1)['compile_failed'])
+
+class BaselineCLITests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='vplan-baseline-test-')
+        self.addCleanup(temporary.cleanup)
+        self.db = Path(temporary.name) / 'dataset.sqlite'
+        database(self.db)
+
+    def test_exact_id_can_select_former_tuning_data(self):
+        with patch.object(vt, 'ensure_compiler', return_value=Path('/fake/clang')), \
+             patch.object(baseline.subprocess, 'run', return_value=SimpleNamespace(stdout='test clang')), \
+             patch.object(vt, 'compile_report', return_value=SimpleNamespace(returncode=0, stderr=emitted())) as compile_, \
+             patch('sys.stdout', new_callable=io.StringIO), patch('sys.stderr', new_callable=io.StringIO):
+            # The tiny fixture has only one VF for this ID, so it is attempted
+            # and explicitly excluded instead of being hidden by a split filter.
+            self.assertEqual(baseline.main(['--db', str(self.db), '--benchmark', 'train']), 1)
+        compile_.assert_called_once()
+        self.assertEqual(compile_.call_args.args[1].id, 'train')
+
+    def test_absent_id_and_empty_population_fail_before_build(self):
+        with patch.object(vt, 'ensure_compiler') as build:
+            with self.assertRaisesRegex(vt.ToolError, 'unknown benchmark: absent'):
+                baseline.main(['--db', str(self.db), '--benchmark', 'absent'])
+            with sqlite3.connect(self.db) as con:
+                con.execute('DELETE FROM measurements')
+                con.execute('DELETE FROM benchmarks')
+            with self.assertRaisesRegex(vt.ToolError, 'database contains no benchmarks'):
+                baseline.main(['--db', str(self.db)])
+            build.assert_not_called()
+
+    def test_compile_failure_does_not_skip_remaining_ids(self):
+        results = [SimpleNamespace(returncode=1, stderr='compiler failure'),
+                   SimpleNamespace(returncode=0, stderr=emitted())]
+        with patch.object(vt, 'ensure_compiler', return_value=Path('/fake/clang')) as build, \
+             patch.object(baseline.subprocess, 'run', return_value=SimpleNamespace(stdout='test clang')), \
+             patch.object(vt, 'compile_report', side_effect=results) as compile_, \
+             patch('sys.stdout', new_callable=io.StringIO) as output, \
+             patch('sys.stderr', new_callable=io.StringIO):
+            self.assertEqual(baseline.main(['--db', str(self.db)]), 1)
+        build.assert_called_once()
+        self.assertEqual([call.args[1].id for call in compile_.call_args_list], ['example', 'train'])
+        self.assertIn('total=2', output.getvalue())
+        self.assertIn('compile_failed=1', output.getvalue())
+
 
 if __name__ == '__main__':
     unittest.main()

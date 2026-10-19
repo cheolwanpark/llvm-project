@@ -17,25 +17,28 @@ From the repository root:
 ```sh
 uv sync --locked --project utils/vplan-tools
 cd utils/vplan-tools
-uv run python calibrate --output /tmp/weights.json
-uv run python evaluate --json-output /tmp/llvm-validation.json --exclude-reasons
-uv run python evaluate-weights --weights /tmp/weights.json \
-  --json-output /tmp/fitted-validation.json --exclude-reasons
+uv run python evaluate --output-dir .cache/cv-seed0
+uv run python evaluate-baseline
 uv run python print-vplans --benchmark lcals/first-diff --detail
 uv run python print-vplan --benchmark lcals/first-diff
 ```
 
 `print-vplan` aliases `print-vplans`. Printing requires an exact benchmark ID and
-can inspect either partition. `evaluate` and `evaluate-weights` accept one optional
-`--benchmark`, but only in **validation**. `calibrate` accepts one optional ID,
-but only in **tuning**. There is no `--split` override. Partition and ID filters
-are applied in SQL before sources and measurements are read or compiled.
-`evaluate-cv` instead reads all benchmark IDs and uses its own five-fold assignment.
+can inspect any benchmark. `evaluate` reads all benchmark IDs, including TSVC,
+and fits/evaluates five folds independently. Database split labels are metadata
+only. `evaluate-baseline` evaluates the same full set once without fitting; its
+optional `--benchmark ID` selects one diagnostic case. Exact ID filters for
+printing and baseline are applied in SQL before sources and measurements are read.
+
+The old fixed-partition tuning/evaluation and split-management commands have been
+removed. The former `evaluate-cv` command is now `evaluate`, without an alias.
+The new command requires `--output-dir` and does not accept the old `evaluate`
+options `--benchmark`, `--weights`, `--json-output` or `--exclude-reasons`.
 
 To run without changing directory:
 
 ```sh
-uv run --project utils/vplan-tools python utils/vplan-tools/evaluate
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate --output-dir /tmp/vplan-cv
 ```
 
 ## Database contract and current dataset
@@ -73,7 +76,7 @@ determines the default even with another working directory or `--llvm-path`.
 Explicit relative paths use the caller's working directory; `~` is expanded.
 
 The current dataset contains **243 benchmark IDs and 1,685 measurements** across
-15 suites. Its existing `split` labels are:
+15 suites. Its historical `split` labels, retained only as metadata, are:
 
 | Partition | Benchmarks | Measurements |
 | --- | ---: | ---: |
@@ -89,24 +92,24 @@ integer kernel cycles. There are 238 benchmarks with seven measured VFs, two
 with six, one with three, and two with two. Eligibility still depends on the
 current compiler's candidate VF set, not the number of database rows alone.
 
-The fixed-partition commands consume these labels as supplied. Cross validation
-uses all IDs without updating labels, source, flags, workloads or measurements.
+Cross validation and baseline use all IDs without updating labels, source,
+flags, workloads or measurements. TSVC has no separate tuning role.
 Compiler exclusions and evaluation results never trigger repartitioning.
 
 ## Five-fold cross validation
 
-`evaluate-cv` independently fits and evaluates the fittable backend policy on five
+`evaluate` independently fits and evaluates the fittable backend policy on five
 folds grouped by **benchmark ID**. Every measured VF and candidate of an ID stays
 in the same fold. Different IDs, including related source variants, may appear
 on opposite sides of a fold; there is no source-family separation claim.
 
 ```sh
 # From utils/vplan-tools. Choose a new or empty output directory for each run.
-uv run python evaluate-cv --db ../../dataset.sqlite \
+uv run python evaluate --db ../../dataset.sqlite \
   --split-seed 0 --fit-seed 0 --output-dir .cache/cv-seed0
 
 # Numerical cost ranking instead of final selection replay:
-uv run python evaluate-cv --metric-mode ranking \
+uv run python evaluate --metric-mode ranking \
   --split-seed 0 --fit-seed 0 --output-dir .cache/cv-ranking-seed0
 ```
 
@@ -120,8 +123,8 @@ There is no single-ID filter or database split override for this command.
 fold starts a new optimizer with the same fit seed and initial-state rules.
 Only its four training folds determine pairs, active parameters and the winning
 training objective. Held-out measurements never select weights or stopping
-steps. All fitting settings below, including `--objective`, also apply, except `--fit-seed` replaces
-`calibrate`'s `--seed`. Defaults remain 16 starts, 2,000 steps, CPU float64.
+steps. All fitting settings below, including `--objective`, apply to each fold.
+Defaults remain 16 starts, 2,000 steps, CPU float64.
 Hyperparameters must be fixed before evaluating the held-out folds; this command
 does not perform nested CV or choose hyperparameters from the OOF scores.
 
@@ -145,6 +148,8 @@ Outputs are:
 Fold indices are 0–4. Weight provenance is checked against the exact training IDs,
 held-out IDs, dataset fingerprint, assignment and compiler identity before use.
 Rows use `split: "held-out"`; `source_split` retains the original database label.
+Weights retain the schema-2 keys `tuning_ids` and `tuning_fingerprint` for
+compatibility; they describe this fold's training IDs, regardless of DB labels.
 The fingerprint covers source, flags, workloads and measurements, independently
 of database split labels. Keep the manifest and recorded Python/PyTorch versions
 alongside results to reproduce a run.
@@ -187,12 +192,13 @@ costed. Each vector candidate is observed after RA cleanup. Compiler
 analytics limitations remain explicit, including unsupported instructions,
 conditional regions, and unprovable iteration mappings.
 
-`evaluate`, `evaluate-weights`, and `calibrate` share observation formats and the
-checkout's policy interface. Default evaluation verifies final replay before
+CV fitting and evaluation share observation formats and the checkout's policy
+interface. Default evaluation verifies final replay before
 scoring its selected VF. `print-vplans` and its alias show policy scores or
 acceptance/rejection reasons and selections; `--detail` adds ordinary VPlan diagnostics.
-Printing accepts `--weights PATH` for a fittable policy. `--compiler-mode direct` uses ordinary LLVM
-costs and the text report parser; meta mode uses structured JSON only.
+Printing accepts `--weights PATH` for a fittable policy. Printing in
+`--compiler-mode direct` shows ordinary LLVM's text report; meta mode uses
+structured JSON. CV requires meta mode and baseline requires direct mode.
 
 Scalar tail cost comes from the manifest's middle-end scalar iteration cost.
 No scalar probe is collected. It may be unavailable when the formula has no tail
@@ -202,7 +208,7 @@ empty actual tail. Missing required scalar cost excludes that candidate explicit
 Candidates must agree on run, function/loop, CPU, VLEN and trip-count context.
 See [VPLAN_RA.md](../../VPLAN_RA.md) for the protocol and final compilation usage.
 
-Calibration and backend `--metric-mode ranking` cache analytics under
+CV training and `--metric-mode ranking` cache analytics under
 `.cache/analytics` (override with `--cache-dir`). Default selection evaluation
 runs the full driver and does not reuse a raw-only cache as evidence of replay. Keys
 include source, recorded flags, compiler/extractor binaries, driver/collection
@@ -247,26 +253,26 @@ are compiled into batched max-plus operations once, not rebuilt per fitting step
 
 ## Training objectives
 
-`calibrate` and `evaluate-cv` accept `--objective
+`evaluate` accepts `--objective
 weighted-pairwise|log-cycle-regression|soft-regret`. The default is
 `weighted-pairwise`. All three use the existing 19-parameter hard-min/max model,
 positive bounded multipliers and identical optimizer settings. Multiple usable
 plans for one VF contribute their minimum predicted cost. Every training loop
 has equal weight.
 
-Use the existing commands with the desired objective, for example from
+Select the training objective, for example from
 `utils/vplan-tools`:
 
 ```sh
-uv run python calibrate --objective log-cycle-regression --output /tmp/regression-weights.json
-uv run python calibrate --objective soft-regret --temperature 0.1 --output /tmp/regret-weights.json
-uv run python evaluate-weights --weights /tmp/regret-weights.json --metric-mode ranking
-uv run python evaluate-cv --objective soft-regret --temperature 0.1 \
+uv run python evaluate --objective log-cycle-regression --output-dir .cache/cv-regression
+uv run python evaluate --objective soft-regret --temperature 0.1 \
   --output-dir .cache/cv-soft-regret
+uv run python evaluate --objective soft-regret --metric-mode ranking \
+  --output-dir .cache/cv-soft-regret-ranking
 ```
 
 Use `--objective weighted-pairwise` or omit `--objective` for the original loss.
-Evaluation reads the saved weights and does not need an objective option.
+Each held-out evaluation uses the weights fitted on that fold's training IDs.
 
 ### Weighted pairwise
 
@@ -288,7 +294,7 @@ explicit experimental choice, not an estimated noise bound.
 
 | CLI option | Default |
 | --- | --- |
-| `--starts`, `--steps`, `--seed` | 16, 2000, 0 |
+| `--starts`, `--steps`, `--fit-seed` | 16, 2000, 0 |
 | `--learning-rate` | 0.03 |
 | `--min-multiplier`, `--max-multiplier` | 0.25, 4 |
 | `--min-tail-scale`, `--max-tail-scale` | 1/64, 64 |
@@ -298,8 +304,8 @@ explicit experimental choice, not an estimated noise bound.
 Adam operates on log multipliers, projected into the configured bounds. The first
 start uses existing coefficients; other starts are log-uniform between 0.5 and 2,
 clipped to the configured bounds. Starts are independent rows in one CPU float64
-batch. The lowest regularized tuning objective across every start and step is
-saved. Validation is never loaded for fitting, early stopping, or weight selection.
+batch. The lowest regularized training objective across every start and step is
+saved. Held-out measurements never enter fitting, early stopping, or weight selection.
 The hard min/max model is used for every objective; there is no smooth-max approximation.
 
 ### Relative log-cycle regression
@@ -338,9 +344,10 @@ can differ, and the weights artifacts record their counts and exclusions.
 Evaluation always uses the hard argmin VF or verified final choice, never the
 soft expected training regret.
 
-`--output` is required. Version 2 JSON stores model version, multipliers, defaults,
-fixed parameters, settings, optimizer diagnostics, tuning IDs and fingerprint,
-compiler provenance, exclusions, and initial/fitted tuning metrics. It also records
+Each fold writes `weights.json` under the required `--output-dir`. Version 2 JSON
+stores model version, multipliers, defaults, fixed parameters, settings, optimizer
+diagnostics, training IDs and fingerprint, compiler provenance, exclusions, and
+initial/fitted training metrics. It also records
 `objective_id`, `formulation`, `settings.objective`, and `ignored_settings`. The
 model version and weights schema remain unchanged; existing weight files remain
 readable, subject to the existing compiler/extraction provenance checks. It is a plain
@@ -356,6 +363,12 @@ reports, multiple loops, fixed/scalar selections and measurement gaps are explic
 exclusions. Measurements require IC=1 and no vector epilogue. The compiler VF
 subset rule above also applies. This evaluates selections against existing DB
 measurements; it does not execute the generated binaries.
+
+The default population is every benchmark ID, including TSVC, matching the full
+held-out population of `evaluate`. Each ID is evaluated once because baseline
+has no training step. Coverage and exclusions can differ between evaluators;
+matching attempted IDs does not imply matching scoreable cohorts. Use the same
+`--db` for both commands. `--benchmark ID` remains available for single-ID diagnosis.
 
 ```sh
 uv run python evaluate-baseline --db ../../dataset.sqlite --skip-build
@@ -381,8 +394,8 @@ minus one. Missing measurements for any compiler VF, scalar or fixed VF choices,
 VLEN mismatches, multiple-loop kernels and compilation failures remain explicit
 exclusions. At least two compiler scalable VFs with measurements are required. Unavailable alternative
 candidate costs do not exclude a successfully replayed, measured choice.
-Results use schema 3 and include the policy identity, actual choice, coverage,
-exclusions and metrics, without fabricated candidate rankings.
+CV evaluation files use schema 1 and include the fold and policy identities,
+actual choice, coverage, exclusions and metrics, without fabricated rankings.
 
 `--metric-mode ranking` is available for numerical policies. Only the compiler's
 scalable VF set participates in this diagnostic, with full measurement coverage
@@ -401,12 +414,11 @@ independently; function-level aggregation for dataset evaluation is not implemen
 
 Top-k requires more than k measured VFs. Ties select the smaller VF; Spearman uses
 average ranks and excludes constant rankings. p95 uses linear interpolation.
-Each benchmark has equal metric weight. Reports include denominators, exclusions,
-coverage and the ten largest regrets. `--exclude-reasons` prints individual reasons.
+Each benchmark has equal metric weight. CV reports include denominators, exclusions
+and coverage; ranking rows also contain scores. Baseline prints its ten largest
+regrets. Both commands print individual exclusion reasons to stderr.
 
-Ranking commands write schema 2 with provenance, scores, metrics and exclusions.
-Default and fitted selection evaluation use the same replay/coverage rules.
-Direct evaluation retains rational LLVM report scores. No eligible benchmarks,
+Both CV metric modes use the output layout above. No eligible benchmarks,
 invalid configuration, or a compilation failure returns 1; completed successful evaluation returns 0.
 All commands return 130 on interruption.
 
@@ -416,13 +428,13 @@ multipliers retain [0.25, 4] bounds. Scores and diagnostic breakdown come from t
 same code. Model `rvv-python-19-v3`, weights schema 2 and cache bundle v4 reject
 older artifacts; recollect and refit without automatic conversion.
 
-## Ablation branches and common comparison
+## Ablation branches
 
 `backend-aware-cost` is the parent and the only fittable variant. `spill-reject`
 and `spill-aware` branch directly from the same common compiler/tools commit.
 Each checkout's `selection_policy.py` implements candidate evaluation and loop
-selection plus capability declarations. The common driver, projection, tail
-formula, dataset partition and CLI implementation are identical across branches.
+selection plus capability declarations. The policies share the driver protocol,
+projection and tail formula.
 `--llvm-path` chooses the target checkout's policy as well as its compiler;
 the default database still belongs to the invoking checkout.
 
@@ -436,21 +448,10 @@ iteration mappings and failed probes are excluded. Both policies use v3 replay,
 IC=1 and no separate vector epilogue; neither compares vector profitability with
 scalar execution. They reject fitting/weights requests as fixed ablations.
 
-Run `evaluate --llvm-path CHECKOUT --artifacts-dir RESULTS/VARIANT
---json-output RESULTS/VARIANT.json` separately for each variant, using the same
-database. The three names are `backend-aware-cost`, `spill-reject`, and
-`spill-aware`. Then run:
-
-```sh
-uv run python compare-vf-selection RESULTS
-```
-
-The comparison audits saved v3 replay artifacts, policy identities, common
-candidate contexts, measurements and splits. It reports metrics on the common
-scoreable cohort and retains individual coverage and every exclusion.
-Compilation failures are rejected unless `--allow-compile-failures` is explicitly
-supplied; such a comparison is marked partial. These metrics use existing
-measurements, not execution timings of the newly generated code.
+`evaluate` requires a fittable policy and rejects the fixed ablations before
+loading the database or building. Use `print-vplans --llvm-path CHECKOUT
+--benchmark ID` to inspect a fixed policy. The former three-variant comparison
+tool has been removed.
 
 ## Tests
 
