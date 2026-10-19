@@ -301,30 +301,15 @@ public:
 bool verifyReductionFissionRecipe(const VPRecipeBase &R);
 
 enum class VPReductionFissionRejectReason {
-  NotSingleBlock,
-  EarlyExit,
   NonConstantTripCount,
   TripCountOverflow,
   UnsafeTripCountExpansion,
   UnsafeStageInput,
   MemoryDependence,
   UnsupportedReduction,
-  InvalidFissionCost,
-  FissionCostNotReduced,
-  TooFewReductions,
-  NoLongProducer,
-  NoAccumulatorPressureOverflow,
-  RuntimeMemoryCheck,
   UnsupportedRecipe,
-  UnsupportedLiveOut,
   CrossPartitionDependence,
-  ScratchOverflow,
   ScratchLimit,
-  ProducerPreviewNotVectorizable,
-  AccumulatorPreviewNotVectorizable,
-  NoPressureSafeVF,
-  ProducerVFDecrease,
-  FissionPressureNotReduced,
 };
 
 StringRef
@@ -355,8 +340,6 @@ struct VPReductionFissionPartition {
 };
 
 struct VPReductionFissionConfig {
-  /// Retained for callers of the experimental API; no longer a veto.
-  unsigned MinimumReductionCount = 4;
   /// Cut preference only; short producers are also eligible.
   unsigned MinimumLongProducerDepth = 8;
 };
@@ -450,8 +433,6 @@ struct VPReductionFissionDecision {
 
 VPReductionFissionAnalysis
 analyzeVPReductionFission(VPlan &Plan,
-                          // Retained for experimental callers, not a veto.
-                          const VPRegisterPressureBreakdown &Pressure,
                           const VPReductionFissionConfig &Config = {});
 
 /// Check the VF-independent supported recipe subset before stage construction.

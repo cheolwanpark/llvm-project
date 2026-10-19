@@ -276,7 +276,7 @@ planReductionFission(ArrayRef<VPlanPtr> VPlans, ElementCount ActualBaselineVF,
     VPReductionFissionConfig Config;
     Config.MinimumLongProducerDepth = VPlanReductionFissionMinChainDepth;
     VPReductionFissionAnalysis Analysis =
-        analyzeVPReductionFission(Plan, {}, Config);
+        analyzeVPReductionFission(Plan, Config);
     if (!Analysis.isCandidate()) {
       DebugReject(getVPReductionFissionRejectReasonName(*Analysis.RejectReason));
       continue;

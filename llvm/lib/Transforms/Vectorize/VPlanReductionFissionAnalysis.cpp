@@ -755,10 +755,6 @@ bool llvm::isLegalReductionFissionVF(VPlan &Plan, ElementCount VF,
 StringRef llvm::getVPReductionFissionRejectReasonName(
     VPReductionFissionRejectReason Reason) {
   switch (Reason) {
-  case VPReductionFissionRejectReason::NotSingleBlock:
-    return "not-single-block";
-  case VPReductionFissionRejectReason::EarlyExit:
-    return "early-exit";
   case VPReductionFissionRejectReason::NonConstantTripCount:
     return "non-constant-trip-count";
   case VPReductionFissionRejectReason::TripCountOverflow:
@@ -771,38 +767,12 @@ StringRef llvm::getVPReductionFissionRejectReasonName(
     return "memory-dependence";
   case VPReductionFissionRejectReason::UnsupportedReduction:
     return "unsupported-reduction";
-  case VPReductionFissionRejectReason::InvalidFissionCost:
-    return "invalid-fission-cost";
-  case VPReductionFissionRejectReason::FissionCostNotReduced:
-    return "fission-cost-not-reduced";
-  case VPReductionFissionRejectReason::TooFewReductions:
-    return "too-few-reductions";
-  case VPReductionFissionRejectReason::NoLongProducer:
-    return "no-long-producer";
-  case VPReductionFissionRejectReason::NoAccumulatorPressureOverflow:
-    return "no-accumulator-pressure-overflow";
-  case VPReductionFissionRejectReason::RuntimeMemoryCheck:
-    return "runtime-memory-check";
   case VPReductionFissionRejectReason::UnsupportedRecipe:
     return "unsupported-recipe";
-  case VPReductionFissionRejectReason::UnsupportedLiveOut:
-    return "unsupported-live-out";
   case VPReductionFissionRejectReason::CrossPartitionDependence:
     return "cross-partition-dependence";
-  case VPReductionFissionRejectReason::ScratchOverflow:
-    return "scratch-overflow";
   case VPReductionFissionRejectReason::ScratchLimit:
     return "scratch-limit";
-  case VPReductionFissionRejectReason::ProducerPreviewNotVectorizable:
-    return "producer-preview-not-vectorizable";
-  case VPReductionFissionRejectReason::AccumulatorPreviewNotVectorizable:
-    return "accumulator-preview-not-vectorizable";
-  case VPReductionFissionRejectReason::NoPressureSafeVF:
-    return "no-pressure-safe-vf";
-  case VPReductionFissionRejectReason::ProducerVFDecrease:
-    return "producer-vf-decrease";
-  case VPReductionFissionRejectReason::FissionPressureNotReduced:
-    return "fission-pressure-not-reduced";
   }
   llvm_unreachable("unknown reduction fission rejection reason");
 }
@@ -861,7 +831,6 @@ VPReductionFissionDecision llvm::selectReductionFissionConfiguration(
 
 VPReductionFissionAnalysis
 llvm::analyzeVPReductionFission(VPlan &Plan,
-                                const VPRegisterPressureBreakdown & /*Pressure*/,
                                 const VPReductionFissionConfig &Config) {
   VPReductionFissionAnalysis Result;
   VPRegionBlock *Region = Plan.getVectorLoopRegion();

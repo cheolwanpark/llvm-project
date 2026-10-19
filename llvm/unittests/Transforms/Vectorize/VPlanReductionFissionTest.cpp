@@ -90,7 +90,7 @@ TEST_F(VPlanReductionFissionTest, InterleaveMembersAndScratchCrossings) {
     }
     VPReductionFissionConfig Config;
     Config.MinimumLongProducerDepth = 1000;
-    auto Direct = analyzeVPReductionFission(Plan, {}, Config);
+    auto Direct = analyzeVPReductionFission(Plan, Config);
     ASSERT_TRUE(Direct.isCandidate());
     EXPECT_EQ(Direct.Partition.FrontierValues.size(), Factor);
     for (unsigned I = 0; I < Factor; ++I) {
@@ -226,13 +226,10 @@ TEST_F(VPlanReductionFissionTest, AnalysisClassifiesLongAndShortProducers) {
     Updates.push_back(Update);
   }
 
-  VPRegisterPressureBreakdown Pressure;
-  Pressure.AccumulatorOverlapSurplus[1] = 1;
   VPReductionFissionConfig Config;
-  Config.MinimumReductionCount = 5;
   Config.MinimumLongProducerDepth = 8;
   VPReductionFissionAnalysis Analysis =
-      analyzeVPReductionFission(Plan, Pressure, Config);
+      analyzeVPReductionFission(Plan, Config);
 
   ASSERT_TRUE(Analysis.isCandidate());
   EXPECT_EQ(Analysis.Slices.size(), 6u);
@@ -252,17 +249,9 @@ TEST_F(VPlanReductionFissionTest, AnalysisClassifiesLongAndShortProducers) {
   EXPECT_TRUE(is_contained(Analysis.Partition.FrontierValues, Long0));
   EXPECT_TRUE(is_contained(Analysis.Partition.FrontierValues, Long1));
 
-  // Overflow and reduction count no longer determine candidacy.
-  VPRegisterPressureBreakdown NoOverflow;
-  Analysis = analyzeVPReductionFission(Plan, NoOverflow, Config);
-  ASSERT_TRUE(Analysis.isCandidate());
-  Config.MinimumReductionCount = 7;
-  Analysis = analyzeVPReductionFission(Plan, NoOverflow, Config);
-  ASSERT_TRUE(Analysis.isCandidate());
-
   // If no chain meets the preferred depth, include short varying inputs too.
   Config.MinimumLongProducerDepth = 100;
-  Analysis = analyzeVPReductionFission(Plan, NoOverflow, Config);
+  Analysis = analyzeVPReductionFission(Plan, Config);
   ASSERT_TRUE(Analysis.isCandidate());
   EXPECT_TRUE(is_contained(Analysis.Partition.FrontierValues, Short));
   EXPECT_TRUE(Analysis.Partition.ProducerRecipes.contains(
@@ -291,13 +280,10 @@ TEST_F(VPlanReductionFissionTest,
   Plan.getEntry()->appendRecipe(Producer1);
   Plan.getEntry()->appendRecipe(Update);
 
-  VPRegisterPressureBreakdown Pressure;
-  Pressure.AccumulatorOverlapSurplus[1] = 1;
   VPReductionFissionConfig Config;
-  Config.MinimumReductionCount = 1;
   Config.MinimumLongProducerDepth = 2;
   VPReductionFissionAnalysis Analysis =
-      analyzeVPReductionFission(Plan, Pressure, Config);
+      analyzeVPReductionFission(Plan, Config);
 
   ASSERT_TRUE(Analysis.isCandidate());
   ASSERT_EQ(Analysis.Slices.size(), 1u);
@@ -333,12 +319,10 @@ TEST_F(VPlanReductionFissionTest, AnalysisRejectsCoupledAccumulatorGraphs) {
   for (VPRecipeBase *R : SmallVector<VPRecipeBase *, 8>{
            Phi0, Phi1, Long0, Long1, Update0, Coupled, Update1})
     Body->appendRecipe(R);
-  VPRegisterPressureBreakdown Pressure;
-  Pressure.AccumulatorOverlapSurplus[1] = 1;
+
   VPReductionFissionConfig Config;
-  Config.MinimumReductionCount = 2;
   Config.MinimumLongProducerDepth = 2;
-  auto A = analyzeVPReductionFission(Plan, Pressure, Config);
+  auto A = analyzeVPReductionFission(Plan, Config);
   ASSERT_TRUE(A.RejectReason);
   EXPECT_EQ(*A.RejectReason,
             VPReductionFissionRejectReason::CrossPartitionDependence);
@@ -382,9 +366,8 @@ TEST_F(VPlanReductionFissionTest, MultiUpdateKeepsShortInputsAndUpdateOrder) {
   for (VPRecipeBase *R :
        SmallVector<VPRecipeBase *>{Phi, Long0, Long1, Short, First, Last})
     Body->appendRecipe(R);
-  VPRegisterPressureBreakdown Pressure;
-  Pressure.AccumulatorOverlapSurplus[1] = 1;
-  auto A = analyzeVPReductionFission(Plan, Pressure, {1, 2});
+
+  auto A = analyzeVPReductionFission(Plan, {2});
   ASSERT_TRUE(A.isCandidate());
   EXPECT_EQ(A.Slices.size(), 1u);
   EXPECT_EQ(A.Partition.FrontierValues, (SmallVector<VPValue *, 4>{Long1}));
@@ -422,9 +405,8 @@ TEST_F(VPlanReductionFissionTest, FusedUpdateAndDependentSelectStayTogether) {
   for (VPRecipeBase *R :
        SmallVector<VPRecipeBase *>{Phi, Long0, Long1, FMA, Cond, Select})
     Body->appendRecipe(R);
-  VPRegisterPressureBreakdown Pressure;
-  Pressure.AccumulatorOverlapSurplus[1] = 1;
-  auto A = analyzeVPReductionFission(Plan, Pressure, {1, 2});
+
+  auto A = analyzeVPReductionFission(Plan, {2});
   ASSERT_TRUE(A.isCandidate());
   EXPECT_EQ(A.Partition.FrontierValues, (SmallVector<VPValue *, 4>{Long1}));
   for (VPRecipeBase *R : SmallVector<VPRecipeBase *>{FMA, Cond, Select}) {
@@ -451,9 +433,8 @@ TEST_F(VPlanReductionFissionTest, NonAddRecurrenceUsesSamePartitionAnalysis) {
   Phi->setOperand(1, Update);
   for (VPRecipeBase *R : SmallVector<VPRecipeBase *>{Phi, Long0, Long1, Update})
     Plan.getEntry()->appendRecipe(R);
-  VPRegisterPressureBreakdown Pressure;
-  Pressure.AccumulatorOverlapSurplus[1] = 1;
-  auto A = analyzeVPReductionFission(Plan, Pressure, {1, 2});
+
+  auto A = analyzeVPReductionFission(Plan, {2});
   ASSERT_TRUE(A.isCandidate());
   EXPECT_EQ(A.Partition.FrontierValues, (SmallVector<VPValue *, 4>{Long1}));
   EXPECT_TRUE(A.Partition.AccumulatorRecipes.contains(Update));
@@ -678,9 +659,8 @@ TEST_F(VPlanReductionFissionTest, CombinedAddCutIsPrivateAndConservative) {
     VPBlockUtils::connectBlocks(Region, Middle);
     VPBlockUtils::connectBlocks(Middle, Plan.getScalarHeader());
     Plan.addVF(ElementCount::getScalable(4));
-    VPRegisterPressureBreakdown Pressure;
-    Pressure.AccumulatorOverlapSurplus[1] = 1;
-    auto Analysis = analyzeVPReductionFission(Plan, Pressure, {1, 1});
+
+    auto Analysis = analyzeVPReductionFission(Plan, {1});
     ASSERT_TRUE(Analysis.isCandidate());
 
     auto Scratch = buildScratchPlan(Analysis.Partition.FrontierValues, 17,
@@ -849,13 +829,10 @@ TEST_F(VPlanReductionFissionTest, PreviewBuildsIndependentVectorRegions) {
   VPBlockUtils::connectBlocks(Exit, Baseline.getScalarHeader());
   Baseline.addVF(ElementCount::getScalable(4));
 
-  VPRegisterPressureBreakdown Pressure;
-  Pressure.AccumulatorOverlapSurplus[1] = 1;
   VPReductionFissionConfig Config;
-  Config.MinimumReductionCount = 1;
   Config.MinimumLongProducerDepth = 1;
   VPReductionFissionAnalysis Analysis =
-      analyzeVPReductionFission(Baseline, Pressure, Config);
+      analyzeVPReductionFission(Baseline, Config);
   ASSERT_TRUE(Analysis.isCandidate());
 
   // Derived scalar IVs are loop control, not duplicated producer work.
@@ -1150,7 +1127,7 @@ TEST_F(VPlanReductionFissionTest, AnalysisRejectsInvariantOnlyAndEmptyCuts) {
   Plan.getEntry()->appendRecipe(Phi);
   Plan.getEntry()->appendRecipe(Invariant);
   Plan.getEntry()->appendRecipe(Update);
-  auto Analysis = analyzeVPReductionFission(Plan, {}, {1, 1});
+  auto Analysis = analyzeVPReductionFission(Plan, {1});
   EXPECT_FALSE(Analysis.isCandidate());
   EXPECT_TRUE(Analysis.Partition.FrontierValues.empty());
   EXPECT_TRUE(Analysis.Partition.ProducerRecipes.empty());
