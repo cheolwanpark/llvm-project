@@ -14,6 +14,7 @@ def selection_row(benchmark, result, expected_vlen=None):
                compile_failed=bool(result.returncode), status="compile-failed",
                reason=None, actual_selection=None, selected_vf=None,
                measured_cycles={str(v): c for v, c in benchmark.measured.items()},
+               ignored_measured_cycles={}, evaluated_vfs=[],
                top1_correct=None, top1_regret=None)
     if result.returncode:
         row["reason"] = result.stderr[-3000:]
@@ -28,6 +29,17 @@ def selection_row(benchmark, result, expected_vlen=None):
     if len(loops) != 1 or len(choices) != 1 or loops[0]["function"] != "selected_kernel":
         row.update(status="ambiguous-loops" if loops else "no-loop", reason="expected one selected_kernel loop")
         return row
+    candidate_vfs = {int(c["vf"][1:]) for c in manifest["candidates"]
+                     if c["function"] == loops[0]["function"] and c["loop"] == loops[0]["loop"]
+                     and c["vf"].startswith("s")}
+    row["evaluated_vfs"] = sorted(candidate_vfs)
+    try:
+        benchmark = vt.restrict_measurements(benchmark, candidate_vfs)
+    except vt.ToolError as exc:
+        row.update(status="missing-measurements", reason=str(exc))
+        return row
+    row["measured_cycles"] = {str(v): c for v, c in benchmark.measured.items()}
+    row["ignored_measured_cycles"] = {str(v): c for v, c in benchmark.ignored_measured.items()}
     actual = dict(choices[0])
     row["actual_selection"] = actual
     if actual["scalar"]:
@@ -132,7 +144,11 @@ def evaluate_main(argv=None, *, fitted=False):
                         if vf.startswith("s") and status["status"] == "scored":
                             number = int(vf[1:])
                             scores[number] = min(scores.get(number, float("inf")), status["score"])
-                    rankings.append(vt.score_benchmark(benchmark, scores))
+                    candidate_vfs = set(row["evaluated_vfs"])
+                    if row["status"] == "missing-measurements":
+                        rankings.append(vt.Result(benchmark, reason=row["reason"]))
+                    else:
+                        rankings.append(vt.score_benchmark(vt.restrict_measurements(benchmark, candidate_vfs), scores))
         except (vt.ToolError, OSError, ValueError, KeyError) as exc:
             from types import SimpleNamespace
             row = selection_row(benchmark, SimpleNamespace(returncode=1, stderr=str(exc)))

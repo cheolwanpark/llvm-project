@@ -80,6 +80,25 @@ class ReportTests(unittest.TestCase):
         text = report([(0, "s2", "Invalid", 4, "Invalid"), (1, "s4", 8, 8, 64)])
         self.assertEqual(vt.parse_report(text), {4: 64})
 
+    def test_compiler_subset_keeps_unavailable_candidates_for_coverage(self):
+        text = report([(0, "s2", "Invalid", 4, "Invalid"), (1, "s4", 8, 8, 64)])
+        candidate_vfs = set()
+        scores = vt.parse_report(text, candidate_vfs)
+        self.assertEqual(candidate_vfs, {2, 4})
+        result = vt.score_benchmark(vt.restrict_measurements(benchmark(), candidate_vfs), scores)
+        self.assertFalse(result.eligible)
+        self.assertIn('s2', result.reason)
+
+    def test_direct_compiler_subset_ignores_db_extras_but_requires_coverage(self):
+        candidate_vfs = set()
+        scores = vt.parse_report(report([(0, 's2', 4, 4, 64), (1, 's4', 8, 8, 128)]), candidate_vfs)
+        b = benchmark((1, 100, 200, 1))
+        result = vt.score_benchmark(vt.restrict_measurements(b, candidate_vfs), scores)
+        self.assertEqual(result.top1_regret, 0)
+        self.assertEqual(result.benchmark.ignored_measured, {1: 1, 8: 1})
+        with self.assertRaisesRegex(vt.ToolError, 'missing measurements.*s4'):
+            vt.restrict_measurements(benchmark((100, 200)), candidate_vfs)
+
     def test_report_boundaries_and_unrelated_functions(self):
         unrelated = report([(0, "s2", 100, 4, 1600)], function="other")
         text = "warning: diagnostics\n" + unrelated + report([(0, "s2", 4, 4, 64)]) + "remark: end\n"

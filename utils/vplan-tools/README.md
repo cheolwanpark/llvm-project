@@ -55,6 +55,15 @@ specifies how representative samples were selected; there is no run-history
 query or fastest-run selection. **VF 1 means scalable s1, not scalar f1.** The
 schema has no LMUL column; VF must not be relabeled as LMUL.
 
+For each benchmark, the current compiler's generated scalable main-loop VF set
+defines the fitting/evaluation population. The database must contain every VF in
+that set. Extra database VFs are ignored for fitting pairs, winners and all metrics;
+they are retained in the database and reported as `ignored_measured_cycles`.
+This is a per-benchmark candidate set, not a hard-coded cutoff at VF 16. Failed or
+unsupported candidates are not silently removed from the required set. At least
+two VFs are needed for fitting/evaluation, and ranking/fitting additionally require
+a usable prediction for each VF. Fixed-width VFs are not mapped to scalable VFs.
+
 The database is opened read-only in a transaction. Missing files, wrong schemas,
 invalid selected data, and absent IDs fail before building. Old `summary.sqlite`
 and `results.sqlite` schemas are intentionally unsupported. `results.sqlite.old`
@@ -205,21 +214,42 @@ JSON file, not a pickle or an LLVM configuration file.
 
 ## Evaluation and exclusions
 
+`evaluate-baseline` evaluates the ordinary LLVM middle-end vectorizer's
+actual selected VF using the direct compilation pipeline. It reads
+`selected-for-main` and the final transformation outcome, rather than inferring
+selection from the lowest printed cost. Late vectorization rejections, missing
+reports, multiple loops, fixed/scalar selections and measurement gaps are explicit
+exclusions. Measurements require IC=1 and no vector epilogue. The compiler VF
+subset rule above also applies. This evaluates selections against existing DB
+measurements; it does not execute the generated binaries.
+
+```sh
+uv run python evaluate-baseline --db ../../vf-xs-run.sqlite --skip-build
+```
+
+`--skip-build` reuses `build-vplan-tools/bin/clang` and `llvm-extract` without
+running CMake/Ninja. The command prints coverage, Top-1 accuracy, mean/median/p95
+regret, exclusion counts, the highest regrets and evaluation time directly to the
+terminal. Progress and individual exclusion reasons go to stderr. There are no
+result-file output options; compilation uses temporary files that are cleaned up.
+
 The default `--metric-mode selection` selects from all generated candidates before
 joining to measurements. Top-1 exact compares the replayed VF with the measured
-winner (smaller VF breaks measured ties). Regret is its measured cycles divided
-by the best measured cycles, minus one. Scalar choices, unmeasured or fixed VFs,
+winner within the compiler's scalable VF set (smaller VF breaks measured ties).
+Regret is its measured cycles divided by the best measured cycles in that set,
+minus one. Missing measurements for any compiler VF, scalar or fixed VF choices,
 VLEN mismatches, multiple-loop kernels and compilation failures remain explicit
-exclusions. At least two measured VFs are required. Unavailable alternative
+exclusions. At least two compiler scalable VFs with measurements are required. Unavailable alternative
 candidate costs do not exclude a successfully replayed, measured choice.
 Results use schema 3 and include the policy identity, actual choice, coverage,
 exclusions and metrics, without fabricated candidate rankings.
 
-`--metric-mode ranking` is available for numerical policies. Only measured scalable
-VFs participate in this diagnostic. Multiple usable plans for one VF use the
-minimum score. A benchmark is excluded if any measured VF lacks a usable score,
-the selected loop is ambiguous, or fewer than two VFs were measured. Unsupported
-unmeasured VFs do not invalidate the ranking. Final compilation selects each loop
+`--metric-mode ranking` is available for numerical policies. Only the compiler's
+scalable VF set participates in this diagnostic, with full measurement coverage
+required. Multiple usable plans for one VF use the minimum score. A benchmark is
+excluded if any compiler VF lacks a measurement or usable score, the selected
+loop is ambiguous, or the set has fewer than two VFs. Extra database VFs do not
+invalidate the ranking. Final compilation selects each loop
 independently; function-level aggregation for dataset evaluation is not implemented.
 
 | Metric | Definition |

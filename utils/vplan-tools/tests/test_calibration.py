@@ -261,6 +261,29 @@ class CollectionTests(unittest.TestCase):
                 raise vt.ToolError(log.getvalue()) from exc
         return result
 
+    def test_fitting_pairs_and_metrics_use_compiler_subset(self):
+        vectors = [analytics(vf=vf, scalable=True) for vf in (1, 2)]
+        measured = {1: 100, 2: 150, 32: 1, 64: 2}
+        model, examples, excluded, provenance = self.prepare(vectors, measured)
+        self.assertFalse(excluded)
+        self.assertEqual(examples[0].vfs, [1, 2])
+        self.assertEqual(examples[0].benchmark.measured, {1: 100, 2: 150})
+        self.assertEqual(len(examples[0].pairs), 1)
+        self.assertEqual(provenance[0]['ignored_measured_vfs'], [32, 64])
+        self.assertEqual(measured[32], 1)
+        scored = cal.results_for(model, examples, torch.ones(P, dtype=DTYPE))[0]
+        self.assertEqual(set(vt.result_json(scored)['measured_cycles']), {'1', '2'})
+
+    def test_missing_compiler_measurement_is_not_silently_intersected(self):
+        vectors = [analytics(vf=vf, scalable=True) for vf in (1, 2, 4)]
+        with self.assertRaisesRegex(vt.ToolError, 'missing measurements.*s4'):
+            self.prepare(vectors, {1: 100, 2: 150, 64: 1})
+
+    def test_db_only_vfs_cannot_supply_fitting_pairs(self):
+        vectors = [analytics(vf=vf, scalable=True) for vf in (1, 2)]
+        with self.assertRaisesRegex(vt.ToolError, 'no pairs above'):
+            self.prepare(vectors, {1: 100, 2: 100, 64: 1})
+
     def test_prepare_without_scalar_and_with_unsupported_alternative(self):
         vectors = [analytics(vf=vf, scalable=True, MaxTripCount=8) for vf in (1, 2)]
         bad = vectors[1] | {"ScalarTail": True}

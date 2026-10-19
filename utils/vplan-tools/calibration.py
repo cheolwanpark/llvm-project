@@ -76,7 +76,7 @@ def collect(benchmark, clang, args, identity):
         loops = {(r["function"], r["loop"]): r for r in manifest["loops"]}
         rows = []
         for index, row in enumerate(manifest["candidates"]):
-            if row["function"] != "selected_kernel" or not row["probeable"]:
+            if row["function"] != "selected_kernel":
                 continue
             prefix = backend / f"probe-{index:04d}"
             status = statuses[index]
@@ -145,15 +145,18 @@ def prepare(benchmarks, clang, args, identity, metadata, fitting):
     for index, b in enumerate(benchmarks, 1):
         print(f"[{index}/{len(benchmarks)}] {b.id}", file=sys.stderr, flush=True)
         try:
+            bundle = collect(b, clang, args, identity)
+            candidate_vfs = {int(r["candidate"]["vf"][1:]) for r in bundle["rows"]
+                             if r["candidate"]["vf"].startswith("s")}
+            b = vt.restrict_measurements(b, candidate_vfs)
             if len(b.measured) < 2:
-                raise vt.ToolError("fewer than two measured VFs")
+                raise vt.ToolError("fewer than two compiler scalable VFs with measurements")
             pairs = make_pairs(b.measured, args.pair_threshold, args.weight_saturation) if fitting else []
             if fitting and not pairs:
                 raise vt.ToolError("no pairs above the measurement threshold")
-            bundle = collect(b, clang, args, identity)
-            # Unmeasured VFs cannot invalidate a measured ranking. Unsupported
-            # alternatives for one VF are ignored only if another plan supplies
-            # a usable prediction, matching the report evaluator's semantics.
+            # The compiler defines the comparison set before analytics filtering.
+            # Unsupported alternatives are ignored only when another plan for
+            # the same VF supplies a usable prediction.
             rows, unsupported = [], {}
             for row in bundle["rows"]:
                 vf = row["candidate"]["vf"]
@@ -184,7 +187,9 @@ def prepare(benchmarks, clang, args, identity, metadata, fitting):
             offset = len(observations)
             observations.extend(local)
             examples.append(Example(b, [[offset + i for i in g] for g in groups], sorted(b.measured), pairs))
-            provenance.append({"id": b.id, "cache_key": bundle["key"], "run_id": bundle["run_id"]})
+            provenance.append({"id": b.id, "cache_key": bundle["key"], "run_id": bundle["run_id"],
+                               "evaluated_vfs": sorted(b.measured),
+                               "ignored_measured_vfs": sorted(b.ignored_measured)})
         except (vt.ToolError, OSError, ValueError, KeyError, TypeError) as exc:
             excluded.append({"id": b.id, "reason": str(exc)})
             print(f"  excluded: {exc}", file=sys.stderr, flush=True)

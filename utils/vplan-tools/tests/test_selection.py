@@ -52,17 +52,20 @@ class ProjectionTests(unittest.TestCase):
                 project_spills(self.candidate, a)
 
 
-def result(vf='s2', scalar=False):
+def result(vf='s2', scalar=False, candidate_vfs=('s1', 's2', 's4')):
     candidate = dict(id='selected_kernel:0:0:' + vf, vf=vf, function='selected_kernel', loop=0)
+    candidates = [candidate | {'id': 'selected_kernel:0:0:' + v, 'vf': v}
+                  for v in dict.fromkeys((*candidate_vfs, vf))]
     choice = dict(function='selected_kernel', loop=0, scalar=scalar, ic=1, epilogue_vf='f0')
     if not scalar:
         choice['id'] = candidate['id']
     manifest = dict(version=3, run_id='run', loops=[dict(function='selected_kernel', loop=0)],
-                    candidates=[candidate], selections=[], failures=[])
+                    candidates=candidates, selections=[], failures=[])
     final = manifest | {'selections': [choice]}
     return SimpleNamespace(returncode=0, stderr='', manifest=manifest,
         selection=copy.deepcopy(final), final_manifest=copy.deepcopy(final),
-        candidate_status={'candidates': [dict(id=candidate['id'], status='scored', score=1, vlen=128)]})
+        candidate_status={'candidates': [dict(id=c['id'], status='scored', score=1, vlen=128)
+                                         for c in candidates]})
 
 
 class SelectionTests(unittest.TestCase):
@@ -78,12 +81,31 @@ class SelectionTests(unittest.TestCase):
 
     def test_scalar_unmeasured_fixed_and_vlen_exclusions(self):
         for r, vlen, status in ((result(scalar=True), 128, 'scalar-selection'),
-                                (result('s8'), 128, 'unmeasured-vf'),
+                                (result('s8'), 128, 'missing-measurements'),
                                 (result('f2'), 128, 'unmeasured-vf'),
                                 (result(), 256, 'vlen-mismatch')):
             row = selection_row(self.benchmark, r, vlen)
             self.assertEqual(row['status'], status)
             self.assertIsNone(row['top1_regret'])
+
+    def test_db_only_vfs_do_not_change_winner_or_regret(self):
+        self.benchmark.measured.update({32: 1, 64: 2})
+        row = selection_row(self.benchmark, result(), 128)
+        self.assertEqual(row['top1_regret'], .5)
+        self.assertEqual(row['evaluated_vfs'], [1, 2, 4])
+        self.assertEqual(row['measured_cycles'], {'1': 100, '2': 150, '4': 200})
+        self.assertEqual(row['ignored_measured_cycles'], {'32': 1, '64': 2})
+        self.assertEqual(self.benchmark.measured[32], 1)
+
+    def test_missing_unselected_compiler_vf_still_excludes(self):
+        del self.benchmark.measured[4]
+        row = selection_row(self.benchmark, result(), 128)
+        self.assertEqual(row['status'], 'missing-measurements')
+        self.assertIn('s4', row['reason'])
+
+    def test_single_compiler_vf_is_not_a_ranking_population(self):
+        row = selection_row(self.benchmark, result(candidate_vfs=('s2',)), 128)
+        self.assertEqual(row['status'], 'insufficient-measurements')
 
     def test_replay_context_corruption_is_fatal(self):
         r = result()
@@ -133,7 +155,7 @@ class ComparisonTests(unittest.TestCase):
             for name in api['NAMES']:
                 root = Path(td) / name
                 root.mkdir()
-                r = result(scalar=name == 'spill-reject')
+                r = result(scalar=name == 'spill-reject', candidate_vfs=('s1', 's2'))
                 policy = {'name': name}
                 r.candidate_status.update(version=3, run_id='run', policy=policy)
                 for filename, value in (('candidates.json', r.manifest), ('selection.json', r.selection),

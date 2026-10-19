@@ -7,7 +7,7 @@ import fcntl
 import hashlib
 from collections import Counter
 from contextlib import closing, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 import json
 import math
@@ -41,6 +41,20 @@ class Benchmark:
     compile_args: list[str]
     workload: dict
     measured: dict[int, int]
+    ignored_measured: dict[int, int] = field(default_factory=dict)
+
+
+def restrict_measurements(benchmark: Benchmark, candidate_vfs: set[int]) -> Benchmark:
+    """Require measurements for every compiler VF, ignoring DB-only VFs."""
+    missing = sorted(candidate_vfs - benchmark.measured.keys())
+    if missing:
+        raise ToolError("missing measurements for compiler VF(s): " +
+                        ", ".join(f"s{vf}" for vf in missing))
+    return replace(benchmark,
+                   measured={vf: benchmark.measured[vf] for vf in sorted(candidate_vfs)},
+                   ignored_measured=benchmark.ignored_measured | {
+                       vf: cycles for vf, cycles in benchmark.measured.items()
+                       if vf not in candidate_vfs})
 
 
 def load_database(path: Path, split: str | None = None,
@@ -369,7 +383,7 @@ def fields(line: str) -> dict[str, str]:
     return dict(re.findall(r"\b([a-z][a-z_-]*)=([^\s]+)", line))
 
 
-def parse_report(text: str) -> dict[int, Fraction]:
+def parse_report(text: str, candidate_vfs: set[int] | None = None) -> dict[int, Fraction]:
     """Parse bounded reports and observed main-selection candidate table scores.
 
     Recipe costs, validation costs, epilogue costs, and placeholder zero costs
@@ -418,6 +432,8 @@ def parse_report(text: str) -> dict[int, Fraction]:
         if len(columns) != 10:
             raise ReportError(f"malformed candidate row: {line}")
         _, _, vf, _, body_cost, score, score_kind, _, _, _ = columns
+        if candidate_vfs is not None and re.fullmatch(r"s[1-9][0-9]*", vf):
+            candidate_vfs.add(int(vf[1:]))
         if (not re.fullmatch(r"s[1-9][0-9]*", vf)
                 or body_cost in ("Invalid", "not-evaluated")
                 or score in ("Invalid", "not-evaluated")
@@ -610,6 +626,7 @@ def result_json(result: Result) -> dict:
         "eligible": result.eligible, "reason": result.reason,
         "compile_failed": result.compile_failed,
         "measured_cycles": {str(vf): cycles for vf, cycles in measured.items()},
+        "ignored_measured_cycles": {str(vf): cycles for vf, cycles in result.benchmark.ignored_measured.items()},
         "scores": {str(vf): ({"numerator": cost.numerator, "denominator": cost.denominator}
                             if isinstance(cost, Fraction) else {"value": float(cost)})
                    for vf, cost in result.scores.items()},
@@ -655,8 +672,10 @@ def evaluate_benchmarks(clang: Path, benchmarks: list[Benchmark], timeout: int,
                                 compile_failed=True)
             else:
                 try:
-                    result = score_benchmark(benchmark, parse_report(compiled.stderr))
-                except ReportError as exc:
+                    candidate_vfs = set()
+                    scores = parse_report(compiled.stderr, candidate_vfs)
+                    result = score_benchmark(restrict_measurements(benchmark, candidate_vfs), scores)
+                except ToolError as exc:
                     result = Result(benchmark, reason=str(exc))
         except ToolError as exc:
             result = Result(benchmark, reason=str(exc), compile_failed=True)
@@ -755,8 +774,8 @@ def evaluate_main(argv: list[str] | None = None) -> int:
     print(version.stdout.splitlines()[0])
     print(f"Measured target: {metadata['target']}; "
           f"measurement compiler: {metadata['measurement_compiler']}")
-    print("Ranking: measured scalable VFs only; LMUL search=8; recorded forced VF removed.")
-    print("Top-k eligibility: measured VF count > k, with a valid prediction for every measured VF.")
+    print("Ranking: compiler scalable VF set; full DB coverage required; extra DB VFs ignored; LMUL search=8.")
+    print("Top-k eligibility: compiler VF count > k, with a measurement and valid prediction for every compiler VF.")
     print("Ties: smaller VF first for top-k; average ranks for Spearman. Each benchmark has equal weight.")
     results = evaluate_benchmarks(
         clang, benchmarks, args.timeout, args.artifacts_dir, args.compiler_mode,
