@@ -23,7 +23,7 @@ import tempfile
 
 TOOLS = Path(__file__).resolve().parent
 DEFAULT_LLVM = TOOLS.parents[1]
-DEFAULT_DB = DEFAULT_LLVM / "results.sqlite"
+DEFAULT_DB = DEFAULT_LLVM / "dataset.sqlite"
 
 
 class ToolError(Exception):
@@ -37,22 +37,18 @@ class ReportError(ToolError):
 @dataclass
 class Benchmark:
     id: str
-    suite: str
     kind: str
     source: str
-    variants: list[dict]
-
-    @property
-    def measured(self) -> dict[int, int]:
-        return {
-            v["vf"]: v["measured_cycles"]
-            for v in self.variants
-            if v["status"] == "success" and v["measured_cycles"] is not None
-        }
+    compile_args: list[str]
+    workload: dict
+    measured: dict[int, int]
 
 
-def load_database(path: Path) -> tuple[list[Benchmark], dict]:
-    """Use the database's latest-successful-run view, never the fastest run."""
+def load_database(path: Path, split: str | None = None,
+                  benchmark_id: str | None = None) -> tuple[list[Benchmark], dict]:
+    """Read only the requested partition, including its measurements."""
+    if split not in (None, "tuning", "validation"):
+        raise ToolError(f"invalid split: {split}")
     path = path.expanduser().resolve()
     if not path.is_file():
         raise ToolError(f"database does not exist: {path}")
@@ -60,26 +56,52 @@ def load_database(path: Path) -> tuple[list[Benchmark], dict]:
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
             db.row_factory = sqlite3.Row
             db.execute("BEGIN")
-            metadata = dict(db.execute(
-                "SELECT compiler_revision, target_platform FROM summary_metadata"
-            ).fetchone())
-            rows = db.execute(
-                "SELECT benchmark_id, source_suite, benchmark_type, compilable_code "
-                "FROM benchmarks ORDER BY case_order, benchmark_id"
-            ).fetchall()
-            variants: dict[str, list[dict]] = {}
+            meta = db.execute("SELECT id, target, measurement_compiler, "
+                              "measurement_protocol_json FROM dataset").fetchall()
+            if len(meta) != 1 or meta[0]["id"] != 1:
+                raise ValueError("expected exactly one dataset metadata row with id=1")
+            metadata = dict(meta[0])
+            metadata["measurement_protocol"] = json.loads(metadata.pop("measurement_protocol_json"))
+            if (not isinstance(metadata["target"], str) or not metadata["target"]
+                    or not isinstance(metadata["measurement_compiler"], str) or not metadata["measurement_compiler"]
+                    or not isinstance(metadata["measurement_protocol"], dict)):
+                raise ValueError("invalid dataset metadata")
+            conditions, params = [], []
+            if split:
+                conditions.append("b.split=?")
+                params.append(split)
+            if benchmark_id:
+                conditions.append("b.id=?")
+                params.append(benchmark_id)
+            where = " WHERE " + " AND ".join(conditions) if conditions else ""
+            rows = db.execute("SELECT b.id,b.split,b.source,b.compile_args_json,b.workload_json "
+                              "FROM benchmarks b" + where + " ORDER BY b.id", params).fetchall()
+            measurements: dict[str, dict[int, int]] = {}
             for row in db.execute(
-                "SELECT benchmark_id, vf, lmul, interleave_count, software_pipelining, "
-                "llvm_flags_json, status, measured_cycles FROM benchmark_vf_summary "
-                "ORDER BY benchmark_id, vf"
-            ):
-                variants.setdefault(row["benchmark_id"], []).append(dict(row))
-            return [Benchmark(row["benchmark_id"], row["source_suite"],
-                              row["benchmark_type"], row["compilable_code"],
-                              variants.get(row["benchmark_id"], []))
-                    for row in rows], metadata
-    except (sqlite3.Error, TypeError) as exc:
-        raise ToolError(f"cannot read summary database {path}: {exc}") from exc
+                "SELECT m.benchmark_id,m.vf,m.cycles FROM measurements m "
+                "JOIN benchmarks b ON b.id=m.benchmark_id" + where +
+                " ORDER BY m.benchmark_id,m.vf", params):
+                if any(type(row[k]) is not int or row[k] <= 0 for k in ("vf", "cycles")):
+                    raise ValueError("VF and cycles must be positive integers")
+                values = measurements.setdefault(row["benchmark_id"], {})
+                if row["vf"] in values:
+                    raise ValueError("duplicate measurement VF")
+                values[row["vf"]] = row["cycles"]
+            benchmarks = []
+            for row in rows:
+                args = json.loads(row["compile_args_json"])
+                workload = json.loads(row["workload_json"])
+                if (not isinstance(args, list) or not all(isinstance(a, str) for a in args)
+                        or not isinstance(workload, dict)
+                        or not isinstance(row["id"], str) or not row["id"]
+                        or not isinstance(row["source"], str) or not row["source"]
+                        or row["split"] not in ("tuning", "validation")):
+                    raise ValueError(f"invalid benchmark: {row['id']}")
+                benchmarks.append(Benchmark(row["id"], row["split"], row["source"], args,
+                                            workload, measurements.get(row["id"], {})))
+            return benchmarks, metadata
+    except (sqlite3.Error, TypeError, ValueError, KeyError) as exc:
+        raise ToolError(f"cannot read dataset database {path}: {exc}") from exc
 
 
 def positive_int(text: str) -> int:
@@ -100,7 +122,7 @@ def argument_parser(description: str) -> argparse.ArgumentParser:
                         help="LLVM source checkout (default: the checkout containing these tools)")
     parser.add_argument("--db", type=resolved_path,
                         default=os.environ.get("VPLAN_DB") or str(DEFAULT_DB),
-                        help="summary database (--db > VPLAN_DB > checkout/results.sqlite)")
+                        help="dataset database (--db > VPLAN_DB > checkout/dataset.sqlite)")
     parser.add_argument("--build-dir", type=resolved_path,
                         help="build directory (default: LLVM checkout/build-vplan-tools)")
     parser.add_argument("--jobs", type=positive_int, default=2,
@@ -180,7 +202,7 @@ def _ensure_compiler(source: Path, build: Path, jobs: int) -> Path:
     # Always ask the build system: checking the executable mtime misses headers,
     # generated files, changed build commands, and library dependencies.
     run_build(["cmake", "--build", str(build), "--target", "clang",
-               "clang-resource-headers", "--parallel", str(jobs)])
+               "clang-resource-headers", "llvm-extract", "--parallel", str(jobs)])
     clang = build / "bin/clang"
     try:
         probe = subprocess.run(
@@ -196,17 +218,18 @@ def _ensure_compiler(source: Path, build: Path, jobs: int) -> Path:
     return clang
 
 
-def normalized_flags(raw: str) -> list[str]:
-    try:
-        flags = json.loads(raw)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise ToolError(f"invalid llvm_flags_json: {exc}") from exc
+def normalized_flags(flags: list[str]) -> list[str]:
     if not isinstance(flags, list) or not all(isinstance(f, str) for f in flags):
-        raise ToolError("llvm_flags_json must contain an array of strings")
+        raise ToolError("compile_args_json must contain an array of strings")
     out = []
     index = 0
     while index < len(flags):
         flag = flags[index]
+        if flag == "-x":
+            if index + 1 == len(flags) or flags[index + 1] not in ("c", "c++"):
+                raise ToolError("recorded language must be c or c++")
+            index += 2
+            continue
         # These are build-container paths, not dependencies of the isolated kernel.
         if flag in ("-I", "-idirafter", "-isystem", "--sysroot", "-isysroot"):
             if index + 1 == len(flags):
@@ -235,32 +258,34 @@ def normalized_flags(raw: str) -> list[str]:
 
 
 def benchmark_flags(benchmark: Benchmark) -> list[str]:
-    if not benchmark.variants:
+    if not benchmark.compile_args:
         raise ToolError("no recorded compilation flags")
-    # The current experiment has one IC/pipelining context per benchmark. Never
-    # collapse different contexts or duplicate VFs into one misleading ranking.
-    contexts = {(v["interleave_count"], v["software_pipelining"]) for v in benchmark.variants}
-    if len(contexts) != 1 or len({v["vf"] for v in benchmark.variants}) != len(benchmark.variants):
-        raise ToolError("multiple measurement contexts or duplicate VFs in one benchmark")
-    choices = [normalized_flags(v["llvm_flags_json"]) for v in benchmark.variants]
-    if any(flags != choices[0] for flags in choices[1:]):
-        raise ToolError("variant flags disagree after removing forced VF and container includes")
-    return choices[0] + [
+    return normalized_flags(benchmark.compile_args) + [
         "-mllvm", "-riscv-v-register-bit-width-lmul=8",
         "-nostdlibinc", "-I", str(TOOLS / "include"), "-fno-color-diagnostics",
     ]
 
 
+def source_name(benchmark: Benchmark) -> str:
+    args = benchmark.compile_args
+    language = "c"
+    for i, arg in enumerate(args):
+        if arg == "-x" and i + 1 < len(args):
+            language = args[i + 1]
+    return "kernel.cpp" if language == "c++" else "kernel.c"
+
+
 def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int,
                    compiler_mode: str = "meta", meta_script: Path | None = None,
-                   artifacts_dir: Path | None = None) -> subprocess.CompletedProcess:
+                   artifacts_dir: Path | None = None,
+                   *, stop_after_ra: bool = False) -> subprocess.CompletedProcess:
     flags = benchmark_flags(benchmark)
     with tempfile.TemporaryDirectory(prefix="vplan-tools-") as temporary:
         root = Path(temporary)
         if artifacts_dir is not None:
             artifacts_dir.mkdir(parents=True, exist_ok=True)
             root = Path(tempfile.mkdtemp(prefix="run-", dir=artifacts_dir))
-        source = root / "kernel.c"
+        source = root / source_name(benchmark)
         source.write_text(benchmark.source)
         if compiler_mode == "meta":
             if meta_script is None:
@@ -273,22 +298,47 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
             command = [sys.executable, str(meta_script), "--clang", str(clang),
                        "--input", str(source), "--work-dir", str(root / "backend"),
                        "--output", str(root / "final.ll"), "--emit", "llvm",
+                       "--extract-function", "selected_kernel",
+                       "--llvm-extract", str(clang.parent / "llvm-extract"),
                        "--timeout", str(timeout)]
+            if stop_after_ra:
+                command += ["--stop-after-ra", "--analytics-only"]
             if detail:
                 command.append("--detail")
             command += ["--", *flags]
             try:
                 # The driver enforces the timeout separately for every probe.
-                return subprocess.run(command, capture_output=True, text=True, errors="replace")
+                result = subprocess.run(command, capture_output=True, text=True, errors="replace")
+                result.artifact_root = root
+                return result
             except OSError as exc:
                 raise ToolError(f"cannot execute meta-compiler: {exc}") from exc
         if compiler_mode != "direct":
             raise ToolError(f"unknown compiler mode: {compiler_mode}")
-        command = [str(clang), *flags, "-mllvm", "--print-vplans"]
+        frontend = root / "frontend.bc"
+        kernel = root / "kernel.bc"
+        from importlib.machinery import SourceFileLoader
+        import types
+        driver_path = meta_script or DEFAULT_LLVM / "utils/vplan-meta-compile"
+        driver = types.ModuleType("vplan_meta_driver")
+        SourceFileLoader(driver.__name__, str(driver_path)).exec_module(driver)
+        # Direct mode retains LLVM's ordinary cost policy. Extract before the
+        # ordinary optimization pipeline rather than enabling the meta pipeline.
+        preparation = [
+            [str(clang), *flags, "-Xclang", "-disable-llvm-passes", "-emit-llvm", "-c", str(source), "-o", str(frontend)],
+            [str(clang.parent / "llvm-extract"), str(frontend), "--func", "selected_kernel",
+             "--recursive", "--keep-const-init", "-o", str(kernel)],
+        ]
+        command = [str(clang), *driver.resume_flags(flags), "-mllvm", "--print-vplans"]
         if detail:
             command += ["-mllvm", "--print-detailed-vplans"]
-        command += ["-S", "-emit-llvm", str(source), "-o", os.devnull]
+        command += ["-S", "-emit-llvm", str(kernel), "-o", os.devnull]
         try:
+            for prep in preparation:
+                result = subprocess.run(prep, capture_output=True, text=True,
+                                        errors="replace", timeout=timeout)
+                if result.returncode:
+                    return result
             return subprocess.run(command, capture_output=True, text=True,
                                   errors="replace", timeout=timeout)
         except subprocess.TimeoutExpired as exc:
@@ -395,7 +445,7 @@ def spearman(predicted: list, measured: list) -> float | None:
 @dataclass
 class Result:
     benchmark: Benchmark
-    scores: dict[int, Fraction] = field(default_factory=dict)
+    scores: dict[int, Fraction | float] = field(default_factory=dict)
     reason: str | None = None
     compile_failed: bool = False
 
@@ -415,7 +465,7 @@ class Result:
         return measured[winner] / best_cycles - 1
 
 
-def score_benchmark(benchmark: Benchmark, scores: dict[int, Fraction]) -> Result:
+def score_benchmark(benchmark: Benchmark, scores: dict[int, Fraction | float]) -> Result:
     measured = benchmark.measured
     missing = sorted(measured.keys() - scores.keys())
     if missing:
@@ -542,7 +592,8 @@ def result_json(result: Result) -> dict:
         "eligible": result.eligible, "reason": result.reason,
         "compile_failed": result.compile_failed,
         "measured_cycles": {str(vf): cycles for vf, cycles in measured.items()},
-        "scores": {str(vf): {"numerator": cost.numerator, "denominator": cost.denominator}
+        "scores": {str(vf): ({"numerator": cost.numerator, "denominator": cost.denominator}
+                            if isinstance(cost, Fraction) else {"value": float(cost)})
                    for vf, cost in result.scores.items()},
         "predicted_best": winner, "top1_regret": result.top1_regret,
     }
@@ -567,7 +618,7 @@ def evaluate_benchmarks(clang: Path, benchmarks: list[Benchmark], timeout: int,
         report_path = artifacts_dir / benchmark.kind / f"{name}.txt" if artifacts_dir else None
         try:
             compiled = compile_report(clang, benchmark,
-                                      bool(artifacts_dir and (detail_all or benchmark.kind == "tuning")), timeout,
+                                      bool(artifacts_dir and detail_all), timeout,
                                       compiler_mode=compiler_mode, meta_script=meta_script,
                                       artifacts_dir=report_path.with_suffix(".ra") if report_path else None)
             if report_path:
@@ -575,7 +626,12 @@ def evaluate_benchmarks(clang: Path, benchmarks: list[Benchmark], timeout: int,
                 report_path.write_text(compiled.stderr)
             if compiled.returncode:
                 print(compiled.stderr.strip(), file=sys.stderr)
-                result = Result(benchmark, reason=f"compilation failed (exit {compiled.returncode})",
+                diagnostics = [line.strip() for line in compiled.stderr.splitlines()
+                               if "error:" in line or "meta-compiler:" in line]
+                reason = f"compilation failed (exit {compiled.returncode})"
+                if diagnostics:
+                    reason += ": " + diagnostics[-1]
+                result = Result(benchmark, reason=reason,
                                 compile_failed=True)
             else:
                 try:
@@ -593,10 +649,8 @@ def evaluate_benchmarks(clang: Path, benchmarks: list[Benchmark], timeout: int,
 
 def evaluation_json(results: list[Result], metadata: dict) -> dict:
     return {
-        "schema_version": 1, "metadata": metadata,
-        "metrics": {kind: summary_json([r for r in results
-                                        if kind == "overall" or r.benchmark.kind == kind])
-                    for kind in ("overall", "tuning", "validation")},
+        "schema_version": 2, "metadata": metadata,
+        "metrics": {"validation": summary_json(results)},
         "benchmarks": [result_json(r) for r in results],
     }
 
@@ -607,11 +661,11 @@ def report_name(benchmark_id: str) -> str:
 
 
 def print_vplans_main(argv: list[str] | None = None) -> int:
-    parser = argument_parser("Print VPlan costs for a benchmark stored in a summary database.")
+    parser = argument_parser("Print VPlan costs for a benchmark stored in a dataset database.")
     parser.add_argument("--benchmark", required=True, help="exact benchmark ID")
     parser.add_argument("--detail", action="store_true", help="include detailed cost calculations")
     args = parser.parse_args(argv)
-    benchmarks, _ = load_database(args.db)
+    benchmarks, _ = load_database(args.db, benchmark_id=args.benchmark)
     benchmark = next((b for b in benchmarks if b.id == args.benchmark), None)
     if benchmark is None:
         raise ToolError(f"unknown benchmark: {args.benchmark}")
@@ -633,20 +687,19 @@ def evaluate_main(argv: list[str] | None = None) -> int:
                         help="one exact benchmark ID (default: all benchmarks; specify only once)")
     parser.add_argument("--exclude-reasons", action="store_true",
                         help="list excluded benchmarks and their exclusion reasons")
-    parser.add_argument("--split", choices=("all", "tuning", "validation"), default="all")
     parser.add_argument("--json-output", type=resolved_path, help="write machine-readable results")
-    parser.add_argument("--artifacts-dir", type=resolved_path, help="save reports, detailed for tuning")
+    parser.add_argument("--artifacts-dir", type=resolved_path, help="save compiler reports and artifacts")
     args = parser.parse_args(argv)
     if args.benchmark and len(args.benchmark) > 1:
         parser.error("--benchmark may be specified only once")
-    benchmarks, metadata = load_database(args.db)
-    if args.split != "all":
-        benchmarks = [b for b in benchmarks if b.kind == args.split]
+    benchmarks, metadata = load_database(args.db, split="validation",
+                                         benchmark_id=args.benchmark[0] if args.benchmark else None)
+    benchmarks = [b for b in benchmarks if b.kind == "validation"]
     if args.benchmark:
         benchmark_id = args.benchmark[0]
         benchmarks = [b for b in benchmarks if b.id == benchmark_id]
         if not benchmarks:
-            raise ToolError(f"unknown benchmark: {benchmark_id}")
+            raise ToolError(f"unknown benchmark: {benchmark_id} in validation partition")
     if not benchmarks:
         raise ToolError("database contains no benchmarks")
     clang = ensure_compiler(args.llvm_path, args.build_dir, args.jobs)
@@ -656,8 +709,8 @@ def evaluate_main(argv: list[str] | None = None) -> int:
     print(f"Compiler: {clang}")
     version = subprocess.run([str(clang), "--version"], capture_output=True, text=True, check=True)
     print(version.stdout.splitlines()[0])
-    print(f"Measured target: {metadata['target_platform']}; "
-          f"measurement compiler revision: {metadata['compiler_revision']}")
+    print(f"Measured target: {metadata['target']}; "
+          f"measurement compiler: {metadata['measurement_compiler']}")
     print("Ranking: measured scalable VFs only; LMUL search=8; recorded forced VF removed.")
     print("Top-k eligibility: measured VF count > k, with a valid prediction for every measured VF.")
     print("Ties: smaller VF first for top-k; average ranks for Spearman. Each benchmark has equal weight.")
@@ -666,9 +719,7 @@ def evaluate_main(argv: list[str] | None = None) -> int:
         args.llvm_path.resolve() / "utils/vplan-meta-compile")
     if args.json_output:
         write_json(args.json_output, evaluation_json(results, metadata))
-    print_summary("Overall", results)
-    for kind in ("tuning", "validation"):
-        print_summary(kind.capitalize(), [r for r in results if r.benchmark.kind == kind])
+    print_summary("Validation", results)
     print_worst_regrets(results)
     print("\nSuccessful measured VF counts (before prediction exclusions):")
     for count, number in sorted(Counter(len(b.measured) for b in benchmarks).items()):

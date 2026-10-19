@@ -113,7 +113,7 @@ tails. Ties retain scalar first, then candidate manifest order.
 Build with the instructions in [README.md](README.md), then run:
 
 ```sh
-python3 utils/vplan-meta-compile \
+uv run --project utils/vplan-tools python utils/vplan-meta-compile \
   --clang build-vplan-tools/bin/clang --input kernel.c \
   --work-dir observations-o3 --output kernel.o --detail \
   -- --target=riscv64-unknown-elf -march=rv64gcv \
@@ -174,9 +174,23 @@ python3 build-vplan-tools/bin/llvm-lit -j 2 \
 build-vplan-tools/unittests/Target/RISCV/RISCVTests --gtest_filter=VPlanBackendCost.*
 build-vplan-tools/unittests/Transforms/Vectorize/VPlanRATests
 VPLAN_CLANG="$PWD/build-vplan-tools/bin/clang" \
-  python3 -m unittest discover -s utils/vplan-tools/tests
+  uv run --project utils/vplan-tools python -m unittest discover -s utils/vplan-tools/tests
 ```
 
 Formula preservation applies to equivalent observations. Cleanup changes the
 observations, and the scalar reference and ranking policy have changed, so old
 selected VFs and frozen evaluation metrics are not claimed as current results.
+
+## Dataset calibration tools
+
+The independent uv project in `utils/vplan-tools` reads `dataset.sqlite` only.
+`calibrate` learns shared internal coefficients from tuning data; `evaluate-weights`
+uses them on validation, while `evaluate` uses LLVM's unchanged backend model.
+See the [tools guide](utils/vplan-tools/README.md) for commands and the audited split.
+
+The driver optionally accepts `--extract-function NAME` and `--llvm-extract PATH`
+to isolate a function and its callees at the pre-vectorizer checkpoint.
+`--analytics-only --stop-after-ra` emits candidate observations without backend
+costs, feedback, or final replay. Unsupported analytics remain visible to the
+consumer. The Python fitting model preserves hard max/min but computes continuous
+costs without InstructionCost quantization; learned coefficients never enter LLVM.

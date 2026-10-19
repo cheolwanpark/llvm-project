@@ -1,97 +1,73 @@
 # Backend-aware VPlan cost tools
 
+Use Linux or macOS with [uv](https://docs.astral.sh/uv/), CMake 3.20+, Ninja, and a
+host C/C++ compiler. `utils/vplan-tools` is an independent Python 3.12 uv project.
+Supply an external `dataset.sqlite`; databases are not committed.
+
 ## Build and evaluate
 
-Use Linux or macOS with Python 3.10+ (`python3`), CMake 3.20+, Ninja, and a host
-C/C++ compiler. Supply an external database using the existing `summary.sqlite`
-schema; databases are not included in this repository.
-
 ```sh
-git clone --depth 1 --single-branch \
-  --branch backend-aware-vector-cost \
-  https://github.com/cheolwanpark/llvm-project.git
-cd llvm-project
+uv sync --locked --project utils/vplan-tools
 
+# Optional explicit build; the tools also configure/build automatically.
 cmake -S llvm -B build-vplan-tools -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DLLVM_ENABLE_ASSERTIONS=ON \
-  -DLLVM_ENABLE_PROJECTS=clang \
-  -DLLVM_TARGETS_TO_BUILD=RISCV \
-  -DLLVM_INCLUDE_TESTS=OFF \
-  -DLLVM_INCLUDE_EXAMPLES=OFF \
-  -DLLVM_INCLUDE_BENCHMARKS=OFF \
-  -DLLVM_PARALLEL_LINK_JOBS=1 \
-  -DCLANG_INCLUDE_TESTS=OFF \
-  -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
+  -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON \
+  -DLLVM_ENABLE_PROJECTS=clang -DLLVM_TARGETS_TO_BUILD=RISCV \
+  -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF \
+  -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_PARALLEL_LINK_JOBS=1 \
+  -DCLANG_INCLUDE_TESTS=OFF -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
   -DCLANG_ENABLE_OBJC_REWRITER=OFF
-
 cmake --build build-vplan-tools --parallel 2 \
-  --target clang clang-resource-headers
+  --target clang clang-resource-headers llvm-extract
 
-# Supply a database using the existing summary.sqlite schema.
-cp /path/to/results.sqlite ./results.sqlite
-
-utils/vplan-tools/evaluate
-utils/vplan-tools/print-vplans --benchmark tsvc-s000-l00 --detail
+cp /path/to/dataset.sqlite ./dataset.sqlite
+cd utils/vplan-tools
+uv run python split-dataset --check
+uv run python evaluate --json-output /tmp/llvm-validation.json --exclude-reasons
+uv run python print-vplans --benchmark lcals/first-diff --detail
 ```
 
-`tsvc-s000-l00` is an example ID from the existing database; use an ID from your
-database. If you skip the explicit build, the tools configure and build LLVM
-automatically. They compile kernels for comparison without running benchmarks
-or updating measured cycles.
+`print-vplan` is an alias for `print-vplans`; use an ID in your database. Sources
+and recorded C/C++ flags come from the new dataset schema. The tools isolate
+`selected_kernel` from preparation functions and compile without running target
+benchmarks or changing measured cycles.
 
-Database precedence is **`--db PATH` > `VPLAN_DB` > `results.sqlite` at the
-checkout containing the tools**. An unset or empty `VPLAN_DB` uses the default;
-`--llvm-path` does not change it. For example:
+## Calibrate and evaluate weights
 
 ```sh
-VPLAN_DB=/path/to/results.sqlite utils/vplan-tools/evaluate
-utils/vplan-tools/evaluate --db /path/to/results.sqlite
+# Run from utils/vplan-tools.
+uv run python split-dataset  # one-time audited 31 tuning / 174 validation split
+uv run python calibrate --output /tmp/weights.json
+uv run python evaluate-weights --weights /tmp/weights.json \
+  --json-output /tmp/fitted-validation.json --exclude-reasons
 ```
+
+`calibrate` reads tuning only. Both evaluation tools read validation only and have
+no split override. `evaluate` uses LLVM costs; `evaluate-weights` uses fitted
+Python costs. Fitting preserves the hard-max analytical structure, learns 18
+shared internal coefficient multipliers with weighted pairwise ranking, and
+excludes measured pairs within 1%. Learned coefficients are not installed into
+LLVM. Unsupported or ambiguous observations are reported as exclusions; the
+usable population may be smaller than the partition.
+
+Database precedence is **`--db PATH` > `VPLAN_DB` > checkout/dataset.sqlite**.
+`--llvm-path` selects another compiler checkout without changing the default DB.
+Old schemas are unsupported; `results.sqlite.old` is an archive only.
+
+```sh
+VPLAN_DB=/path/to/dataset.sqlite uv run python evaluate
+uv run python evaluate --db /path/to/dataset.sqlite
+# From any repository-root shell:
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate
+```
+
+Common options include `--benchmark ID`, `--build-dir`, `--llvm-path`, `--jobs`
+(default 2), `--timeout` (120 seconds per invocation), and `--artifacts-dir` on
+evaluation/calibration commands. Printing supports `--detail`. LLVM printing and
+evaluation support `--compiler-mode meta|direct`; calibration always uses raw
+post-RA analytics. O2/O3 options are preserved.
 
 See the [tools guide](utils/vplan-tools/README.md) for the database contract,
-metrics, and artifacts, and [LLVM's original README](LLVM_README.md) for general
-LLVM guidance.
-
-The meta pipeline supports non-LTO RISCV64 `-O2` and `-O3`; it preserves the selected
-optimization level through preparation, probes and final compilation.
-
-## Flags
-
-`print-vplan` is an alias for `print-vplans`. Explicit relative paths use the
-current working directory; paths also expand `~`.
-
-| Tool option | Commands | Usage |
-| --- | --- | --- |
-| `--benchmark ID` | Both | Evaluate one ID (default: all); required for printing. |
-| `--detail` | Print only | Include detailed VPlan cost calculations. |
-| `--db PATH` / `VPLAN_DB` | Both | Select the external summary database. |
-| `--build-dir PATH` | Both | Build directory; default: selected LLVM checkout's `build-vplan-tools`. |
-| `--llvm-path PATH` | Both | LLVM source checkout; default: checkout containing these tools. |
-| `--jobs N` | Both | Build parallelism; default 2, with one link job in fresh builds. |
-| `--timeout SECONDS` | Both | Per compiler invocation, including each probe; default 120. |
-| `--split all\|tuning\|validation` | Evaluate only | Select a split; default `all`. |
-| `--json-output PATH` | Evaluate only | Save metrics and exact rational VF costs. |
-| `--artifacts-dir PATH` | Evaluate only | Save reports and backend artifacts; tuning reports include details. |
-| `--exclude-reasons` | Evaluate only | List excluded benchmarks and reasons. |
-| `--compiler-mode meta\|direct` | Both | Default `meta` runs the backend analytics/cost feedback pipeline; `direct` compares existing costs. |
-
-Pass LLVM options to clang with `-mllvm` before each option. The reporting flags
-alone do not enable the Post-RA model; the default meta evaluation path generates
-the required feedback.
-
-| LLVM option | Usage |
-| --- | --- |
-| `-mllvm -print-vplans` | Print VPlan cost reports. |
-| `-mllvm -print-detailed-vplans` | Include detailed calculations. |
-| `-vplan-pipeline=prepare\|resume` | Meta-compiler: create or resume the pre-vectorizer checkpoint. |
-| `-vplan-candidates-output=PATH` | Meta-compiler: write candidate and selection JSON. |
-| `-vplan-ra-run-id=DIGEST` | Meta-compiler: bind artifacts to a run identity. |
-| `-vplan-probe-candidate=ID` | Meta-compiler: probe one generated plan/VF. |
-| `-vplan-analytics-output=PATH` | Meta-compiler: dump cost-independent backend observations. |
-| `-vplan-ra-feedback=PATH` | Meta-compiler: provide observations for final costing. |
-| `-vplan-cost-output=PATH` | Meta-compiler: write backend-computed scores. |
-| `-stop-after=riscv-vplan-cost` | Stop after analytics and costing, and emit MIR. |
-
-See [VPLAN_RA.md](VPLAN_RA.md#compiler-interfaces) for the compiler interfaces and
-manual invocation details.
+model, fitting options, metrics, caching, exclusions and tests;
+[VPLAN_RA.md](VPLAN_RA.md) for compiler interfaces; and
+[LLVM's original README](LLVM_README.md) for general LLVM guidance.

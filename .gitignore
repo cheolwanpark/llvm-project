@@ -96,3 +96,9 @@ pythonenv*
 /results.sqlite-journal
 /results.sqlite-wal
 /results.sqlite-shm
+
+# External dataset, archived input, and local calibration outputs.
+/dataset.sqlite*
+/results.sqlite.old*
+/utils/vplan-tools/.venv/
+/utils/vplan-tools/.cache/

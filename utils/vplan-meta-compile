@@ -72,18 +72,22 @@ def validate_flags(flags: list[str]) -> None:
 
 class Driver:
     def __init__(self, clang: Path, source: Path, work: Path, flags: list[str],
-                 timeout: int = 120):
+                 timeout: int = 120, extract_function: str | None = None,
+                 llvm_extract: Path | None = None):
         self.clang = clang.resolve()
         self.source = source.resolve()
         self.work = work.resolve()
         self.flags = flags
         self.timeout = timeout
         self.commands = []
+        self.extract_function = extract_function
+        self.llvm_extract = llvm_extract or self.clang.parent / "llvm-extract"
 
-    def run(self, label: str, command: list[str]) -> subprocess.CompletedProcess:
+    def run(self, label: str, command: list[str], *, executable: Path | None = None) -> subprocess.CompletedProcess:
         # Integrated cc1 keeps timeout cancellation from leaving a compiler
         # grandchild behind. Processes stay in the campaign's process group.
-        command = [str(self.clang), *command, "-fintegrated-cc1"]
+        command = ([str(executable), *command] if executable else
+                   [str(self.clang), *command, "-fintegrated-cc1"])
         self.commands.append({"stage": label, "argv": command})
         write_json(self.work / "commands.json", self.commands)
         try:
@@ -120,7 +124,9 @@ class Driver:
             raise MetaCompileError(f"invalid manifest {path}: {exc}") from exc
 
     def compile(self, output: Path | None, emit: str, stop_after_ra: bool,
-                detail: bool) -> dict:
+                detail: bool, analytics_only: bool = False) -> dict:
+        if analytics_only and not stop_after_ra:
+            raise MetaCompileError("--analytics-only requires --stop-after-ra")
         validate_flags(self.flags)
         if self.work.exists() and any(self.work.iterdir()):
             raise MetaCompileError(f"work directory must be empty: {self.work}")
@@ -128,8 +134,16 @@ class Driver:
         checkpoint = self.work / "pre-vectorize.bc"
         self.run("prepare", [*self.flags, *llvm_flag("vplan-pipeline", "prepare"),
                              "-emit-llvm", "-c", str(self.source), "-o", str(checkpoint)])
+        if self.extract_function:
+            extracted = self.work / "extracted.bc"
+            self.run("extract", [str(checkpoint), "--func", self.extract_function,
+                                 "--recursive", "--keep-const-init", "-o", str(extracted)],
+                     executable=self.llvm_extract)
+            checkpoint.rename(self.work / "module-pre-vectorize.bc")
+            extracted.rename(checkpoint)
         identity = {"checkpoint": digest(checkpoint), "compiler": digest(self.clang),
-                    "flags": self.flags, "protocol": 2}
+                    "flags": self.flags, "protocol": 2,
+                    "extract_function": self.extract_function}
         run_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         write_json(self.work / "identity.json", identity | {"run_id": run_id})
         common = [*resume_flags(self.flags), "-x", "ir", str(checkpoint),
@@ -152,17 +166,18 @@ class Driver:
             cost_path = self.work / f"{label}.cost.json"
             loop_key = (row["function"], row["loop"])
             scalar_flags = []
-            if row["vf"] != "f1":
+            if row["vf"] != "f1" and not analytics_only:
                 if loop_key not in scalar_analytics:
                     raise MetaCompileError(f"{label}: missing scalar candidate")
                 scalar_flags = llvm_flag("vplan-scalar-analytics-input", str(scalar_analytics[loop_key]))
             probe_manifest = self.work / f"{label}.manifest.json"
             mir = self.work / f"{label}.mir"
+            cost_flags = [] if analytics_only else [*llvm_flag("vplan-cost-output", str(cost_path)), *scalar_flags]
             self.run(label, [*common, *llvm_flag("vplan-probe-candidate", row["id"]),
                              *llvm_flag("vplan-candidates-output", str(probe_manifest)),
                              *llvm_flag("vplan-analytics-output", str(analytics_path)),
-                             *llvm_flag("vplan-cost-output", str(cost_path)), *scalar_flags,
-                             *llvm_flag("stop-after", "riscv-vplan-cost"),
+                             *cost_flags,
+                             *llvm_flag("stop-after", "riscv-vplan-analytics" if analytics_only else "riscv-vplan-cost"),
                              "-S", "-o", str(mir)])
             probe = self.manifest(probe_manifest, run_id)
             if probe["candidates"] != manifest["candidates"]:
@@ -172,6 +187,15 @@ class Driver:
                 raise MetaCompileError(f"{label}: requested candidate was not selected exactly once")
             try:
                 observation = json.loads(analytics_path.read_text())
+                if analytics_only:
+                    if (observation["Version"] != 2 or observation["RunID"] != run_id
+                            or observation["Candidate"] != row["id"]
+                            or observation["Function"] != row["function"]
+                            or observation["Stage"] != "post-ra-cleanup"):
+                        raise ValueError("analytics identity mismatch")
+                    # Unsupported observations remain visible for the Python
+                    # consumer; no compiler costs or feedback are fabricated.
+                    continue
                 cost = json.loads(cost_path.read_text())
                 if (observation["Version"] != 2 or observation["RunID"] != run_id
                     or observation["Candidate"] != row["id"] or observation["Stage"] != "post-ra-cleanup"
@@ -188,10 +212,14 @@ class Driver:
             feedback.append({"id": row["id"], "cost": cost["cost"],
                              "selection": choices[0], "mir": str(mir)})
         feedback_path = self.work / "feedback.json"
-        write_json(feedback_path, {"version": 2, "run_id": run_id, "candidates": feedback})
+        if not analytics_only:
+            write_json(feedback_path, {"version": 2, "run_id": run_id, "candidates": feedback})
         result = {"version": 2, "run_id": run_id, "candidates": len(feedback),
                   "manifest": str(manifest_path), "feedback": str(feedback_path),
-                  "stage": "post-ra-cleanup"}
+                  "stage": "post-ra-cleanup", "analytics_only": analytics_only}
+        if analytics_only:
+            result["candidates"] = sum(r["probeable"] for r in manifest["candidates"])
+            result.pop("feedback")
         if not stop_after_ra:
             if output is None:
                 raise MetaCompileError("final compilation requires --output")
@@ -222,7 +250,10 @@ def main(argv=None) -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--emit", choices=("llvm", "asm", "obj"), default="obj")
     parser.add_argument("--stop-after-ra", action="store_true")
+    parser.add_argument("--analytics-only", action="store_true", help="collect raw facts without computing backend costs")
     parser.add_argument("--detail", action="store_true")
+    parser.add_argument("--extract-function", help="isolate a function at the pre-vectorizer checkpoint")
+    parser.add_argument("--llvm-extract", type=Path, help="matching llvm-extract binary")
     parser.add_argument("--timeout", type=int, default=120, help="seconds per compiler invocation")
     parser.add_argument("flags", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -232,8 +263,9 @@ def main(argv=None) -> int:
     if not args.stop_after_ra and args.output is None:
         parser.error("--output is required unless --stop-after-ra is used")
     try:
-        result = Driver(args.clang, args.input, args.work_dir, flags, args.timeout).compile(
-            args.output, args.emit, args.stop_after_ra, args.detail)
+        result = Driver(args.clang, args.input, args.work_dir, flags, args.timeout,
+                        args.extract_function, args.llvm_extract).compile(
+            args.output, args.emit, args.stop_after_ra, args.detail, args.analytics_only)
         print(json.dumps(result))
         return 0
     except (MetaCompileError, OSError) as exc:

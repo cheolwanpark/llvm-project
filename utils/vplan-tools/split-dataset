@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Apply or verify the audited family split without changing dataset contents."""
+
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+from contextlib import closing
+import hashlib
+import json
+from pathlib import Path
+import re
+import sqlite3
+import sys
+
+
+TOOLS = Path(__file__).resolve().parent
+SPLITS = ("tuning", "validation")
+
+
+class SplitError(Exception):
+    """A manifest or dataset mismatch that must leave the database unchanged."""
+
+
+def load_manifest(path: Path) -> dict:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SplitError(f"cannot read manifest {path}: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        raise SplitError("manifest must have schema_version 1")
+    families = manifest.get("families")
+    entries = manifest.get("benchmarks")
+    expected = manifest.get("expected_counts")
+    if not isinstance(families, dict) or not families:
+        raise SplitError("manifest must contain a nonempty families object")
+    if not isinstance(entries, list) or not entries:
+        raise SplitError("manifest must contain a nonempty benchmarks array")
+    if not isinstance(expected, dict):
+        raise SplitError("manifest must contain expected_counts")
+    for kind in ("benchmarks", "measurements"):
+        counts = expected.get(kind)
+        if (not isinstance(counts, dict)
+                or set(counts) != {"total", *SPLITS}
+                or any(type(n) is not int or n < 0 for n in counts.values())
+                or counts["total"] != sum(counts[s] for s in SPLITS)):
+            raise SplitError(f"invalid expected_counts.{kind}")
+    for family, description in families.items():
+        if (not isinstance(description, dict)
+                or description.get("split") not in SPLITS
+                or not isinstance(description.get("reason"), str)
+                or not description["reason"].strip()):
+            raise SplitError(f"invalid family definition: {family}")
+    seen = set()
+    used_families = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise SplitError("benchmark entries must be objects")
+        benchmark_id = entry.get("id")
+        family = entry.get("family")
+        source_hash = entry.get("source_sha256")
+        if not isinstance(benchmark_id, str) or not benchmark_id:
+            raise SplitError("benchmark entry is missing its id")
+        if benchmark_id in seen:
+            raise SplitError(f"duplicate benchmark id in manifest: {benchmark_id}")
+        seen.add(benchmark_id)
+        if not isinstance(family, str) or family not in families:
+            raise SplitError(f"unknown family for {benchmark_id}: {family}")
+        used_families.add(family)
+        if entry.get("split") != families[family]["split"]:
+            raise SplitError(f"family split mismatch for {benchmark_id}: {family}")
+        if not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", source_hash):
+            raise SplitError(f"invalid source_sha256 for {benchmark_id}")
+    if used_families != set(families):
+        raise SplitError("manifest contains unused families")
+    counts = Counter(entry["split"] for entry in entries)
+    actual = {"total": len(entries), **{s: counts[s] for s in SPLITS}}
+    if actual != expected["benchmarks"]:
+        raise SplitError(f"manifest benchmark counts differ: {actual}")
+    return manifest
+
+
+def content_snapshot(db: sqlite3.Connection) -> tuple:
+    """Capture every dataset field except the split labels we intend to change."""
+    return (
+        tuple(db.execute("SELECT * FROM dataset ORDER BY id")),
+        tuple(db.execute(
+            "SELECT id, source, compile_args_json, workload_json "
+            "FROM benchmarks ORDER BY id")),
+        tuple(db.execute(
+            "SELECT benchmark_id, vf, cycles FROM measurements ORDER BY benchmark_id, vf")),
+    )
+
+
+def validate_dataset(db: sqlite3.Connection, manifest: dict) -> list[tuple[str, str]]:
+    entries = {entry["id"]: entry for entry in manifest["benchmarks"]}
+    rows = db.execute("SELECT id, split, source FROM benchmarks ORDER BY id").fetchall()
+    actual_ids = {row[0] for row in rows}
+    if actual_ids != set(entries):
+        missing = sorted(set(entries) - actual_ids)
+        unexpected = sorted(actual_ids - set(entries))
+        raise SplitError(f"benchmark IDs differ; missing={missing}, unexpected={unexpected}")
+    if len(rows) != len(entries):
+        raise SplitError("database contains duplicate benchmark IDs")
+    changes = []
+    for benchmark_id, current_split, source in rows:
+        entry = entries[benchmark_id]
+        if not isinstance(source, str) or hashlib.sha256(source.encode("utf-8")).hexdigest() != entry["source_sha256"]:
+            raise SplitError(f"source hash mismatch: {benchmark_id}")
+        if current_split not in SPLITS:
+            raise SplitError(f"invalid current split for {benchmark_id}: {current_split}")
+        if current_split != entry["split"]:
+            changes.append((entry["split"], benchmark_id))
+    if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise SplitError("database has foreign-key violations")
+    counts = Counter()
+    for benchmark_id, count in db.execute(
+            "SELECT benchmark_id, COUNT(*) FROM measurements GROUP BY benchmark_id"):
+        if benchmark_id not in entries:
+            raise SplitError(f"measurement references unknown benchmark: {benchmark_id}")
+        counts[entries[benchmark_id]["split"]] += count
+    actual = {"total": sum(counts.values()), **{s: counts[s] for s in SPLITS}}
+    if actual != manifest["expected_counts"]["measurements"]:
+        raise SplitError(f"measurement counts differ from manifest: {actual}")
+    return changes
+
+
+def split_dataset(db_path: Path, manifest: dict, *, check: bool = False) -> int:
+    db_path = db_path.expanduser().resolve()
+    if not db_path.is_file():
+        raise SplitError(f"database does not exist: {db_path}")
+    mode = "ro" if check else "rw"
+    with closing(sqlite3.connect(db_path.as_uri() + f"?mode={mode}", uri=True)) as db:
+        try:
+            # The write lock covers validation too, preventing changes between
+            # checking source identity and applying the fixed partition.
+            db.execute("BEGIN" if check else "BEGIN IMMEDIATE")
+            changes = validate_dataset(db, manifest)
+            if check:
+                if changes:
+                    raise SplitError(
+                        f"split labels differ for {len(changes)} benchmarks: "
+                        + ", ".join(benchmark_id for _, benchmark_id in changes))
+            else:
+                before = content_snapshot(db)
+                db.executemany("UPDATE benchmarks SET split = ? WHERE id = ?", changes)
+                if content_snapshot(db) != before:
+                    raise SplitError("dataset contents changed beyond split labels; rolling back")
+                if validate_dataset(db, manifest):
+                    raise SplitError("split labels did not match manifest after update; rolling back")
+            db.commit()
+            return len(changes)
+        except BaseException:
+            db.rollback()
+            raise
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db", type=Path, default=TOOLS.parents[1] / "dataset.sqlite",
+                        help="dataset database (default: checkout/dataset.sqlite)")
+    parser.add_argument("--manifest", type=Path, default=TOOLS / "dataset-split.json",
+                        help="audited split manifest (default: next to this script)")
+    parser.add_argument("--check", action="store_true",
+                        help="verify existing labels using a read-only connection; do not update")
+    args = parser.parse_args(argv)
+    try:
+        manifest = load_manifest(args.manifest.expanduser().resolve())
+        changed = split_dataset(args.db, manifest, check=args.check)
+    except (SplitError, sqlite3.Error, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    counts = manifest["expected_counts"]["benchmarks"]
+    measurements = manifest["expected_counts"]["measurements"]
+    action = "Verified" if args.check else f"Applied ({changed} labels changed)"
+    print(f"{action}: tuning={counts['tuning']}, validation={counts['validation']}; "
+          f"measurements={measurements['tuning']}/{measurements['validation']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

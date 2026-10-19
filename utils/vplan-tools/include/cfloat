@@ -1,0 +1,4 @@
+#ifndef VPLAN_TOOLS_CFLOAT
+#define VPLAN_TOOLS_CFLOAT
+#include <float.h>
+#endif

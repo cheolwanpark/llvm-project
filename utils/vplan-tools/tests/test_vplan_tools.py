@@ -1,4 +1,4 @@
-"""Run with: python3 -B -m unittest discover -s utils/vplan-tools/tests -v."""
+"""Run from this uv project: uv run python -B -m unittest discover -s tests -v."""
 
 from fractions import Fraction
 import io
@@ -19,12 +19,21 @@ import vplan_tools as vt
 
 
 def benchmark(cycles=(10, 20, 30, 40)):
-    return vt.Benchmark("example", "tsvc", "validation", "void selected_kernel(void) {}", [
-        {"vf": 2 ** index, "lmul": f"m{2 ** index}", "interleave_count": 1,
-         "software_pipelining": "off", "status": "success", "measured_cycles": cycle,
-         "llvm_flags_json": json.dumps(["-O2", "-mllvm", f"-force-vector-width={2 ** index}"])}
-        for index, cycle in enumerate(cycles)
-    ])
+    return vt.Benchmark("example", "validation", "void selected_kernel(void) {}",
+                        ["-O2"], {}, {2 ** i: c for i, c in enumerate(cycles)})
+
+
+def database(path):
+    with sqlite3.connect(path) as db:
+        db.executescript("""
+            CREATE TABLE dataset(id, target, measurement_compiler, measurement_protocol_json);
+            INSERT INTO dataset VALUES(1, 'xiangshan', 'revision', '{}');
+            CREATE TABLE benchmarks(id, split, source, compile_args_json, workload_json);
+            INSERT INTO benchmarks VALUES('example', 'validation', 'source', '["-O3"]', '{}');
+            INSERT INTO benchmarks VALUES('train', 'tuning', 'source', '["-O3"]', '{}');
+            CREATE TABLE measurements(benchmark_id, vf, cycles);
+            INSERT INTO measurements VALUES('example', 1, 20), ('example', 2, 30), ('train', 1, 99);
+        """)
 
 
 def report(candidates, *, trip_count=64, function="selected_kernel", version=2):
@@ -181,34 +190,46 @@ class MetricTests(unittest.TestCase):
 
 
 class DatabaseTests(unittest.TestCase):
-    def test_view_prefers_latest_success_over_newer_failure_or_older_faster_run(self):
+    def test_dataset_partition_and_read_only(self):
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "summary.sqlite"
-            with sqlite3.connect(path) as db:
-                db.executescript("""
-                    CREATE TABLE summary_metadata(compiler_revision, target_platform);
-                    INSERT INTO summary_metadata VALUES('revision', 'xiangshan');
-                    CREATE TABLE benchmarks(benchmark_id, case_order, source_suite, benchmark_type, compilable_code);
-                    INSERT INTO benchmarks VALUES('example', 0, 'tsvc', 'validation', 'source');
-                    CREATE TABLE variants(variant_id, benchmark_id, vf, lmul, interleave_count, software_pipelining, llvm_flags_json);
-                    INSERT INTO variants VALUES(1, 'example', 2, 'm1', 1, 'off', '[]');
-                    CREATE TABLE measurements(variant_id, status, measured_cycles, finished_at, run_id);
-                    INSERT INTO measurements VALUES(1, 'success', 10, '2026-01-01', 'a');
-                    INSERT INTO measurements VALUES(1, 'success', 20, '2026-01-02', 'b');
-                    INSERT INTO measurements VALUES(1, 'failed', NULL, '2026-01-03', 'c');
-                    CREATE VIEW benchmark_vf_summary AS
-                    WITH ranked AS (
-                        SELECT *, row_number() OVER (PARTITION BY variant_id
-                        ORDER BY (status='success') DESC, finished_at DESC, run_id DESC) r
-                        FROM measurements)
-                    SELECT v.*, m.status, m.measured_cycles FROM variants v
-                    LEFT JOIN ranked m ON v.variant_id=m.variant_id AND m.r=1;
-                """)
+            path = Path(temporary) / "dataset.sqlite"
+            database(path)
             before = path.read_bytes()
-            rows, metadata = vt.load_database(path)
-            self.assertEqual(rows[0].measured, {2: 20})
-            self.assertEqual(metadata["target_platform"], "xiangshan")
+            rows, metadata = vt.load_database(path, split="validation")
+            self.assertEqual([r.id for r in rows], ["example"])
+            self.assertEqual(rows[0].measured, {1: 20, 2: 30})
+            self.assertEqual(metadata["target"], "xiangshan")
+            self.assertEqual(vt.load_database(path, split="tuning")[0][0].id, "train")
+            self.assertEqual(vt.load_database(path, split="validation", benchmark_id="train")[0], [])
             self.assertEqual(path.read_bytes(), before)
+
+    def test_other_partition_payload_is_not_read_or_parsed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "dataset.sqlite"
+            database(path)
+            with sqlite3.connect(path) as db:
+                db.execute("UPDATE benchmarks SET compile_args_json='bad' WHERE split='tuning'")
+                db.execute("UPDATE measurements SET cycles=-1 WHERE benchmark_id='train'")
+            self.assertEqual(len(vt.load_database(path, split="validation")[0]), 1)
+            with self.assertRaises(vt.ToolError):
+                vt.load_database(path, split="tuning")
+
+    def test_old_schema_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "old.sqlite"
+            with sqlite3.connect(path) as db:
+                db.execute("CREATE TABLE summary_metadata(compiler_revision, target_platform)")
+            with self.assertRaisesRegex(vt.ToolError, "dataset"):
+                vt.load_database(path)
+
+    def test_missing_benchmark_column_is_an_actionable_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "dataset.sqlite"
+            database(path)
+            with sqlite3.connect(path) as db:
+                db.execute("ALTER TABLE benchmarks DROP COLUMN workload_json")
+            with self.assertRaisesRegex(vt.ToolError, "workload_json"):
+                vt.load_database(path)
 
     def test_missing_database_is_not_created(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -223,30 +244,34 @@ class CompilationTests(unittest.TestCase):
         raw = ["--target=riscv64-unknown-elf", "-O2", "-mllvm", "-force-vector-width=4",
                "-mllvm", "-force-vector-interleave=1", "-I", "/container/include",
                "-idirafter", "/container/libc", "-mllvm", "-enable-interleaved-mem-accesses=false"]
-        flags = vt.normalized_flags(json.dumps(raw))
+        flags = vt.normalized_flags(raw)
         self.assertEqual(flags, ["--target=riscv64-unknown-elf", "-O2", "-mllvm",
                                  "-force-vector-interleave=1", "-mllvm", "-enable-interleaved-mem-accesses=false"])
 
-    def test_variant_context_and_flags_must_agree(self):
+    def test_recorded_language_is_moved_to_source_suffix(self):
         b = benchmark()
-        self.assertIn("-riscv-v-register-bit-width-lmul=8", vt.benchmark_flags(b))
-        b.variants[0]["interleave_count"] = 2
-        with self.assertRaisesRegex(vt.ToolError, "multiple measurement contexts"):
-            vt.benchmark_flags(b)
-        b.variants[0]["interleave_count"] = 1
-        b.variants[0]["llvm_flags_json"] = '["-O3"]'
-        with self.assertRaisesRegex(vt.ToolError, "flags disagree"):
-            vt.benchmark_flags(b)
+        b.compile_args = ['-x', 'c++', '-std=gnu++20', '-O3']
+        self.assertEqual(vt.source_name(b), 'kernel.cpp')
+        self.assertNotIn('-x', vt.benchmark_flags(b))
+        self.assertIn('-std=gnu++20', vt.benchmark_flags(b))
+        self.assertIn('-riscv-v-register-bit-width-lmul=8', vt.benchmark_flags(b))
+        with self.assertRaises(vt.ToolError):
+            vt.normalized_flags(['-x', 'ir'])
 
     def test_compile_uses_provided_compiler_and_detail_and_cleans_source(self):
         observed = []
         def run(command, **kwargs):
-            source = Path(command[command.index("-emit-llvm") + 1])
-            self.assertEqual(source.read_text(), benchmark().source)
-            observed.append(source)
-            self.assertEqual(command[0], "/custom/build/bin/clang")
-            self.assertIn("--print-vplans", command)
-            self.assertIn("--print-detailed-vplans", command)
+            if '-disable-llvm-passes' in command:
+                source = Path(command[command.index('-c') + 1])
+                self.assertEqual(source.read_text(), benchmark().source)
+                observed.append(source)
+            elif command[0].endswith('llvm-extract'):
+                self.assertIn('--recursive', command)
+                self.assertIn('selected_kernel', command)
+            else:
+                self.assertEqual(command[0], "/custom/build/bin/clang")
+                self.assertIn("--print-vplans", command)
+                self.assertIn("--print-detailed-vplans", command)
             return subprocess.CompletedProcess(command, 0, "", "report")
         with patch("subprocess.run", side_effect=run):
             vt.compile_report(Path("/custom/build/bin/clang"), benchmark(), True, 120, compiler_mode="direct")
@@ -315,6 +340,7 @@ add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/VCSRevision.h"
   DEPENDS "${git_dir}/logs/HEAD")
 add_custom_target(clang DEPENDS "${CMAKE_BINARY_DIR}/VCSRevision.h")
 add_custom_target(clang-resource-headers)
+add_custom_target(llvm-extract)
 ''')
         git_dir = self.source / ".git"
         (git_dir / "logs").mkdir(parents=True)
@@ -374,7 +400,7 @@ class CLITests(unittest.TestCase):
                        (2, "s4", 4, 8, 32), (3, "s8", 4, 16, 16)])
         successful = subprocess.CompletedProcess([], 0, "", text)
         failed = subprocess.CompletedProcess([], 1, "", "error: compiler failure")
-        metadata = {"target_platform": "xiangshan", "compiler_revision": "original"}
+        metadata = {"target": "xiangshan", "measurement_compiler": "original"}
         with patch.object(vt, "load_database", return_value=(rows, metadata)), \
                 patch.object(vt, "ensure_compiler", return_value=Path("/custom/clang")) as build, \
                 patch.object(vt, "compile_report", side_effect=[successful, failed, successful]) as compile_, \
@@ -389,7 +415,7 @@ class CLITests(unittest.TestCase):
         self.assertNotIn("failed: measured_vfs=4; compilation failed", output.getvalue())
 
     def test_exclusion_details_require_flag(self):
-        metadata = {"target_platform": "xiangshan", "compiler_revision": "original"}
+        metadata = {"target": "xiangshan", "measurement_compiler": "original"}
         for flags in ([], ["--exclude-reasons"]):
             with self.subTest(flags=flags), \
                     patch.object(vt, "load_database", return_value=([benchmark()], metadata)), \
@@ -408,7 +434,7 @@ class CLITests(unittest.TestCase):
         rows[0].id, rows[1].id = "first", "selected"
         text = report([(0, "s1", 4, 2, 128), (1, "s2", 4, 4, 64),
                        (2, "s4", 4, 8, 32), (3, "s8", 4, 16, 16)])
-        metadata = {"target_platform": "xiangshan", "compiler_revision": "original"}
+        metadata = {"target": "xiangshan", "measurement_compiler": "original"}
         with patch.object(vt, "load_database", return_value=(rows, metadata)), \
                 patch.object(vt, "ensure_compiler", return_value=Path("/custom/clang")), \
                 patch.object(vt, "compile_report", return_value=subprocess.CompletedProcess([], 0, "", text)) as compile_, \
@@ -456,7 +482,7 @@ class StandaloneTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             args = vt.argument_parser("test").parse_args([])
             self.assertEqual(args.llvm_path, vt.TOOLS.parents[1])
-            self.assertEqual(args.db, vt.TOOLS.parents[1] / "results.sqlite")
+            self.assertEqual(args.db, vt.TOOLS.parents[1] / "dataset.sqlite")
             self.assertEqual((args.jobs, args.timeout, args.compiler_mode), (2, 120, "meta"))
         for value in ("", "relative database.sqlite", "~/database with spaces.sqlite"):
             with self.subTest(value=value), patch.dict(os.environ, {"VPLAN_DB": value}):
@@ -559,9 +585,9 @@ class StandaloneTests(unittest.TestCase):
                 missing = subprocess.run([*command, *flags], cwd=root, env=env,
                                          capture_output=True, text=True)
                 self.assertEqual(missing.returncode, 1)
-                self.assertIn(str(root / "results.sqlite"), missing.stderr)
+                self.assertIn(str(root / "dataset.sqlite"), missing.stderr)
                 self.assertNotIn("Traceback", missing.stderr)
-            self.assertFalse((root / "results.sqlite").exists())
+            self.assertFalse((root / "dataset.sqlite").exists())
             self.assertFalse((root / "build-vplan-tools").exists())
 
 

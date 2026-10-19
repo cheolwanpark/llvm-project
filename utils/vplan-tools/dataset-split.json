@@ -1,0 +1,1558 @@
+{
+  "schema_version": 1,
+  "description": "Audited source-family partition of the 205-benchmark dataset. Selection uses source structure and workload diversity, never measured winners or model scores.",
+  "policy": {
+    "assignment": "Exact benchmark IDs; all variants in each family remain in the same partition.",
+    "source_hash": "SHA-256 of the exact UTF-8 source string stored in benchmarks.source.",
+    "eligibility": "Freeze this split before fitting. Compiler failures, multiple reports, unsupported analytics or missing candidate costs produce exclusions; they never trigger repartitioning.",
+    "tuning_visibility": "Only calibration reads tuning benchmarks; evaluate and evaluate-weights read validation benchmarks.",
+    "audit": "All 205 embedded selected_kernel bodies were inspected. Tuning has 30 single-loop kernels and one nested kernel (pathfinder-traverse); tqli-l72 has a data-dependent break. Source structure does not guarantee compiler eligibility.",
+    "similarity_check": "No tuning/validation kernel pair reached 0.90 SequenceMatcher similarity after identifier/number token normalization (autojunk=False). This is a source-duplication check, not a guarantee of semantic independence."
+  },
+  "expected_counts": {
+    "benchmarks": {
+      "total": 205,
+      "tuning": 31,
+      "validation": 174
+    },
+    "measurements": {
+      "total": 859,
+      "tuning": 136,
+      "validation": 723
+    }
+  },
+  "families": {
+    "cbench/bitcount-mask": {
+      "split": "tuning",
+      "reason": "Tuning: integer shifts, masks, additions and a reduction; the selected helper contains no additional loop."
+    },
+    "lcals-rajaperf/dot": {
+      "split": "validation",
+      "reason": "Validation: corresponding inner-product reduction kernels from LCALS and RAJAPerf."
+    },
+    "lcals-rajaperf/eos": {
+      "split": "validation",
+      "reason": "Validation: shared LCALS/RAJAPerf kernel lineage with different trip counts; keep both source-suite versions together."
+    },
+    "lcals-rajaperf/first-diff": {
+      "split": "validation",
+      "reason": "Validation: shared LCALS/RAJAPerf kernel lineage with different trip counts; keep both source-suite versions together."
+    },
+    "lcals-rajaperf/hydro-1d": {
+      "split": "validation",
+      "reason": "Validation: shared LCALS/RAJAPerf kernel lineage with different trip counts; keep both source-suite versions together."
+    },
+    "lcals-rajaperf/if-quad": {
+      "split": "validation",
+      "reason": "Validation: same quadratic formula loop across suites, including the builtin variant."
+    },
+    "lcals-rajaperf/init3": {
+      "split": "validation",
+      "reason": "Validation: shared LCALS/RAJAPerf kernel lineage with different trip counts; keep both source-suite versions together."
+    },
+    "lcals-rajaperf/muladdsub": {
+      "split": "validation",
+      "reason": "Validation: shared LCALS/RAJAPerf kernel lineage with different trip counts; keep both source-suite versions together."
+    },
+    "lcals/band-lin-eq": {
+      "split": "validation",
+      "reason": "Validation: preserve all phases or inner/outer variants of the same LCALS kernel family."
+    },
+    "lcals/energy-calc": {
+      "split": "tuning",
+      "reason": "Tuning: six phases of the same energy calculation cover multi-array floating-point arithmetic, conditions, square roots and division; keep all phases together."
+    },
+    "lcals/fir": {
+      "split": "validation",
+      "reason": "Validation: preserve all phases or inner/outer variants of the same LCALS kernel family."
+    },
+    "lcals/pressure-calc": {
+      "split": "validation",
+      "reason": "Validation: preserve all phases or inner/outer variants of the same LCALS kernel family."
+    },
+    "media-stats/flac": {
+      "split": "tuning",
+      "reason": "Tuning: adjacent integer sample accesses, differences, absolute values and multiple accumulations."
+    },
+    "media-stats/lcms": {
+      "split": "validation",
+      "reason": "Validation: independent upstream media statistics kernel retained as holdout coverage."
+    },
+    "media-stats/minimp3": {
+      "split": "validation",
+      "reason": "Validation: independent upstream media statistics kernel retained as holdout coverage."
+    },
+    "media-stats/openh264": {
+      "split": "validation",
+      "reason": "Validation: independent upstream media statistics kernel retained as holdout coverage."
+    },
+    "media-stats/ssim": {
+      "split": "validation",
+      "reason": "Validation: keep the closely related SSIM window sum/variance/covariance kernels together despite different upstream projects."
+    },
+    "media-stats/theora": {
+      "split": "validation",
+      "reason": "Validation: independent upstream media statistics kernel retained as holdout coverage."
+    },
+    "media-stats/uvg266": {
+      "split": "validation",
+      "reason": "Validation: independent upstream media statistics kernel retained as holdout coverage."
+    },
+    "minimd/atom": {
+      "split": "validation",
+      "reason": "Validation: keep related MiniMD function phases, neighbor-loop variants or integration variants in one holdout family."
+    },
+    "minimd/force-eam-compute": {
+      "split": "validation",
+      "reason": "Validation: keep related MiniMD function phases, neighbor-loop variants or integration variants in one holdout family."
+    },
+    "minimd/force-eam-file2array": {
+      "split": "tuning",
+      "reason": "Tuning: three phases of one interpolation function with clamp operations, floating-point arithmetic and indexed loads."
+    },
+    "minimd/force-eam-interpolate": {
+      "split": "validation",
+      "reason": "Validation: keep related MiniMD function phases, neighbor-loop variants or integration variants in one holdout family."
+    },
+    "minimd/force-lj": {
+      "split": "validation",
+      "reason": "Validation: keep related MiniMD function phases, neighbor-loop variants or integration variants in one holdout family."
+    },
+    "minimd/integrate": {
+      "split": "validation",
+      "reason": "Validation: keep related MiniMD function phases, neighbor-loop variants or integration variants in one holdout family."
+    },
+    "minimd/thermo": {
+      "split": "validation",
+      "reason": "Validation: keep related MiniMD function phases, neighbor-loop variants or integration variants in one holdout family."
+    },
+    "mlas/dequant8": {
+      "split": "tuning",
+      "reason": "Tuning: int8-to-float conversion with per-channel and per-tensor scaling; both variants stay together."
+    },
+    "mlas/globalavg": {
+      "split": "validation",
+      "reason": "Validation: keep signedness, packing or normalization phases of the same MLAS operation together; retain independent operations as holdouts."
+    },
+    "mlas/linear": {
+      "split": "tuning",
+      "reason": "Tuning: strided dot products; keep query/retrieval and dk=32/128/512 variants together to cover trip-count and vector-width diversity."
+    },
+    "mlas/q4-minmax": {
+      "split": "validation",
+      "reason": "Validation: keep signedness, packing or normalization phases of the same MLAS operation together; retain independent operations as holdouts."
+    },
+    "mlas/qgemm": {
+      "split": "validation",
+      "reason": "Validation: keep signedness, packing or normalization phases of the same MLAS operation together; retain independent operations as holdouts."
+    },
+    "mlas/qk-dot": {
+      "split": "validation",
+      "reason": "Validation: keep signedness, packing or normalization phases of the same MLAS operation together; retain independent operations as holdouts."
+    },
+    "mlas/rmsnorm": {
+      "split": "validation",
+      "reason": "Validation: keep signedness, packing or normalization phases of the same MLAS operation together; retain independent operations as holdouts."
+    },
+    "mlas/sgemm": {
+      "split": "tuning",
+      "reason": "Tuning: one loop with four or eight accumulators; preserve the paired register-pressure and dependency variants."
+    },
+    "mlas/sv-update": {
+      "split": "validation",
+      "reason": "Validation: keep signedness, packing or normalization phases of the same MLAS operation together; retain independent operations as holdouts."
+    },
+    "npb/cg": {
+      "split": "validation",
+      "reason": "Validation: preserve all phases, fixed-trip-count variants, builtin variants and shared preparation kernels from the same NPB algorithm."
+    },
+    "npb/ep": {
+      "split": "validation",
+      "reason": "Validation: preserve all phases, fixed-trip-count variants, builtin variants and shared preparation kernels from the same NPB algorithm."
+    },
+    "npb/ft": {
+      "split": "validation",
+      "reason": "Validation: preserve all phases, fixed-trip-count variants, builtin variants and shared preparation kernels from the same NPB algorithm."
+    },
+    "npb/is": {
+      "split": "validation",
+      "reason": "Validation: preserve all phases, fixed-trip-count variants, builtin variants and shared preparation kernels from the same NPB algorithm."
+    },
+    "npb/lu-pintgr": {
+      "split": "tuning",
+      "reason": "Tuning: surface-integral reductions with related axis and problem-size variants, including short trip counts."
+    },
+    "npb/mg": {
+      "split": "validation",
+      "reason": "Validation: preserve all phases, fixed-trip-count variants, builtin variants and shared preparation kernels from the same NPB algorithm."
+    },
+    "parboil/spmv-jds": {
+      "split": "validation",
+      "reason": "Validation: keep fixed-size inner and full-row JDS sparse-matrix-vector variants together."
+    },
+    "parsec/streamcluster": {
+      "split": "validation",
+      "reason": "Validation: independent PARSEC algorithm retained for holdout coverage."
+    },
+    "parsec/swaptions": {
+      "split": "validation",
+      "reason": "Validation: independent PARSEC algorithm retained for holdout coverage."
+    },
+    "polybench/adi": {
+      "split": "validation",
+      "reason": "Validation: preserve all PolyBench versions, individual loop phases and full/outer nest variants of this algorithm."
+    },
+    "polybench/atax-bicg-mvt": {
+      "split": "validation",
+      "reason": "Validation: keep PolyBench versions and phases together, including identical dot-product and zero-initialization loops shared across ATAX, BiCG and MVT."
+    },
+    "polybench/fdtd-2d": {
+      "split": "validation",
+      "reason": "Validation: preserve all PolyBench versions, individual loop phases and full/outer nest variants of this algorithm."
+    },
+    "polybench/floyd-warshall": {
+      "split": "validation",
+      "reason": "Validation: preserve all PolyBench versions, individual loop phases and full/outer nest variants of this algorithm."
+    },
+    "polybench/gemm-syrk": {
+      "split": "validation",
+      "reason": "Validation: keep related matrix-product phases together across PolyBench versions, including structurally identical scale loops."
+    },
+    "polybench/gemver": {
+      "split": "validation",
+      "reason": "Validation: preserve all PolyBench versions, individual loop phases and full/outer nest variants of this algorithm."
+    },
+    "polybench/gesummv": {
+      "split": "validation",
+      "reason": "Validation: preserve all PolyBench versions, individual loop phases and full/outer nest variants of this algorithm."
+    },
+    "polybench/heat-3d": {
+      "split": "validation",
+      "reason": "Validation: preserve all PolyBench versions, individual loop phases and full/outer nest variants of this algorithm."
+    },
+    "polybench/jacobi-1d": {
+      "split": "validation",
+      "reason": "Validation: preserve all PolyBench versions, individual loop phases and full/outer nest variants of this algorithm."
+    },
+    "polybench/jacobi-2d": {
+      "split": "validation",
+      "reason": "Validation: preserve all PolyBench versions, individual loop phases and full/outer nest variants of this algorithm."
+    },
+    "rajaperf/copy8": {
+      "split": "validation",
+      "reason": "Validation: independent RAJAPerf operation retained for holdout coverage; shared cross-suite and source variants have separate joint families."
+    },
+    "rajaperf/diff-predict": {
+      "split": "validation",
+      "reason": "Validation: independent RAJAPerf operation retained for holdout coverage; shared cross-suite and source variants have separate joint families."
+    },
+    "rajaperf/first-sum": {
+      "split": "validation",
+      "reason": "Validation: independent RAJAPerf operation retained for holdout coverage; shared cross-suite and source variants have separate joint families."
+    },
+    "rajaperf/gen-lin-recur": {
+      "split": "tuning",
+      "reason": "Tuning: the forward and reverse traversal variants of the same per-element update remain together."
+    },
+    "rajaperf/init-view1d": {
+      "split": "validation",
+      "reason": "Validation: independent RAJAPerf operation retained for holdout coverage; shared cross-suite and source variants have separate joint families."
+    },
+    "rajaperf/int-predict": {
+      "split": "validation",
+      "reason": "Validation: independent RAJAPerf operation retained for holdout coverage; shared cross-suite and source variants have separate joint families."
+    },
+    "rajaperf/pi-reduce": {
+      "split": "validation",
+      "reason": "Validation: independent RAJAPerf operation retained for holdout coverage; shared cross-suite and source variants have separate joint families."
+    },
+    "rajaperf/reduce-struct": {
+      "split": "validation",
+      "reason": "Validation: independent RAJAPerf operation retained for holdout coverage; shared cross-suite and source variants have separate joint families."
+    },
+    "rajaperf/reduce-sum": {
+      "split": "validation",
+      "reason": "Validation: independent RAJAPerf operation retained for holdout coverage; shared cross-suite and source variants have separate joint families."
+    },
+    "rajaperf/reduce3-int": {
+      "split": "validation",
+      "reason": "Validation: independent RAJAPerf operation retained for holdout coverage; shared cross-suite and source variants have separate joint families."
+    },
+    "rajaperf/trap-int": {
+      "split": "validation",
+      "reason": "Validation: keep original and builtin variants of the same integration loop together."
+    },
+    "rajaperf/tridiag-elim": {
+      "split": "validation",
+      "reason": "Validation: independent RAJAPerf operation retained for holdout coverage; shared cross-suite and source variants have separate joint families."
+    },
+    "rodinia/kmeans": {
+      "split": "validation",
+      "reason": "Validation: independent distance-reduction kernel retained as a holdout."
+    },
+    "rodinia/pathfinder": {
+      "split": "tuning",
+      "reason": "Tuning: the boundary-min row update and its complete traversal share a source loop; retain both in the same partition even if compiler eligibility excludes the nested case."
+    },
+    "rodinia/srad": {
+      "split": "validation",
+      "reason": "Validation: keep the full ROI and isolated-row variants of the same sum/square-sum loop together."
+    },
+    "scimark2/fft": {
+      "split": "validation",
+      "reason": "Validation: keep full algorithms, individual phases and inner/outer/repeated-loop variants together to prevent source-loop leakage."
+    },
+    "scimark2/lu": {
+      "split": "validation",
+      "reason": "Validation: keep full algorithms, individual phases and inner/outer/repeated-loop variants together to prevent source-loop leakage."
+    },
+    "scimark2/sparse": {
+      "split": "validation",
+      "reason": "Validation: keep full algorithms, individual phases and inner/outer/repeated-loop variants together to prevent source-loop leakage."
+    },
+    "stream/elementwise": {
+      "split": "validation",
+      "reason": "Validation: keep HPCC and RAJAPerf STREAM-style copies, scaling, addition and triad variants together across suites."
+    },
+    "tealeaf/eigenvalue-driver": {
+      "split": "tuning",
+      "reason": "Tuning: the eigenvalue driver covers diagonal construction, extrema reduction and early-exit scanning; keep the family fixed if unsupported compiler features exclude a member."
+    },
+    "tealeaf/grid-solver": {
+      "split": "validation",
+      "reason": "Validation: related grid solvers share stencil and update operations; keep their initialization, update, residual and summary phases in the holdout."
+    }
+  },
+  "benchmarks": [
+    {
+      "id": "cbench/bitcount-mask",
+      "family": "cbench/bitcount-mask",
+      "source_sha256": "c6996524be18bfcbfc52f4b0da684a21ed851b592bdc8f99e75d48bb4da4553b",
+      "split": "tuning"
+    },
+    {
+      "id": "hpcc/stream-add",
+      "family": "stream/elementwise",
+      "source_sha256": "24aa33c1276357eb0b73f7fb342aff6422de0a6184186832adb1cf488b7d19a0",
+      "split": "validation"
+    },
+    {
+      "id": "hpcc/stream-copy",
+      "family": "stream/elementwise",
+      "source_sha256": "704b37a8bfed8e0456c95a0639d5331e102cfd9accc6f03011fa558e36a96e6b",
+      "split": "validation"
+    },
+    {
+      "id": "hpcc/stream-scale",
+      "family": "stream/elementwise",
+      "source_sha256": "3be809db6ae99b24c8d98490e1f017576b4be43b6c2981834c87de1215ef1903",
+      "split": "validation"
+    },
+    {
+      "id": "hpcc/stream-triad",
+      "family": "stream/elementwise",
+      "source_sha256": "1da1dc57816ab1d0edc34cfad746f3de1bd4dbfa141d936f0bb40b8b9e56a72a",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/band-lin-eq-inner",
+      "family": "lcals/band-lin-eq",
+      "source_sha256": "2a046f43de59c10ca79283f6c33ad2c76e569aa3ead5c3220780355dbb9b0113",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/band-lin-eq-outer",
+      "family": "lcals/band-lin-eq",
+      "source_sha256": "f994079f6af6c50250f7993dac5d962743398abb44782f0b507217b79bf8d3c3",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/energy-calc-l00",
+      "family": "lcals/energy-calc",
+      "source_sha256": "cd0cfe7ae5af2ba053474468383cd8fa94809140357f3cd36e57a23d52d8f337",
+      "split": "tuning"
+    },
+    {
+      "id": "lcals/energy-calc-l01",
+      "family": "lcals/energy-calc",
+      "source_sha256": "33a6b28464b385e7eb3b38d088a94c25a95441d01775e7b001968757de4b385c",
+      "split": "tuning"
+    },
+    {
+      "id": "lcals/energy-calc-l02",
+      "family": "lcals/energy-calc",
+      "source_sha256": "82c518c49c8e00dbe503afb524262c1e63de758590eafd8639ba8ab6230f09b7",
+      "split": "tuning"
+    },
+    {
+      "id": "lcals/energy-calc-l03",
+      "family": "lcals/energy-calc",
+      "source_sha256": "1449a85cdd65ce6afe91640698512e3eef5827bd47918f19907e6ed2df322c40",
+      "split": "tuning"
+    },
+    {
+      "id": "lcals/energy-calc-l04",
+      "family": "lcals/energy-calc",
+      "source_sha256": "5247471b7a8fc9502661be93e2d5c26cb5f3401ea4f12186392c1be260510ab8",
+      "split": "tuning"
+    },
+    {
+      "id": "lcals/energy-calc-l05",
+      "family": "lcals/energy-calc",
+      "source_sha256": "41e8065dd7a2ba489e5ff68960601ee60b35374c8975ac7aedd54de6b834ce8e",
+      "split": "tuning"
+    },
+    {
+      "id": "lcals/eos",
+      "family": "lcals-rajaperf/eos",
+      "source_sha256": "e8052721ab8105a15cfc2354580ec9fbd4d4dc318b291ec18b9e87332424ff9d",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/fir-inner",
+      "family": "lcals/fir",
+      "source_sha256": "38ffa561825d16685fa5eb1ddc9e2ae7bada500cb86bb28eb70e4a1b9414821b",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/fir-outer",
+      "family": "lcals/fir",
+      "source_sha256": "bf0ab14347a93ce9e82f3233f58914dcc50208ffdeebfba22595141b2b46b79a",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/first-diff",
+      "family": "lcals-rajaperf/first-diff",
+      "source_sha256": "12508873a7c1dcc463351b0f618150c8f8b148807478d0c7b4156bbc3874ffe5",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/hydro-1d",
+      "family": "lcals-rajaperf/hydro-1d",
+      "source_sha256": "4e4b8fca20221600ede263be7865925fd9bae848cedf83bbd5d7a15f759626fe",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/if-quad",
+      "family": "lcals-rajaperf/if-quad",
+      "source_sha256": "0e190bad86f61861a5a122ef874d43f1a104d484f28715bc6be96c51b071bc8f",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/init3",
+      "family": "lcals-rajaperf/init3",
+      "source_sha256": "760a73b32c3989103b8a9fe4e27803083f7138b6d521ee41e9bbabb056970a81",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/inner-prod",
+      "family": "lcals-rajaperf/dot",
+      "source_sha256": "1446d7b2fdf5478736e3499c321646cb1e1288d065bca2735ffbee0b53c6eb74",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/muladdsub",
+      "family": "lcals-rajaperf/muladdsub",
+      "source_sha256": "f799ed7c55afb3613837875af133742de6a8bbcd119d960a89d61e306a47d5c4",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/pressure-calc-l00",
+      "family": "lcals/pressure-calc",
+      "source_sha256": "cb3f666968e7fa12cefe90e338d7b6ab4820f936fab1ae09ed53c2ad9f06bd6c",
+      "split": "validation"
+    },
+    {
+      "id": "lcals/pressure-calc-l01",
+      "family": "lcals/pressure-calc",
+      "source_sha256": "d1bd4305b7fbb7f1f26cc7c08f99b7a8deb7ce9e93662940babb214b55ce592c",
+      "split": "validation"
+    },
+    {
+      "id": "media-stats/flac-loose-mid-side-sum-abs",
+      "family": "media-stats/flac",
+      "source_sha256": "4231018e5f299d0d3f8ccdb620c59032a47f7c8b3f5d9480729ac8bb2d3ea426",
+      "split": "tuning"
+    },
+    {
+      "id": "media-stats/lcms-tifdiff-gray-stats",
+      "family": "media-stats/lcms",
+      "source_sha256": "11cd4b96c18379fa8afac37252d47380be12ed1ba2c58989ae8cb8e11805a1e1",
+      "split": "validation"
+    },
+    {
+      "id": "media-stats/libwebp-ssim-clipped",
+      "family": "media-stats/ssim",
+      "source_sha256": "0210301df868fa7a0770fa019710e8c3f478acf4ad345e695f8f85f1c06bdc77",
+      "split": "validation"
+    },
+    {
+      "id": "media-stats/libyuv-ssim8x8-sums",
+      "family": "media-stats/ssim",
+      "source_sha256": "7c5c475857cb2e8c0d0e5ebbab7810f71f57bc488d250face97ba92caf541af8",
+      "split": "validation"
+    },
+    {
+      "id": "media-stats/minimp3-test-psnr-mse-maxdiff",
+      "family": "media-stats/minimp3",
+      "source_sha256": "d2c097266a80fa16e812a4cc948316456fe0f3169f202c24b9707e7273713e1e",
+      "split": "validation"
+    },
+    {
+      "id": "media-stats/openh264-sample-variance16x16",
+      "family": "media-stats/openh264",
+      "source_sha256": "a2c6b2994494e638ceb8cd4028dc3e55e439ecded328d56d33f363cbe91bb7ea",
+      "split": "validation"
+    },
+    {
+      "id": "media-stats/theora-mb-activity-edge-energy",
+      "family": "media-stats/theora",
+      "source_sha256": "b8ff9adc43bc7c4fb89a6ddffac0d26100fafebd15607610dffb8f9016bf5ab8",
+      "split": "validation"
+    },
+    {
+      "id": "media-stats/uvg266-reshape-chroma-stats",
+      "family": "media-stats/uvg266",
+      "source_sha256": "e7ba5b8d937a8c820c922c27a37d7c80a627419bd1a4c6758e254d079b578159",
+      "split": "validation"
+    },
+    {
+      "id": "media-stats/vtk-ssim-var-covar-u8",
+      "family": "media-stats/ssim",
+      "source_sha256": "725007361bdb49c207fb885b39e17acc28d64c339d7a442fb89c2f558067db10",
+      "split": "validation"
+    },
+    {
+      "id": "media-stats/xavs2-ssim-window-stats",
+      "family": "media-stats/ssim",
+      "source_sha256": "700baa895929bb4e006a0a0bc7ef2f33acf8fbd6ea6beac8822deecbc69b8293",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/atom-pbc-l109",
+      "family": "minimd/atom",
+      "source_sha256": "ddfd51801648f75be1ed53a767f4ee19d60c0cf549a7bb1686814d76a0b41536",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/force-eam-compute-fullneigh-l315",
+      "family": "minimd/force-eam-compute",
+      "source_sha256": "85fd8f89654ea51a4162417752bd05d67c2b8cd921987937c2fac7284226bb0e",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/force-eam-compute-fullneigh-l382",
+      "family": "minimd/force-eam-compute",
+      "source_sha256": "2e3be2c6bfc4e203c057df56258d57e42ee06ee16d359e286c161fd1a52f7e56",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/force-eam-compute-halfneigh-l172",
+      "family": "minimd/force-eam-compute",
+      "source_sha256": "0b9923302f59f5fc6c3a420c2822bb6583f1b756afb83ace7d623089ca5abd18",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/force-eam-file2array-l630",
+      "family": "minimd/force-eam-file2array",
+      "source_sha256": "8a9df60dae38a1e59603cc19666f3ed71ba4e503e27875cc1d15c50d8e736501",
+      "split": "tuning"
+    },
+    {
+      "id": "minimd/force-eam-file2array-l658",
+      "family": "minimd/force-eam-file2array",
+      "source_sha256": "beeafa33ed497a157e32b34d1e7a977b8b6021f79655b0147f671edb33f4348c",
+      "split": "tuning"
+    },
+    {
+      "id": "minimd/force-eam-file2array-l696",
+      "family": "minimd/force-eam-file2array",
+      "source_sha256": "0207ecb9b096374c369e2fdeeeba0101ae75f2df7f72ecadacede3bf409e6881",
+      "split": "tuning"
+    },
+    {
+      "id": "minimd/force-eam-interpolate-l774",
+      "family": "minimd/force-eam-interpolate",
+      "source_sha256": "497cf562648eac69f1f86367b7e0bd19f2b0cd93aa36d3cc8e67be6f4ab2a4d3",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/force-eam-interpolate-l778",
+      "family": "minimd/force-eam-interpolate",
+      "source_sha256": "a4f03d23d6607676ff760b0551c745c17d115bacffe0ae8794cf0359287e6211",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/force-eam-interpolate-l788",
+      "family": "minimd/force-eam-interpolate",
+      "source_sha256": "37de11f7482cb9b70768f82874291c4f1dd9b883ea1889d5453a38b96eb76525",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/force-lj-compute-fullneigh-l410",
+      "family": "minimd/force-lj",
+      "source_sha256": "e1d39df0f227fb7bd829c464eab95cd220c7d0242bc4e42507a58201b2b6b9b4",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/integrate-final-integrate-l62",
+      "family": "minimd/integrate",
+      "source_sha256": "d19a716c77e060c19f2c563923d69984d347acf5169e4796fa08b58d6efb2b9a",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/integrate-initial-integrate-l49",
+      "family": "minimd/integrate",
+      "source_sha256": "7d4b539ae076811dcca6f8920fdc63cac5f74c276e3342c0882637385da52096",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/integrate-run-l117",
+      "family": "minimd/integrate",
+      "source_sha256": "b72f29bdc6a0a80869c7d4e2169bd48727e531fac2417b998c4b28b3e5f82af3",
+      "split": "validation"
+    },
+    {
+      "id": "minimd/thermo-temperature-l152",
+      "family": "minimd/thermo",
+      "source_sha256": "7c2b84c2747e48818ea6a794c82d0ce40c685753a110c44720078d452d6d1e2e",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-dequant8-perchannel",
+      "family": "mlas/dequant8",
+      "source_sha256": "fe64da71047fb97ae7130a69f8ca76829d31e905df72ca9e91028e2f0c52d111",
+      "split": "tuning"
+    },
+    {
+      "id": "mlas/mlas-dequant8-pertensor",
+      "family": "mlas/dequant8",
+      "source_sha256": "8cdbffd862067560db63520ed24a3e7ffa463fd5246e285fad035e26bdec175c",
+      "split": "tuning"
+    },
+    {
+      "id": "mlas/mlas-globalavg-signed",
+      "family": "mlas/globalavg",
+      "source_sha256": "51512e8e805890437932922b127a03faa7973e767850dc2e13ca1c0a3893202d",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-globalavg-unsigned",
+      "family": "mlas/globalavg",
+      "source_sha256": "342af8630001cb6800ef5808aff35426d768bd57aefdf13b5f768105a35ab958",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-linear-query",
+      "family": "mlas/linear",
+      "source_sha256": "cec19b0be461add03a35eb251cc953ba86e8f51d3bd7272b0121f5f2bf19444b",
+      "split": "tuning"
+    },
+    {
+      "id": "mlas/mlas-linear-query-dk128",
+      "family": "mlas/linear",
+      "source_sha256": "f23e99a2042705ad4d134e03843ffe6506a2a7d49e2aefef5681439138ac71a7",
+      "split": "tuning"
+    },
+    {
+      "id": "mlas/mlas-linear-query-dk512",
+      "family": "mlas/linear",
+      "source_sha256": "205fec913b23eb4470624fa62d9e247229809f8fc513d3bf5f6a4799f7a6c0d3",
+      "split": "tuning"
+    },
+    {
+      "id": "mlas/mlas-linear-retrieval",
+      "family": "mlas/linear",
+      "source_sha256": "43dec069344b639228852c6461413cd97bcb74f68554096a4783712c89e2a768",
+      "split": "tuning"
+    },
+    {
+      "id": "mlas/mlas-q4-minmax",
+      "family": "mlas/q4-minmax",
+      "source_sha256": "f1efdb924a68813f5000e74330c51afa7608762eccaef4b91eb1374162f1ed45",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-qgemm-dot4",
+      "family": "mlas/qgemm",
+      "source_sha256": "0083c89b9a5bb2bc02b0e18043de827ae22eb094e7a0f5a73d1ed68ce149531d",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-qgemm-packa-signed",
+      "family": "mlas/qgemm",
+      "source_sha256": "c9a54ca5dce6cafd33bff70a5812b65b22172c073b441306bbcaeb731d81346e",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-qgemm-packa-unsigned",
+      "family": "mlas/qgemm",
+      "source_sha256": "ef5c25d124a78ed0ae767e0d62766651616df0a1b01431104b4a8b7dc86f039c",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-qgemm-packb-signed",
+      "family": "mlas/qgemm",
+      "source_sha256": "305ced843bda6e3bcfc2255d93f3b290d69d5b664e4722ee8eccff24e69dadf2",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-qgemm-packb-unsigned",
+      "family": "mlas/qgemm",
+      "source_sha256": "87a9daeb4b3f7e73db0d758e0470c6f9b1c32feb12b2d2642155a37da242c0ec",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-qk-dot",
+      "family": "mlas/qk-dot",
+      "source_sha256": "ed12e7cd10da3a7ceef2570f4ab18f9b5860c90d123595f38e9505f1cd720166",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-rmsnorm-copy-sumsq",
+      "family": "mlas/rmsnorm",
+      "source_sha256": "3b9eec4a605b9c82721b0074768001e492b638c528cf9b3f9faa7243b5152ec8",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-rmsnorm-scale",
+      "family": "mlas/rmsnorm",
+      "source_sha256": "11b12988771bc143d3c7e26b036be538c005c87421b7a28194cf3549a11add09",
+      "split": "validation"
+    },
+    {
+      "id": "mlas/mlas-sgemm-4acc",
+      "family": "mlas/sgemm",
+      "source_sha256": "aafd8c1618acee13accf73ed9d8641624630edc418a2aba0b9e0c96325e3048b",
+      "split": "tuning"
+    },
+    {
+      "id": "mlas/mlas-sgemm-8acc",
+      "family": "mlas/sgemm",
+      "source_sha256": "a4802a2a23e1a8c1c5839b2a85582b3bdf574b2741bbdbd31e1b4fab1f24e980",
+      "split": "tuning"
+    },
+    {
+      "id": "mlas/mlas-sv-update",
+      "family": "mlas/sv-update",
+      "source_sha256": "0877a4d0b9b1b016e42b99fe5a1a9706749f7419155967f84aa93c1b49d26446",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-csr-p",
+      "family": "npb/cg",
+      "source_sha256": "003e681bea01da00e380a511093bf35bc2ff284eb8907406af2f28ff9da4c4e8",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-csr-p-fixed16",
+      "family": "npb/cg",
+      "source_sha256": "d9dde8f6ae879f94b3543238774271999264c1c55efd015f87d4b4e9fb4e60b1",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-csr-p-fixed64",
+      "family": "npb/cg",
+      "source_sha256": "09396e39ef8f270715a845c4f3fbb6301c4e9f9f301ae4655b8b12f560eaac2f",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-csr-z",
+      "family": "npb/cg",
+      "source_sha256": "c4e2e8814d30e95b46c1889b5890eb76dbbff516a840486b6ae866493621a918",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-dual-dot",
+      "family": "npb/cg",
+      "source_sha256": "f85bf353c5e89a18f7eca0ed8a7842b842267407dc8e18db0dde369f648477bc",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-initialize",
+      "family": "npb/cg",
+      "source_sha256": "76273a4499f3e1f6959890e6b3312f61b3c20ef39623e86f90c889f47f4bc121",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-normalize",
+      "family": "npb/cg",
+      "source_sha256": "f7713a5c11651fb7a9caceec053a616ad63a333a1d8dfc0406ee0938928d6e9c",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-p-update",
+      "family": "npb/cg",
+      "source_sha256": "92dec7746cb84fb5fbbad6a1fb07006de436661031ae18ffe644f0086b90b100",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-pq-dot",
+      "family": "npb/cg",
+      "source_sha256": "5a38605b33553e35358380746388ba109e5fbf6d90580bd0ce995f371c85bc45",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-residual",
+      "family": "npb/cg",
+      "source_sha256": "09a5c2a97b068d98fde5c438c70e0e381a32426d0df84e05f6c51b846230fe21",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-rho",
+      "family": "npb/cg",
+      "source_sha256": "4e3c557b5f04b9fa9dd1669ba34bc4b9455643f7c8dc9ae6b9f86e96461fa4dd",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-cg-zr-update",
+      "family": "npb/cg",
+      "source_sha256": "df676c6fa6a0bc40ffaa32f9547422c23edfaf33971275c5f40f37cd509b1595",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-ep-bin-sum",
+      "family": "npb/ep",
+      "source_sha256": "9dbdaf9a16abcf3f68e5be38be489969371f5770ea3a918b55a1990228cc0740",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-ft-evolve",
+      "family": "npb/ft",
+      "source_sha256": "2884a6633f76ab30e86735e4e86997ebb4b5c206496ddccb641556cd07ebb795",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-is-copy",
+      "family": "npb/is",
+      "source_sha256": "1b6798f35b5450751d30ce23ec5d54d5ff1f22c36ccab97f0c20b4588c7104b1",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-is-verify-order",
+      "family": "npb/is",
+      "source_sha256": "2806a12f122ac4a272a1f0b18a86938da121020c7bdcdabaf24ab3ac83d0ce18",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-lu-pintgr-xy",
+      "family": "npb/lu-pintgr",
+      "source_sha256": "dfea6ba30f8670b858359c0aee69d4abe10cf32fd41926d510797207f95f2338",
+      "split": "tuning"
+    },
+    {
+      "id": "npb/npb-lu-pintgr-xy-a",
+      "family": "npb/lu-pintgr",
+      "source_sha256": "2ed6bf3778db20b231c3699dd4e869aabadc55e1de8919e758882698b476fdd7",
+      "split": "tuning"
+    },
+    {
+      "id": "npb/npb-lu-pintgr-xy-w",
+      "family": "npb/lu-pintgr",
+      "source_sha256": "1eac7d803ce068fa842eb153b984837dc56716b6e5d0f823f9788f4a4443863a",
+      "split": "tuning"
+    },
+    {
+      "id": "npb/npb-lu-pintgr-xz",
+      "family": "npb/lu-pintgr",
+      "source_sha256": "2786a36307002c8fb13f3cf0f47c2af5b12a06a420e1b3ba8b954eb21a9e3234",
+      "split": "tuning"
+    },
+    {
+      "id": "npb/npb-lu-pintgr-yz",
+      "family": "npb/lu-pintgr",
+      "source_sha256": "c24cc380502a8d4b1ddcbce60b0ba0ce2b013980811ed0c8b70018f1a013356f",
+      "split": "tuning"
+    },
+    {
+      "id": "npb/npb-mg-comm-y",
+      "family": "npb/mg",
+      "source_sha256": "16a764010d77c8037ecfd70a77b12b16f5d1020e308921a80358047757365738",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-comm-z",
+      "family": "npb/mg",
+      "source_sha256": "231240f337a7dc6ff6bf9676f018e63d905404c0b94dc95be58d6845505c5ad7",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-interp-000",
+      "family": "npb/mg",
+      "source_sha256": "cabd30535ca58428719e0a754f0d5b768d11be9f53f04f8ccf840e1a8dddbca8",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-interp-010",
+      "family": "npb/mg",
+      "source_sha256": "ca633a2bfeb9edab2d3c7a58ddd3d7096acfb4697f6408532e8c07e77a8dc873",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-interp-100",
+      "family": "npb/mg",
+      "source_sha256": "a6426c9352b14aea6511e61ed714b969b293204a775c75d91042195c2c81c4bd",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-interp-110",
+      "family": "npb/mg",
+      "source_sha256": "8aa92236b9f3d94bf1211e966fae68c2bfc38c64ecd04f0ba0150eed5879e2d5",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-interp-prep",
+      "family": "npb/mg",
+      "source_sha256": "85d0ddd58e77142ec6faf67bae96407840285075527f1d310c6c0533374a01f8",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-norm",
+      "family": "npb/mg",
+      "source_sha256": "794286f7f115a17fb0f5bbac7e76f256245463853148ce1376dae35a4be3328a",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-norm-builtin",
+      "family": "npb/mg",
+      "source_sha256": "6265d4c9352b2489a2018edf51560ad93beae739b19d226eb50397d1bbc09989",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-psinv",
+      "family": "npb/mg",
+      "source_sha256": "83e3cef290f14c182fff1a0054cf2fdf9c7ba3c8a597a38c53753fb918cdb441",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-psinv-prep",
+      "family": "npb/mg",
+      "source_sha256": "43086c8c51ab40fae58c36e04feb1f678042b2613a66e4a5534fc95818a11fed",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-resid",
+      "family": "npb/mg",
+      "source_sha256": "8717b900348c1b15dcddc6c085aa810504bf0a7a9957b0126a6b1081ea6bf702",
+      "split": "validation"
+    },
+    {
+      "id": "npb/npb-mg-resid-prep",
+      "family": "npb/mg",
+      "source_sha256": "416fd8c355e8d4aa6301ced79b838f410522914fe5ee9d0cf689671778853d87",
+      "split": "validation"
+    },
+    {
+      "id": "parboil/spmv-jds-fixed64",
+      "family": "parboil/spmv-jds",
+      "source_sha256": "2b72bece8c21323c51c06dabf674fac8f72fb74b6c798e99d581c283ecb9d145",
+      "split": "validation"
+    },
+    {
+      "id": "parboil/spmv-jds-rows",
+      "family": "parboil/spmv-jds",
+      "source_sha256": "c67244be2a5b4f4fcf3e9ac44d310f33c6f32ce9cb1095bd8b23a7f583c819c0",
+      "split": "validation"
+    },
+    {
+      "id": "parsec/parsec-streamcluster-dist",
+      "family": "parsec/streamcluster",
+      "source_sha256": "ce87dae34f0ae0f5df33f14aad560d78358905d9123f46536cd347b758244df7",
+      "split": "validation"
+    },
+    {
+      "id": "parsec/parsec-swaptions-fixedleg",
+      "family": "parsec/swaptions",
+      "source_sha256": "fc491edc3667de14b5859b46f1f430412cdade0e3dbb309fcf5ea78e57ec671e",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-adi-full",
+      "family": "polybench/adi",
+      "source_sha256": "1f3e283ad4740c6e8ada71788f85946f9a7b228ca686b8359baf7263026b6724",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-atax-l00",
+      "family": "polybench/atax-bicg-mvt",
+      "source_sha256": "bcd83df15f7213f3be436cca516ada850af9bc067cee42743407a15de925ca06",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-atax-l01",
+      "family": "polybench/atax-bicg-mvt",
+      "source_sha256": "4b4739b107e4c2bdb619825f634dd0ff827bcce54917b8facb72e1d5b1dfc97f",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-atax-l02",
+      "family": "polybench/atax-bicg-mvt",
+      "source_sha256": "63cb41942147128021ed84bb52660f1946373614a8d9c79a0dda0a99beda8064",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-bicg-l00",
+      "family": "polybench/atax-bicg-mvt",
+      "source_sha256": "4c681d3456e2e8d8515dbca245ae4f85a74bcec69f9d8ebc0bb9352d7e0cdb56",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-bicg-l01",
+      "family": "polybench/atax-bicg-mvt",
+      "source_sha256": "ed490d4c7e2e99f3aa9d1723f1113cfb1ba649e97f6ff32e10ed52e902d949d8",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-fdtd-2d-full",
+      "family": "polybench/fdtd-2d",
+      "source_sha256": "509295d742a79d71afc87709e8038e85cc7d3051e51d011f0b4e58a101ebe60d",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-floyd-warshall-full",
+      "family": "polybench/floyd-warshall",
+      "source_sha256": "06532b037f3d2e4df3eb17632a20f284cf3039e286f6478afe526bf3260d47f9",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-gemm-l00",
+      "family": "polybench/gemm-syrk",
+      "source_sha256": "9322e49b585f7af59e0b34061adcb363faf72bff9394c2a05ef92528529a1b05",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-gemver-l00",
+      "family": "polybench/gemver",
+      "source_sha256": "b8a8e2cf1ef3d100b397d9ac92a681aed7615acac135ce7a7d1ff541e74c920d",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-gemver-l02",
+      "family": "polybench/gemver",
+      "source_sha256": "534485f15f4f1272fc8593bff6047da4870282b884ae2e3ecc5dd18c305c7e0e",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-gemver-l03",
+      "family": "polybench/gemver",
+      "source_sha256": "fbd3bb27c68903620ff7805db02556da6ab2524abf7547eda2c09f5a6676b78b",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-gesummv-l00",
+      "family": "polybench/gesummv",
+      "source_sha256": "d61e43a8e42c0b23fda1e1c116f2455480dbbaf642b931e395a10494c2d67262",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-jacobi-1d-imper-full",
+      "family": "polybench/jacobi-1d",
+      "source_sha256": "c7918bd0cc49c337c80b18aaf7d6623a04730ed8dcde1709a6fc9687ae75bf54",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-jacobi-1d-imper-l00",
+      "family": "polybench/jacobi-1d",
+      "source_sha256": "74255ee758ff7b1bea758d4ac9333b4e1f05f11f4b84ddf6f67c920ff6db501b",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-jacobi-1d-imper-l01",
+      "family": "polybench/jacobi-1d",
+      "source_sha256": "ba7e9b9d1a5bf59a2fa8cf4342d1b6c1fa027ba388a4871918b8d3e5100d37b9",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-jacobi-2d-imper-full",
+      "family": "polybench/jacobi-2d",
+      "source_sha256": "f9ce39d4c812e992563ab9d011db919ad3314a3330ca5cf10c9b0f3cbcdd27c3",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-mvt-l00",
+      "family": "polybench/atax-bicg-mvt",
+      "source_sha256": "7044fb740a3760a4a2e918cb5f440fb0ba2e723dd02d83b6a2d725da26aed66a",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-syrk-l00",
+      "family": "polybench/gemm-syrk",
+      "source_sha256": "f88228ed1d2938a9525a8e141301aae16e2940f3fb11e39a3cf8e03d0ff9aa40",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p32-syrk-l01",
+      "family": "polybench/gemm-syrk",
+      "source_sha256": "2e5bd9596c6fce707a7add7e2e4b1d376345393af28ee248381e4f3cd6de73f6",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p421-atax-l01",
+      "family": "polybench/atax-bicg-mvt",
+      "source_sha256": "5d69e7a16eaabcf68a256540ae7f25f52e297c4971a7aeb46af10add37dd33af",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p421-fdtd-2d-full",
+      "family": "polybench/fdtd-2d",
+      "source_sha256": "bcb376b1cba6223943c18611490da6e3df1722972fb267dc2d92e653c464cd31",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p421-floyd-warshall-full",
+      "family": "polybench/floyd-warshall",
+      "source_sha256": "684465b7dd4191956d101d89706cc8ecaaf7885520bf387f657ff20fe14f6b68",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p421-gemm-l00",
+      "family": "polybench/gemm-syrk",
+      "source_sha256": "ad7226730cdeda07a870b54b6dd4e696ff84d4066f4eecb3f6a2bc7ec3b88557",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p421-gemm-l01",
+      "family": "polybench/gemm-syrk",
+      "source_sha256": "b5d083a622b8271ab8808356811cf7af20b920fd919cf5df63bba4094ac2ade1",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p421-heat-3d-full",
+      "family": "polybench/heat-3d",
+      "source_sha256": "9e37dc4cf1be9cd54e68b77d8fbba0945bf4796a27ac44f34fa9b2bd49303e50",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p421-jacobi-1d-full",
+      "family": "polybench/jacobi-1d",
+      "source_sha256": "5a1981bc40524d761da3742463cabde604e36a5fad98972cbdf07c8982d816cc",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p421-jacobi-1d-l00",
+      "family": "polybench/jacobi-1d",
+      "source_sha256": "362ec9b46611a9890a74f158e37fdea26c20f0553c721ad8397acf93f358b962",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p421-jacobi-1d-l01",
+      "family": "polybench/jacobi-1d",
+      "source_sha256": "25d34305a67045c696f40b43dbe492af223aac774e9a81eb4590fc9b51c64076",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p421-jacobi-1d-outer",
+      "family": "polybench/jacobi-1d",
+      "source_sha256": "26a7b4d945e79a6dd56eb8d1c098197bd3a63c2d271ef33c057e0df12f815b9e",
+      "split": "validation"
+    },
+    {
+      "id": "polybench/p421-jacobi-2d-full",
+      "family": "polybench/jacobi-2d",
+      "source_sha256": "b44c1280f735186eea1a6d6269aac763eff06880a8f4b59822a273bcad508df3",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/add",
+      "family": "stream/elementwise",
+      "source_sha256": "e96ed942a21ef805950758e415e40aab386343e39ee9506726868e024b4535cd",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/copy",
+      "family": "stream/elementwise",
+      "source_sha256": "30f2313cdaeaae4bece68a0c07ca9a52a2f88114a6d1ee6931872a4e3303f501",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/copy8",
+      "family": "rajaperf/copy8",
+      "source_sha256": "b1b01eac32be4c060eb053cfab5d4ed65a3c5047daf68a01c56fe803eb927a1f",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/daxpy",
+      "family": "stream/elementwise",
+      "source_sha256": "86c175759c45ba72cd1d4c7e438650aa9fdd1016ad36d81ca521c5e7c6e72622",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/diff-predict",
+      "family": "rajaperf/diff-predict",
+      "source_sha256": "cddf015a71fcf259a261cdfae74d391a2009978c177853b0994dc0d61bd7a048",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/dot",
+      "family": "lcals-rajaperf/dot",
+      "source_sha256": "5aa8b416a640aa7fbab7095ff2b69ecaf654d9c59163511d10d86d80751ba585",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/eos",
+      "family": "lcals-rajaperf/eos",
+      "source_sha256": "21042ce05a5502cd39ea8db1a2cc6fc47d361ba881a4e96db421109953a6dab7",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/first-diff",
+      "family": "lcals-rajaperf/first-diff",
+      "source_sha256": "b4c6b25b4ceba2b552dd54e81bde139e79656ed8efaba210a642f5841d3354aa",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/first-sum",
+      "family": "rajaperf/first-sum",
+      "source_sha256": "3574f040cf1a78192a1d17df605c6eff8360a6c8955202f310f82851e2976b7c",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/gen-lin-recur-forward",
+      "family": "rajaperf/gen-lin-recur",
+      "source_sha256": "52de217f037b5ac83253a51b3e32115acf228e8f1fce1dd151a1eed984d4d70d",
+      "split": "tuning"
+    },
+    {
+      "id": "rajaperf/gen-lin-recur-reverse",
+      "family": "rajaperf/gen-lin-recur",
+      "source_sha256": "e1b293f3941cb98d56fa40f27fb1243a637958ed38cac5233b608cdce692ca19",
+      "split": "tuning"
+    },
+    {
+      "id": "rajaperf/hydro-1d",
+      "family": "lcals-rajaperf/hydro-1d",
+      "source_sha256": "88359602af3f36aa3f8e08b6e085833a09b503c6f6f31a1a365ee8811ef60594",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/if-quad",
+      "family": "lcals-rajaperf/if-quad",
+      "source_sha256": "8dc469b94177dd3867bcc7bfc301b43619bc56b336b6c7e4f3027e9d5bc88281",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/if-quad-builtin",
+      "family": "lcals-rajaperf/if-quad",
+      "source_sha256": "5e761aae90df5d11be4a4dc7c2024ff7e978a8c746fa4b958d9b52abf4345c3c",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/init-view1d",
+      "family": "rajaperf/init-view1d",
+      "source_sha256": "ca9436df09ad13f23f67f4ad5f799801299bb6d34f106acb5f497bbc237e4b4b",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/init3",
+      "family": "lcals-rajaperf/init3",
+      "source_sha256": "666112bcc23945976e752df58f286a0f615a8bee39e06513900a7c3d686b72b0",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/int-predict",
+      "family": "rajaperf/int-predict",
+      "source_sha256": "95f5267266b575afbbe5bf60d7a653024aada59e707515bfd141b5229b2bb56e",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/mul",
+      "family": "stream/elementwise",
+      "source_sha256": "cc753a35acd022d6051bca59aec1de9e701b2e821e0a0f71ee0a98b96368ffe0",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/muladdsub",
+      "family": "lcals-rajaperf/muladdsub",
+      "source_sha256": "32521342b663db61879e27a8f08f6f56c5c931c9713046e9a7aa893145628187",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/pi-reduce",
+      "family": "rajaperf/pi-reduce",
+      "source_sha256": "9976c6b81ac85ceb595ddb6f1be57a1fb0bc75dd60294f76b00b2e3187cb23d4",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/reduce-struct",
+      "family": "rajaperf/reduce-struct",
+      "source_sha256": "6a58da97cbd4ac48d56be227d63d3c03d369534a0a3237939e943e111e460832",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/reduce-sum",
+      "family": "rajaperf/reduce-sum",
+      "source_sha256": "6779571529679224437031f0f5a70669ccdb69fc866745038d5fcc3c499fea54",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/reduce3-int",
+      "family": "rajaperf/reduce3-int",
+      "source_sha256": "854c01a6137943cd7e04468d7180f676021cdf5d9166678f29b0888f575ddb16",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/trap-int",
+      "family": "rajaperf/trap-int",
+      "source_sha256": "47239acced9257095fffb4f8f270dce781d9a17c8db8ab04b2abf804c9608ba7",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/trap-int-builtin",
+      "family": "rajaperf/trap-int",
+      "source_sha256": "576370519b1fe8ecc8e3b04f9eced1533391a100157b2961e9682ac959ccbd6b",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/triad",
+      "family": "stream/elementwise",
+      "source_sha256": "af9c37be0f521af3237cdb5b528f871253260d3288459c8a36dfa609210744c0",
+      "split": "validation"
+    },
+    {
+      "id": "rajaperf/tridiag-elim",
+      "family": "rajaperf/tridiag-elim",
+      "source_sha256": "56ea0cd2fc1dff83c6e4dca8aa766cbf18b744b8a57b67ea6a3e59231b596e49",
+      "split": "validation"
+    },
+    {
+      "id": "rodinia/rodinia-kmeans-distance",
+      "family": "rodinia/kmeans",
+      "source_sha256": "7305af553141f5046d7f7ce430f6602242a2ace65338e69a9b5311e0bb807207",
+      "split": "validation"
+    },
+    {
+      "id": "rodinia/rodinia-pathfinder-row",
+      "family": "rodinia/pathfinder",
+      "source_sha256": "1b7b07196cd0a7153b91fae73aa38d89611696e8dd6ff60833e54e375bfcb300",
+      "split": "tuning"
+    },
+    {
+      "id": "rodinia/rodinia-pathfinder-traverse",
+      "family": "rodinia/pathfinder",
+      "source_sha256": "5ae39813bb1aeef31e201c66da569aba0f7bc3ece6e736bd94d0f59c79c07a87",
+      "split": "tuning"
+    },
+    {
+      "id": "rodinia/rodinia-srad-roi",
+      "family": "rodinia/srad",
+      "source_sha256": "f5cf326b00efe6a9d6bc39da08791ef5503dfded3b280bcc11663b9d1770f98c",
+      "split": "validation"
+    },
+    {
+      "id": "rodinia/rodinia-srad-row",
+      "family": "rodinia/srad",
+      "source_sha256": "e86695ac9f6dc8c218a1a48adcc3dd648ff8feb7afca0f4aeead2d94280cff46",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/fft-first-butterflies",
+      "family": "scimark2/fft",
+      "source_sha256": "dfc53dda2bec0cc924c3d4884f239e700f35554a15194b97e233a9f3c2058737",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/fft-inverse-normalize",
+      "family": "scimark2/fft",
+      "source_sha256": "a481ff9ff49d8215913cb075dc56cd52005d639e8dc8e595b2ac5f05dc7c9eb2",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/fft-stages",
+      "family": "scimark2/fft",
+      "source_sha256": "07c70bad37435115c8945465d8b6b3233fd29d5efa7d9957c38206b1073c3cd4",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/fft-twiddle-butterflies",
+      "family": "scimark2/fft",
+      "source_sha256": "410402351577f11883a7f57d21504a895adb7928e7f1982bc3c5bef527176b48",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/lu-column-scale",
+      "family": "scimark2/lu",
+      "source_sha256": "3c3db83fbbc8c3cd40356d19ce442f1785df8fca56b8123cee9900e11b5a4aeb",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/lu-copy",
+      "family": "scimark2/lu",
+      "source_sha256": "e981957772d7e00e9917f62d269f9c0c8893f0e1439e6f0452bf1594ee81eea6",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/lu-factor",
+      "family": "scimark2/lu",
+      "source_sha256": "9726c5f0546acadee29a255b8546bccb6103f5935a4027e31fd5d32640ce3ea7",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/lu-rank-columns",
+      "family": "scimark2/lu",
+      "source_sha256": "50250194b937ed7ac1dfc283204102de175b1eed295e588480d6baeabbf3eac5",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/lu-rank-rows",
+      "family": "scimark2/lu",
+      "source_sha256": "f0d8f31470bfc831d6a7151d44b66e72b72d7027f7de8464e70e496d8b7415b3",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/sparse-nonzeros",
+      "family": "scimark2/sparse",
+      "source_sha256": "90d930f1996918ad7b113aad31b12dccfdeab3a3307767cba8f00c9d5e044e96",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/sparse-repetitions",
+      "family": "scimark2/sparse",
+      "source_sha256": "dc854f6ca852a63d2a6e23f5c893cc2134220754c10d860c4a06d8437d074504",
+      "split": "validation"
+    },
+    {
+      "id": "scimark2/sparse-rows",
+      "family": "scimark2/sparse",
+      "source_sha256": "d0b16e733ddbb4c69730505b17aefc070179a5c76f00bdfeaf1c98332676f53b",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/cg-cg-calc-p-l93",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "e43226601d565aee95caa1bdfed7a61668d038a8a8e97469b2777c50e4418bfb",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/cg-cg-calc-ur-l78",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "6e4df806be77745ed4d63fff46d250430e96c4f1d131065f4f560874f504030b",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/cg-cg-calc-w-l61",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "37be2d37753afe286afede02a793364770191635018cfa7f7ec36a15e8072050",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/cg-cg-init-l16",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "95240183ef89aaa52b723d53d67b5749138ae39fe3bfd5aff67a4595654e649a",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/cg-cg-init-l25",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "97675b6c5f5685447edd2ed97ea79c9fbb3e2fd14782d7b23825f16d02a67d79",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/cg-cg-init-l32",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "80b623a58fd33437eae068451a47d6aaac386450bfa8c043ce26b65a9dba23fd",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/cg-cg-init-l42",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "e8aa213c3f92e922301dd9c27bc6da16c183c8c84ca333f9c75447e237f64aec",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/cheby-cheby-calc-u-l11",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "c435415593a5163dc68ad61b4402044e8795813193b285c4287d904dd538ca3e",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/cheby-cheby-init-l22",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "4a306916f5cc78a91e5c671bc49e18c6a9626a03e94671ce47b0ebdd26fd052f",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/cheby-cheby-iterate-l38",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "cd6f78299a962be8649977722fdd2f2ad47aec308c713c9d9db71e0a435c533b",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/eigenvalue-driver-eigenvalue-driver-initialise-l22",
+      "family": "tealeaf/eigenvalue-driver",
+      "source_sha256": "01020265d35817e2655259be2e291a932e936debaf18d475fa2323a8dcb29fb1",
+      "split": "tuning"
+    },
+    {
+      "id": "tealeaf/eigenvalue-driver-eigenvalue-driver-initialise-l40",
+      "family": "tealeaf/eigenvalue-driver",
+      "source_sha256": "d599a30fcc914f38d0bec82e2a147921ab488741eb72d708d06f9024d7386e34",
+      "split": "tuning"
+    },
+    {
+      "id": "tealeaf/eigenvalue-driver-tqli-l72",
+      "family": "tealeaf/eigenvalue-driver",
+      "source_sha256": "533daf051c75f640852a23401b71188e97258a77341bac3881b812da221937d4",
+      "split": "tuning"
+    },
+    {
+      "id": "tealeaf/jacobi-jacobi-init-l18",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "97f339f6b299d779ae56cfb3aa5df5aeffc0f2c8a27a202859a0a956ce8aaf66",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/jacobi-jacobi-init-l27",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "ddb6c49de370b165ad80c6e29e4b285e936cb5417c561747a4d8880c0ccf978f",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/jacobi-jacobi-iterate-l51",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "75867bb1ed2beae7568d762aac04054b050214abbc46298025e8843ccf2f3222",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/ppcg-ppcg-init-l11",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "34b2643065331c57a4ede00b6605825233af46f3963689be55c8e76a09695098",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/ppcg-ppcg-inner-iteration-l22",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "2c806be53e531cf8e4a1f1dfa23ee60f42eae75757da114eba383f7d9d95f903",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/ppcg-ppcg-inner-iteration-l31",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "0c83115fb46960c89af03973a8373463f5b9a98ea811aeb40b9359e6f65670e4",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/solver-methods-calculate-2norm-l68",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "75eb49f75e18dd46cfe9e23fa45f706da2253b12e85681614e35a87ed3db9a45",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/solver-methods-calculate-residual-l55",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "178f094e4047801653bfca204517e0b203b70fd2b484a823790ab08f43efece3",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/solver-methods-field-summary-l17",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "ce4773abb0376d58cba4491d9d8daf65668b564ec0346c5e40eb3aad6bff9e01",
+      "split": "validation"
+    },
+    {
+      "id": "tealeaf/solver-methods-finalise-l80",
+      "family": "tealeaf/grid-solver",
+      "source_sha256": "3503b794cdc57900e645bcb5ef34327c6bda4ff4628eeb6ed42a157a0b71d15a",
+      "split": "validation"
+    }
+  ]
+}

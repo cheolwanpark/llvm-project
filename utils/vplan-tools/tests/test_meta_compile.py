@@ -90,3 +90,38 @@ class MetaCompilerTests(unittest.TestCase):
             result = self.compile(Path(td), ['-O1'])
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('requires non-LTO RISCV64 -O2/-O3', result.stderr)
+
+    def test_extraction_and_raw_analytics_do_not_compute_costs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = SOURCE.replace('void add(', 'void selected_kernel(') + SOURCE
+            src = root / 'kernel.c'
+            src.write_text(source)
+            result = subprocess.run([
+                os.sys.executable, str(DRIVER), '--clang', CLANG, '--input', str(src),
+                '--work-dir', str(root / 'work'), '--stop-after-ra', '--analytics-only',
+                '--extract-function', 'selected_kernel', '--', '-O3',
+                '--target=riscv64-unknown-elf', '-march=rv64gcv',
+                '-mcpu=xiangshan-kunminghu', '-ffreestanding'],
+                capture_output=True, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            work = root / 'work'
+            manifest = json.loads((work / 'candidates.json').read_text())
+            self.assertEqual({r['function'] for r in manifest['candidates']}, {'selected_kernel'})
+            self.assertTrue(list(work.glob('*.analytics.json')))
+            self.assertFalse(list(work.glob('*.cost.json')))
+            self.assertFalse((work / 'feedback.json').exists())
+            self.assertFalse((work / 'final.manifest.json').exists())
+
+    def test_continuous_default_model_agrees_with_backend_before_rounding(self):
+        from cost_model import CostModel, DTYPE, P
+        import torch
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result = self.compile(root, ['-O3'])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for path in (root / 'work').glob('*.analytics.json'):
+                raw = json.loads(path.read_text())
+                cost = json.loads(path.with_name(path.name.replace('.analytics.', '.cost.')).read_text())['cost']
+                body = float(CostModel([raw]).bodies(torch.ones(P, dtype=DTYPE))[0, 0])
+                self.assertLessEqual(abs(body - cost['body_quarters'] / 4), .25)
