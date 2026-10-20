@@ -1,80 +1,55 @@
 # Python VPlan selection protocol
 
-LLVM checkpoints IR before LoopVectorize, enumerates vector candidates, collects
-post-register-allocation facts, and reproduces explicitly selected candidates.
-`utils/vplan-tools/selection_policy.py` supplies this checkout's policy to
-evaluation, printing and `utils/vplan-meta-compile`. On `backend-aware-cost`,
-`cost_model.py` supplies the same backend costs to selection and calibration.
-The two ablation branches replace only the policy, not the compiler pipeline.
-No measurements or dataset
-are read by the meta compiler. Scores are heuristic model units, not CPU cycles.
+LLVM checkpoints IR before LoopVectorize, enumerates vector candidates, and
+reproduces explicitly selected candidates. `utils/vplan-tools/selection_policy.py`
+supplies the fixed `llvm-middle-end` policy for evaluation, printing and
+`utils/vplan-meta-compile`. `cost_model.py` consumes the ordinary LLVM cost
+observations; it has no parameters to fit and reads no database or measurements.
 
 ```text
 prepare checkpoint → discover candidates + middle-end loop context
-                   → vector probes → raw post-RA analytics
-                   → Python default/fitted scores → per-loop selection
+                   → fixed Python costs and scalar/vector comparison
+                   → materialize selected candidates to LLVM IR for safety checks
                    → LLVM replay → IR / assembly / object
 ```
 
-The supported interface is non-LTO RISCV64 O2/O3, inner loops, IC=1, without a
-separate vector epilogue. Ordinary LLVM compilation and `--compiler-mode direct`
-retain the normal TTI cost and selection policy. Meta selection ranks evaluable
-vectors only; it does not compare profitability against scalar execution.
-If no vector is evaluable, that loop stays scalar with an explicit reason.
+The interface supports non-LTO RISCV64 O2/O3, inner loops, IC=1, without a vector
+epilogue. The fixed policy targets the RISC-V throughput configuration used by
+`search-dataset.sqlite`. It ranks both fixed and scalable vectors against scalar
+f1, using compiler order and LLVM's scalable tie preference. Structured safety
+rejections leave the affected loop scalar; compiler errors remain errors.
 Multiple loops are selected independently, without function-level aggregation.
 
-## Observation and scoring
+## Cost model
 
-`RISCVVPlanAnalytics` runs at the end of RISC-V `addPostRegAlloc`, after register
-assignment/rewrite, stack-slot coloring, copy propagation, post-RA LICM and
-redundant-copy elimination when enabled. It preserves the MachineFunction and
-only collects and writes facts. Observation precedes post-RA sinking, frame
-lowering, later pseudo expansion and scheduling; it is not final assembly.
+Let C be `middle_end.original / 4`, W be the candidate's `estimated_width`,
+S be `scalar_cost`, and T be `max_trip_count`:
 
-Raw analytics version 2 contains instructions, register geometry, operand
-flags, memory direction, spill objects, predicate identities, regions and proven
-physical RAW dependency edges. Instructions outside the selected body remain
-visible but are not costed. Single-block regions have distance-0/1 dependency
-coverage; other regions expose block-local coverage. Unknown facts are explicit.
-
-Operands additionally expose `Bank` (`gpr`, `fpr`, `vector`, or `unknown`). Each
-instruction's `SpillSlotAccess` checks both frame-index operands and fixed-stack
-MMOs, independently of recognized `Spill` transfers. The shared Python spill
-projection rejects incomplete coverage rather than interpreting it as zero.
-
-IR metadata identifies the selected loop. Induction witnesses verify its
-post-optimization iteration mapping, including fixed-vscale folding and provable
-unrolling. Single-block EVL loops are recognized by VL-based induction updates.
-Lost or ambiguous loops and unproven mappings are unavailable, rather than scored
-at the original estimated VF width.
-
-Let B be body cost including spill and per-iteration mask/VL configuration, W the
-verified post-RA width, S the middle-end cost of one original scalar iteration,
-and T the known trip-count upper bound:
-
-| Condition | Python score |
+| Condition | Comparison score |
 | --- | --- |
-| Unknown T | B / W |
-| Scalar remainder | B × floor(T/W) + tail_scale × S × (T % W) |
-| Folded tail | B × ceil(T/W) |
+| Unknown T | C / W |
+| Scalar remainder | C × floor(T/W) + S × (T % W) |
+| Folded tail | C × ceil(T/W) |
 
-S comes from `CM.expectedCost(f1)`, with invalid values represented by JSON null.
-Zero is a valid scalar cost. S is required only for scalar-tail candidates with a
-known T, unless both the positive exact trip count and T divide W. Divisibility
-of an upper bound alone does not establish that the real remainder is empty.
-The bound is used for scoring and is never presented as an exact runtime count.
+C already includes precomputed legacy costs, VPlan region costs and LLVM's
+estimated register-pressure spill cost. Comparisons preserve integer quarter
+units, saturation, invalid propagation and the incoming candidate's tail policy
+on both sides. Scores are model units, not CPU cycles. The previous learned
+backend resource/latency model and tail coefficient have been removed.
 
-The model retains resource hard maxima, load/store overlap, predicate sharing,
-recurrence/load-use bounds, spill and configuration formulas. Floating-point
-costs are continuous, without InstructionCost quantization. `tail_scale` defaults
-to 1 and is learned in positive log space, separately bounded to [1/64, 64]. It
-stays 1 when no nonzero remainder term is observed. Breakdown and scores use the
-same computation, so spill/configuration are never added a second time.
+The manifest does not encode every LLVM selection policy. User/forced VF hints,
+size optimization, some candidate filters, and outside-loop profitability can
+still cause differences from ordinary LLVM. Use `evaluate --compare-baseline`
+to measure agreement. See [the tools README](utils/vplan-tools/README.md).
 
-One-time guards, initialization and exits are excluded. Reduced body cost at a
-short VL, precise epilogue modeling, new instructions and function aggregation
-remain future work. LLVM legality and runtime safety checks remain active.
-Known always-failing memory/SCEV checks produce structured probe failures.
+## Optional backend observations
+
+`--analytics-only --stop-after-ra` retains the raw-observation pipeline.
+`RISCVVPlanAnalytics` runs after register allocation cleanup and exposes raw
+instructions, register geometry, operand banks, memory direction, spill objects,
+predicates, regions, and proven physical RAW dependencies. Its version remains 2.
+These facts are not inputs to the fixed model. The default path does not invoke
+RA probes or require their iteration-mapping/dependency coverage.
 
 ## Usage
 
@@ -86,12 +61,13 @@ uv run --project utils/vplan-tools python utils/vplan-meta-compile \
   -mcpu=xiangshan-kunminghu -O3 -ffreestanding
 ```
 
-Use an empty work directory. `--emit llvm|asm|obj` selects the output.
-`--weights PATH` loads current fitted coefficients; omission uses all multipliers
-at 1. `--stop-after-ra` collects and scores without final compilation;
-`--analytics-only --stop-after-ra` collects raw facts without loading the model.
-`--detail` retains ordinary VPlan diagnostics. `--timeout` applies per invocation.
-`--extract-function NAME` optionally isolates a function at the checkpoint.
+Use an empty work directory. `--emit llvm|asm|obj` selects the final output.
+`--stop-after-ra` remains the compatibility name for stopping before final replay;
+with the fixed policy this stops after middle-end scoring and IR safety checks.
+`--analytics-only --stop-after-ra` instead collects raw backend observations.
+`--weights` is rejected. `--detail` retains ordinary VPlan diagnostics and
+`--timeout` applies per invocation. `--extract-function NAME` optionally isolates
+a function at the checkpoint.
 
 ## Protocol v3
 
@@ -134,18 +110,19 @@ and require neither a scalar VPlan nor a scalar profitability baseline.
 Duplicate/missing/stale decisions, unsupported settings, changed loop/candidate
 context, and final materialization mismatches are errors.
 
-Artifacts include `identity.json`, `pre-vectorize.bc`, `candidates.json`, per-probe
-`.analytics.json`, `.manifest.json`, `.mir` and logs, `candidate-status.json`
+Artifacts include `identity.json`, `pre-vectorize.bc`, `candidates.json`,
+`check-*.manifest.json` and LLVM IR for selected-candidate safety checks,
+`candidate-status.json`
 (status, reason, Python score and breakdown), `selection.json`,
-`final.manifest.json`, and `result.json`. Individual unsupported or failed probes
-do not stop other probes. Preparation/discovery failure and identity/schema
+`final.manifest.json`, and `result.json`. The optional raw analytics mode also
+emits per-probe analytics, MIR and logs. Preparation/discovery failure and identity/schema
 corruption in successful probe output fail the driver. Final replay failure
 never becomes a scalar fallback.
 
-Protocol v2 manifests/feedback, old cache bundles, and old weights are rejected.
-Recollect and refit; there is no compatibility mode. Raw analytics remain v2,
-cache bundles are v4, and weights schema 2 uses model `rvv-python-19-v3`.
-Existing caches must be recollected for the added common observations.
+Protocol v2 manifests/feedback and old weights are rejected. Recollect
+observations with protocol v3; no refitting is needed. Raw analytics remain v2.
+The fixed model is `llvm-middle-end-v1` and accepts no weights.
+The fixed policy does not consume old analytics caches or weights.
 
 ## Verification
 
@@ -163,7 +140,7 @@ VPLAN_CLANG="$PWD/build-vplan-tools/bin/clang" \
 ```
 
 LLVM MIR tests compare current raw facts without PyTorch or a legacy feature/cost
-projection. Python tests cover formulas, fitting, weight persistence and driver
+projection. Python tests cover fixed cost formulas, selection, rejection and driver
 integration. Dataset validation uses previously measured cycles and does not
 measure execution performance of newly generated code. See the
-[tools guide](utils/vplan-tools/README.md) for partitioning and metrics.
+[tools guide](utils/vplan-tools/README.md) for evaluation and metrics.

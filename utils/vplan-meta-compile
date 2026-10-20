@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect vector analytics, rank in Python, and replay explicit selections."""
+"""Rank middle-end observations in Python and replay explicit selections."""
 from __future__ import annotations
 
 import argparse
@@ -155,6 +155,10 @@ class Driver:
         for index, row in enumerate(manifest["candidates"]):
             status = {"id": row["id"], "status": "unavailable"}
             statuses.append(status)
+            if policy and not policy.requires_backend:
+                status.update(policy.evaluate_middle_end(
+                    row, loops[(row["function"], row["loop"])]))
+                continue
             if not row["probeable"]:
                 status["reason"] = row.get("reason", "not probeable")
                 continue
@@ -202,6 +206,30 @@ class Driver:
                     status.update(policy.evaluate(row, observation))
                 except ToolError as exc:
                     status.update(status="unsupported", reason=str(exc))
+        if policy and not policy.requires_backend:
+            # Check the chosen vector's materialization and runtime safety in
+            # LLVM IR. This needs no RA analytics and never changes its cost.
+            # Like LLVM's late rejection, a rejected winner leaves this loop
+            # scalar rather than silently substituting another vector width.
+            for index, choice in enumerate(select_loops(policy, manifest, statuses)):
+                if choice["scalar"]:
+                    continue
+                label = f"check-{index:04d}"
+                check_path = self.work / f"{label}.manifest.json"
+                self.run(label, [*common,
+                    *llvm_flag("vplan-probe-candidate", choice["id"]),
+                    *llvm_flag("vplan-candidates-output", str(check_path)),
+                    "-S", "-emit-llvm", "-o", str(self.work / f"{label}.ll")])
+                checked = self.manifest(check_path, run_id)
+                if checked["candidates"] != manifest["candidates"] or checked["loops"] != manifest["loops"]:
+                    raise MetaCompileError(f"{label}: candidate context changed")
+                failures = [f["reason"] for f in checked["failures"] if f["id"] == choice["id"]]
+                if failures:
+                    for candidate, status in zip(manifest["candidates"], statuses, strict=True):
+                        if (candidate["function"], candidate["loop"]) == (choice["function"], choice["loop"]):
+                            status.update(status="loop-rejected", reason="; ".join(failures))
+                elif checked["selections"] != [choice]:
+                    raise MetaCompileError(f"{label}: requested candidate not materialized")
         statuses_path = self.work / "candidate-status.json"
         write_json(statuses_path, {"version": 3, "run_id": run_id, "candidates": statuses,
                                    "policy": policy.identity if policy else None})
@@ -212,7 +240,8 @@ class Driver:
                 "loops": manifest["loops"], "candidates": manifest["candidates"], "selections": selections})
         result = {"version": 3, "run_id": run_id, "candidates": len(statuses),
                   "manifest": str(manifest_path), "candidate_status": str(statuses_path),
-                  "stage": "post-ra-cleanup", "analytics_only": analytics_only}
+                  "stage": "middle-end" if policy and not policy.requires_backend else "post-ra-cleanup",
+                  "analytics_only": analytics_only}
         if not analytics_only:
             result["selection"] = str(selection_path)
             result["policy"] = policy.identity
@@ -249,7 +278,7 @@ def main(argv=None) -> int:
     parser.add_argument("--emit", choices=("llvm", "asm", "obj"), default="obj")
     parser.add_argument("--stop-after-ra", action="store_true")
     parser.add_argument("--analytics-only", action="store_true", help="collect raw facts without computing backend costs")
-    parser.add_argument("--weights", type=Path, help="protocol v3 fitted Python model weights")
+    parser.add_argument("--weights", type=Path, help="legacy option; rejected by the fixed policy")
     parser.add_argument("--spill-count-unit", choices=("instruction", "register"))
     parser.add_argument("--detail", action="store_true")
     parser.add_argument("--extract-function", help="isolate a function at the pre-vectorizer checkpoint")

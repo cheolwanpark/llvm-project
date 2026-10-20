@@ -67,6 +67,8 @@ class MetaCompilerTests(unittest.TestCase):
         for selection in final['selections']:
             self.assertEqual(selection['ic'], 1)
             self.assertEqual(selection['epilogue_vf'], 'f0')
+        self.assertFalse(list(work.glob('*.analytics.json')))
+        self.assertTrue(list(work.glob('check-*.manifest.json')))
         for path in work.glob('*.analytics.json'):
             raw = json.loads(path.read_text())
             self.assertEqual(raw['Error'], '')
@@ -90,8 +92,8 @@ class MetaCompilerTests(unittest.TestCase):
             result = self.compile(root, ['-O3', '-fno-unroll-loops', '-mllvm',
                                          '-tail-folding-policy=dont-fold-tail'], source)
             self.check_result(root, result)
-            raw = [json.loads(p.read_text()) for p in (root / 'work').glob('*.analytics.json')]
-            self.assertTrue(any(a['ScalarTail'] and a['VF'] > 1 for a in raw))
+            manifest = json.loads((root / 'work/candidates.json').read_text())
+            self.assertTrue(any(c['scalar_tail'] and int(c['vf'][1:]) > 1 for c in manifest['candidates']))
 
     def test_unsupported_optimization_level(self):
         with tempfile.TemporaryDirectory() as td:
@@ -121,53 +123,32 @@ class MetaCompilerTests(unittest.TestCase):
             self.assertFalse((work / 'feedback.json').exists())
             self.assertFalse((work / 'final.manifest.json').exists())
 
-    def test_shared_model_and_fitted_weights(self):
-        from cost_model import score_observation, PARAMETERS, MODEL_VERSION, load_weights
-        from observations import bind_observation
+    def test_fixed_model_rejects_weights_before_compilation(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            weights = root / 'weights.json'
-            weights.write_text(json.dumps({'schema_version': 2, 'model_version': MODEL_VERSION,
-                'multipliers': dict.fromkeys(PARAMETERS, 2.)}))
-            result = self.compile(root, ['-O3'], extra=['--weights', str(weights)])
-            if not load_policy().supports_fit:
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('fixed ablation policy', result.stderr)
-                self.assertFalse((root / 'work').exists())
-                return
-            self.check_result(root, result)
-            work = root / 'work'
-            manifest = json.loads((work / 'candidates.json').read_text())
-            statuses = json.loads((work / 'candidate-status.json').read_text())['candidates']
-            w = load_weights(weights)[1]
-            for row, status in zip(manifest['candidates'], statuses):
-                a = json.loads(Path(status['analytics']).read_text())
-                bound = bind_observation(a, row, manifest['loops'][0], manifest['run_id'])
-                self.assertEqual(score_observation(bound, w), status['breakdown'])
+            result = self.compile(root, ['-O3'], extra=['--weights', str(root / 'old-weights.json')])
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('fixed ablation', result.stderr)
+            self.assertFalse((root / 'work').exists())
 
-    def test_probe_failures_and_independent_loops(self):
+    def test_check_failure_is_not_silently_replaced(self):
         from unittest.mock import patch
         Driver, Error = API['Driver'], API['MetaCompileError']
         original = Driver.run
-        for fail_all in (False, True):
-            with self.subTest(fail_all=fail_all), tempfile.TemporaryDirectory() as td:
-                root = Path(td)
-                src = root / 'kernel.c'
-                src.write_text(SOURCE + SOURCE.replace('void add(', 'void other('))
-                driver = Driver(Path(CLANG), src, root / 'work',
-                    ['-O2', '--target=riscv64-unknown-elf', '-march=rv64gcv',
-                     '-mcpu=xiangshan-kunminghu', '-ffreestanding'])
-                def run(instance, label, command, **kw):
-                    target = next((c for c in command if c.startswith('-vplan-probe-candidate=add:')), None)
-                    if target and (fail_all or label == 'probe-0000'):
-                        raise Error('injected candidate materialization failure')
-                    return original(instance, label, command, **kw)
-                with patch.object(Driver, 'run', run):
-                    driver.compile(root / 'out.o', 'obj', False, False)
-                final = json.loads((root / 'work/final.manifest.json').read_text())
-                choices = {c['function']: c for c in final['selections']}
-                self.assertEqual(choices['add']['scalar'], fail_all)
-                self.assertFalse(choices['other']['scalar'])
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / 'kernel.c'
+            src.write_text(SOURCE)
+            driver = Driver(Path(CLANG), src, root / 'work',
+                ['-O3', '--target=riscv64-unknown-elf', '-march=rv64gcv',
+                 '-mcpu=xiangshan-kunminghu', '-ffreestanding'])
+            def run(instance, label, command, **kw):
+                if label.startswith('check-'):
+                    raise Error('injected compiler failure')
+                return original(instance, label, command, **kw)
+            with patch.object(Driver, 'run', run), self.assertRaisesRegex(Error, 'injected'):
+                driver.compile(root / 'out.o', 'obj', False, False)
+            self.assertFalse((root / 'work/final.manifest.json').exists())
 
     def test_stale_duplicate_configuration_and_changed_set_are_errors(self):
         with tempfile.TemporaryDirectory() as td:
@@ -202,12 +183,12 @@ class MetaCompilerTests(unittest.TestCase):
                 ['-O3', '--target=riscv64-unknown-elf', '-march=rv64gcv', '-mcpu=xiangshan-kunminghu'])
             def run(instance, label, command, **kw):
                 result = original(instance, label, command, **kw)
-                if label.startswith('probe-'):
-                    path = instance.work / (label + '.analytics.json')
-                    value = json.loads(path.read_text()); value['RunID'] = 'wrong'
+                if label.startswith('check-'):
+                    path = instance.work / (label + '.manifest.json')
+                    value = json.loads(path.read_text()); value['run_id'] = 'wrong'
                     path.write_text(json.dumps(value))
                 return result
-            with patch.object(Driver, 'run', run), self.assertRaisesRegex(ToolError, 'identity'):
+            with patch.object(Driver, 'run', run), self.assertRaisesRegex(ToolError, 'mismatch'):
                 driver.compile(None, 'obj', True, False)
 
     def test_unknown_trip_and_masked_or_evl_folding(self):
@@ -226,8 +207,8 @@ class MetaCompilerTests(unittest.TestCase):
                     if status['status'] != 'scored':
                         continue
                     self.assertFalse(row['scalar_tail'])
-                    raw = json.loads(Path(status['analytics']).read_text())
-                    factor = (trip + raw['Width'] - 1) // raw['Width'] if trip else 1 / raw['Width']
+                    width = row['estimated_width']
+                    factor = (trip + width - 1) // width if trip else 1 / width
                     self.assertEqual(status['score'], status['breakdown']['body'] * factor)
 
     def test_two_loops_in_one_function_and_no_vector_candidates(self):

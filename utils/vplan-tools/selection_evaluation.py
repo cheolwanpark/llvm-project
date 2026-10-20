@@ -29,6 +29,13 @@ def selection_row(benchmark, result, expected_vlen=None):
                      if c["function"] == loops[0]["function"] and c["loop"] == loops[0]["loop"]
                      and c["vf"].startswith("s")}
     row["evaluated_vfs"] = sorted(candidate_vfs)
+    actual = dict(choices[0])
+    row["actual_selection"] = actual
+    if actual["scalar"]:
+        actual.update(main_vf="f1", emitted=False)
+    else:
+        candidate = next(c for c in manifest["candidates"] if c["id"] == actual["id"])
+        actual.update(main_vf=candidate["vf"], emitted=True)
     try:
         benchmark = vt.restrict_measurements(benchmark, candidate_vfs)
     except vt.ToolError as exc:
@@ -36,16 +43,12 @@ def selection_row(benchmark, result, expected_vlen=None):
         return row
     row["measured_cycles"] = {str(v): c for v, c in benchmark.measured.items()}
     row["ignored_measured_cycles"] = {str(v): c for v, c in benchmark.ignored_measured.items()}
-    actual = dict(choices[0])
-    row["actual_selection"] = actual
     if actual["scalar"]:
-        actual.update(main_vf="f1", emitted=False)
         row.update(status="scalar-selection", reason=actual.get("reason"))
         return row
-    candidate = next(c for c in manifest["candidates"] if c["id"] == actual["id"])
-    actual.update(main_vf=candidate["vf"], emitted=True)
     statuses = {s["id"]: s for s in result.candidate_status["candidates"]}
-    if expected_vlen and statuses[actual["id"]].get("vlen") != expected_vlen:
+    middle_end = result.candidate_status.get("policy", {}).get("name") == "llvm-middle-end"
+    if expected_vlen and not middle_end and statuses[actual["id"]].get("vlen") != expected_vlen:
         row.update(status="vlen-mismatch", reason="analytics VLEN differs from measured VLEN")
         return row
     vf = candidate["vf"]

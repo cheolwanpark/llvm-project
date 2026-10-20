@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import vplan_tools as vt
-import cross_validation as cv
+import fixed_evaluation as evaluation
 import llvm_baseline as baseline
 
 
@@ -361,7 +361,7 @@ class StandaloneTests(unittest.TestCase):
                 db.execute("CREATE TABLE dataset(id)")
             for path in (root / "missing.sqlite", invalid, wrong):
                 before = path.read_bytes() if path.exists() else None
-                for main, flags in ((cv.main, ["--output-dir", str(root / "cv")]),
+                for main, flags in ((evaluation.main, ["--output-dir", str(root / "cv")]),
                                     (baseline.main, []),
                                     (vt.print_vplans_main, ["--benchmark", "example"])):
                     with self.subTest(path=path, main=main.__name__), \
@@ -408,9 +408,9 @@ class StandaloneTests(unittest.TestCase):
             root = Path(temporary)
             tool_dir = root / "utils/vplan-tools"
             tool_dir.mkdir(parents=True)
-            for name in ("vplan_tools.py", "model_errors.py", "calibration.py", "cost_model.py", "observations.py",
+            for name in ("vplan_tools.py", "model_errors.py", "cost_model.py", "observations.py",
                          "selection.py", "selection_policy.py", "selection_evaluation.py", "spill_observations.py",
-                         "cross_validation.py", "llvm_baseline.py",
+                         "fixed_evaluation.py", "llvm_baseline.py",
                          "evaluate", "evaluate-baseline", "print-vplans", "print-vplan"):
                 shutil.copy2(vt.TOOLS / name, tool_dir / name)
             env = dict(os.environ, VPLAN_DB="", PYTHONDONTWRITEBYTECODE="1")
