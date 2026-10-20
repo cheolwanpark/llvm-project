@@ -124,9 +124,38 @@ Raw input snapshots cannot cross through scratch, including cast, select, PHI,
 freeze and identity-operation wrappers. If a safe original read is impossible,
 the analysis retries a computed-result boundary or rejects. Recomputed freezes
 are prohibited because repeated freezes can choose different values. Scratch
-allocation is bounded by both the byte budget and pointer index representation.
-Traffic remarks distinguish static original access widths, potential extra reads,
-reused buffers, and scratch bytes. Nested and conditional execution multiplicities
+allocation is bounded by the per-split byte budget, pointer index representation,
+and an unconditional small constant maximum trip count when ScalarEvolution can
+prove one. A missing bound never prevents a split. When that bound fits the final
+capacity, the producer keeps its original continuation without a capacity test,
+and the consumer runs for the actual completed count, with no chunk restart.
+
+Shared invariant-offset/IV address expressions are cloned with their original
+widths, flags and control. A final dependency cleanup moves private multiply
+suffixes only when their operands are already available in the consumer and no
+producer demand survives removal of the stream. This does not introduce loads,
+reassociation or input snapshots.
+
+Scratch lifetimes span the complete schedule, across all chunks, from the
+original preheader through the dedicated exit after the last consumer read.
+Fixed allocas remain in the function entry; existing user buffers are excluded.
+LLVM stack coloring may share storage between nonoverlapping schedules, including
+schedules invoked repeatedly inside an enclosing loop.
+
+`FunctionScratchAllocaBytes` reports the sum of scratch IR allocation sizes after
+all splits in a function. The byte budget remains **per split**, so this sum may
+exceed it. It is distinct from peak live scratch and the machine frame (which
+also includes spills and other objects). Lifetime-based sharing can reduce the
+machine frame without reducing the IR allocation sum; inspect codegen to measure
+actual reuse.
+
+Traffic remarks distinguish static original access widths, moved and duplicated
+original reads, reused buffers, and scratch bytes. `MovedOriginalLoadInstructionBytes`
+counts consumer reads whose producer dependencies disappear;
+`DuplicatedOriginalLoadInstructionBytes` counts reads retained by both stages.
+The compatibility field `AdditionalLoadInstructionBytesUpperBound` now uses the
+same final producer-dependency count as the duplicated-read field. It remains a
+conservative static count, not a measure of dynamic extra traffic. Nested and conditional execution multiplicities
 vary, and opaque calls’ dynamic access volume is not estimated; these counts do
 not estimate cache traffic or runtime.
 
@@ -154,7 +183,7 @@ accumulator-dependent FMA, producer expressions and unrelated loops are unchange
 | `enable-scalar-fission` | false | Enable default-pipeline integration. |
 | `scalar-fission-early` | false | Use the position before full unrolling. |
 | `scalar-fission-max-scratch-bytes` | 65536 | Static scratch byte budget per split. |
-| `scalar-fission-chunk-capacity` | 1024 | Maximum completed iterations per chunk; the byte budget may lower it. |
+| `scalar-fission-chunk-capacity` | 1024 | Maximum completed iterations per chunk; the byte budget or a proven trip bound may lower it. |
 | `scalar-fission-allow-fp-reordering` | false | Consumer FP sum reassociation. |
 | `scalar-fission-producer-vf`, `scalar-fission-consumer-vf` | 0 | Independent VF requests; 0 is automatic, fixed 1 is scalar. |
 | `scalar-fission-producer-scalable`, `scalar-fission-consumer-scalable` | false | Interpret the respective VF as scalable, including vscale x 1. |
@@ -180,8 +209,10 @@ and is propagated through normal vectorization.
 `llvm/utils/check-scalar-fission.py` executes original and transformed host IR
 against independent oracles, then machine-verifies RVV code separately.
 `llvm/utils/scalar-fission-sweep.py` changes only metadata on a frozen split IR
-and records actual VF/IC and unavailable pairs. Its optional external benchmark
-command saves execution results; without one, performance remains unmeasured.
+and records actual VF/IC and unavailable pairs. `--producer-interleave` and
+`--consumer-interleave` independently override its shared `--interleave` default.
+Its optional external benchmark command saves execution results; without one,
+performance remains unmeasured.
 `llvm/utils/evaluate-scalar-fission.py` checks the pinned 117-case corpus, matches
 exact target-loop locations and compares independent original-LV, Early and Late
 runs under both FP policies. The sweep and corpus tools require PyYAML.

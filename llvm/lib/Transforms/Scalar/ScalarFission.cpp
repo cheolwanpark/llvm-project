@@ -167,6 +167,7 @@ struct FissionPlan {
   MapVector<Instruction *, Transfer> Inputs;
   SmallVector<PHINode *> Inductions;
   SmallVector<Stream> Streams;
+  bool SingleChunk = false;
   uint64_t Capacity = 0;
   uint64_t ScratchBytes = 0;
   uint64_t ScratchTraffic = 0;
@@ -484,6 +485,33 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
   // Start from the update slice and outer control. Walk backwards through
   // private, cheap suffixes; stop at shared computed values or producer-only
   // regions. Reconstruct affine IVs rather than copying addresses to scratch.
+  // Recognize a bounded tree of original address operations. In particular a
+  // load in this loop is never an invariant leaf. The emitter clones these
+  // instructions at their original CFG positions, including widths and flags.
+  std::function<bool(Value *, unsigned)> Address = [&](Value *V,
+                                                       unsigned Depth) -> bool {
+    if (L.isLoopInvariant(V))
+      return true;
+    if (!Depth || !P.Budget)
+      return false;
+    --P.Budget;
+    auto *I = dyn_cast<Instruction>(V);
+    if (!I || LI.getLoopFor(I->getParent()) != &L)
+      return false;
+    if (auto *Phi = dyn_cast<PHINode>(I)) {
+      InductionDescriptor ID;
+      return Phi->getParent() == Header &&
+             InductionDescriptor::isInductionPHI(Phi, &L, &SE, ID) &&
+             ID.getKind() == InductionDescriptor::IK_IntInduction &&
+             ID.getConstIntStepValue() && ID.getInductionBinOp() &&
+             L.isLoopInvariant(ID.getStartValue());
+    }
+    if (I->getOpcode() != Instruction::Add &&
+        !isa<TruncInst, ZExtInst, SExtInst, GetElementPtrInst>(I))
+      return false;
+    return all_of(I->operands(),
+                  [&](Value *Op) { return Address(Op, Depth - 1); });
+  };
   SmallPtrSet<Instruction *, 32> Visiting;
   std::function<bool(Value *)> Input = [&](Value *V) -> bool {
     auto *I = dyn_cast<Instruction>(V);
@@ -530,7 +558,7 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
     if (!P.Reason.empty())
       return false;
     bool Scratch = InnerResult || isa<CallBase, FreezeInst>(I) ||
-                   (Shared && Computed && !isa<PHINode>(I));
+                   (Shared && Computed && !isa<PHINode>(I) && !Address(I, 8));
     if (Scratch) {
       if (!Computed)
         return P.reject("forbidden-load-relay");
@@ -539,19 +567,16 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
       P.Inputs[I] = Transfer::Scratch;
       auto Bytes = DL.getTypeAllocSize(I->getType()).getFixedValue();
       P.Streams.push_back({I, Bytes, DL.getABITypeAlign(I->getType())});
-      P.ScratchTraffic += DL.getTypeStoreSize(I->getType()).getFixedValue();
       return true;
     }
     if (auto *Load = dyn_cast<LoadInst>(I)) {
       if (!stableMemory(Load->getPointerOperand(), P, AA))
         return P.reject("load-snapshot-required");
-      P.ConsumerReadBytes += DL.getTypeStoreSize(I->getType()).getFixedValue();
     } else if (!movable(*I)) {
       return P.reject("unsupported-consumer-input");
     }
     unsigned OldInputs = P.Inputs.size(), OldStreams = P.Streams.size();
     unsigned OldInductions = P.Inductions.size();
-    uint64_t OldTraffic = P.ScratchTraffic;
     P.Inputs[I] = Transfer::Recompute;
     for (Value *Op : I->operands()) {
       if (Input(Op))
@@ -567,12 +592,10 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
         P.Inputs.pop_back();
       P.Streams.resize(OldStreams);
       P.Inductions.resize(OldInductions);
-      P.ScratchTraffic = OldTraffic;
       P.Reason = {};
       P.Inputs[I] = Transfer::Scratch;
       P.Streams.push_back({I, DL.getTypeAllocSize(I->getType()).getFixedValue(),
                            DL.getABITypeAlign(I->getType())});
-      P.ScratchTraffic += DL.getTypeStoreSize(I->getType()).getFixedValue();
       return true;
     }
     return true;
@@ -589,18 +612,6 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
           if (!Input(Br->getCondition()))
             return false;
       }
-    }
-  // A load that remains needed by the producer is an additional original read.
-  // All copied accesses retain their original control conditions.
-  for (auto [I, T] : P.Inputs)
-    if (auto *Load = dyn_cast<LoadInst>(I)) {
-      bool Retained = any_of(I->users(), [&](User *U) {
-        auto *UI = dyn_cast<Instruction>(U);
-        return !UI || (!P.Moved.contains(UI) && !P.Inputs.count(UI));
-      });
-      if (Retained)
-        P.AdditionalReadBytes +=
-            DL.getTypeStoreSize(Load->getType()).getFixedValue();
     }
   // At least one actual producer calculation must cross the boundary. Pure
   // input reductions have no producer to separate and need no scratch relay.
@@ -620,8 +631,6 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
           auto Bytes = DL.getTypeAllocSize(Source->getType()).getFixedValue();
           P.Streams.push_back(
               {Source, Bytes, DL.getABITypeAlign(Source->getType())});
-          P.ScratchTraffic +=
-              DL.getTypeStoreSize(Source->getType()).getFixedValue();
           break;
         }
         if (!P.Streams.empty())
@@ -663,8 +672,6 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
       P.Inputs[Source] = Transfer::ExistingBuffer;
       P.Streams[N].ExistingStore = Store;
       P.Streams[N].Alignment = Store->getAlign();
-      P.ScratchTraffic -=
-          DL.getTypeStoreSize(Source->getType()).getFixedValue();
       break;
     }
   }
@@ -685,24 +692,104 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
     for (Value *Op : I->operands())
       Mark(Op);
   };
-  for (Instruction *I : P.Moved)
-    Mark(I);
-  for (BasicBlock *BB : P.Blocks)
-    if (BB != Latch)
-      if (auto *Br = dyn_cast<BranchInst>(BB->getTerminator());
-          Br->isConditional())
-        Mark(Br->getCondition());
-  P.Inputs.remove_if(
-      [&](const auto &Entry) { return !Needed.contains(Entry.first); });
+  auto ConsumerNeeds = [&] {
+    Needed.clear();
+    for (Instruction *I : P.Moved)
+      Mark(I);
+    for (BasicBlock *BB : P.Blocks)
+      if (BB != Latch)
+        if (auto *Br = cast<BranchInst>(BB->getTerminator());
+            Br->isConditional())
+          Mark(Br->getCondition());
+    P.Inputs.remove_if(
+        [&](const auto &Entry) { return !Needed.contains(Entry.first); });
+    llvm::erase_if(P.Streams,
+                   [&](const Stream &S) { return !Needed.contains(S.Source); });
+    llvm::erase_if(P.Inductions,
+                   [&](PHINode *I) { return !Needed.contains(I); });
+  };
+  SmallPtrSet<Instruction *, 32> Retained;
+  auto ProducerNeeds = [&](Instruction *Omit) {
+    Retained.clear();
+    SmallVector<Instruction *> Work;
+    auto Add = [&](Value *V) {
+      auto *I = dyn_cast<Instruction>(V);
+      if (I && L.contains(I) && !P.Moved.contains(I) &&
+          Retained.insert(I).second)
+        Work.push_back(I);
+    };
+    for (BasicBlock *BB : L.blocks())
+      for (Instruction &I : *BB) {
+        if (I.isTerminator() || I.mayHaveSideEffects() ||
+            isa<CallBase, FreezeInst>(&I) ||
+            (isa<PHINode>(&I) && BB == Header) ||
+            any_of(I.users(), [&](User *U) {
+              auto *UI = dyn_cast<Instruction>(U);
+              return !UI || !L.contains(UI);
+            }))
+          Add(&I);
+      }
+    for (const Stream &S : P.Streams)
+      if (S.Source != Omit)
+        Add(S.Source);
+    while (!Work.empty()) {
+      if (!P.Budget) {
+        P.reject("analysis-budget");
+        return;
+      }
+      --P.Budget;
+      for (Value *Op : Work.pop_back_val()->operands())
+        Add(Op);
+    }
+  };
+  // Removing a synthetic store can make its private source dead. Only move a
+  // multiply whose operands already have dominating consumer definitions; this
+  // never opens a new input walk, adds a read, or duplicates producer work.
+  bool Changed;
+  do {
+    ConsumerNeeds();
+    Changed = false;
+    for (const Stream &S : P.Streams) {
+      Instruction *I = S.Source;
+      if (S.ExistingStore || I->getOpcode() != Instruction::FMul ||
+          LI.getLoopFor(I->getParent()) != &L || P.Streams.size() == 1)
+        continue;
+      bool Available = all_of(I->operands(), [&](Value *Op) {
+        if (L.isLoopInvariant(Op))
+          return DT.dominates(Op, I);
+        auto *Def = dyn_cast<Instruction>(Op);
+        return Def && Needed.contains(Def) && P.Inputs.count(Def) &&
+               DT.dominates(Def, I);
+      });
+      if (!Available)
+        continue;
+      ProducerNeeds(I);
+      if (!P.Reason.empty())
+        return false;
+      if (Retained.contains(I))
+        continue;
+      P.Inputs[I] = Transfer::Recompute;
+      llvm::erase_if(P.Streams,
+                     [&](const Stream &Stream) { return Stream.Source == I; });
+      Changed = true;
+      break;
+    }
+  } while (Changed);
+  ProducerNeeds(nullptr);
   P.ConsumerReadBytes = 0;
   P.AdditionalReadBytes = 0;
   for (auto [I, T] : P.Inputs)
     if (auto *Load = dyn_cast<LoadInst>(I)) {
       uint64_t Bytes = DL.getTypeStoreSize(Load->getType()).getFixedValue();
       P.ConsumerReadBytes += Bytes;
-      // Conservative upper bound: cleanup may eliminate additional reads.
-      P.AdditionalReadBytes += Bytes;
+      if (Retained.contains(Load))
+        P.AdditionalReadBytes += Bytes;
     }
+  P.ScratchTraffic = 0;
+  for (const Stream &S : P.Streams)
+    if (!S.ExistingStore)
+      P.ScratchTraffic +=
+          DL.getTypeStoreSize(S.Source->getType()).getFixedValue();
   if (!P.Reason.empty())
     return false;
   auto Size = [&](uint64_t Count) -> std::optional<uint64_t> {
@@ -723,7 +810,9 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
   };
   if (!MaxCapacity || !Size(1))
     return P.reject("scratch-limit");
-  uint64_t Low = 1, High = MaxCapacity;
+  unsigned Bound = SE.getSmallConstantMaxTripCount(&L);
+  uint64_t Low = 1, High = Bound ? std::min(unsigned(MaxCapacity), Bound)
+                                 : unsigned(MaxCapacity);
   while (Low < High) {
     uint64_t Mid = Low + (High - Low) / 2 + 1;
     if (Size(Mid))
@@ -731,6 +820,7 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
     else
       High = Mid - 1;
   }
+  P.SingleChunk = Bound && Bound <= Low;
   P.Capacity = Low;
   P.ScratchBytes = *Size(Low);
   return true;
@@ -818,11 +908,16 @@ static void emit(FissionPlan &P, DominatorTree &DT, LoopInfo &LI,
   B.SetCurrentDebugLocation(Loc);
   DenseMap<Value *, PHINode *> Carries;
   for (const State &S : OriginalState) {
-    auto *Carry = B.CreatePHI(S.Phi->getType(), 2, S.Phi->getName() + ".chunk");
-    Carry->addIncoming(S.Seed, Preheader);
-    Carries[S.Phi] = Carry;
+    Value *Seed = S.Seed;
+    if (!P.SingleChunk) {
+      auto *Carry =
+          B.CreatePHI(S.Phi->getType(), 2, S.Phi->getName() + ".chunk");
+      Carry->addIncoming(Seed, Preheader);
+      Carries[S.Phi] = Carry;
+      Seed = Carry;
+    }
     S.Phi->replaceIncomingBlockWith(Preheader, ProducerPH);
-    S.Phi->setIncomingValueForBlock(ProducerPH, Carry);
+    S.Phi->setIncomingValueForBlock(ProducerPH, Seed);
   }
   B.CreateBr(ProducerPH);
   BranchInst::Create(Header, ProducerPH)->setDebugLoc(Loc);
@@ -872,10 +967,12 @@ static void emit(FissionPlan &P, DominatorTree &DT, LoopInfo &LI,
       Branch->getSuccessor(0) == Header
           ? Branch->getCondition()
           : B.CreateNot(Branch->getCondition(), "fission.continue");
-  Value *More = B.CreateICmpULT(NextOrdinal, B.getInt64(P.Capacity));
-  // select rather than and also preserves the original conditional poison
-  // semantics; Continue was already consumed by the source branch.
-  More = B.CreateSelect(Continue, More, B.getFalse(), "fission.more");
+  Value *More = Continue;
+  if (!P.SingleChunk) {
+    More = B.CreateICmpULT(NextOrdinal, B.getInt64(P.Capacity));
+    // Preserve the original conditional poison semantics.
+    More = B.CreateSelect(Continue, More, B.getFalse(), "fission.more");
+  }
   Branch->setCondition(More);
   Branch->setSuccessor(0, Header);
   Branch->setSuccessor(1, ProducerExit);
@@ -894,9 +991,9 @@ static void emit(FissionPlan &P, DominatorTree &DT, LoopInfo &LI,
     return Phi;
   };
   Value *Completed = ExportProducer(NextOrdinal);
-  Value *MoreChunks = ExportProducer(Continue);
+  Value *MoreChunks = P.SingleChunk ? nullptr : ExportProducer(Continue);
   for (const State &S : OriginalState)
-    if (!P.Moved.contains(S.Phi))
+    if (!P.SingleChunk && !P.Moved.contains(S.Phi))
       Carries[S.Phi]->addIncoming(ExportProducer(S.Next), ChunkLatch);
   for (auto [Phi, V] : Exports)
     if (!P.Moved.contains(dyn_cast<Instruction>(V)))
@@ -913,6 +1010,7 @@ static void emit(FissionPlan &P, DominatorTree &DT, LoopInfo &LI,
       CountTy, 2, "fission.consumer.ordinal", ConsumerHeader->begin());
   ConsumerOrdinal->addIncoming(ConstantInt::get(CountTy, 0), ConsumerPH);
   IRBuilder<> Entry(&*F.getEntryBlock().getFirstInsertionPt());
+  SmallVector<AllocaInst *> Scratch;
   for (const Stream &S : P.Streams) {
     auto *Array = ArrayType::get(S.Source->getType(), P.Capacity);
     AllocaInst *Slot = nullptr;
@@ -921,6 +1019,11 @@ static void emit(FissionPlan &P, DominatorTree &DT, LoopInfo &LI,
       Slot = Entry.CreateAlloca(Array, DL.getAllocaAddrSpace(), nullptr,
                                 "scalar.fission.scratch");
       Slot->setAlignment(S.Alignment);
+      Scratch.push_back(Slot);
+      // The preheader executes once per complete schedule, even when this
+      // schedule is nested in another loop. Never end between chunks.
+      IRBuilder<> Start(Preheader->getTerminator());
+      Start.CreateLifetimeStart(Slot);
       // Provenance is diagnostic only, never an alias or legality claim.
       Slot->setMetadata(
           "scalar.fission.source",
@@ -976,7 +1079,8 @@ static void emit(FissionPlan &P, DominatorTree &DT, LoopInfo &LI,
     }
   for (const State &S : OriginalState)
     if (auto *Phi = dyn_cast_or_null<PHINode>(Map.lookup(S.Phi)))
-      Phi->setIncomingValueForBlock(ConsumerPH, Carries[S.Phi]);
+      Phi->setIncomingValueForBlock(ConsumerPH,
+                                    P.SingleChunk ? S.Seed : Carries[S.Phi]);
 
   auto *ConsumerBranch = cast<BranchInst>(Map[Branch]);
   B.SetInsertPoint(ConsumerBranch);
@@ -1002,8 +1106,9 @@ static void emit(FissionPlan &P, DominatorTree &DT, LoopInfo &LI,
     ConsumerExports[V] = Phi;
     return Phi;
   };
-  for (const State &S : P.States)
-    Carries[S.Phi]->addIncoming(ExportConsumer(S.Next), ChunkLatch);
+  if (!P.SingleChunk)
+    for (const State &S : P.States)
+      Carries[S.Phi]->addIncoming(ExportConsumer(S.Next), ChunkLatch);
   for (auto [Phi, V] : Exports) {
     if (P.Moved.contains(dyn_cast<Instruction>(V)))
       Phi->setIncomingValueForBlock(Latch, ExportConsumer(V));
@@ -1011,7 +1116,15 @@ static void emit(FissionPlan &P, DominatorTree &DT, LoopInfo &LI,
   }
   BranchInst::Create(ChunkLatch, ConsumerExit);
   B.SetInsertPoint(ChunkLatch);
-  B.CreateCondBr(MoreChunks, Chunk, Exit);
+  // All original exits go through the consumer and then the dedicated exit.
+  // Its entry is therefore after every scratch read on the completed path.
+  IRBuilder<> End(&*Exit->getFirstInsertionPt());
+  for (AllocaInst *Slot : Scratch)
+    End.CreateLifetimeEnd(Slot);
+  if (P.SingleChunk)
+    B.CreateBr(Exit);
+  else
+    B.CreateCondBr(MoreChunks, Chunk, Exit);
 
   // Only direct FP sums get the explicit opt-in permission. Compound updates,
   // subtraction, compensation, and accumulator-dependent FMA remain ordered.
@@ -1052,12 +1165,21 @@ static void emit(FissionPlan &P, DominatorTree &DT, LoopInfo &LI,
   // Remove inputs whose sole consumers moved. This also distinguishes moved
   // loads from actual rereads. Calls and stores retain their program points.
   SmallVector<WeakTrackingVH> Dead;
-  for (auto [I, T] : P.Inputs)
-    if (T == Transfer::Recompute)
-      Dead.push_back(I);
-  for (WeakTrackingVH &V : Dead)
-    if (auto *I = dyn_cast_or_null<Instruction>(V))
-      RecursivelyDeleteTriviallyDeadInstructions(I);
+  // Include dead users outside the consumer closure: they must not keep a
+  // pruned suffix (or a moved load) alive in the producer. Preserve the calls
+  // and freezes used as retention roots during analysis.
+  for (BasicBlock *BB : P.Blocks)
+    for (Instruction &I : *BB)
+      Dead.push_back(&I);
+  while (!Dead.empty()) {
+    auto *I = dyn_cast_or_null<Instruction>(Dead.pop_back_val());
+    if (!I || isa<CallBase, FreezeInst>(I) || !isInstructionTriviallyDead(I))
+      continue;
+    for (Value *Op : I->operands())
+      if (auto *Def = dyn_cast<Instruction>(Op); Def && L.contains(Def))
+        Dead.push_back(Def);
+    I->eraseFromParent();
+  }
 
   unsigned PVF = ProducerVF ? unsigned(ProducerVF) : unsigned(OldProducerVF);
   unsigned CVF = ConsumerVF ? unsigned(ConsumerVF) : unsigned(OldConsumerVF);
@@ -1069,8 +1191,9 @@ static void emit(FissionPlan &P, DominatorTree &DT, LoopInfo &LI,
       LLVMContext::MD_loop,
       stageID(C, OriginalID, ConsumerMD, CVF,
               ConsumerScalable || (!ConsumerVF && OldConsumerVF), ConsumerIC));
-  ChunkLatch->getTerminator()->setMetadata(
-      LLVMContext::MD_loop, stageID(C, nullptr, StageMD, 1, false, 1));
+  if (!P.SingleChunk)
+    ChunkLatch->getTerminator()->setMetadata(
+        LLVMContext::MD_loop, stageID(C, nullptr, StageMD, 1, false, 1));
   // Rebuild after emission; never reuse a Loop pointer or plan across this
   // boundary. No MemorySSA preservation is claimed.
   DT.recalculate(F);
@@ -1173,6 +1296,13 @@ PreservedAnalyses ScalarFissionPass::run(Function &F,
         << ", additional read bytes "
         << ore::NV("AdditionalLoadInstructionBytesUpperBound",
                    P.AdditionalReadBytes)
+        << ", duplicated original read bytes "
+        << ore::NV("DuplicatedOriginalLoadInstructionBytes",
+                   P.AdditionalReadBytes)
+        << ", moved original read bytes "
+        << ore::NV("MovedOriginalLoadInstructionBytes",
+                   P.ConsumerReadBytes - P.AdditionalReadBytes)
+        << ", single chunk " << ore::NV("SingleChunk", P.SingleChunk)
         << ", traffic scope "
         << ore::NV(
                "TrafficScope",
@@ -1192,6 +1322,20 @@ PreservedAnalyses ScalarFissionPass::run(Function &F,
     emit(P, DT, LI, SE);
     ORE.emit(Selected);
     AM.invalidate(F, PreservedAnalyses::none());
+  }
+  uint64_t Allocation = 0;
+  for (Instruction &I : F.getEntryBlock())
+    if (auto *AI = dyn_cast<AllocaInst>(&I);
+        AI && AI->getMetadata("scalar.fission.source"))
+      Allocation += *AI->getAllocationSize(F.getDataLayout());
+  if (Allocation) {
+    auto &ORE = AM.getResult<OptimizationRemarkEmitterAnalysis>(F);
+    ORE.emit([&] {
+      return OptimizationRemarkAnalysis("scalar-fission", "FunctionScratch", &F)
+             << "function scratch IR allocation bytes "
+             << ore::NV("FunctionScratchAllocaBytes", Allocation)
+             << "; sum of allocas, not peak live scratch or machine frame";
+    });
   }
   return PreservedAnalyses::none();
 }

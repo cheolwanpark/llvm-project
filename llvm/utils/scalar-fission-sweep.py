@@ -32,7 +32,8 @@ def vf(text):
     return width, scalable
 
 
-def configure(source, producer, consumer, ic):
+def configure(source, producer, consumer, ic, consumer_ic=None):
+    consumer_ic = ic if consumer_ic is None else consumer_ic
     ids = [int(x) for x in re.findall(r'^!(\d+)\s*=', source, re.M)]
     next_id = max(ids, default=0) + 1
     definitions = dict(re.findall(r'^!(\d+)\s*=\s*(.*)$', source, re.M))
@@ -44,9 +45,12 @@ def configure(source, producer, consumer, ic):
         if not body.startswith('distinct !{'): return match[0]
         refs = re.findall(r'!(\d+)', body)
         stage = None
+        stage_ic = ic
         for ref in refs[1:]:
             if '"llvm.loop.scalar_fission.producer"' in definitions.get(ref, ''): stage = producer
-            if '"llvm.loop.scalar_fission.consumer"' in definitions.get(ref, ''): stage = consumer
+            if '"llvm.loop.scalar_fission.consumer"' in definitions.get(ref, ''):
+                stage = consumer
+                stage_ic = consumer_ic
         if stage is None: return match[0]
         stages += 1
         keep = [refs[0]]
@@ -59,10 +63,10 @@ def configure(source, producer, consumer, ic):
         for key, bits, value in [('vectorize.width',32,width),
                                 ('vectorize.scalable.enable',1,int(scalable)),
                                 ('vectorize.enable',1,int(width != 1 or scalable)),
-                                ('interleave.count',32,ic),
+                                ('interleave.count',32,stage_ic),
                                 ('scalar_fission.requested_vf',32,width),
                                 ('scalar_fission.requested_scalable',1,int(scalable)),
-                                ('scalar_fission.requested_ic',32,ic)]:
+                                ('scalar_fission.requested_ic',32,stage_ic)]:
             keep.append(str(next_id))
             literal = ('true' if value else 'false') if bits == 1 else str(value)
             appended.append(f'!{next_id} = !{{!"llvm.loop.{key}", i{bits} {literal}}}')
@@ -84,23 +88,28 @@ def main():
     p.add_argument('--producer', nargs='+', default=['1','f2','f4'])
     p.add_argument('--consumer', nargs='+', default=['1','f2','f4'])
     p.add_argument('--interleave', type=int, default=1)
+    p.add_argument('--producer-interleave', type=int)
+    p.add_argument('--consumer-interleave', type=int)
     p.add_argument('--target-arg', action='append', default=[])
     p.add_argument('--llc-arg', action='append', default=[])
     p.add_argument('--run-command')
     a = p.parse_args()
-    if a.interleave < 1 or a.interleave & (a.interleave-1): p.error('interleave must be a power of two')
+    pic = a.interleave if a.producer_interleave is None else a.producer_interleave
+    cic = a.interleave if a.consumer_interleave is None else a.consumer_interleave
+    for ic in [a.interleave, pic, cic]:
+        if ic < 1 or ic & (ic-1): p.error('interleave must be a power of two')
     source = a.input.read_text()
     work = a.output.resolve(); work.mkdir(parents=True, exist_ok=True)
     rows = []
     for producer, consumer in itertools.product(a.producer,a.consumer):
         tag = producer + '-' + consumer
         path, output, remarks, assembly = [work/(tag+ext) for ext in ['.ll','-lv.ll','.yaml','.s']]
-        path.write_text(configure(source, producer, consumer, a.interleave))
+        path.write_text(configure(source, producer, consumer, pic, cic))
         cmd = [str(a.build_dir/'bin/opt'), '-passes=loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>',
                '-verify-each', '-pass-remarks-output='+str(remarks), '-pass-remarks-filter=scalar-fission',
                *a.target_arg, '-S', str(path), '-o', str(output)]
         r = subprocess.run(cmd, capture_output=True, text=True)
-        row = dict(producer=producer,consumer=consumer,interleave=a.interleave, command=cmd,
+        row = dict(producer=producer,consumer=consumer,interleave=a.interleave, producer_interleave=pic, consumer_interleave=cic, command=cmd,
                    stderr=r.stderr, status='unavailable', actual=[], performance='unmeasured')
         if r.returncode: row['reason']='compiler-error'
         else:
@@ -114,7 +123,8 @@ def main():
                 width,scalable = vf(request)
                 actual = str(fields.get('ProducerVF' if stage == 'producer' else 'AccumulatorVF'))
                 expected = f'vscale x {width}' if scalable else str(width)
-                matched = actual == expected and int(fields.get('ActualIC',0)) == a.interleave
+                requested_ic = pic if stage == 'producer' else cic
+                matched = actual == expected and int(fields.get('ActualIC',0)) == requested_ic
                 matches.append(matched)
                 row['actual'].append(dict(function=record.get('Function'),stage=stage,vf=actual,
                                           ic=fields.get('ActualIC'),available=matched))

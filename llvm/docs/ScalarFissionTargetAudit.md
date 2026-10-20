@@ -1,5 +1,8 @@
 # Audit of the ten selected scalar-fission targets
 
+This report is the historical baseline. See the [implemented overhead reductions
+and fresh validation](ScalarFissionOverhead.md) for the follow-up results.
+
 The generated splits passed the additional semantic checks, but they are **not
 free of redundant overhead**. In particular, the transfer-boundary optimization
 is incomplete: simple indices and reconstructible suffixes reach scratch. The

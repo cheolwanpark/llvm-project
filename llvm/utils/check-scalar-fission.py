@@ -68,6 +68,46 @@ def exercise(lib, reference, relaxed=False):
     def equal_fp(a, b, tolerance=0):
         if fpbits(a) == fpbits(b) or (math.isnan(a) and math.isnan(b)): return
         assert relaxed and math.isfinite(a) and math.isfinite(b) and not (a == b == 0.0) and abs(a-b) <= tolerance, (a,b,tolerance)
+    if hasattr(lib, 'indices'):
+        dp = C.POINTER(C.c_double)
+        for name in ['indices', 'conditional_indices']:
+            f = function(lib, name, [dp, dp, dp, u64, C.c_uint8, C.c_double], C.c_double)
+            ref = function(reference, name, f.argtypes, C.c_double)
+            values = [rng.uniform(-1, 1) for _ in range(520)]
+            data = (C.c_double * len(values))(*values)
+            for end in [254, 255, 0, 1, 13, 252, 253]:
+                for offset in [0, 3, 256]:
+                    for seed in [0., -0., 7., float('inf'), float('nan')]:
+                        equal_fp(f(data, data, data, offset, end, seed),
+                                 ref(data, data, data, offset, end, seed))
+                        count += 1
+        g = function(lib, 'suffix', [dp, u64, C.c_double, C.c_double], C.c_double)
+        refg = function(reference, 'suffix', g.argtypes, C.c_double)
+        for n in [0, 1, 2, 3, 4, 7, 64, 65, 256]:
+            for scale in [-2., 0., 0.25, 3.]:
+                for seed in [0., -0., 7.]:
+                    equal_fp(g(data, n, scale, seed), refg(data, n, scale, seed))
+                    count += 1
+    if hasattr(lib, 'sequential'):
+        dp = C.POINTER(C.c_double)
+        for name in ['sequential', 'enclosing']:
+            f = function(lib, name, [dp, dp, u64, C.c_double], C.c_double)
+            ref = function(reference, name, f.argtypes, C.c_double)
+            data = (C.c_double * 128)(*[rng.uniform(-8, 8) for _ in range(128)])
+            for n in [0, 1, 2, 3, 7]:
+                for seed in [0., -0., 3., float('inf'), float('nan')]:
+                    equal_fp(f(data, data, n, seed), ref(data, data, n, seed))
+                    count += 1
+    if hasattr(lib, 'bounded'):
+        dp = C.POINTER(C.c_double)
+        for name in ['exact', 'bounded', 'one']:
+            f = function(lib, name, [dp, u64, C.c_double], C.c_double)
+            ref = function(reference, name, f.argtypes, C.c_double)
+            for n in [0, 1, 2, 3, 7, 8, 9, 64, (1 << 64) - 1]:
+                for seed in [0., -0., 3., float('inf'), float('nan')]:
+                    data = (C.c_double * 8)(*[rng.uniform(-8, 8) for _ in range(8)])
+                    equal_fp(f(data, n, seed), ref(data, n, seed))
+                    count += 1
     if hasattr(lib, 'shared'):
         f = function(lib, 'shared', [C.POINTER(C.c_double), u64, C.c_double], C.c_double)
         ref = function(reference, 'shared', f.argtypes, C.c_double)
@@ -258,7 +298,8 @@ def legacy_integer(lib, reference, kind):
 
 def check(build, work):
     records = []
-    for fixture in ['basic', 'nested', 'memory', 'vector-pair', 'coupled-state', 'fp-policy', 'bitwise', 'multiply', 'minmax']:
+    for fixture in ['basic', 'nested', 'memory', 'vector-pair', 'coupled-state', 'fp-policy',
+                    'overhead', 'bounded-schedule', 'scratch-lifetime', 'bitwise', 'multiply', 'minmax']:
         legacy = fixture in ['bitwise','multiply','minmax']
         source = ((ROOT/'llvm/test/Transforms/LoopVectorize/RISCV'/('reduction-fission-scalar-'+fixture+'.ll'))
                   if legacy else TESTS / (fixture + '.ll'))
