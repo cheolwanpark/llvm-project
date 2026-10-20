@@ -38,7 +38,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_acyclic_conditional_nested(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @safe(i32) memory(none) nounwind willreturn speculatable
 declare i32 @unsafe(i32) memory(read) nounwind willreturn speculatable
 
@@ -105,7 +106,9 @@ loop:
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %right
 left:
-  %lc = call i32 @safe(i32 %x)
+  %lc.depth.mul = mul i32 %x, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @safe(i32 %lc.depth.bias)
   br label %first.merge
 right:
   %rc = xor i32 %x, 7
@@ -194,7 +197,9 @@ loop:
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %right
 left:
-  %lc = call i32 @safe(i32 %x)
+  %lc.depth.mul = mul i32 %x, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @safe(i32 %lc.depth.bias)
   br label %first.merge
 right:
   %rc = xor i32 %x, 7
@@ -238,7 +243,9 @@ loop:
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %right
 left:
-  %lc = call i32 @safe(i32 %x)
+  %lc.depth.mul = mul i32 %x, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @safe(i32 %lc.depth.bias)
   br label %first.merge
 right:
   %rc = xor i32 %x, 7
@@ -283,7 +290,9 @@ loop:
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %right
 left:
-  %lc = call i32 @safe(i32 %x)
+  %lc.depth.mul = mul i32 %x, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @safe(i32 %lc.depth.bias)
   br label %first.merge
 right:
   %rc = xor i32 %x, 7
@@ -327,7 +336,9 @@ loop:
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %right
 left:
-  %lc = call i32 @safe(i32 %x)
+  %lc.depth.mul = mul i32 %x, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @safe(i32 %lc.depth.bias)
   br label %first.merge
 right:
   %rc = xor i32 %x, 7
@@ -504,7 +515,9 @@ loop:
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %right
 left:
-  %lc = call i32 @safe(i32 %x)
+  %lc.depth.mul = mul i32 %x, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @safe(i32 %lc.depth.bias)
   br label %first.merge
 right:
   %rc = xor i32 %x, 7
@@ -547,7 +560,9 @@ loop:
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %latch
 left:
-  %lc = call i32 @safe(i32 %x)
+  %lc.depth.mul = mul i32 %x, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @safe(i32 %lc.depth.bias)
   br label %first.merge
 first.merge:
   %first = phi i32 [%lc, %left]

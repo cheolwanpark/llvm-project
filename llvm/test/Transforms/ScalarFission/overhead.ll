@@ -35,7 +35,9 @@ loop:
   %pb = getelementptr inbounds double, ptr %b, i64 %index
   %px = getelementptr double, ptr %x, i64 %wide
   %z = load double, ptr %px
-  %f = fmul double %z, %z
+  %square = fmul double %z, %z
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   %av = load double, ptr %pa
   %bv = load double, ptr %pb
   %af = fmul double %f, %av
@@ -57,7 +59,7 @@ exit:
 ; CHECK-LABEL: define double @suffix(
 ; CHECK: alloca [3 x double]
 ; CHECK-NOT: alloca
-; CHECK: %f = fmul double %x, %x
+; CHECK: %f = fmul double %biased, 5.000000e-01
 ; CHECK-NOT: %g =
 ; CHECK-NOT: %h =
 ; CHECK-NOT: %dead =
@@ -80,7 +82,9 @@ loop:
   %t = phi double [1.0, %ph], [%z, %loop]
   %p = getelementptr double, ptr %a, i64 %i
   %x = load double, ptr %p
-  %f = fmul double %x, %x
+  %square = fmul double %x, %x
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   %g = fmul nnan nsz double %f, %scale
   %h = fmul contract double %g, %f
   %dead = fmul double %h, 5.0
@@ -125,7 +129,9 @@ loop:
   %t = phi double [1.0, %entry], [%v, %loop]
   %p = getelementptr double, ptr %a, i64 %i
   %x = load double, ptr %p
-  %f = fmul double %x, %x
+  %square = fmul double %x, %x
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   %g = fmul double %f, %x
   store double %g, ptr %out
   %h = fmul double %g, %f
@@ -168,7 +174,9 @@ loop:
   %pb = getelementptr double, ptr %b, i64 %index
   %x = load double, ptr %pa
   %y = load double, ptr %pb
-  %f = fmul double %x, %x
+  %square = fmul double %x, %x
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   %g = fmul double %f, %y
   %u = fadd double %s, %f
   %v = fsub double %t, %g
@@ -186,7 +194,7 @@ exit:
 ; result buffer remains producer-owned and supplies a dominating transfer.
 ; CHECK-LABEL: define double @conditional_buffer(
 ; CHECK-NOT: alloca
-; CHECK: %f = fmul double %x, %x
+; CHECK: %f = fmul double %biased, 5.000000e-01
 ; CHECK: store double %f, ptr %op
 ; CHECK-NOT: %g =
 ; CHECK: loop.consume:
@@ -196,7 +204,7 @@ exit:
 ; CHECK: then.consume:
 ; CHECK: %g.consume = fmul nsz double %f.scratch, %scale
 ; CHECK: %u.consume = fadd {{(reassoc )?}}double %s.consume, %g.consume
-; CHECK: %v.consume = fsub double %t.consume, %g.consume
+; CHECK: %v.consume = fsub double %t.consume, %f.scratch
 ; CHECK: ret double
 
 define double @conditional_buffer(ptr noalias %a, ptr noalias %out, i64 %n, double %scale, i1 %take) {
@@ -209,13 +217,15 @@ loop:
   %p = getelementptr double, ptr %a, i64 %i
   %op = getelementptr inbounds double, ptr %out, i64 %i
   %x = load double, ptr %p
-  %f = fmul double %x, %x
+  %square = fmul double %x, %x
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   store double %f, ptr %op
   br i1 %take, label %then, label %latch
 then:
   %g = fmul nsz double %f, %scale
   %u = fadd double %s, %g
-  %v = fsub double %t, %g
+  %v = fsub double %t, %f
   br label %latch
 latch:
   %sn = phi double [%s, %loop], [%u, %then]
@@ -250,7 +260,9 @@ loop:
   %t = phi double [1.0, %entry], [%v, %loop]
   %p = getelementptr double, ptr %a, i64 %i
   %x = load double, ptr %p
-  %f = fmul double %x, %x
+  %square = fmul double %x, %x
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   %g = fmul double %f, %x
   %h = fmul double %g, %f
   %u = fadd double %s, %h
@@ -291,7 +303,9 @@ loop:
   %wide = zext i8 %i to i64
   %px = getelementptr double, ptr %x, i64 %wide
   %z = load double, ptr %px
-  %f = fmul double %z, %z
+  %square = fmul double %z, %z
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   %odd = and i8 %i, 1
   %take = icmp eq i8 %odd, 0
   br i1 %take, label %then, label %latch

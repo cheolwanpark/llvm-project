@@ -14,7 +14,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_nested(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define void @compact_triangle(ptr readonly %a, ptr readonly %fp, ptr %out,
@@ -39,7 +40,9 @@ loop:
   br i1 %choose, label %left, label %latch, !dbg !7
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dc = load double, ptr %dp, align 8
   %fc = fptrunc double %dc to float
@@ -91,7 +94,9 @@ loop:
   br i1 %choose, label %right, label %left, !dbg !9
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dc = load double, ptr %dp, align 8
   %fc = fptrunc double %dc to float
@@ -143,7 +148,9 @@ loop:
   br i1 %choose, label %latch, label %left, !dbg !11
 left:
   %wide = zext i32 %x to i64
-  %c = mul nuw nsw i64 %wide, 13
+  %c.depth.mul = mul i64 %wide, 13
+  %c.depth.bias = add i64 %c.depth.mul, 7
+  %c = mul nuw nsw i64 %c.depth.bias, 13
   %u = add nuw nsw i64 %c, %sum
   %u2 = add nuw nsw i64 %sum2, %c
   br label %latch
@@ -196,7 +203,9 @@ inner:
   %choose = icmp ne i32 %bit, 0
   br i1 %choose, label %left, label %right, !dbg !13
 left:
-  %lc = call i32 @scalar_helper(i32 %salted)
+  %lc.depth.mul = mul i32 %salted, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %dp = getelementptr double, ptr %dbase, i64 %iv
   %dx = load double, ptr %dp, align 8
   %ld = fmul double %dx, 3.0

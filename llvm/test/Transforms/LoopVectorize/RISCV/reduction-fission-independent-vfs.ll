@@ -8,7 +8,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @independent_vfs_bounded(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 define void @independent_vfs(ptr noalias readonly %a, ptr noalias %out) !dbg !5 {
 entry:
   br label %loop, !dbg !6
@@ -17,7 +18,9 @@ loop:
   %sum = phi i32 [0, %entry], [%update, %loop]
   %p = getelementptr i64, ptr %a, i64 %i
   %x = load i64, ptr %p, align 8
-  %term = call i32 @foo(i64 %x) #0, !dbg !6
+  %term.depth.mul = mul i64 %x, 13
+  %term.depth.bias = add i64 %term.depth.mul, 7
+  %term = call i32 @foo(i64 %term.depth.bias) #0, !dbg !6
   %update = add i32 %sum, %term
   %next = add nuw i64 %i, 1
   %done = icmp eq i64 %next, 65
@@ -41,7 +44,9 @@ loop:
   %p = getelementptr i64, ptr %a, i64 %i
   %x = load i64, ptr %p, align 8
   %lo = trunc i64 %x to i32
-  %term = call i32 @bar(i32 %lo, i64 %x) #1, !dbg !8
+  %term.depth.mul = mul i32 %lo, 13
+  %term.depth.bias = add i32 %term.depth.mul, 7
+  %term = call i32 @bar(i32 %term.depth.bias, i64 %x) #1, !dbg !8
   %update = xor i32 %bits, %term
   %next = add nuw i64 %i, 1
   %done = icmp eq i64 %next, %n

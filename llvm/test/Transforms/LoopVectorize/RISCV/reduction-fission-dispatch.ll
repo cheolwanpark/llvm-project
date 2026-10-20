@@ -20,7 +20,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @dispatch_marked(
 ; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) nounwind willreturn speculatable memory(none)
 
 define void @interleave2(ptr readonly %a, ptr %out, i64 %n) !dbg !4 {
@@ -178,7 +179,9 @@ inner:
   %choose = icmp ne i32 %bit, 0
   br i1 %choose, label %left, label %right, !dbg !11
 left:
-  %lc = call i32 @scalar_helper(i32 %salted)
+  %lc.depth.mul = mul i32 %salted, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %dp = getelementptr double, ptr %dbase, i64 %iv
   %dx = load double, ptr %dp, align 8
   %ld = fmul double %dx, 3.0

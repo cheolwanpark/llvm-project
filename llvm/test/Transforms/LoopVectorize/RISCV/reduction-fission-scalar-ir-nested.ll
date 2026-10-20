@@ -5,7 +5,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @scalar_nested(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define void @scalar_nested(ptr readonly %a, ptr readonly %fp, ptr %out,
@@ -39,7 +40,9 @@ inner:
   %p = getelementptr i32, ptr %base, i64 %iv
   %x = load i32, ptr %p, align 4
   %salted = xor i32 %x, %salt
-  %c = call i32 @scalar_helper(i32 %salted)
+  %c.depth.mul = mul i32 %salted, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dp = getelementptr double, ptr %dbase, i64 %iv
   %dx = load double, ptr %dp, align 8
   %dc = fmul double %dx, 3.0

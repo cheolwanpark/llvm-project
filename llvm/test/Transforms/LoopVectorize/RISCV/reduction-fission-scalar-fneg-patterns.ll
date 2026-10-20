@@ -5,7 +5,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @shared_negations(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 define void @shared_negations(ptr %a, ptr %b, ptr %out, i64 %n) !dbg !10 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -24,7 +25,9 @@ loop:
   %fp = getelementptr float, ptr %b, i64 %iv
   %d = load double, ptr %dp, align 8
   %f = load float, ptr %fp, align 4
-  %dn = fneg nsz double %d, !dbg !11
+  %dn.depth.mul = fmul double %d, 5.000000e-01
+  %dn.depth.bias = fadd double %dn.depth.mul, 1.250000e+00
+  %dn = fneg nsz double %dn.depth.bias, !dbg !11
   %fn = fneg nsz float %f, !dbg !11
   %du0 = fadd nsz double %d0, %dn, !dbg !12
   %du1 = fsub nsz double %d1, %dn, !dbg !12

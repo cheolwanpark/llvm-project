@@ -44,7 +44,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_signed_down_early(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define void @affine_const(ptr readonly %a, ptr readonly %fp, ptr %out,
@@ -71,7 +72,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !7
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   br label %first.merge
 right:
@@ -145,7 +148,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !9
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   br label %first.merge
 right:
@@ -217,7 +222,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !11
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   br label %first.merge
 right:
@@ -290,7 +297,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !13
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   br label %first.merge
 right:
@@ -362,7 +371,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !15
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   br label %first.merge
 right:
@@ -436,7 +447,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !17
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   %bit = and i32 %x, 2
   %second = icmp ne i32 %bit, 0
@@ -508,7 +521,9 @@ loop:
   br i1 %choose, label %left, label %latch, !dbg !19
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %index
   %dc = load double, ptr %dp, align 8
   %fc = fptrunc double %dc to float
@@ -578,7 +593,9 @@ inner:
   %choose = icmp ne i32 %bit, 0
   br i1 %choose, label %left, label %right, !dbg !21
 left:
-  %lc = call i32 @scalar_helper(i32 %salted)
+  %lc.depth.mul = mul i32 %salted, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %dp = getelementptr double, ptr %dbase, i64 %index
   %dx = load double, ptr %dp, align 8
   %ld = fmul double %dx, 3.0
@@ -645,7 +662,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !23
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   br label %first.merge
 right:
@@ -718,7 +737,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !25
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   br label %first.merge
 right:
@@ -790,7 +811,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !27
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   br label %first.merge
 right:
@@ -862,7 +885,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !29
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   br label %first.merge
 right:
@@ -934,7 +959,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !31
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   br label %first.merge
 right:
@@ -1006,7 +1033,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !33
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %ld = sitofp i32 %q to double
   br label %first.merge
 right:

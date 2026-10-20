@@ -1,3 +1,5 @@
+; RUN: opt -passes=scalar-fission -pass-remarks-output=%t.frontier.yaml -pass-remarks-filter=scalar-fission -disable-output %s
+; RUN: FileCheck %s --check-prefix=FRONTIER < %t.frontier.yaml
 ; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
 ; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
@@ -12,16 +14,16 @@
 ; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_default_limit(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_over_limit(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_relational_limit(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_relational_over_limit(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_relational_i8_max(
 ; SCALAR-MIGRATION-NOT: scalar.fission
@@ -29,7 +31,7 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @affine_relational_i8_overflow(
 ; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; These short helper producers reject at depth one; checks exercise standalone scalar fission and ordinary LV.
 define i32 @affine_one(i32 %cutoff) !dbg !6 {
 entry:
   br label %preheader
@@ -132,6 +134,9 @@ exit:
   ret i32 %result
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: affine_default_limit
+; FRONTIER: Reason: producer-too-shallow
 define i32 @affine_default_limit(i32 %cutoff) !dbg !12 {
 entry:
   br label %preheader
@@ -166,6 +171,9 @@ exit:
   ret i32 %result
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: affine_over_limit
+; FRONTIER: Reason: producer-too-shallow
 define i32 @affine_over_limit(i32 %cutoff) !dbg !14 {
 entry:
   br label %preheader
@@ -200,6 +208,9 @@ exit:
   ret i32 %result
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: affine_relational_limit
+; FRONTIER: Reason: producer-too-shallow
 define i32 @affine_relational_limit(i32 %cutoff) !dbg !16 {
 entry:
   br label %preheader
@@ -234,6 +245,9 @@ exit:
   ret i32 %result
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: affine_relational_over_limit
+; FRONTIER: Reason: producer-too-shallow
 define i32 @affine_relational_over_limit(i32 %cutoff) !dbg !18 {
 entry:
   br label %preheader

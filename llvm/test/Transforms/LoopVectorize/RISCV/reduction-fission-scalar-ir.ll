@@ -17,7 +17,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @one_iteration(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define void @scalar_helper_sum(ptr readonly %a, ptr %out, i64 %n, i32 %start) !dbg !4 {
@@ -33,7 +34,9 @@ loop:
   %sum = phi i32 [%start, %preheader], [%update, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, %n
@@ -60,7 +63,9 @@ loop:
   %x = load i32, ptr %p, align 4
   %wide = zext i32 %x to i64
   %mul = mul i64 %wide, 13
-  %c = xor i64 %mul, 7
+  %c.depth.mul = mul i64 %mul, 13
+  %c.depth.bias = add i64 %c.depth.mul, 7
+  %c = xor i64 %c.depth.bias, 7
   %update = add i64 %c, %sum
   %next = add nuw i64 %iv, 1
   %more = icmp ne i64 %next, %n
@@ -89,7 +94,9 @@ loop:
   %rf = phi float [%fstart, %preheader], [%uf, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %dc = fmul double %dx, 3.0
@@ -122,7 +129,9 @@ loop:
   %sum = phi i32 [9, %entry], [%update, %loop]
   %index = zext i8 %iv to i32
   %v = xor i32 %x, %index
-  %c = call i32 @scalar_helper(i32 %v)
+  %c.depth.mul = mul i32 %v, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add i8 %iv, 1
   %done = icmp eq i8 %next, -56
@@ -137,7 +146,9 @@ entry:
 loop:
   %iv = phi i64 [0, %entry], [%next, %loop]
   %sum = phi i32 [19, %entry], [%update, %loop]
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add i64 %iv, 1
   %done = icmp eq i64 %next, 1

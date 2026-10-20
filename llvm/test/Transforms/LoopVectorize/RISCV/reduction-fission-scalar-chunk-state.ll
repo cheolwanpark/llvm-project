@@ -14,7 +14,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_state_nested(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define void @chunk_state_delay(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
@@ -36,7 +37,9 @@ loop:
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %dnext = fadd double %dstate, %dx
@@ -175,7 +178,9 @@ loop:
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %dnext = fadd double %dstate, %dx

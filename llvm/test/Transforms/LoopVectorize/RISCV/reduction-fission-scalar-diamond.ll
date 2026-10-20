@@ -11,7 +11,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @scalar_diamond_nested(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define void @scalar_diamond(ptr readonly %a, ptr readonly %fp, ptr %out,
@@ -43,7 +44,9 @@ left:
 right:
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
-  %rc = fmul double %dx, 3.0
+  %rc.depth.mul = fmul double %dx, 5.000000e-01
+  %rc.depth.bias = fadd double %rc.depth.mul, 1.250000e+00
+  %rc = fmul double %rc.depth.bias, 3.0
   %rfp = fptrunc double %rc to float
   br label %latch
 latch:
@@ -146,7 +149,9 @@ inner:
   %choose = icmp ne i32 %bit, 0
   br i1 %choose, label %left, label %right, !dbg !11
 left:
-  %lc = call i32 @scalar_helper(i32 %salted)
+  %lc.depth.mul = mul i32 %salted, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %dp = getelementptr double, ptr %dbase, i64 %iv
   %dx = load double, ptr %dp, align 8
   %ld = fmul double %dx, 3.0

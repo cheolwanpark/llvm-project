@@ -23,7 +23,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_export_integration_cross_edge(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define i32 @oversized_offset(i32 %x) {
@@ -34,7 +35,9 @@ preheader:
 loop:
   %iv = phi i64 [7, %preheader], [%next, %loop]
   %sum = phi i32 [17, %preheader], [%update, %loop]
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, 72
@@ -52,7 +55,9 @@ preheader:
 loop:
   %iv = phi i64 [0, %preheader], [%next, %loop]
   %sum = phi i32 [17, %preheader], [%update, %loop]
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 2
   %done = icmp eq i64 %next, 130
@@ -70,7 +75,9 @@ preheader:
 loop:
   %iv = phi i64 [0, %preheader], [%next, %loop]
   %sum = phi i32 [17, %preheader], [%update, %loop]
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %iv, 64
@@ -88,7 +95,9 @@ preheader:
 loop:
   %iv = phi i64 [0, %preheader], [%next, %loop]
   %sum = phi i32 [17, %preheader], [%update, %loop]
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 65, %next
@@ -106,7 +115,9 @@ preheader:
 loop:
   %iv = phi i64 [0, %preheader], [%next, %loop]
   %sum = phi i32 [17, %preheader], [%update, %loop]
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp ult i64 %next, 65
@@ -134,7 +145,9 @@ loop:
   %p = getelementptr i32, ptr %a, i64 %index
   %x = load i32, ptr %p, align 4
   %arg = xor i32 %x, 7
-  %c = call i32 @scalar_helper(i32 %arg)
+  %c.depth.mul = mul i32 %arg, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 2
   %done = icmp eq i64 %next, %limit

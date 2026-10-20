@@ -47,7 +47,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_store_constrained(
 ; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare void @effect(ptr) nounwind willreturn
 declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
@@ -201,7 +202,9 @@ loop:
   %sum = phi i32 [ 19, %preheader ], [ %update, %loop ]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   store i32 %x, ptr %p, align 4
   %next = add nuw i64 %iv, 1

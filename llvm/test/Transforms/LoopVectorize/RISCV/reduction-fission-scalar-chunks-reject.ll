@@ -26,7 +26,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @chunk_retained_state(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare i32 @unsafe(i32) nounwind willreturn
 declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
@@ -144,7 +145,9 @@ loop:
   %sum = phi i32 [17, %preheader], [%update, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, %n
@@ -213,7 +216,9 @@ loop:
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw nsw i64 %iv, 1
   %done = icmp eq i64 %next, %n

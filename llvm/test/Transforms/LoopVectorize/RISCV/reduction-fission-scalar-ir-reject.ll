@@ -71,7 +71,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_reduction_derived_export(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @safe(i32) memory(none) nounwind willreturn speculatable
 declare i32 @side_effect(i32) nounwind willreturn
 declare i32 @throwing(i32) memory(none) willreturn speculatable
@@ -178,7 +179,9 @@ loop:
   %sum = phi i32 [19, %preheader], [%update, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @nonspeculatable(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @nonspeculatable(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, %n
@@ -298,7 +301,9 @@ loop:
   %sum = phi i32 [19, %preheader], [%update, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @safe(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @safe(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %feedback = xor i32 %update, %x
   %next = add nuw i64 %iv, 1
@@ -347,7 +352,9 @@ loop:
   %sum = phi i32 [19, %preheader], [%update, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @safe(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @safe(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, %n
@@ -371,7 +378,9 @@ loop:
   %sum = phi i32 [19, %preheader], [%update, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @safe(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @safe(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, %n
@@ -395,7 +404,9 @@ loop:
   %sum = phi i32 [19, %preheader], [%update, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @safe(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @safe(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, %n
@@ -467,7 +478,9 @@ loop:
   %sum = phi i32 [19, %preheader], [%update, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @safe(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @safe(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   store i32 %x, ptr %p
   %next = add nuw i64 %iv, 1
@@ -492,7 +505,9 @@ loop:
   %sum = phi i32 [19, %preheader], [%update, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @safe(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @safe(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i32 %c, 0
@@ -540,7 +555,9 @@ loop:
   %sum = phi i32 [19, %preheader], [%update, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @safe(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @safe(i32 %c.depth.bias)
   %update = xor i32 %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, %n
@@ -604,7 +621,9 @@ entry:
 loop:
   %iv = phi i128 [0, %entry], [%next, %loop]
   %sum = phi i32 [19, %entry], [%update, %loop]
-  %c = call i32 @safe(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @safe(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add nuw i128 %iv, 1
   %done = icmp eq i128 %next, 18446744073709551616
@@ -626,7 +645,9 @@ loop:
   %sum = phi i32 [19, %preheader], [%update, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @safe(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @safe(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %last = xor i32 %update, %x
   %next = add nuw i64 %iv, 1

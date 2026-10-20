@@ -27,7 +27,9 @@ loop:
   %t = phi double [1.0, %ph], [%v, %loop]
   %p = getelementptr double, ptr %a, i64 %i
   %x = load double, ptr %p
-  %f = fmul double %x, %x
+  %square = fmul double %x, %x
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   %a1 = fadd double %f, 3.0
   %a2 = fmul double %f, 2.0
   %u = fadd double %s, %a1
@@ -68,7 +70,9 @@ loop:
   %t = phi i32 [7, %ph], [%v, %latch]
   %p = getelementptr i32, ptr %a, i64 %i
   %x = load i32, ptr %p
-  %f = mul i32 %x, %x
+  %square = mul i32 %x, %x
+  %biased = add i32 %square, 3
+  %f = xor i32 %biased, 9
   %odd = and i64 %i, 1
   %c = icmp ne i64 %odd, 0
   %d = icmp sgt i32 %f, 8
@@ -95,6 +99,7 @@ done:
 }
 
 ; Producer-local helper calls need neither a vector mapping nor speculatable.
+declare i32 @pure(i32) nounwind willreturn memory(none)
 declare i32 @helper(ptr) nounwind willreturn nosync nofree nocallback memory(argmem: read)
 ; CHECK-LABEL: define i32 @data_exit(
 ; CHECK: call i32 @helper
@@ -109,10 +114,12 @@ entry:
 loop:
   %p = phi ptr [%a, %entry], [%next, %loop]
   %s = phi i32 [19, %entry], [%u, %loop]
-  %x = call i32 @helper(ptr %p)
+  %raw = call i32 @helper(ptr %p)
+  %biased = add i32 %raw, 7
+  %x = call i32 @pure(i32 %biased)
   %u = add i32 %s, %x
   %next = getelementptr i32, ptr %p, i64 1
-  %more = icmp ne i32 %x, 0
+  %more = icmp ne i32 %raw, 0
   br i1 %more, label %loop, label %exit
 exit:
   %r = phi i32 [%u, %loop]

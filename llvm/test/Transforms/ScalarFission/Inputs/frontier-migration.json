@@ -1,0 +1,2244 @@
+{
+  "schema": 1,
+  "scope": "Current expectations for legacy fixtures changed by graph frontier/depth policy. legacy-migration.json remains the historical scalar-adoption snapshot.",
+  "rows": [
+    {
+      "fixture": "reduction-fission-dispatch.ll",
+      "sha256": "6e28e78ce325ff43dcb8b14ac56dc9544e1759422a4018c182e698720618906a",
+      "functions": [
+        {
+          "function": "interleave2",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "interleave3",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "interleave2_ordered",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_nested",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "dispatch_reject",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "dispatch_marked",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-independent-vfs.ll",
+      "sha256": "e75e8575822d8a0ae856aeb0d03c31a8a4297235414b2ed6ea8acf2dd72f29ec",
+      "functions": [
+        {
+          "function": "independent_vfs",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "independent_vfs_bounded",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-interleave-wide.ll",
+      "sha256": "cf4006781fdc72bfdda72bcd98432f84ce8a2943773d7c86664f5628d222919c",
+      "functions": [
+        {
+          "function": "interleave4",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "interleave4_members",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "interleave5",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "interleave5_members",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "interleave6",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "interleave6_members",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "interleave7",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "interleave7_members",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "interleave8",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "interleave8_members",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-interleave.ll",
+      "sha256": "477f7755b6c02e081cc8f10f361385c5012ce79466345f526271a82ea1f6e3c7",
+      "functions": [
+        {
+          "function": "interleave2",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "interleave3",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "interleave2_ordered",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "interleave3_ordered",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "interleave2_members",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "interleave3_members",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-acyclic-reject.ll",
+      "sha256": "16260b88972f37f03d78af576ff580af4c8d7661d2bb2d66817305997d413c0c",
+      "functions": [
+        {
+          "function": "reject_acyclic_early_exit",
+          "selected": false,
+          "rejections": [
+            "unsupported-iteration-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_acyclic_internal_cycle",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_acyclic_predicate",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_acyclic_contribution",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_acyclic_result_feedback",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_acyclic_liveout",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_acyclic_store",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_acyclic_unsafe_call",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_acyclic_header_update",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_acyclic_switch",
+          "selected": false,
+          "rejections": [
+            "unsupported-control"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_acyclic_conditional_serial",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_acyclic_conditional_nested",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-acyclic.ll",
+      "sha256": "1dd74744fdc5024a74b4bf3ed2ccb421ac0dad3220a96a96846a7ff15cda2549",
+      "functions": [
+        {
+          "function": "acyclic_serial",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "acyclic_nested",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "acyclic_three_way",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "acyclic_enclosing",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "acyclic_cross_edge",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-affine-bounds.ll",
+      "sha256": "cc05187f12eb14b759e56bce184561e854fa5eb22d1527f11f0ea18cf2a52462",
+      "functions": [
+        {
+          "function": "affine_one",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "affine_i8_max",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "affine_i8_overflow",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "affine_default_limit",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "affine_over_limit",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "affine_relational_limit",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "affine_relational_over_limit",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "affine_relational_i8_max",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "affine_relational_i8_overflow",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-affine-reject.ll",
+      "sha256": "882a7e2e94596800e4936cb2c6fa12088ced00857d61a22a4523dee3d36c6287",
+      "functions": [
+        {
+          "function": "reject_affine_unproved",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_affine_variable_step",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_affine_feedback",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_affine_contribution_feedback",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_affine_unsafe_call",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_affine_store",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_affine_liveout",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_affine_participation",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_affine_strictfp",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_affine_zero_step",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_affine_nonlinear",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_affine_pointer",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_affine_fp_control",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-affine.ll",
+      "sha256": "92b7bf510913a4915004b5f7045e9e48d460a1d1aae4dbe2ad848527e66b5c26",
+      "functions": [
+        {
+          "function": "affine_const",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_runtime",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_unsigned",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_signed",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_down",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_signed_down",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_compact",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_enclosing",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_wrap",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_current",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_unsigned_early",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_signed_early",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_down_early",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "affine_signed_down_early",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-chunk-state.ll",
+      "sha256": "db641a00fe9be1fa8a6251f304ddd0c340f7f107110a5c335153ee380d41d3eb",
+      "functions": [
+        {
+          "function": "chunk_state_delay",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "chunk_state_pair",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "chunk_state_fp",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "chunk_state_nested",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-chunks-reject.ll",
+      "sha256": "77aaa9eef47f4da9f2bf5296dfd66bbc6a196f39260af338093bab45db31f1a7",
+      "functions": [
+        {
+          "function": "chunk_feedback",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "chunk_effect",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "chunk_volatile",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "chunk_strictfp",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "chunk_noncanonical",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "chunk_reverse_equality",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "chunk_constrained",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "chunk_retained_state",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-chunks.ll",
+      "sha256": "d9e3ef34d4e72fee465af09bc577359cbc2c1cf2e1c4400d2942cb1c56cbe4e6",
+      "functions": [
+        {
+          "function": "chunk_mixed",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "chunk_narrow",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "chunk_ne",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "chunk_nested",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-compact-bounds.ll",
+      "sha256": "498f5b39519d16e2a5f492c0137e08b642ce5d1b6dbcda6aab0035379b11d736",
+      "functions": [
+        {
+          "function": "compact_i8_max",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "compact_i8_overflow",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "compact_default_limit",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "compact_over_limit",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-compact-recurrence-reject.ll",
+      "sha256": "b109e09b3f65dc569e2378a3e791957195de17d4c1d9177a6cb47576de0b3750",
+      "functions": [
+        {
+          "function": "compact_recurrence_reject_predicate",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_reject_state",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_reject_address",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_reject_state_export",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_reject_incompatible",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_reject_store",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_reject_strict",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "compact_recurrence_reject_constrained",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "compact_recurrence_reject_unbounded",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_reject_over_capacity",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-compact-recurrence.ll",
+      "sha256": "a327ecdb9936f70f28bfb4f40c27f859d9552333f7e921222ef3903f1d9a0657",
+      "functions": [
+        {
+          "function": "compact_recurrence",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_reverse",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_merge",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_affine",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_runtime",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_enclosing",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_one",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_255",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_recurrence_limit",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-compact.ll",
+      "sha256": "63c4ec42e6d60d7ba6d3fc6a35db2ad718409512785d5b3f04a5b982072cdf9e",
+      "functions": [
+        {
+          "function": "compact_triangle",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_diamond",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_integer",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "compact_nested",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-diamond-reject.ll",
+      "sha256": "97770cb2b12d940019bb88367c3dd63306f684b3936db7f1a5cdc26f62f67a97",
+      "functions": [
+        {
+          "function": "reject_conditional_update",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_accumulator_predicate",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_accumulator_merge",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_updated_accumulator_use",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_extra_exit",
+          "selected": false,
+          "rejections": [
+            "unsupported-iteration-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_internal_cycle",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_arm_cycle",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_arm_store",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_arm_volatile",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_arm_atomic",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_arm_readonly_call",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_arm_errno_call",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_arm_constrained",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_merged_liveout",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_induction_liveout",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_header_update_predicate",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-diamond.ll",
+      "sha256": "dfda8c342a4277670f4e9678e66bcff652b15ef614a0cb9ce2c01b92dd635160",
+      "functions": [
+        {
+          "function": "scalar_diamond",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "diamond_arithmetic",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "scalar_diamond_nested",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-export-controls.ll",
+      "sha256": "f18baf0d1dcbec26363a9ce28c4d8aae58e7f0a1d7cefba2bb8e052b4acbfce8",
+      "functions": [
+        {
+          "function": "export_offset",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "export_stride",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "export_down",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "export_current",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "export_affine_compact",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "export_serial",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "export_acyclic_nested",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "export_enclosing",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-export-poison.ll",
+      "sha256": "30626bda90126a61e301435ea2026edef09b902a70ee4a604f47e63d657482e2",
+      "functions": [
+        {
+          "function": "export_possible_poison",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-exports.ll",
+      "sha256": "3b97f053fbd7afa40bbc3d344d7975b8d6e7c8c88e35fa626ac482f2a82c1789",
+      "functions": [
+        {
+          "function": "export_unconditional",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "export_diamond",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "export_compact",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "export_nested",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-fneg-patterns.ll",
+      "sha256": "22744cb436a8e9092feb8939c3c1b05199a473bdd2994b5ec5a5b467ad91bdb5",
+      "functions": [
+        {
+          "function": "shared_negations",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-fneg-reject.ll",
+      "sha256": "d05270102e145680d633e2715c664f775b1fa6ace1c19d1617874188477dfb9d",
+      "functions": [
+        {
+          "function": "reject_accumulator_negation",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_update_negation",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_vector_negation",
+          "selected": false,
+          "rejections": [
+            "unsupported-instruction"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_strictfp",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_constrained",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_unsafe_call",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_negation_recurrence",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-fneg.ll",
+      "sha256": "6205637ab54503bcba3a0de560782565915c7b97e73b17a7bd27e9d1862fbffc",
+      "functions": [
+        {
+          "function": "stores_full",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_compact",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_chunk",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_chunk_ne",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_affine",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-integration-reject.ll",
+      "sha256": "d9be1ea12b00532a1ee87200f43babd65138d77589e02d319cced19a05ed6a7e",
+      "functions": [
+        {
+          "function": "oversized_offset",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "oversized_stride",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "oversized_current",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "oversized_swapped",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "oversized_witness",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_export_integration_affine",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_export_integration_cross_edge",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-integration.ll",
+      "sha256": "a4b0e13d269fd2621551ed8d2cfd2567f7f3ac25236d4053bfbf2be14c1af118",
+      "functions": [
+        {
+          "function": "integration_affine",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "integration_cross_edge",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "integration_chunk",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-ir-nested.ll",
+      "sha256": "43bde9f5b6205515c6fed1c1e8ccab765e704bec9be385b292a39abb2c82e04e",
+      "functions": [
+        {
+          "function": "scalar_nested",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-ir-reject.ll",
+      "sha256": "1e02809345ec8ab5d999f143752f0f5f181f8c543337fd58a1248a3c9b69cbc9",
+      "functions": [
+        {
+          "function": "reject_side_effect",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_throwing",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_nonterminating",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_nonspeculatable",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_convergent_call",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_readonly_call",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_noduplicate_call",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_feedback",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_update_feedback",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_strictfp",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_unbounded",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_liveout",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_old_accumulator_liveout",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_volatile_load",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_atomic_load",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_write",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_unsupported_exit",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_operand_bundle",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_other_recurrence",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_constrained",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_early_exit",
+          "selected": false,
+          "rejections": [
+            "unsupported-iteration-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_trip_overflow",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_reduction_derived_export",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-ir.ll",
+      "sha256": "7dbb329f20e36d1ec39a754aa530a35ea25f9ece644e7df58d579002497c8336",
+      "functions": [
+        {
+          "function": "scalar_helper_sum",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "arithmetic_sum",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "scalar_mixed",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "narrow_constant",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "one_iteration",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-minmax-analogous.ll",
+      "sha256": "f07530ce79c8ff22b9d7dcd7e5646100f83c712b1a00939cee1dfd48324a6517",
+      "functions": [
+        {
+          "function": "minmax_retained",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-recurrence-compact-legacy.ll",
+      "sha256": "e3d46611be7515072bf37af300f38a2c080277eab3fa738cd953cb0a93258701",
+      "functions": [
+        {
+          "function": "recurrence_compact",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-recurrence-reject.ll",
+      "sha256": "366a33c47757c3606dd466c55fcee9c83f45dbac0975bfff22716dc68183ec71",
+      "functions": [
+        {
+          "function": "recurrence_phi_feedback",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_update_feedback",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_other_reduction",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_address_feedback",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_predicate_feedback",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_partial_export",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_state_export",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_store",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_call",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "recurrence_unbounded",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_over_capacity",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_strict",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "recurrence_constrained",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "recurrence_no_extractable",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_no_supported_update",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_unsupported_multiply",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_unsupported_division",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-recurrence.ll",
+      "sha256": "cbc8bf82b1f3b5af8bccd9b45dbe6f3868e01f077196d2b706ca03ca2cacadeb",
+      "functions": [
+        {
+          "function": "recurrence_first",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_two",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_affine",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_runtime",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_branch",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_enclosing",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_one",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_255",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_limit",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_first_affine",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "recurrence_first_enclosing",
+          "selected": true,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-relational-reject.ll",
+      "sha256": "6f85c17bc49b668ddc845d922fb5aacfe75e128219aa17f0aa43fc02cc66465f",
+      "functions": [
+        {
+          "function": "equality_continues",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "unreachable_equality",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "unbounded_witness",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-stores-reject.ll",
+      "sha256": "2611953ffc4e0a3007c284561eb638e7aa6a4c7806d4757fc1c10b6a3b9c24a5",
+      "functions": [
+        {
+          "function": "reject_store_accumulator_value",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_accumulator_address",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_update_value",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_update_address",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_accumulator_predicate",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_partial_export",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_store_volatile",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_atomic",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_vector",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_aggregate",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_fence",
+          "selected": false,
+          "rejections": [
+            "unsupported-instruction"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_atomicrmw",
+          "selected": false,
+          "rejections": [
+            "unsupported-instruction"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_effect",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_strictfp",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_store_constrained",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-stores.ll",
+      "sha256": "7481538b8978599911f30dd7f925ea70334785dfdf71300fc14c33024e53090b",
+      "functions": [
+        {
+          "function": "stores_full",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_raw",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_compact",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_chunk",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_chunk_ne",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-subtraction-reject.ll",
+      "sha256": "952205465cc7ea880d369588549459ca97cf3f80d03ad47696950a343f0dda03",
+      "functions": [
+        {
+          "function": "reject_sub_store_accumulator_value",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_accumulator_address",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_update_value",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_update_address",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_accumulator_predicate",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_partial_export",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_sub_store_volatile",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_atomic",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_vector",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_aggregate",
+          "selected": false,
+          "rejections": [
+            "non-simple-memory"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_fence",
+          "selected": false,
+          "rejections": [
+            "unsupported-instruction"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_atomicrmw",
+          "selected": false,
+          "rejections": [
+            "unsupported-instruction"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_effect",
+          "selected": false,
+          "rejections": [
+            "unsafe-producer-call"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_strictfp",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_store_constrained",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_reverse_integer",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_sub_integer_chain",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_sub_reverse_float",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_sub_reverse_double",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_sub_vector_recurrence",
+          "selected": false,
+          "rejections": [
+            "no-closed-state"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "reject_sub_float_chain",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_sub_float_feedback",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "reject_sub_float_strictfp",
+          "selected": false,
+          "rejections": [
+            "strict-fp"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-scalar-subtraction.ll",
+      "sha256": "d1b93c09d8b358e4dee11aa82de328b90667c5e285b8248fe9e1dca57800ff50",
+      "functions": [
+        {
+          "function": "stores_full",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_raw",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_compact",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_chunk",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_chunk_ne",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_affine",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        },
+        {
+          "function": "stores_flags",
+          "selected": true,
+          "rejections": [],
+          "coverage": "qualifying producer with original feature checks"
+        }
+      ]
+    },
+    {
+      "fixture": "reduction-fission-short-producers.ll",
+      "sha256": "c62d1d65ca8c8953d5066a587a927b47abfbc2e0701ecfe8eb3dd2df90047a91",
+      "functions": [
+        {
+          "function": "short_one",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "short_two",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "short_ordered",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "short_ordered_two",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "short_dependence",
+          "selected": false,
+          "rejections": [
+            "producer-too-shallow"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        },
+        {
+          "function": "short_invariant",
+          "selected": false,
+          "rejections": [
+            "no-computed-boundary"
+          ],
+          "coverage": "explicit rejection; original short/relay arithmetic retained"
+        }
+      ]
+    }
+  ]
+}

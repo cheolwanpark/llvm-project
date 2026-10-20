@@ -11,7 +11,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @unbounded_witness(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define i32 @equality_continues(i8 %begin, i8 %n) !dbg !6 {
@@ -23,7 +24,9 @@ loop:
   %iv = phi i8 [%begin, %preheader], [%next, %loop]
   %sum = phi i32 [17, %preheader], [%update, %loop]
   %wide = zext i8 %iv to i32
-  %c = call i32 @scalar_helper(i32 %wide)
+  %c.depth.first = call i32 @scalar_helper(i32 %wide)
+  %c.depth.bias = call i32 @scalar_helper(i32 %c.depth.first)
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add i8 %iv, 3
   %more = icmp ule i8 %next, -1
@@ -42,7 +45,9 @@ loop:
   %iv = phi i8 [0, %preheader], [%next, %loop]
   %sum = phi i32 [17, %preheader], [%update, %loop]
   %wide = zext i8 %iv to i32
-  %c = call i32 @scalar_helper(i32 %wide)
+  %c.depth.first = call i32 @scalar_helper(i32 %wide)
+  %c.depth.bias = call i32 @scalar_helper(i32 %c.depth.first)
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add i8 %iv, 2
   %more = icmp ult i8 %next, -1
@@ -64,7 +69,9 @@ loop:
   %iv = phi i64 [%begin, %preheader], [%next, %loop]
   %sum = phi i32 [17, %preheader], [%update, %loop]
   %wide = trunc i64 %iv to i32
-  %c = call i32 @scalar_helper(i32 %wide)
+  %c.depth.first = call i32 @scalar_helper(i32 %wide)
+  %c.depth.bias = call i32 @scalar_helper(i32 %c.depth.first)
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   %next = add i64 %iv, 3
   %more = icmp ult i64 %next, %limit

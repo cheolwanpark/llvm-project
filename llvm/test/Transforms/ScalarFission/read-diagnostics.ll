@@ -20,7 +20,9 @@ loop:
   %t = phi double [1.0, %entry], [%tn, %latch]
   %p = getelementptr double, ptr %a, i64 %i
   %x = load double, ptr %p
-  %f = fmul double %x, %x
+  %square = fmul double %x, %x
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   %sp = getelementptr i8, ptr %symmetries, i64 %i
   %symmetry = load i8, ptr %sp
   %take = icmp eq i8 %symmetry, 0

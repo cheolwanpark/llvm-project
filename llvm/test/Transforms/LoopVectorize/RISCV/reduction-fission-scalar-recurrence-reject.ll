@@ -53,7 +53,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_unsupported_division(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare i32 @effect(i32) nounwind willreturn
 declare double @llvm.experimental.constrained.fsub.f64(double, double, metadata, metadata)
@@ -319,7 +320,9 @@ loop:
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dc = fsub double %dx, %dprev
   %bounded = and i32 %x, 127
   %state.next = add nuw nsw i32 %bounded, %older
@@ -366,7 +369,9 @@ loop:
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dc = fsub double %dx, %dprev
   %bounded = and i32 %x, 127
   %state.next = add nuw nsw i32 %bounded, %older
@@ -414,7 +419,9 @@ loop:
   %dx = load double, ptr %dp, align 8
   store i32 %x, ptr %p
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dc = fsub double %dx, %dprev
   %bounded = and i32 %x, 127
   %state.next = add nuw nsw i32 %bounded, %older
@@ -505,7 +512,9 @@ loop:
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dc = fsub double %dx, %dprev
   %bounded = and i32 %x, 127
   %state.next = add nuw nsw i32 %bounded, %older
@@ -550,7 +559,9 @@ loop:
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dc = fsub double %dx, %dprev
   %bounded = and i32 %x, 127
   %state.next = add nuw nsw i32 %bounded, %older
@@ -685,7 +696,9 @@ loop:
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dc = fsub double %dx, %dprev
   %bounded = and i32 %x, 127
   %state.next = add nuw nsw i32 %bounded, %older
@@ -730,7 +743,9 @@ loop:
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dc = fsub double %dx, %dprev
   %bounded = and i32 %x, 127
   %state.next = add nuw nsw i32 %bounded, %older
@@ -775,7 +790,9 @@ loop:
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dc = fsub double %dx, %dprev
   %bounded = and i32 %x, 127
   %state.next = add nuw nsw i32 %bounded, %older
@@ -820,7 +837,9 @@ loop:
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %raw = xor i32 %prev, %x
-  %c = call i32 @scalar_helper(i32 %raw)
+  %c.depth.mul = mul i32 %raw, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dc = fsub double %dx, %dprev
   %bounded = and i32 %x, 127
   %state.next = add nuw nsw i32 %bounded, %older

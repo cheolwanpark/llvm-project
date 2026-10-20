@@ -23,7 +23,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_negation_recurrence(
 ; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare double @unsafe(double) memory(none) nounwind willreturn
 declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
 
@@ -171,7 +172,9 @@ loop:
   %p = getelementptr double, ptr %a, i64 %iv
   %x = load double, ptr %p, align 8
   %neg = fneg double %x
-  %c = call double @unsafe(double %neg)
+  %c.depth.mul = fmul double %neg, 5.000000e-01
+  %c.depth.bias = fadd double %c.depth.mul, 1.250000e+00
+  %c = call double @unsafe(double %c.depth.bias)
   %update = fadd double %sum, %c
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, %n

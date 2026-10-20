@@ -21,7 +21,9 @@ header:
 body:
   %p = getelementptr double, ptr %a, i64 %i
   %x = load double, ptr %p
-  %f = call double @expensive(double %x)
+  %scaled = fmul double %x, 0.5
+  %biased = fadd double %scaled, 1.25
+  %f = call double @expensive(double %biased)
   %positive = fcmp ogt double %f, 0.0
   br i1 %positive, label %update, label %latch
 update:

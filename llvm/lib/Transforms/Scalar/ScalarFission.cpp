@@ -27,6 +27,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -36,6 +37,7 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
 #include "llvm/Transforms/Scalar/LoopRotation.h"
@@ -46,6 +48,8 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
 using namespace llvm;
+
+#define DEBUG_TYPE "scalar-fission"
 
 static cl::opt<bool> EnableFission("enable-scalar-fission", cl::init(false),
                                    cl::Hidden,
@@ -158,6 +162,14 @@ struct Stream {
   Align Alignment;
   StoreInst *ExistingStore = nullptr;
 };
+struct Contribution {
+  unsigned Group;
+  Value *Root;
+  SmallPtrSet<Instruction *, 32> Dependencies;
+};
+struct StateGroup {
+  SmallPtrSet<Instruction *, 32> Updates;
+};
 struct FissionPlan {
   Loop &L;
   SmallVector<BasicBlock *> Blocks;
@@ -175,7 +187,20 @@ struct FissionPlan {
   uint64_t OriginalWriteBytes = 0;
   uint64_t ConsumerReadBytes = 0;
   uint64_t AdditionalReadBytes = 0;
+  SmallVector<StateGroup, 2> Groups;
+  SmallVector<Contribution, 4> Contributions;
+  DenseMap<Instruction *, unsigned> Membership;
+  MapVector<Instruction *, StringRef> Boundaries;
+  SmallPtrSet<Instruction *, 32> Retained;
+  bool FinalPartition = false;
+  unsigned ProducerDepth = 0;
   unsigned Budget = 4096;
+  bool charge() {
+    if (!Budget)
+      return reject("analysis-budget");
+    --Budget;
+    return true;
+  }
   StringRef Reason;
   explicit FissionPlan(Loop &L) : L(L) {}
   bool reject(StringRef R) {
@@ -184,6 +209,15 @@ struct FissionPlan {
   }
 };
 } // namespace
+
+static std::string inputName(const Value *V) {
+  if (V->hasName())
+    return V->getName().str();
+  std::string Name;
+  raw_string_ostream OS(Name);
+  V->printAsOperand(OS, false);
+  return Name;
+}
 
 static bool scalarType(Type *T) {
   return T->isIntegerTy() || T->isFloatingPointTy() || T->isPointerTy();
@@ -209,7 +243,7 @@ static bool movable(const Instruction &I) {
     }
   }
   return isa<BinaryOperator, UnaryOperator, CastInst, CmpInst, SelectInst,
-             PHINode, FreezeInst, GetElementPtrInst>(I);
+             PHINode, FreezeInst, GetElementPtrInst, ExtractValueInst>(I);
 }
 
 static bool collectState(PHINode &Phi, FissionPlan &P, LoopInfo &LI,
@@ -219,7 +253,7 @@ static bool collectState(PHINode &Phi, FissionPlan &P, LoopInfo &LI,
   auto *Latch = P.L.getLoopLatch();
   auto *Exit = P.L.getUniqueExitBlock();
   for (unsigned N = 0; N != Work.size(); ++N) {
-    if (!P.Budget--)
+    if (!P.charge())
       return P.reject("analysis-budget");
     Instruction *I = Work[N];
     if (!Slice.insert(I).second)
@@ -266,7 +300,8 @@ static bool computedImpl(Value *V, SmallPtrSetImpl<Value *> &Seen,
   if (Value *Simple = simplifyInstruction(I, SimplifyQuery(I->getDataLayout())))
     if (Simple != I)
       return computedImpl(Simple, Seen, Budget, Depth + 1);
-  if (isa<CastInst, PHINode, SelectInst, FreezeInst, GetElementPtrInst>(I)) {
+  if (isa<CastInst, PHINode, SelectInst, FreezeInst, GetElementPtrInst,
+          ExtractValueInst>(I)) {
     unsigned Start = isa<SelectInst>(I) ? 1 : 0;
     bool AnyComputed = false;
     for (unsigned N = Start; N < I->getNumOperands(); ++N) {
@@ -340,6 +375,81 @@ static bool computed(Value *V, SmallPtrSetImpl<Value *> &Seen, FissionPlan &P) {
   if (!P.Budget)
     P.reject("analysis-budget");
   return Result;
+}
+
+// Score only data dependencies in the final retained producer. Loads do not
+// inherit address depth; control and addresses are reached only if they also
+// produce data. Recurrence PHIs cut backedges, including in nested producers.
+static bool measureProducerDepth(FissionPlan &P, LoopInfo &LI,
+                                 ScalarEvolution &SE) {
+  SmallPtrSet<Instruction *, 32> Data;
+  std::function<void(Value *)> MarkData = [&](Value *V) {
+    auto *I = dyn_cast<Instruction>(V);
+    if (!I || !P.L.contains(I) || !Data.insert(I).second || !P.charge())
+      return;
+    if (isa<LoadInst, GetElementPtrInst>(I) ||
+        (isa<PHINode>(I) && LI.isLoopHeader(I->getParent())))
+      return;
+    unsigned Start = isa<SelectInst>(I) ? 1 : 0;
+    for (unsigned N = Start; N < I->getNumOperands(); ++N)
+      if (!I->getOperand(N)->getType()->isPointerTy())
+        MarkData(I->getOperand(N));
+  };
+  // Trace state results through their update graphs, skipping select
+  // conditions. Predicate roots still count as contribution slices, but a
+  // control-only input cannot acquire data depth merely by needing a transfer.
+  // Likewise, load addresses are never data dependencies of a loaded result.
+  for (const State &S : P.States)
+    MarkData(S.Next);
+  for (BasicBlock *BB : P.L.blocks())
+    for (Instruction &I : *BB) {
+      if (!P.Retained.contains(&I))
+        continue;
+      if (auto *Store = dyn_cast<StoreInst>(&I))
+        MarkData(Store->getValueOperand());
+      else if (isa<CallBase>(I))
+        MarkData(&I);
+      else if (auto *Phi = dyn_cast<PHINode>(&I); Phi && LI.isLoopHeader(BB)) {
+        Loop *Owner = LI.getLoopFor(BB);
+        InductionDescriptor ID;
+        if (!InductionDescriptor::isInductionPHI(Phi, Owner, &SE, ID))
+          for (Value *V : Phi->incoming_values())
+            MarkData(V);
+      }
+    }
+  DenseMap<Instruction *, unsigned> Depths;
+  std::function<unsigned(Value *)> Depth = [&](Value *V) -> unsigned {
+    auto *I = dyn_cast<Instruction>(V);
+    if (!I || !P.Retained.contains(I) || !Data.contains(I))
+      return 0;
+    if (auto It = Depths.find(I); It != Depths.end())
+      return It->second;
+    if (!P.charge())
+      return 0;
+    Depths[I] = 0;
+    if (isa<LoadInst, GetElementPtrInst>(I) ||
+        (isa<PHINode>(I) && LI.isLoopHeader(I->getParent())))
+      return 0;
+    if (Value *Simple =
+            simplifyInstruction(I, SimplifyQuery(I->getDataLayout()));
+        Simple && Simple != I)
+      return Depths[I] = Depth(Simple);
+    unsigned Result = 0;
+    // Select conditions describe execution, not an extra data calculation.
+    unsigned Start = isa<SelectInst>(I) ? 1 : 0;
+    for (unsigned N = Start; N < I->getNumOperands(); ++N)
+      Result = std::max(Result, Depth(I->getOperand(N)));
+    bool Induction =
+        SE.isSCEVable(I->getType()) && isa<SCEVAddRecExpr>(SE.getSCEV(I));
+    bool Operation =
+        !Induction && isa<BinaryOperator, UnaryOperator, CmpInst, CallBase>(I);
+    return Depths[I] = Result + unsigned(Operation);
+  };
+  for (BasicBlock *BB : P.L.blocks())
+    for (Instruction &I : *BB)
+      if (P.Retained.contains(&I))
+        P.ProducerDepth = std::max(P.ProducerDepth, Depth(&I));
+  return P.Reason.empty();
 }
 
 static bool safeCall(const CallBase &C) {
@@ -447,7 +557,18 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
       P.States.push_back({&Phi,
                           Phi.getIncomingValueForBlock(L.getLoopPreheader()),
                           Phi.getIncomingValueForBlock(Latch)});
+      // Overlapping forward closures are one group, even if discovered from
+      // several coupled header PHIs. Independent states keep their identities.
+      for (auto It = P.Groups.begin(); It != P.Groups.end();) {
+        if (any_of(It->Updates,
+                   [&](Instruction *I) { return Slice.contains(I); })) {
+          Slice.insert_range(It->Updates);
+          It = P.Groups.erase(It);
+        } else
+          ++It;
+      }
       P.Moved.insert_range(Slice);
+      P.Groups.push_back({std::move(Slice)});
     }
     if (!P.Reason.empty())
       return false;
@@ -458,7 +579,7 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
   const DataLayout &DL = Header->getModule()->getDataLayout();
   for (BasicBlock *BB : L.blocks())
     for (Instruction &I : *BB) {
-      if (!P.Budget--)
+      if (!P.charge())
         return P.reject("analysis-budget");
       if (isa<ConstrainedFPIntrinsic>(I))
         return P.reject("strict-fp");
@@ -482,9 +603,7 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
       }
     }
 
-  // Start from the update slice and outer control. Walk backwards through
-  // private, cheap suffixes; stop at shared computed values or producer-only
-  // regions. Reconstruct affine IVs rather than copying addresses to scratch.
+  // Address reconstruction is independent of contribution sharing.
   // Recognize a bounded tree of original address operations. In particular a
   // load in this loop is never an invariant leaf. The emitter clones these
   // instructions at their original CFG positions, including widths and flags.
@@ -492,9 +611,8 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
                                                        unsigned Depth) -> bool {
     if (L.isLoopInvariant(V))
       return true;
-    if (!Depth || !P.Budget)
+    if (!Depth || !P.charge())
       return false;
-    --P.Budget;
     auto *I = dyn_cast<Instruction>(V);
     if (!I || LI.getLoopFor(I->getParent()) != &L)
       return false;
@@ -512,136 +630,228 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
     return all_of(I->operands(),
                   [&](Value *Op) { return Address(Op, Depth - 1); });
   };
+  auto AddressOrIV = [&](Instruction *I) {
+    return Address(I, 8) ||
+           (SE.isSCEVable(I->getType()) && isa<SCEVAddRecExpr>(SE.getSCEV(I)));
+  };
+  DenseMap<Instruction *, bool> VaryingInputs;
+  std::function<bool(Value *)> Varying = [&](Value *V) {
+    auto *I = dyn_cast<Instruction>(V);
+    if (!I || !L.contains(I))
+      return false;
+    if (auto It = VaryingInputs.find(I); It != VaryingInputs.end())
+      return It->second;
+    if (!P.charge())
+      return false;
+    // Recurrences, reads and nondeterministic operations are varying leaves.
+    // An invariant-only arithmetic tree is reconstructed in the consumer.
+    VaryingInputs[I] = true;
+    bool Result = isa<PHINode, LoadInst, CallBase, FreezeInst>(I) ||
+                  any_of(I->operands(), Varying);
+    return VaryingInputs[I] = Result;
+  };
+  auto InnerResult = [&](Instruction *I) {
+    auto *Phi = dyn_cast<PHINode>(I);
+    return Phi && Phi->getParent() != Header &&
+           any_of(Phi->blocks(),
+                  [&](BasicBlock *Pred) { return LI.getLoopFor(Pred) != &L; });
+  };
+  DenseMap<Instruction *, bool> Computations;
+  auto Computed = [&](Instruction *I) {
+    auto It = Computations.find(I);
+    if (It != Computations.end())
+      return It->second;
+    SmallPtrSet<Value *, 32> Seen;
+    bool Result = computed(I, Seen, P);
+    Computations[I] = Result;
+    return Result;
+  };
+
+  // An input is distinct within a closed group, rather than at each use or
+  // header PHI. Collect in source order; hash-table order never chooses a cut.
+  for (auto [G, Group] : enumerate(P.Groups)) {
+    SmallPtrSet<Value *, 16> Roots;
+    for (BasicBlock *BB : P.Blocks)
+      for (Instruction &I : *BB)
+        if (Group.Updates.contains(&I))
+          for (Value *Op : I.operands()) {
+            auto *Def = dyn_cast<Instruction>(Op);
+            if (!Def || !L.contains(Def) || Group.Updates.contains(Def) ||
+                !Roots.insert(Op).second)
+              continue;
+            P.Contributions.push_back({unsigned(G), Op, {}});
+            Contribution &C = P.Contributions.back();
+            SmallVector<Instruction *> Work{Def};
+            while (!Work.empty()) {
+              if (!P.charge())
+                return false;
+              Instruction *Node = Work.pop_back_val();
+              if (!C.Dependencies.insert(Node).second)
+                continue;
+              // Count once per complete slice, including short slices and
+              // reconvergent paths. Recurrences and nested LCSSA are leaves.
+              if (!P.charge())
+                return false;
+              ++P.Membership[Node];
+              if ((isa<PHINode>(Node) && Node->getParent() == Header) ||
+                  InnerResult(Node))
+                continue;
+              for (Value *Operand : Node->operands())
+                if (auto *Dep = dyn_cast<Instruction>(Operand);
+                    Dep && L.contains(Dep) && !P.Moved.contains(Dep))
+                  Work.push_back(Dep);
+            }
+          }
+  }
+
+  // Last shared-to-private edges, including 4 -> 2 -> 1 sharing levels.
+  // Mandatory producer values supplement this frontier; they are not sharing.
+  for (BasicBlock *BB : P.Blocks)
+    for (Instruction &I : *BB) {
+      if (!P.Membership.count(&I))
+        continue;
+      StringRef Why;
+      if (InnerResult(&I))
+        Why = "inner-result";
+      else if (isa<ExtractValueInst>(I))
+        Why = "aggregate-result";
+      else if (isa<CallBase, FreezeInst>(I))
+        Why = isa<CallBase>(I) ? "call" : "freeze";
+      else if (P.Membership.lookup(&I) > 1 &&
+               any_of(I.users(),
+                      [&](User *U) {
+                        auto *Use = dyn_cast<Instruction>(U);
+                        return Use && P.Membership.lookup(Use) == 1;
+                      }) &&
+               !(isa<PHINode>(I) && I.getParent() == Header) &&
+               !AddressOrIV(&I) && Varying(&I) && Computed(&I))
+        Why = "last-shared";
+      if (!Why.empty())
+        P.Boundaries[&I] = Why;
+    }
+  // An independent computed input, or a shared root used directly by updates,
+  // still needs a computed-result crossing when it has no selected ancestor.
+  for (const Contribution &C : P.Contributions) {
+    if (any_of(C.Dependencies,
+               [&](Instruction *I) { return P.Boundaries.count(I); }))
+      continue;
+    auto *Root = cast<Instruction>(C.Root);
+    if (!(isa<PHINode>(Root) && Root->getParent() == Header) &&
+        !AddressOrIV(Root) && Varying(Root) && Computed(Root))
+      P.Boundaries[Root] = "uncovered-root";
+  }
+  if (!P.Reason.empty())
+    return false;
+
+  // Resolve availability before committing the consumer closure. Each node has
+  // one decision. Failed reconstruction promotes a genuine computed result to
+  // a fallback boundary; no tentative stream/IV lists need rolling back.
+  struct Availability {
+    Transfer Mode = Transfer::Recompute;
+    StringRef Failure;
+  };
+  DenseMap<Instruction *, Availability> Available;
   SmallPtrSet<Instruction *, 32> Visiting;
-  std::function<bool(Value *)> Input = [&](Value *V) -> bool {
+  std::function<StringRef(Value *)> Resolve = [&](Value *V) -> StringRef {
+    auto *I = dyn_cast<Instruction>(V);
+    if (!I || !L.contains(I) || P.Moved.contains(I))
+      return {};
+    if (auto It = Available.find(I); It != Available.end())
+      return It->second.Failure;
+    if (!P.charge())
+      return P.Reason;
+    if (!Visiting.insert(I).second)
+      return "unsupported-input-cycle";
+    auto Pop = make_scope_exit([&] { Visiting.erase(I); });
+    Availability A;
+    if (LI.getLoopFor(I->getParent()) != &L)
+      A.Failure = "non-lcssa-inner-input";
+    else if (auto *Phi = dyn_cast<PHINode>(I);
+             Phi && Phi->getParent() == Header) {
+      if (!Address(Phi, 8))
+        A.Failure = "producer-state-input";
+      // The induction's next value is included in the final closure below.
+    } else if (P.Boundaries.count(I) || InnerResult(I) ||
+               isa<CallBase, FreezeInst, ExtractValueInst>(I)) {
+      if (!Computed(I))
+        A.Failure = "forbidden-load-relay";
+      else if (!scalarType(I->getType()))
+        A.Failure = "unsupported-stream-type";
+      else {
+        A.Mode = Transfer::Scratch;
+        if (!P.Boundaries.count(I))
+          P.Boundaries[I] = InnerResult(I)     ? "inner-result"
+                            : isa<CallBase>(I) ? "call"
+                                               : "freeze";
+      }
+    } else {
+      if (auto *Load = dyn_cast<LoadInst>(I)) {
+        if (!stableMemory(Load->getPointerOperand(), P, AA))
+          A.Failure = "load-snapshot-required";
+      } else if (!movable(*I))
+        A.Failure = "unsupported-consumer-input";
+      if (A.Failure.empty())
+        for (Value *Op : I->operands()) {
+          A.Failure = Resolve(Op);
+          if (!A.Failure.empty())
+            break;
+        }
+      if ((A.Failure == "load-snapshot-required" ||
+           A.Failure == "producer-state-input" ||
+           A.Failure == "non-lcssa-inner-input") &&
+          Computed(I)) {
+        A.Failure = {};
+        A.Mode = Transfer::Scratch;
+        P.Boundaries[I] = "unavailable-dependency";
+      }
+    }
+    Available[I] = A;
+    return A.Failure;
+  };
+  auto Require = [&](Value *V) {
+    StringRef Failure = Resolve(V);
+    return P.Reason.empty() && (Failure.empty() || P.reject(Failure));
+  };
+  for (const Contribution &C : P.Contributions)
+    if (!Require(C.Root))
+      return false;
+  // Control is a consumer dependency, never an extra contribution slice.
+  for (BasicBlock *BB : P.Blocks)
+    if (BB != Latch)
+      if (auto *Br = cast<BranchInst>(BB->getTerminator()); Br->isConditional())
+        if (!Require(Br->getCondition()))
+          return false;
+
+  std::function<bool(Value *)> Commit = [&](Value *V) {
     auto *I = dyn_cast<Instruction>(V);
     if (!I || !L.contains(I) || P.Moved.contains(I) || P.Inputs.count(I))
       return true;
-    if (!P.Budget--)
-      return P.reject("analysis-budget");
-    if (!Visiting.insert(I).second)
-      return P.reject("unsupported-input-cycle");
-    auto PopVisiting = make_scope_exit([&] { Visiting.erase(I); });
-    bool Outer = LI.getLoopFor(I->getParent()) == &L;
-    if (!Outer)
-      return P.reject("non-lcssa-inner-input");
-    if (auto *Phi = dyn_cast<PHINode>(I); Phi && Phi->getParent() == Header) {
-      InductionDescriptor ID;
-      if (InductionDescriptor::isInductionPHI(Phi, &L, &SE, ID) &&
-          ID.getKind() == InductionDescriptor::IK_IntInduction &&
-          ID.getConstIntStepValue() && ID.getInductionBinOp() &&
-          L.isLoopInvariant(ID.getStartValue())) {
-        P.Inductions.push_back(Phi);
-        P.Inputs[I] = Transfer::Recompute;
-        auto *Next = ID.getInductionBinOp();
-        P.Inputs[Next] = Transfer::Recompute;
-        for (Value *Op : Next->operands())
-          if (!Input(Op))
-            return false;
-        return true;
-      }
-      return P.reject("producer-state-input");
-    }
-    bool InnerResult = false;
-    if (auto *Phi = dyn_cast<PHINode>(I))
-      for (BasicBlock *Pred : Phi->blocks())
-        InnerResult |= LI.getLoopFor(Pred) != &L;
-    bool Shared = false;
-    for (User *U : I->users()) {
-      auto *UI = dyn_cast<Instruction>(U);
-      Shared |=
-          !UI || (!P.Moved.contains(UI) &&
-                  !isa<CastInst, GetElementPtrInst>(I) && I->getNumUses() > 1);
-    }
-    SmallPtrSet<Value *, 32> Seen;
-    bool Computed = computed(I, Seen, P);
-    if (!P.Reason.empty())
+    if (!P.charge() || !Require(I))
       return false;
-    bool Scratch = InnerResult || isa<CallBase, FreezeInst>(I) ||
-                   (Shared && Computed && !isa<PHINode>(I) && !Address(I, 8));
-    if (Scratch) {
-      if (!Computed)
-        return P.reject("forbidden-load-relay");
-      if (!scalarType(I->getType()))
-        return P.reject("unsupported-stream-type");
-      P.Inputs[I] = Transfer::Scratch;
-      auto Bytes = DL.getTypeAllocSize(I->getType()).getFixedValue();
-      P.Streams.push_back({I, Bytes, DL.getABITypeAlign(I->getType())});
-      return true;
-    }
-    if (auto *Load = dyn_cast<LoadInst>(I)) {
-      if (!stableMemory(Load->getPointerOperand(), P, AA))
-        return P.reject("load-snapshot-required");
-    } else if (!movable(*I)) {
-      return P.reject("unsupported-consumer-input");
-    }
-    unsigned OldInputs = P.Inputs.size(), OldStreams = P.Streams.size();
-    unsigned OldInductions = P.Inductions.size();
-    P.Inputs[I] = Transfer::Recompute;
-    for (Value *Op : I->operands()) {
-      if (Input(Op))
-        continue;
-      // Try the computed contribution boundary if its private suffix cannot
-      // safely reread an original input or reconstruct producer-local state.
-      // No IR has been created; roll back all tentative transfers first.
-      if (!Computed || (P.Reason != "load-snapshot-required" &&
-                        P.Reason != "producer-state-input" &&
-                        P.Reason != "non-lcssa-inner-input"))
-        return false;
-      while (P.Inputs.size() > OldInputs)
-        P.Inputs.pop_back();
-      P.Streams.resize(OldStreams);
-      P.Inductions.resize(OldInductions);
-      P.Reason = {};
-      P.Inputs[I] = Transfer::Scratch;
+    Transfer T = Available.lookup(I).Mode;
+    P.Inputs[I] = T;
+    if (T == Transfer::Scratch) {
       P.Streams.push_back({I, DL.getTypeAllocSize(I->getType()).getFixedValue(),
                            DL.getABITypeAlign(I->getType())});
       return true;
     }
+    if (auto *Phi = dyn_cast<PHINode>(I); Phi && Phi->getParent() == Header)
+      P.Inductions.push_back(Phi);
+    for (Value *Op : I->operands())
+      if (!Commit(Op))
+        return false;
     return true;
   };
-  // Stable source order keeps boundary selection and diagnostics reproducible.
+  for (const Contribution &C : P.Contributions)
+    if (!Commit(C.Root))
+      return false;
   for (BasicBlock *BB : P.Blocks)
-    for (Instruction &I : *BB) {
-      if (P.Moved.contains(&I)) {
-        for (Value *Op : I.operands())
-          if (!Input(Op))
-            return false;
-      } else if (&I != Branch) {
-        if (auto *Br = dyn_cast<BranchInst>(&I); Br && Br->isConditional())
-          if (!Input(Br->getCondition()))
-            return false;
-      }
-    }
-  // At least one actual producer calculation must cross the boundary. Pure
-  // input reductions have no producer to separate and need no scratch relay.
-  if (P.Streams.empty()) {
-    // Retry the simple contribution boundary when no shared cut was found.
-    for (BasicBlock *BB : P.Blocks) {
-      for (Instruction &I : *BB) {
-        if (!P.Moved.contains(&I))
-          continue;
-        for (Value *Op : I.operands()) {
-          auto *Source = dyn_cast<Instruction>(Op);
-          SmallPtrSet<Value *, 32> Seen;
-          if (!Source || !P.Inputs.count(Source) || isa<PHINode>(Source) ||
-              !computed(Source, Seen, P))
-            continue;
-          P.Inputs[Source] = Transfer::Scratch;
-          auto Bytes = DL.getTypeAllocSize(Source->getType()).getFixedValue();
-          P.Streams.push_back(
-              {Source, Bytes, DL.getABITypeAlign(Source->getType())});
-          break;
-        }
-        if (!P.Streams.empty())
-          break;
-      }
-      if (!P.Streams.empty())
-        break;
-    }
-    if (P.Streams.empty())
-      return P.reject("no-computed-boundary");
-  }
+    if (BB != Latch)
+      if (auto *Br = cast<BranchInst>(BB->getTerminator()); Br->isConditional())
+        if (!Commit(Br->getCondition()))
+          return false;
+  if (P.Streams.empty())
+    return P.reject("no-computed-boundary");
   // Reuse an existing result array only with an injective, nonwrapping
   // original IV and a same-path store. Every other possible writer must be
   // disjoint for the whole schedule. No new noalias assumption is introduced.
@@ -667,7 +877,7 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
       if (!Next || !Next->hasNoUnsignedWrap() ||
           !stableMemory(GEP, P, AA, Store))
         continue;
-      if (!Input(GEP))
+      if (!Commit(GEP))
         return false;
       P.Inputs[Source] = Transfer::ExistingBuffer;
       P.Streams[N].ExistingStore = Store;
@@ -681,6 +891,8 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
   std::function<void(Value *)> Mark = [&](Value *V) {
     auto *I = dyn_cast<Instruction>(V);
     if (!I || !L.contains(I) || !Needed.insert(I).second)
+      return;
+    if (!P.charge())
       return;
     if (P.Inputs.count(I) && P.Inputs.lookup(I) != Transfer::Recompute) {
       if (P.Inputs.lookup(I) == Transfer::ExistingBuffer)
@@ -708,7 +920,7 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
     llvm::erase_if(P.Inductions,
                    [&](PHINode *I) { return !Needed.contains(I); });
   };
-  SmallPtrSet<Instruction *, 32> Retained;
+  auto &Retained = P.Retained;
   auto ProducerNeeds = [&](Instruction *Omit) {
     Retained.clear();
     SmallVector<Instruction *> Work;
@@ -776,6 +988,21 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
     }
   } while (Changed);
   ProducerNeeds(nullptr);
+  if (!P.Reason.empty())
+    return false;
+  // Validate the authoritative consumer closure before emission can remap it.
+  // Original SSA dominance and CFG positions are preserved, including PHI
+  // edges.
+  for (Instruction *I : Needed) {
+    if (P.Moved.contains(I) || P.Inputs.count(I))
+      continue;
+    return P.reject("unavailable-consumer-definition");
+  }
+  P.FinalPartition = true;
+  if (!measureProducerDepth(P, LI, SE))
+    return false;
+  if (P.ProducerDepth < 3)
+    return P.reject("producer-too-shallow");
   P.ConsumerReadBytes = 0;
   P.AdditionalReadBytes = 0;
   for (auto [I, T] : P.Inputs)
@@ -1271,12 +1498,61 @@ PreservedAnalyses ScalarFissionPass::run(Function &F,
       Chosen = &Grouped;
     }
     FissionPlan &P = *Chosen;
+    // Bounded analysis records distinguish graph membership, the initial cut,
+    // and the final transfers after availability resolution and cleanup.
+    unsigned Records = 0;
+    for (const Contribution &C : P.Contributions) {
+      if (Records++ == 128)
+        break;
+      ORE.emit([&] {
+        return OptimizationRemarkAnalysis("scalar-fission", "Contribution",
+                                          Candidate->getStartLoc(),
+                                          Candidate->getHeader())
+               << "contribution group " << ore::NV("StateGroup", C.Group)
+               << ", root " << ore::NV("Root", inputName(C.Root))
+               << ", slice size "
+               << ore::NV("SliceSize", C.Dependencies.size());
+      });
+    }
+    Records = 0;
+    for (BasicBlock *BB : Candidate->blocks())
+      for (Instruction &I : *BB) {
+        if ((!P.Membership.count(&I) && !P.Boundaries.count(&I)) ||
+            Records++ >= 256)
+          continue;
+        ORE.emit([&] {
+          StringRef Mode = !P.FinalPartition ? "unresolved"
+                           : !P.Inputs.count(&I)
+                               ? (P.Retained.contains(&I) ? "producer" : "dead")
+                           : P.Inputs.lookup(&I) == Transfer::Scratch
+                               ? "scratch"
+                           : P.Inputs.lookup(&I) == Transfer::ExistingBuffer
+                               ? "existing-buffer"
+                               : "recompute";
+          return OptimizationRemarkAnalysis("scalar-fission", "Frontier",
+                                            Candidate->getStartLoc(),
+                                            Candidate->getHeader())
+                 << "value " << ore::NV("Value", inputName(&I))
+                 << ", membership "
+                 << ore::NV("Membership", P.Membership.lookup(&I))
+                 << ", boundary "
+                 << ore::NV("Boundary", P.Boundaries.lookup(&I))
+                 << ", final mode " << ore::NV("Transfer", Mode);
+        });
+      }
+    LLVM_DEBUG(dbgs() << "scalar fission: " << P.Contributions.size()
+                      << " contributions, producer depth " << P.ProducerDepth
+                      << ", budget remaining " << P.Budget << '\n');
     if (!Valid) {
       ORE.emit([&] {
         return OptimizationRemarkMissed("scalar-fission", "Rejected",
                                         Candidate->getStartLoc(),
                                         Candidate->getHeader())
-               << "scalar fission rejected: " << ore::NV("Reason", P.Reason);
+               << "scalar fission rejected: " << ore::NV("Reason", P.Reason)
+               << ", producer depth "
+               << ore::NV("ProducerDepth", P.ProducerDepth)
+               << ", analysis budget remaining "
+               << ore::NV("AnalysisBudgetRemaining", P.Budget);
       });
       continue;
     }
@@ -1318,7 +1594,10 @@ PreservedAnalyses ScalarFissionPass::run(Function &F,
         << ", scratch store bytes "
         << ore::NV("ScratchStoreBytesPerIteration", P.ScratchTraffic)
         << ", scratch load bytes "
-        << ore::NV("ScratchLoadBytesPerIteration", P.ScratchTraffic);
+        << ore::NV("ScratchLoadBytesPerIteration", P.ScratchTraffic)
+        << ", producer depth " << ore::NV("ProducerDepth", P.ProducerDepth)
+        << ", analysis budget remaining "
+        << ore::NV("AnalysisBudgetRemaining", P.Budget);
     emit(P, DT, LI, SE);
     ORE.emit(Selected);
     AM.invalidate(F, PreservedAnalyses::none());

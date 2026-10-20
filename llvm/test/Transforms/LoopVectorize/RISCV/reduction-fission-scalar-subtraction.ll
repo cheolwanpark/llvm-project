@@ -23,7 +23,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @stores_flags(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define void @stores_full(ptr %a, ptr %fp, ptr %out, ptr %indices,
@@ -44,7 +45,9 @@ loop:
   %rf = phi float [%fstart, %preheader], [%uf, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %dc = fmul double %dx, 3.0
@@ -140,7 +143,9 @@ loop:
   store i32 %write, ptr %op, align 4
   %seen = load i32, ptr %op, align 4
   store i32 0, ptr %op, align 4
-  %c = call i32 @scalar_helper(i32 %seen)
+  %c.depth.mul = mul i32 %seen, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %dc = fmul double %dx, 3.0
@@ -230,7 +235,9 @@ gate:
   br label %left
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %ld = fmul double %dx, 3.0
@@ -333,7 +340,9 @@ loop:
   %rf = phi float [%fstart, %preheader], [%uf, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %dc = fmul double %dx, 3.0
@@ -423,7 +432,9 @@ loop:
   %rf = phi float [%fstart, %preheader], [%uf, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %dc = fmul double %dx, 3.0
@@ -517,7 +528,9 @@ loop:
   %iv = lshr exact i64 %distance, 1
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %dc = fmul double %dx, 3.0
@@ -608,7 +621,9 @@ loop:
   %rf = phi float [%fstart, %preheader], [%uf, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %rawc = call i32 @scalar_helper(i32 %x)
+  %rawc.depth.mul = mul i32 %x, 13
+  %rawc.depth.bias = add i32 %rawc.depth.mul, 7
+  %rawc = call i32 @scalar_helper(i32 %rawc.depth.bias)
   %c = and i32 %rawc, 3
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8

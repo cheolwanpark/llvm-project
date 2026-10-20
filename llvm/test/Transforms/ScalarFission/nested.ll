@@ -31,7 +31,8 @@ inner:
   %j = phi i32 [0, %inner.ph], [%jnext, %inner]
   %v = phi i32 [0, %inner.ph], [%vnext, %inner]
   %x = call i32 @effect(ptr %p)
-  %vnext = add i32 %v, %x
+  %scaled = mul i32 %x, 3
+  %vnext = add i32 %v, %scaled
   %jnext = add i32 %j, 1
   %again = icmp ne i32 %jnext, 3
   br i1 %again, label %inner, label %inner.exit

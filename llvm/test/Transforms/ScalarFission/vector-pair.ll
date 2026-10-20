@@ -17,7 +17,8 @@ loop:
   %p = getelementptr i32, ptr %a, i64 %i
   %x = load i32, ptr %p
   %square = mul i32 %x, %x
-  %f = add i32 %square, 3
+  %biased = add i32 %square, 3
+  %f = xor i32 %biased, 9
   %a1 = add i32 %f, 1
   %a2 = xor i32 %f, 7
   %u = add i32 %s, %a1

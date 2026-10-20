@@ -1,26 +1,31 @@
+; RUN: opt -passes=scalar-fission -pass-remarks-output=%t.frontier.yaml -pass-remarks-filter=scalar-fission -disable-output %s
+; RUN: FileCheck %s --check-prefix=FRONTIER < %t.frontier.yaml
 ; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
 ; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
 ; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @short_one(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @short_two(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @short_ordered(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @short_ordered_two(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @short_dependence(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @short_invariant(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: short_one
+; FRONTIER: Reason: producer-too-shallow
 define void @short_one(ptr noalias readonly %a, ptr noalias %out, i64 %n) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -47,6 +52,9 @@ bypass:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: short_two
+; FRONTIER: Reason: producer-too-shallow
 define void @short_two(ptr noalias readonly %a, ptr noalias %out, i64 %n) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -80,6 +88,9 @@ bypass:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: short_ordered
+; FRONTIER: Reason: producer-too-shallow
 define void @short_ordered(ptr noalias readonly %a, ptr noalias %out, i64 %n, double %start) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -106,6 +117,9 @@ bypass:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: short_ordered_two
+; FRONTIER: Reason: producer-too-shallow
 define void @short_ordered_two(ptr noalias readonly %a, ptr noalias %out, i64 %n, double %start) {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -139,6 +153,9 @@ bypass:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: short_dependence
+; FRONTIER: Reason: producer-too-shallow
 define void @short_dependence(ptr %a, ptr noalias %out) {
 entry:
   br label %loop
@@ -159,6 +176,9 @@ exit:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: short_invariant
+; FRONTIER: Reason: no-computed-boundary
 define void @short_invariant(i32 %x, ptr %out) {
 entry:
   br label %loop

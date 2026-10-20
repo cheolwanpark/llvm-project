@@ -50,7 +50,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_header_update_predicate(
 ; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @readonly_call(i32) memory(read) nounwind willreturn speculatable
 declare i32 @effect_call(i32) nounwind willreturn
 declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
@@ -140,7 +141,9 @@ left:
   %lc = mul i32 %x, 3
   br label %latch
 right:
-  %rc = xor i32 %x, 7
+  %rc.depth.mul = mul i32 %x, 13
+  %rc.depth.bias = add i32 %rc.depth.mul, 7
+  %rc = xor i32 %rc.depth.bias, 7
   br label %latch
 latch:
   %c = phi i32 [%sum, %left], [%rc, %right]
@@ -240,7 +243,9 @@ loop:
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %right
 left:
-  %lc = mul i32 %x, 3
+  %lc.depth.mul = mul i32 %x, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = mul i32 %lc.depth.bias, 3
   %again = icmp eq i32 %x, 3
   br i1 %again, label %left, label %latch
 right:
@@ -277,7 +282,9 @@ left:
   %lc = mul i32 %x, 3
   br i1 %choose, label %left, label %right
 right:
-  %rc = xor i32 %x, 7
+  %rc.depth.mul = mul i32 %x, 13
+  %rc.depth.bias = add i32 %rc.depth.mul, 7
+  %rc = xor i32 %rc.depth.bias, 7
   br label %latch
 latch:
   %c = phi i32 [%rc, %right]
@@ -307,7 +314,9 @@ loop:
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %right
 left:
-  %lc = mul i32 %x, 3
+  %lc.depth.mul = mul i32 %x, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = mul i32 %lc.depth.bias, 3
   br label %latch
 right:
   store i32 %x, ptr %p

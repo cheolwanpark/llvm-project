@@ -117,8 +117,28 @@ iterations reordered by the chunk schedule. Unknown aliases are rejected; there
 is no new noalias assumption or runtime alias versioning. Conditional loads stay
 on their original paths. Existing result buffers can replace scratch when stores
 use a nonwrapping canonical IV, are injective, and are disjoint from other writers.
-Computed shared values cross through private scratch; private suffixes remain in
-the consumer. Constants, addresses and affine integer IVs are reconstructed.
+Boundary analysis collects a complete backward slice for each distinct input
+of each closed state group. Repeated uses of one input within a group count once;
+different inputs in a compound group count separately, as does the same input in
+independent groups. Overlapping coupled update closures form one group. An
+instruction is shared when it belongs to more than one contribution slice. The
+structural cut is the **last shared-to-private frontier**: legal computed shared
+values with an edge to an instruction belonging to exactly one slice. A transition
+from membership four to two is still shared and is not a frontier. All slices
+participate, including short ones; there is no depth-eight preference or search
+for an earlier common ancestor.
+
+Calls, freezes, scalar aggregate extracts and inner-loop LCSSA results impose
+mandatory producer crossings independently of sharing. Direct shared roots and
+uncovered computed inputs use a computed-result fallback. Every consumer operand
+must still be available: one frontier in a root's slice does not cover unrelated
+operands. CFG predicates outside the state update graph constrain availability
+without adding contribution slices. The pass first tries independently closed
+terminal states and retries coupled groups only for `no-closed-state`.
+
+Computed results cross through scratch or proven existing buffers; private
+suffixes remain in the consumer. Constants, invariant-only expressions, addresses
+and affine integer IVs are reconstructed at their original CFG positions.
 
 Raw input snapshots cannot cross through scratch, including cast, select, PHI,
 freeze and identity-operation wrappers. If a safe original read is impossible,
@@ -169,8 +189,34 @@ into the consumer. No contracts are inferred from library or helper names.
 Irreducible outer control, multiple outer completion exits, EH, volatile/atomic
 accesses, strict/constrained FP, nonreconstructible state inputs and unsupported
 call effects are rejected with specific reasons. Analysis has a 4096-step budget per candidate, with at most two state-slice candidates.
-There is no minimum reduction count, producer depth, register-pressure gate,
-whole-loop vector-legality prerequisite or speedup requirement.
+Slice traversal, membership counting, availability and final dependency work
+all consume that budget; exhaustion reports `analysis-budget` before emission.
+There is no minimum reduction count, register-pressure gate, whole-loop
+vector-legality prerequisite or speedup requirement.
+
+After transfer resolution, existing-buffer decisions and fixed-point cleanup,
+the **final retained producer** must have maximum dependent computational depth
+at least **three**. Genuine data arithmetic and computational calls/intrinsics
+have unit weight; an opaque call counts once regardless of its name. Parallel
+operations do not add depth. Loads, address/IV calculations, casts, control and
+structural forwarding add no weight, and loads do not inherit address depth.
+Predicate-only arithmetic inside a state-dependent select has no data depth,
+even though the predicate remains a contribution input for membership counting.
+Recurrence PHIs stop backedges; nested loops contribute finite instruction
+dependencies rather than trip-count-multiplied depth. The maximum applies to the
+whole producer, including retained effects, so short contributions can coexist
+with a qualifying chain. A shallower producer reports `producer-too-shallow`.
+This is a selection policy, separate from the no-computed-boundary/raw-relay
+legality checks; the frontier is never moved to manufacture depth.
+
+Selected and shallow-rejected remarks record `ProducerDepth`; decisions also
+record `AnalysisBudgetRemaining`. Analysis records identify up to 128 contribution
+roots and 256 membership/boundary decisions per candidate. They distinguish
+initial boundary reasons from final scratch, existing-buffer, reconstructed,
+producer and dead values. Rejected incomplete partitions are labeled unresolved.
+These bounds limit diagnostics, not graph analysis. See the separate
+[frontier-change audit](ScalarFissionFrontier.md) for validation and selection
+changes; the prior overhead report remains historical evidence.
 
 By default FP flags, operand order, seeds and update order are preserved. Explicit
 `-scalar-fission-allow-fp-reordering` adds only `reassoc` to recognized consumer FP

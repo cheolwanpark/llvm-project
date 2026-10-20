@@ -71,7 +71,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @reject_sub_float_strictfp(
 ; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 declare void @effect(ptr) nounwind willreturn
 declare double @llvm.experimental.constrained.fsub.f64(double, double, metadata, metadata)
@@ -225,7 +226,9 @@ loop:
   %sum = phi i32 [ 19, %preheader ], [ %update, %loop ]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = sub i32 %sum, %c
   store i32 %x, ptr %p, align 4
   %next = add nuw i64 %iv, 1
@@ -491,7 +494,9 @@ loop:
   %sum = phi i32 [ 19, %preheader ], [ %update, %loop ]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = sub i32 %c, %sum
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, %n
@@ -516,7 +521,9 @@ loop:
   %sum = phi i32 [ 19, %preheader ], [ %update, %loop ]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %partial = sub i32 %sum, %c
   %update = add i32 %partial, %c
   %next = add nuw i64 %iv, 1
@@ -542,7 +549,9 @@ loop:
   %sum = phi float [ 1.900000e+01, %preheader ], [ %update, %loop ]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %term = sitofp i32 %c to float
   %update = fsub float %term, %sum
   %next = add nuw i64 %iv, 1
@@ -568,7 +577,9 @@ loop:
   %sum = phi double [ 1.900000e+01, %preheader ], [ %update, %loop ]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %term = sitofp i32 %c to double
   %update = fsub double %term, %sum
   %next = add nuw i64 %iv, 1
@@ -620,7 +631,9 @@ loop:
   %sum = phi double [ 1.900000e+01, %preheader ], [ %update, %loop ]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %term = sitofp i32 %c to double
   %partial = fsub double %sum, %term
   %update = fadd double %partial, %term
@@ -647,7 +660,9 @@ loop:
   %sum = phi double [ 1.900000e+01, %preheader ], [ %update, %loop ]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %converted = sitofp i32 %c to double
   %term = fsub double %sum, %converted
   %update = fsub double %sum, %term

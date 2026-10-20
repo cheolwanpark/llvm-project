@@ -14,7 +14,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @export_nested(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define void @export_unconditional(ptr readonly %a, ptr readonly %fp, ptr %out, ptr %indices,
@@ -35,7 +36,9 @@ loop:
   %rf = phi float [%fstart, %preheader], [%uf, %loop]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %dc = fmul double %dx, 3.0
@@ -119,7 +122,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !13
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %ld = fmul double %dx, 3.0
@@ -211,7 +216,9 @@ loop:
   br i1 %choose, label %left, label %right, !dbg !15
 left:
   %q = sdiv i32 840, %x
-  %lc = call i32 @scalar_helper(i32 %q)
+  %lc.depth.mul = mul i32 %q, 13
+  %lc.depth.bias = add i32 %lc.depth.mul, 7
+  %lc = call i32 @scalar_helper(i32 %lc.depth.bias)
   %dp = getelementptr double, ptr %fp, i64 %iv
   %dx = load double, ptr %dp, align 8
   %ld = fmul double %dx, 3.0

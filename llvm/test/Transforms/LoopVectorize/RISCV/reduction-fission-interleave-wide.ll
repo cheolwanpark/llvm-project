@@ -1,3 +1,5 @@
+; RUN: opt -passes=scalar-fission -pass-remarks-output=%t.frontier.yaml -pass-remarks-filter=scalar-fission -disable-output %s
+; RUN: FileCheck %s --check-prefix=FRONTIER < %t.frontier.yaml
 ; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
 ; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
@@ -6,31 +8,31 @@
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave4_members(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave5(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave5_members(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave6(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave6_members(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave7(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave7_members(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave8(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave8_members(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @interleave4(ptr readonly %a, ptr %out, i64 %n) !dbg !5 {
@@ -81,6 +83,9 @@ bypass:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: interleave4_members
+; FRONTIER: Reason: no-computed-boundary
 define void @interleave4_members(ptr readonly %a, ptr %out, i64 %n) !dbg !7 {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -194,6 +199,9 @@ bypass:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: interleave5_members
+; FRONTIER: Reason: no-computed-boundary
 define void @interleave5_members(ptr readonly %a, ptr %out, i64 %n) !dbg !11 {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -320,6 +328,9 @@ bypass:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: interleave6_members
+; FRONTIER: Reason: no-computed-boundary
 define void @interleave6_members(ptr readonly %a, ptr %out, i64 %n) !dbg !15 {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -459,6 +470,9 @@ bypass:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: interleave7_members
+; FRONTIER: Reason: no-computed-boundary
 define void @interleave7_members(ptr readonly %a, ptr %out, i64 %n) !dbg !19 {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -611,6 +625,9 @@ bypass:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: interleave8_members
+; FRONTIER: Reason: no-computed-boundary
 define void @interleave8_members(ptr readonly %a, ptr %out, i64 %n) !dbg !23 {
 entry:
   %bounded = icmp ule i64 %n, 65

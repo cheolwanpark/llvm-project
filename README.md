@@ -18,8 +18,10 @@ build-fission/bin/opt -passes=loop-vectorize -S split.ll -o vectorized.ll
 Use `-enable-scalar-fission` with an O2/O3 default pipeline, or Clang's
 `-mllvm -enable-scalar-fission`. Late placement is the default;
 `-scalar-fission-early` selects the comparison position before full unrolling.
-Fission does not depend on vector legality, reduction count, producer depth,
-register pressure, forced vector width or expected speedup.
+Fission requires final producer computation depth of at least three. It does not
+depend on vector legality, reduction count, register pressure, forced vector
+width or expected speedup. Contribution-slice membership selects the last shared
+values before private suffixes.
 
 The producer retains internal recurrences, nested loops, safe calls and its
 original termination test. Fixed scratch capacity supports runtime counts and
@@ -40,9 +42,9 @@ VF flags now control metadata on scalar stages. VPlan-only isolation is diagnose
 
 ## Validation and experiments
 
-See the [final validation report](llvm/docs/ScalarFissionValidation.md) for
-execution results, the 117-target Early/Late comparison, migration coverage and
-measurement limits.
+See the [frontier audit](llvm/docs/ScalarFissionFrontier.md) for current execution,
+corpus and VF/IC evidence. The earlier [scalar-adoption validation](llvm/docs/ScalarFissionValidation.md)
+and [overhead report](llvm/docs/ScalarFissionOverhead.md) remain historical evidence.
 
 ```sh
 build-fission/unittests/Transforms/Vectorize/VectorizeTests
@@ -64,8 +66,10 @@ reported as performance measurement.
 `evaluate-scalar-fission.py --help` describes the pinned-corpus runner. It saves
 source/tool hashes, exact commands, pass order, original-LV/Early/Late artifacts,
 compile time, peak memory and target-loop-attributed remarks. Historical inputs
-and results are not rewritten. The migration inventory is
-[legacy-migration.json](llvm/test/Transforms/ScalarFission/Inputs/legacy-migration.json).
+and results are not rewritten. The historical scalar-adoption inventory is
+[legacy-migration.json](llvm/test/Transforms/ScalarFission/Inputs/legacy-migration.json);
+[frontier-migration.json](llvm/test/Transforms/ScalarFission/Inputs/frontier-migration.json)
+records current expectations for fixtures changed by the frontier/depth policy.
 Obsolete VPlan structural checkers and their harness have been removed; current
 semantic checks use the new execution checker and scalar regression suite.
 `check-reduction-fission.py` remains a small command-line compatibility wrapper.

@@ -20,7 +20,9 @@ loop:
   %t = phi i32 [3, %entry], [%v, %loop]
   %p = getelementptr i32, ptr %a, i64 %i
   %x = load i32, ptr %p
-  %f = call i32 @pure(i32 7)
+  %first = call i32 @pure(i32 7)
+  %second = call i32 @pure(i32 %first)
+  %f = call i32 @pure(i32 %second)
   %u = add i32 %s, %x
   %v = xor i32 %t, %f
   store i32 5, ptr %out
@@ -50,7 +52,9 @@ loop:
   %p = getelementptr float, ptr %a, i64 %i
   %x = load float, ptr %p
   %bits = bitcast float %x to i32
-  %f = call i32 @pure(i32 7)
+  %first = call i32 @pure(i32 7)
+  %second = call i32 @pure(i32 %first)
+  %f = call i32 @pure(i32 %second)
   %u = add i32 %s, %bits
   %v = xor i32 %t, %f
   store i32 5, ptr %out
@@ -79,7 +83,9 @@ loop:
   %s = phi i32 [9, %entry], [%u, %loop]
   %p = getelementptr i32, ptr %a, i64 %i
   %x = load i32, ptr %p
-  %f = mul i32 %x, 3
+  %square = mul i32 %x, %x
+  %biased = add i32 %square, 7
+  %f = mul i32 %biased, 3
   %u = add i32 %s, %f
   store i32 5, ptr %out
   %next = add i64 %i, 1
@@ -125,7 +131,9 @@ loop:
   %i = phi i64 [0, %entry], [%next, %loop]
   %s = phi i32 [9, %entry], [%u, %loop]
   %p = getelementptr inbounds i32, ptr %out, i64 %i
-  %f = call i32 @pure(i32 7)
+  %first = call i32 @pure(i32 7)
+  %second = call i32 @pure(i32 %first)
+  %f = call i32 @pure(i32 %second)
   store i32 %f, ptr %p
   %u = add i32 %s, %f
   %next = add nuw i64 %i, 1

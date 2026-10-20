@@ -15,6 +15,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import time
 import yaml
@@ -71,11 +72,17 @@ def main():
     p.add_argument('--corpus', type=Path, required=True)
     p.add_argument('--sysroot', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--frontend-input-dir', type=Path,
+                   help='reuse a completed corpus run’s verified frontend IR for an identical-input comparison')
     args = p.parse_args()
     build, corpus, output = args.build_dir.resolve(), args.corpus.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     manifest = corpus / 'benchmark-search/targets.json'
     entries = json.loads(manifest.read_text())['benchmarks']
+    frontend_dir = args.frontend_input_dir.resolve() if args.frontend_input_dir else None
+    if frontend_dir:
+        previous = json.loads((frontend_dir / 'result.json').read_text())
+        assert previous['manifest_sha256'] == sha(manifest), 'frontend manifest mismatch'
     def evaluate_one(e):
         rows = []
         source = corpus / e['source']
@@ -87,15 +94,27 @@ def main():
         if cpp:
             base = args.sysroot / 'include/c++/15.2.0'
             includes = ['-isystem', base, '-isystem', base / 'riscv-none-elf']
-        front = run([build / 'bin/clang', '--target=riscv64-unknown-elf',
-            '-march=rv64gcv_zba_zbb_zbc_zbs_zfh_zvfh_zvbb_zvl128b',
-            '-mcpu=xiangshan-kunminghu', '-mabi=lp64d', '-mcmodel=medany',
-            '-mno-relax', '-mrvv-vector-bits=128', '--sysroot=' + str(args.sysroot),
-            *includes, '-isystem', args.sysroot / 'include',
-            '-std=c++17' if cpp else '-std=c11', '-DBENCH_NO_MAIN', '-ffp-contract=off',
-            '-O3', '-gline-tables-only', '-gcolumn-info', '-fno-discard-value-names',
-            '-Xclang', '-disable-llvm-passes', '-emit-llvm', '-c', source,
-            '-o', case / 'raw.bc'], case, 'frontend')
+        if frontend_dir:
+            original = frontend_dir / e['id']
+            command = original / 'frontend.command.json'
+            assert str(source) in json.loads(command.read_text()), 'frontend source mismatch'
+            shutil.copy2(original / 'raw.bc', case / 'raw.bc')
+            front = dict(exit_code=0, seconds=0, peak_rss_bytes=None,
+                         reused_from=str(original / 'raw.bc'),
+                         input_sha256=sha(case / 'raw.bc'),
+                         command_provenance=str(command), command_sha256=sha(command),
+                         compiler_sha256=previous['compiler']['clang'])
+        else:
+            front = run([build / 'bin/clang', '--target=riscv64-unknown-elf',
+                '-march=rv64gcv_zba_zbb_zbc_zbs_zfh_zvfh_zvbb_zvl128b',
+                '-mcpu=xiangshan-kunminghu', '-mabi=lp64d', '-mcmodel=medany',
+                '-mno-relax', '-mrvv-vector-bits=128', '--sysroot=' + str(args.sysroot),
+                *includes, '-isystem', args.sysroot / 'include',
+                '-std=c++17' if cpp else '-std=c11', '-DBENCH_NO_MAIN', '-ffp-contract=off',
+                '-O3', '-gline-tables-only', '-gcolumn-info', '-fno-discard-value-names',
+                '-Xclang', '-disable-llvm-passes', '-emit-llvm', '-c', source,
+                '-o', case / 'raw.bc'], case, 'frontend')
+            front['input_sha256'] = sha(case / 'raw.bc') if not front['exit_code'] else None
         for placement, relaxed in [('baseline', False), ('early', False), ('late', False), ('early', True), ('late', True)]:
             tag = placement + ('-reordered' if relaxed else '-ordered')
             flags = [] if placement == 'baseline' else [

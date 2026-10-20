@@ -11,7 +11,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @bitwise_affine(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Three dependent contribution operations qualify the retained producer.
+; Checks exercise standalone scalar fission and ordinary LV.
 define void @bitwise_full(ptr %a, ptr %mem, ptr %out, i64 %n, i32 %mode, i32 %seed) !dbg !10 {
 entry:
   %valid = icmp ule i64 %n, 65
@@ -31,7 +32,9 @@ loop:
   %x1 = phi i64 [ -81985529216486896, %preheader ], [ %u.x1, %loop ]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = xor i32 %state, %x
+  %contribution.mix = mul i32 %state, 13
+  %contribution.bias = add i32 %contribution.mix, 7
+  %c = xor i32 %contribution.bias, %x
   %wide.c = zext i32 %c to i64
   %wide.state = zext i32 %state to i64
   %high = shl i64 %wide.state, 32
@@ -116,7 +119,9 @@ loop:
   %x1 = phi i64 [ -81985529216486896, %preheader ], [ %m.x1, %latch ]
   %p = getelementptr i32, ptr %a, i64 %iv
   %x = load i32, ptr %p, align 4
-  %c = xor i32 %state, %x
+  %contribution.mix = mul i32 %state, 13
+  %contribution.bias = add i32 %contribution.mix, 7
+  %c = xor i32 %contribution.bias, %x
   %wide.c = zext i32 %c to i64
   %wide.state = zext i32 %state to i64
   %high = shl i64 %wide.state, 32
@@ -241,7 +246,9 @@ loop:
   %idx = udiv i64 %distance, 3
   %p = getelementptr i32, ptr %a, i64 %idx
   %x = load i32, ptr %p, align 4
-  %c = xor i32 %state, %x
+  %contribution.mix = mul i32 %state, 13
+  %contribution.bias = add i32 %contribution.mix, 7
+  %c = xor i32 %contribution.bias, %x
   %wide.c = zext i32 %c to i64
   %wide.state = zext i32 %state to i64
   %high = shl i64 %wide.state, 32

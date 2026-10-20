@@ -21,7 +21,9 @@ loop:
   %error = phi double [0.0, %ph], [%error.next, %loop]
   %p = getelementptr double, ptr %input, i64 %i
   %x = load double, ptr %p
-  %f = call double @square(double %x)
+  %scaled = fmul double %x, 0.5
+  %biased = fadd double %scaled, 1.25
+  %f = call double @square(double %biased)
   %y = fsub double %f, %error
   %sum.next = fadd double %sum, %y
   %delta = fsub double %sum.next, %sum
@@ -52,7 +54,9 @@ loop:
   %sum = phi double [%seed, %ph], [%sum.next, %loop]
   %p = getelementptr double, ptr %input, i64 %i
   %x = load double, ptr %p
-  %f = call double @square(double %x)
+  %scaled = fmul double %x, 0.5
+  %biased = fadd double %scaled, 1.25
+  %f = call double @square(double %biased)
   %sum.next = call double @llvm.fma.f64(double %sum, double 5.0e-1, double %f)
   %next = add i64 %i, 1
   %more = icmp ne i64 %next, %n

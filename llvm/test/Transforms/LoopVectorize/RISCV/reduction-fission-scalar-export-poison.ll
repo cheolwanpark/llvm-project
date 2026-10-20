@@ -5,7 +5,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @export_possible_poison(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define i32 @export_possible_poison(i32 %x, i32 %shift, i64 %n, i1 %observe) {
@@ -20,7 +21,9 @@ preheader:
 loop:
   %iv = phi i64 [7, %preheader], [%next, %loop]
   %sum = phi i32 [17, %preheader], [%update, %loop]
-  %c = call i32 @scalar_helper(i32 %x)
+  %c.depth.mul = mul i32 %x, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %value = shl i32 %x, %shift
   %update = add i32 %sum, %c
   %next = add nuw nsw i64 %iv, 1

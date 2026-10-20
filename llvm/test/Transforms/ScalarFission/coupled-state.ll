@@ -21,7 +21,9 @@ loop:
   %b = phi i32 [7, %ph], [%bnext, %loop]
   %p = getelementptr i32, ptr %input, i64 %i
   %x = load i32, ptr %p
-  %f = call i32 @pure(i32 %x)
+  %square = mul i32 %x, %x
+  %biased = add i32 %square, 3
+  %f = call i32 @pure(i32 %biased)
   %mix = add i32 %a, %b
   %anext = add i32 %mix, %f
   %bnext = xor i32 %b, %a

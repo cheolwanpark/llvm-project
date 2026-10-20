@@ -1,3 +1,5 @@
+; RUN: opt -passes=scalar-fission -pass-remarks-output=%t.frontier.yaml -pass-remarks-filter=scalar-fission -disable-output %s
+; RUN: FileCheck %s --check-prefix=FRONTIER < %t.frontier.yaml
 ; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
 ; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
@@ -15,10 +17,10 @@
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave2_members(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @interleave3_members(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
 define void @interleave2(ptr readonly %a, ptr %out, i64 %n) !dbg !5 {
@@ -183,6 +185,9 @@ bypass:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: interleave2_members
+; FRONTIER: Reason: no-computed-boundary
 define void @interleave2_members(ptr readonly %a, ptr %out, i64 %n) !dbg !13 {
 entry:
   %bounded = icmp ule i64 %n, 65
@@ -220,6 +225,9 @@ bypass:
   ret void
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: interleave3_members
+; FRONTIER: Reason: no-computed-boundary
 define void @interleave3_members(ptr readonly %a, ptr %out, i64 %n) !dbg !15 {
 entry:
   %bounded = icmp ule i64 %n, 65

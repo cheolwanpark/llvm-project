@@ -41,7 +41,9 @@ loop:
   %s = phi double [%seed, %ph], [%u, %loop]
   %p = getelementptr double, ptr %a, i64 %i
   %x = load double, ptr %p
-  %f = fmul double %x, %x
+  %square = fmul double %x, %x
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   %u = fadd double %s, %f
   %next = add nuw i64 %i, 1
   %more = icmp ult i64 %next, 8
@@ -88,7 +90,9 @@ loop:
   %s = phi double [%seed, %ph], [%u, %loop]
   %p = getelementptr double, ptr %a, i64 %i
   %x = load double, ptr %p
-  %f = fmul double %x, %x
+  %square = fmul double %x, %x
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   %u = fadd double %s, %f
   %next = add nuw i64 %i, 1
   %more = icmp ult i64 %next, %limit
@@ -132,7 +136,9 @@ loop:
   %s = phi double [%seed, %ph], [%u, %loop]
   %p = getelementptr double, ptr %a, i64 %i
   %x = load double, ptr %p
-  %f = fmul double %x, %x
+  %square = fmul double %x, %x
+  %biased = fadd double %square, 1.25
+  %f = fmul double %biased, 0.5
   %u = fadd double %s, %f
   %next = add nuw i64 %i, 1
   %more = icmp ult i64 %next, %limit

@@ -5,7 +5,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @recurrence_compact(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i32 @scalar_helper(i32) memory(none) nounwind willreturn speculatable
 
 define i32 @recurrence_compact(ptr %a, i64 %n) !dbg !12 {
@@ -25,7 +26,9 @@ loop:
   %choose = icmp ne i32 %x, 0
   br i1 %choose, label %left, label %latch
 left:
-  %c = call i32 @scalar_helper(i32 %prev)
+  %c.depth.mul = mul i32 %prev, 13
+  %c.depth.bias = add i32 %c.depth.mul, 7
+  %c = call i32 @scalar_helper(i32 %c.depth.bias)
   %update = add i32 %sum, %c
   br label %latch
 latch:

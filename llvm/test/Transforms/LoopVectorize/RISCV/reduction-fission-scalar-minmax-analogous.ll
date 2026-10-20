@@ -5,7 +5,8 @@
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @minmax_retained(
 ; SCALAR-MIGRATION: scalar.fission.chunk:
 ; SCALAR-MIGRATION: }
-; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; Dependent contribution arithmetic preserves positive feature coverage under
+; the final producer depth policy. Checks exercise scalar fission and ordinary LV.
 declare i16 @llvm.smin.i16(i16, i16)
 declare i16 @llvm.smax.i16(i16, i16)
 declare i16 @llvm.umin.i16(i16, i16)
@@ -37,7 +38,9 @@ loop:
   %local.next = call i16 @other_min(i16 %local, i16 %x)
   %observed.next = call i16 @llvm.smax.i16(i16 %observed, i16 %x)
   store i16 %observed.next, ptr %p, align 2
-  %c = xor i16 %local, %x
+  %c.depth.mul = mul i16 %local, 13
+  %c.depth.bias = add i16 %c.depth.mul, 7
+  %c = xor i16 %c.depth.bias, %x
   %u0 = call i16 @llvm.smin.i16(i16 %r0, i16 %c)
   %u1 = call i16 @llvm.smax.i16(i16 %c, i16 %r1)
   %u2 = call i16 @llvm.umin.i16(i16 %r2, i16 %c)

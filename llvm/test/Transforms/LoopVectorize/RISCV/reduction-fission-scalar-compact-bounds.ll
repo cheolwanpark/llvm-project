@@ -1,20 +1,25 @@
+; RUN: opt -passes=scalar-fission -pass-remarks-output=%t.frontier.yaml -pass-remarks-filter=scalar-fission -disable-output %s
+; RUN: FileCheck %s --check-prefix=FRONTIER < %t.frontier.yaml
 ; RUN: opt -passes='scalar-fission,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -scalar-fission-chunk-capacity=3 -S %s | FileCheck %s --check-prefix=SCALAR-MIGRATION
 ; RUN: opt -passes='scalar-fission,scalar-fission,loop-vectorize,verify<domtree>,verify<loops>,verify<scalar-evolution>' -verify-each -mtriple=riscv64 -mattr=+v -scalar-fission-chunk-capacity=1 -S %s -o %t.scalar.ll
 ; RUN: llc -mtriple=riscv64 -mattr=+v -verify-machineinstrs %t.scalar.ll -o /dev/null
 ; SCALAR-MIGRATION checks characterize the independent scalar pass; semantic
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_i8_max(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_i8_overflow(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_default_limit(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; SCALAR-MIGRATION-LABEL: define {{.*}} @compact_over_limit(
-; SCALAR-MIGRATION: scalar.fission.chunk:
+; SCALAR-MIGRATION-NOT: scalar.fission
 ; SCALAR-MIGRATION: }
 ; Original IR retained; checks exercise standalone scalar fission and ordinary LV.
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: compact_i8_max
+; FRONTIER: Reason: no-computed-boundary
 define i32 @compact_i8_max(i32 %cutoff) {
 entry:
   br label %preheader
@@ -39,6 +44,9 @@ exit:
   ret i32 %result
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: compact_i8_overflow
+; FRONTIER: Reason: no-computed-boundary
 define i32 @compact_i8_overflow(i32 %cutoff) {
 entry:
   br label %preheader
@@ -63,6 +71,9 @@ exit:
   ret i32 %result
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: compact_default_limit
+; FRONTIER: Reason: no-computed-boundary
 define i32 @compact_default_limit(i32 %cutoff) {
 entry:
   br label %preheader
@@ -87,6 +98,9 @@ exit:
   ret i32 %result
 }
 
+; FRONTIER: Name: Rejected
+; FRONTIER: Function: compact_over_limit
+; FRONTIER: Reason: no-computed-boundary
 define i32 @compact_over_limit(i32 %cutoff) {
 entry:
   br label %preheader
