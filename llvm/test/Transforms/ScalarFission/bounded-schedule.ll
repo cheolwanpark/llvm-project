@@ -22,9 +22,9 @@
 ; BUDGET: alloca [1 x double]
 ; CHUNKS-LABEL: define double @exact(
 ; CHUNKS: alloca [3 x double]
-; CHUNKS: fission.more = select i1
+; CHUNKS: fission.more = and i1
 ; CHUNKS: br i1 %more.produced, label %scalar.fission.chunk, label %exit
-; BUDGET: fission.more = select i1
+; BUDGET: fission.more = and i1
 ; BUDGET: br i1 %more.produced, label %scalar.fission.chunk, label %exit
 ; FINAL-LABEL: define double @exact(
 ; FINAL-NOT: fission.more
@@ -68,9 +68,9 @@ exit:
 ; BUDGET: alloca [1 x double]
 ; CHUNKS-LABEL: define double @bounded(
 ; CHUNKS: alloca [3 x double]
-; CHUNKS: fission.more = select i1
+; CHUNKS: fission.more = and i1
 ; CHUNKS: br i1 %more.produced, label %scalar.fission.chunk, label %exit
-; BUDGET: fission.more = select i1
+; BUDGET: fission.more = and i1
 ; BUDGET: br i1 %more.produced, label %scalar.fission.chunk, label %exit
 ; FINAL-LABEL: define double @bounded(
 ; FINAL-NOT: fission.more

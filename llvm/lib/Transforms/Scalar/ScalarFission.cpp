@@ -954,9 +954,10 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
         Add(Op);
     }
   };
-  // Removing a synthetic store can make its private source dead. Only move a
-  // multiply whose operands already have dominating consumer definitions; this
-  // never opens a new input walk, adds a read, or duplicates producer work.
+  // Removing a synthetic store can make its private source dead. A multiply
+  // may also have one private arithmetic operand whose leaves already have
+  // consumer definitions (e.g. (a+b)*c). This is a bounded extension of suffix
+  // cleanup, not another frontier search: it cannot open a new input walk.
   bool Changed;
   do {
     ConsumerNeeds();
@@ -966,20 +967,58 @@ static bool analyze(FissionPlan &P, LoopInfo &LI, DominatorTree &DT,
       if (S.ExistingStore || I->getOpcode() != Instruction::FMul ||
           LI.getLoopFor(I->getParent()) != &L || P.Streams.size() == 1)
         continue;
-      bool Available = all_of(I->operands(), [&](Value *Op) {
+      auto Available = [&](Value *Op) {
         if (L.isLoopInvariant(Op))
           return DT.dominates(Op, I);
         auto *Def = dyn_cast<Instruction>(Op);
         return Def && Needed.contains(Def) && P.Inputs.count(Def) &&
                DT.dominates(Def, I);
+      };
+      SmallVector<Instruction *, 2> Private;
+      bool CanMove = all_of(I->operands(), [&](Value *Op) {
+        if (Available(Op))
+          return true;
+        if (P.Streams.size() != 2 || !P.charge())
+          return false;
+        auto *Def = dyn_cast<BinaryOperator>(Op);
+        if (!Def || Def->getParent() != I->getParent() ||
+            P.Boundaries.count(Def) || !DT.dominates(Def, I) ||
+            !all_of(Def->operands(), Available))
+          return false;
+        Private.push_back(Def);
+        return true;
       });
-      if (!Available)
+      if (!P.Reason.empty())
+        return false;
+      if (!CanMove)
         continue;
       ProducerNeeds(I);
       if (!P.Reason.empty())
         return false;
       if (Retained.contains(I))
         continue;
+      if (!Private.empty()) {
+        // Try only one arithmetic layer at the final pair of streams. With
+        // one stream left there is no later suffix cleanup to invalidate the
+        // candidate's depth proof.
+        if (Private.size() != 1)
+          continue;
+        // New private work must disappear from the producer, and the earlier
+        // cut must still pass the real final-depth gate. Otherwise keep the
+        // valid structural partition. Analysis work is never refunded.
+        if (any_of(Private,
+                   [&](Instruction *Def) { return Retained.contains(Def); }))
+          continue;
+        P.ProducerDepth = 0;
+        if (!measureProducerDepth(P, LI, SE))
+          return false;
+        unsigned Depth = std::exchange(P.ProducerDepth, 0);
+        if (Depth < 3)
+          continue;
+        for (Instruction *Def : Private)
+          if (!Commit(Def))
+            return false;
+      }
       P.Inputs[I] = Transfer::Recompute;
       llvm::erase_if(P.Streams,
                      [&](const Stream &Stream) { return Stream.Source == I; });
@@ -1190,15 +1229,25 @@ static void emit(FissionPlan &P, DominatorTree &DT, LoopInfo &LI,
   Value *NextOrdinal =
       B.CreateAdd(Ordinal, B.getInt64(1), "fission.completed", true);
   Ordinal->addIncoming(NextOrdinal, Latch);
-  Value *Continue =
-      Branch->getSuccessor(0) == Header
-          ? Branch->getCondition()
-          : B.CreateNot(Branch->getCondition(), "fission.continue");
+  Value *Continue = Branch->getCondition();
+  // Keep the exit directly analyzable by SCEV/LV. An xor around an integer
+  // comparison hides even a constant trip count until InstCombine runs.
+  if (Branch->getSuccessor(0) != Header) {
+    if (auto *Cmp = dyn_cast<ICmpInst>(Branch->getCondition())) {
+      auto *Inverse = cast<ICmpInst>(Cmp->clone());
+      Inverse->setPredicate(Cmp->getInversePredicate());
+      Continue = B.Insert(Inverse, "fission.continue");
+    } else
+      Continue = B.CreateNot(Continue, "fission.continue");
+  }
   Value *More = Continue;
   if (!P.SingleChunk) {
     More = B.CreateICmpULT(NextOrdinal, B.getInt64(P.Capacity));
-    // Preserve the original conditional poison semantics.
-    More = B.CreateSelect(Continue, More, B.getFalse(), "fission.more");
+    // The capacity comparison is nonpoison: the local ordinal starts at zero
+    // and cannot exceed the checked capacity. Thus and preserves the original
+    // continuation's poison, including at a chunk boundary, without hiding
+    // the two countable exits behind a select.
+    More = B.CreateAnd(Continue, More, "fission.more");
   }
   Branch->setCondition(More);
   Branch->setSuccessor(0, Header);

@@ -1,0 +1,5612 @@
+{
+  "baseline_commit": "da9c6d542",
+  "implementation_sha256": "cafcf3e5f915449798735e808ad68f290a3a7b8d8ff20efa5181f7b29d66eead",
+  "baseline_implementation_sha256": "662d5518d23bbb6cf465023b543046c94b3f8505ec100db607eef8bfc8d8ac48",
+  "compiler": {
+    "clang": "b9f3e00512c4975043ccea93be644216e5641e7175c68de945064a31ea9c8e44",
+    "opt": "6009b8d9a4a4654d4b6c9d9c1c85daa95c224a0a8284f6943cba53491738bdb1",
+    "llc": "cd9262bda18e92014b692c9eb4ec95e271fc780f50e95d19b3a71079c8541768"
+  },
+  "baseline_compiler": {
+    "clang": "f6946194c63e5508700f6b2ff31aa77290b3474aa311276188e584b39f71ea50",
+    "opt": "e9f0ab1a60fcb8aa98295f93bf2001e8541f800ca57f3f4665966a249b86ac58",
+    "llc": "7e0f9e9fe9dfe118e5ca6a149d0d0880750e1f6352ce9191f3b5d06f8677beac"
+  },
+  "manifest_sha256": "b60b4ce8c4f3f69b6dcd56e5cb0a8c2f2bfddaf30c5d0682c6f2213f4f1a2c3d",
+  "source_count": 117,
+  "optimizer_and_rvv_configurations": 585,
+  "target_selection_changes": [],
+  "non_target_selection_changes": [],
+  "budget_rejection_changes": [],
+  "selected_target_counts": {
+    "early-fp0": 6,
+    "early-fp1": 6,
+    "late-fp0": 9,
+    "late-fp1": 9
+  },
+  "selected_targets": {
+    "early-fp0": [
+      "t000018-vina-non-cache-deriv",
+      "t000070-map2alm-scalar-ring-pair",
+      "t000070-map2alm-spin2-ring-pair",
+      "t000104-dlib-lm-numerical",
+      "t000156-gravity-potential-paired-degree",
+      "t000159-vv10-hessian-uwabce-grid"
+    ],
+    "early-fp1": [
+      "t000018-vina-non-cache-deriv",
+      "t000070-map2alm-scalar-ring-pair",
+      "t000070-map2alm-spin2-ring-pair",
+      "t000104-dlib-lm-numerical",
+      "t000156-gravity-potential-paired-degree",
+      "t000159-vv10-hessian-uwabce-grid"
+    ],
+    "late-fp0": [
+      "t000018-vina-non-cache-deriv",
+      "t000070-map2alm-scalar-ring-pair",
+      "t000070-map2alm-spin2-ring-pair",
+      "t000104-dlib-lm-numerical",
+      "t000141-nek5000-drgtrq-3d-face",
+      "t000141-nek5000-drgtrq-3d-row",
+      "t000156-gravity-potential-paired-degree",
+      "t000159-vv10-hessian-ft-six-trial-grid",
+      "t000159-vv10-hessian-uwabce-grid"
+    ],
+    "late-fp1": [
+      "t000018-vina-non-cache-deriv",
+      "t000070-map2alm-scalar-ring-pair",
+      "t000070-map2alm-spin2-ring-pair",
+      "t000104-dlib-lm-numerical",
+      "t000141-nek5000-drgtrq-3d-face",
+      "t000141-nek5000-drgtrq-3d-row",
+      "t000156-gravity-potential-paired-degree",
+      "t000159-vv10-hessian-ft-six-trial-grid",
+      "t000159-vv10-hessian-uwabce-grid"
+    ]
+  },
+  "native_comparisons": 60396,
+  "native_mismatches": 0,
+  "host_checker_comparisons": 34002,
+  "lit_passed": 1361,
+  "lit_unsupported": 101,
+  "vectorize_unit_passed": 66,
+  "matrix_status_counts": {
+    "available": 834,
+    "unavailable": 246
+  },
+  "timing": [
+    {
+      "repeat": 0,
+      "baseline": {
+        "seconds": 48.99932316399645,
+        "max_rss_bytes": 53510144
+      },
+      "final": {
+        "seconds": 48.95768778992351,
+        "max_rss_bytes": 53854208
+      }
+    },
+    {
+      "repeat": 1,
+      "baseline": {
+        "seconds": 49.589230873971246,
+        "max_rss_bytes": 53575680
+      },
+      "final": {
+        "seconds": 48.00647762476001,
+        "max_rss_bytes": 53788672
+      }
+    },
+    {
+      "repeat": 2,
+      "baseline": {
+        "seconds": 48.8882820418803,
+        "max_rss_bytes": 53460992
+      },
+      "final": {
+        "seconds": 47.56076308491174,
+        "max_rss_bytes": 53805056
+      }
+    }
+  ],
+  "per_kernel_median_optimizer_seconds_both_policies": {
+    "t000018-vina-non-cache-deriv": {
+      "baseline": 47.02792137500364,
+      "final": 45.55829316703603
+    },
+    "t000070-map2alm-scalar-ring-pair": {
+      "baseline": 0.31757508299779147,
+      "final": 0.1121285839471966
+    },
+    "t000070-map2alm-spin2-ring-pair": {
+      "baseline": 0.14028770884033293,
+      "final": 0.14449174993205816
+    },
+    "t000104-dlib-lm-numerical": {
+      "baseline": 0.12726954114623368,
+      "final": 0.12459770787972957
+    },
+    "t000141-nek5000-drgtrq-3d-face": {
+      "baseline": 0.3116964999353513,
+      "final": 0.3092612080508843
+    },
+    "t000141-nek5000-drgtrq-3d-row": {
+      "baseline": 0.3285193749470636,
+      "final": 0.34782662498764694
+    },
+    "t000156-gravity-potential-paired-degree": {
+      "baseline": 0.08051474892999977,
+      "final": 0.07955187407787889
+    },
+    "t000159-vv10-hessian-ft-six-trial-grid": {
+      "baseline": 0.49146725004538894,
+      "final": 0.47758533293381333
+    },
+    "t000159-vv10-hessian-uwabce-grid": {
+      "baseline": 0.1407512091100216,
+      "final": 0.14780033403076231
+    }
+  },
+  "timing_samples": [
+    {
+      "repeat": 0,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 23.83640699996613,
+      "peak_rss_bytes": 53510144
+    },
+    {
+      "repeat": 0,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 23.028205750044435,
+      "peak_rss_bytes": 53854208
+    },
+    {
+      "repeat": 0,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 23.191514375037514,
+      "peak_rss_bytes": 53444608
+    },
+    {
+      "repeat": 0,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 24.200305207981728,
+      "peak_rss_bytes": 53575680
+    },
+    {
+      "repeat": 0,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.29093716701027006,
+      "peak_rss_bytes": 34799616
+    },
+    {
+      "repeat": 0,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.05725799989886582,
+      "peak_rss_bytes": 34848768
+    },
+    {
+      "repeat": 0,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.05930383305530995,
+      "peak_rss_bytes": 34881536
+    },
+    {
+      "repeat": 0,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.05442883295472711,
+      "peak_rss_bytes": 34750464
+    },
+    {
+      "repeat": 0,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.07091633300296962,
+      "peak_rss_bytes": 34455552
+    },
+    {
+      "repeat": 0,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.07258891698438674,
+      "peak_rss_bytes": 35471360
+    },
+    {
+      "repeat": 0,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.06926841591484845,
+      "peak_rss_bytes": 34422784
+    },
+    {
+      "repeat": 0,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.07143866701517254,
+      "peak_rss_bytes": 35471360
+    },
+    {
+      "repeat": 0,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.06341545807663351,
+      "peak_rss_bytes": 35635200
+    },
+    {
+      "repeat": 0,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.05984079104382545,
+      "peak_rss_bytes": 35487744
+    },
+    {
+      "repeat": 0,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.06385408306960016,
+      "peak_rss_bytes": 35864576
+    },
+    {
+      "repeat": 0,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.0600323750404641,
+      "peak_rss_bytes": 35504128
+    },
+    {
+      "repeat": 0,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.15835912502370775,
+      "peak_rss_bytes": 41107456
+    },
+    {
+      "repeat": 0,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.15660437499172986,
+      "peak_rss_bytes": 40828928
+    },
+    {
+      "repeat": 0,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.15333737491164356,
+      "peak_rss_bytes": 41107456
+    },
+    {
+      "repeat": 0,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.15265683305915445,
+      "peak_rss_bytes": 40861696
+    },
+    {
+      "repeat": 0,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.16305170801933855,
+      "peak_rss_bytes": 41271296
+    },
+    {
+      "repeat": 0,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.168774374993518,
+      "peak_rss_bytes": 41320448
+    },
+    {
+      "repeat": 0,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.16296666592825204,
+      "peak_rss_bytes": 41353216
+    },
+    {
+      "repeat": 0,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.17905224999412894,
+      "peak_rss_bytes": 41271296
+    },
+    {
+      "repeat": 0,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.04227662493940443,
+      "peak_rss_bytes": 33193984
+    },
+    {
+      "repeat": 0,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.039620582945644855,
+      "peak_rss_bytes": 33128448
+    },
+    {
+      "repeat": 0,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.040337457903660834,
+      "peak_rss_bytes": 33259520
+    },
+    {
+      "repeat": 0,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.041862874990329146,
+      "peak_rss_bytes": 33210368
+    },
+    {
+      "repeat": 0,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.2490310410503298,
+      "peak_rss_bytes": 48955392
+    },
+    {
+      "repeat": 0,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.2422878328943625,
+      "peak_rss_bytes": 48791552
+    },
+    {
+      "repeat": 0,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.24359529197681695,
+      "peak_rss_bytes": 49037312
+    },
+    {
+      "repeat": 0,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.23529750003945082,
+      "peak_rss_bytes": 48939008
+    },
+    {
+      "repeat": 0,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.07092008402105421,
+      "peak_rss_bytes": 36519936
+    },
+    {
+      "repeat": 0,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.06846550002228469,
+      "peak_rss_bytes": 36061184
+    },
+    {
+      "repeat": 0,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.06983112508896738,
+      "peak_rss_bytes": 36438016
+    },
+    {
+      "repeat": 0,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.06896712502930313,
+      "peak_rss_bytes": 36126720
+    },
+    {
+      "repeat": 1,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 22.446708667092025,
+      "peak_rss_bytes": 53788672
+    },
+    {
+      "repeat": 1,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 23.970933459000662,
+      "peak_rss_bytes": 53575680
+    },
+    {
+      "repeat": 1,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 22.79228149994742,
+      "peak_rss_bytes": 53723136
+    },
+    {
+      "repeat": 1,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 23.33924708305858,
+      "peak_rss_bytes": 53542912
+    },
+    {
+      "repeat": 1,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.24075408303178847,
+      "peak_rss_bytes": 34799616
+    },
+    {
+      "repeat": 1,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.05663391703274101,
+      "peak_rss_bytes": 34979840
+    },
+    {
+      "repeat": 1,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.05753091594669968,
+      "peak_rss_bytes": 34848768
+    },
+    {
+      "repeat": 1,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.05627316597383469,
+      "peak_rss_bytes": 34914304
+    },
+    {
+      "repeat": 1,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.07472658297047019,
+      "peak_rss_bytes": 35389440
+    },
+    {
+      "repeat": 1,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.0717009169748053,
+      "peak_rss_bytes": 34373632
+    },
+    {
+      "repeat": 1,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.07234504201915115,
+      "peak_rss_bytes": 35373056
+    },
+    {
+      "repeat": 1,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.06911083299200982,
+      "peak_rss_bytes": 34324480
+    },
+    {
+      "repeat": 1,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.06568145903293043,
+      "peak_rss_bytes": 35487744
+    },
+    {
+      "repeat": 1,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.10337558295577765,
+      "peak_rss_bytes": 35979264
+    },
+    {
+      "repeat": 1,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.4036811249097809,
+      "peak_rss_bytes": 35602432
+    },
+    {
+      "repeat": 1,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.30386483296751976,
+      "peak_rss_bytes": 35831808
+    },
+    {
+      "repeat": 1,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.160951416939497,
+      "peak_rss_bytes": 40878080
+    },
+    {
+      "repeat": 1,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.1586869590682909,
+      "peak_rss_bytes": 40927232
+    },
+    {
+      "repeat": 1,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.1618157079210505,
+      "peak_rss_bytes": 40943616
+    },
+    {
+      "repeat": 1,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.1832416249671951,
+      "peak_rss_bytes": 41320448
+    },
+    {
+      "repeat": 1,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.63371249998454,
+      "peak_rss_bytes": 41517056
+    },
+    {
+      "repeat": 1,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.3973368749720976,
+      "peak_rss_bytes": 41189376
+    },
+    {
+      "repeat": 1,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.17237491603009403,
+      "peak_rss_bytes": 41123840
+    },
+    {
+      "repeat": 1,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.16684891702607274,
+      "peak_rss_bytes": 41222144
+    },
+    {
+      "repeat": 1,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.0399378330912441,
+      "peak_rss_bytes": 33095680
+    },
+    {
+      "repeat": 1,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.03859383298549801,
+      "peak_rss_bytes": 33177600
+    },
+    {
+      "repeat": 1,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.03961404098663479,
+      "peak_rss_bytes": 33210368
+    },
+    {
+      "repeat": 1,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.04192091594450176,
+      "peak_rss_bytes": 33193984
+    },
+    {
+      "repeat": 1,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.2507494589081034,
+      "peak_rss_bytes": 49004544
+    },
+    {
+      "repeat": 1,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.24606329097878188,
+      "peak_rss_bytes": 49053696
+    },
+    {
+      "repeat": 1,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.2458120419178158,
+      "peak_rss_bytes": 48955392
+    },
+    {
+      "repeat": 1,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.24540395906660706,
+      "peak_rss_bytes": 49004544
+    },
+    {
+      "repeat": 1,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.07495045906398445,
+      "peak_rss_bytes": 36159488
+    },
+    {
+      "repeat": 1,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.07023025001399219,
+      "peak_rss_bytes": 36323328
+    },
+    {
+      "repeat": 1,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.07284987496677786,
+      "peak_rss_bytes": 36143104
+    },
+    {
+      "repeat": 1,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.06976445799227804,
+      "peak_rss_bytes": 36323328
+    },
+    {
+      "repeat": 2,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 22.68395249999594,
+      "peak_rss_bytes": 53444608
+    },
+    {
+      "repeat": 2,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 22.800927042029798,
+      "peak_rss_bytes": 53805056
+    },
+    {
+      "repeat": 2,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 23.96222254098393,
+      "peak_rss_bytes": 53460992
+    },
+    {
+      "repeat": 2,
+      "id": "t000018-vina-non-cache-deriv",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 22.75736612500623,
+      "peak_rss_bytes": 53723136
+    },
+    {
+      "repeat": 2,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.2632964999647811,
+      "peak_rss_bytes": 34865152
+    },
+    {
+      "repeat": 2,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.05411279189866036,
+      "peak_rss_bytes": 34848768
+    },
+    {
+      "repeat": 2,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.054278583033010364,
+      "peak_rss_bytes": 34881536
+    },
+    {
+      "repeat": 2,
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.05801579204853624,
+      "peak_rss_bytes": 34734080
+    },
+    {
+      "repeat": 2,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.07084616692736745,
+      "peak_rss_bytes": 34373632
+    },
+    {
+      "repeat": 2,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.0723638329654932,
+      "peak_rss_bytes": 35487744
+    },
+    {
+      "repeat": 2,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.06944154191296548,
+      "peak_rss_bytes": 34324480
+    },
+    {
+      "repeat": 2,
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.07212791696656495,
+      "peak_rss_bytes": 35340288
+    },
+    {
+      "repeat": 2,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.061955542070791125,
+      "peak_rss_bytes": 35618816
+    },
+    {
+      "repeat": 2,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.05959679197985679,
+      "peak_rss_bytes": 35422208
+    },
+    {
+      "repeat": 2,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.0594782920088619,
+      "peak_rss_bytes": 35700736
+    },
+    {
+      "repeat": 2,
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.06500091589987278,
+      "peak_rss_bytes": 35438592
+    },
+    {
+      "repeat": 2,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.15497499995399266,
+      "peak_rss_bytes": 41140224
+    },
+    {
+      "repeat": 2,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.15432358405087143,
+      "peak_rss_bytes": 40910848
+    },
+    {
+      "repeat": 2,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.1533263330347836,
+      "peak_rss_bytes": 40960000
+    },
+    {
+      "repeat": 2,
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.1519217089517042,
+      "peak_rss_bytes": 40960000
+    },
+    {
+      "repeat": 2,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.16506929195020348,
+      "peak_rss_bytes": 41156608
+    },
+    {
+      "repeat": 2,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.17073487490415573,
+      "peak_rss_bytes": 41156608
+    },
+    {
+      "repeat": 2,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.16345008299686015,
+      "peak_rss_bytes": 41353216
+    },
+    {
+      "repeat": 2,
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.1682572909630835,
+      "peak_rss_bytes": 41320448
+    },
+    {
+      "repeat": 2,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.039140958921052516,
+      "peak_rss_bytes": 33177600
+    },
+    {
+      "repeat": 2,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.038984375074505806,
+      "peak_rss_bytes": 33112064
+    },
+    {
+      "repeat": 2,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.03943208302371204,
+      "peak_rss_bytes": 33193984
+    },
+    {
+      "repeat": 2,
+      "id": "t000156-gravity-potential-paired-degree",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.038794708088971674,
+      "peak_rss_bytes": 33144832
+    },
+    {
+      "repeat": 2,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.24183645809534937,
+      "peak_rss_bytes": 49102848
+    },
+    {
+      "repeat": 2,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.23416216706391424,
+      "peak_rss_bytes": 48840704
+    },
+    {
+      "repeat": 2,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.23278650001157075,
+      "peak_rss_bytes": 48889856
+    },
+    {
+      "repeat": 2,
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.23353783308994025,
+      "peak_rss_bytes": 48791552
+    },
+    {
+      "repeat": 2,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.07228741701692343,
+      "peak_rss_bytes": 36306944
+    },
+    {
+      "repeat": 2,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.14259612490423024,
+      "peak_rss_bytes": 36175872
+    },
+    {
+      "repeat": 2,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "variant": "baseline",
+      "exit_code": 0,
+      "seconds": 0.40050624997820705,
+      "peak_rss_bytes": 36438016
+    },
+    {
+      "repeat": 2,
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "variant": "final",
+      "exit_code": 0,
+      "seconds": 0.2879392090253532,
+      "peak_rss_bytes": 36159488
+    }
+  ],
+  "native_spin2_schedule_locations": [
+    {
+      "line": 156,
+      "column": 5,
+      "role": "manifest target"
+    },
+    {
+      "line": 178,
+      "column": 5,
+      "role": "companion schedule"
+    }
+  ],
+  "rows": [
+    {
+      "id": "t000018-vina-non-cache-deriv",
+      "source": "benchmarks/autodock-vina/non-cache-eval-deriv-neighbors.cpp",
+      "policies": {
+        "ordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "8",
+              "AnalysisBudgetRemaining": "3355",
+              "Streams": "5",
+              "ScratchBytes": "40960",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "40",
+              "ScratchLoadBytesPerIteration": "40",
+              "DuplicatedOriginalLoadInstructionBytes": "16",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "8",
+              "AnalysisBudgetRemaining": "3355",
+              "Streams": "5",
+              "ScratchBytes": "40960",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "40",
+              "ScratchLoadBytesPerIteration": "40",
+              "DuplicatedOriginalLoadInstructionBytes": "16",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [
+            {
+              "name": "%mul.i.i69",
+              "opcode": "fmul",
+              "producer": "fmul double %sub.i62, %sub.i62, !dbg !3230",
+              "consumer": "fmul double %sub.i62.scratch, %sub.i62.scratch, !dbg !3230"
+            },
+            {
+              "name": "%mul.i3.i",
+              "opcode": "fmul",
+              "producer": "fmul double %sub5.i, %sub5.i, !dbg !3234",
+              "consumer": "fmul double %sub5.i.scratch, %sub5.i.scratch, !dbg !3234"
+            },
+            {
+              "name": "%add.i71",
+              "opcode": "fadd",
+              "producer": "fadd double %mul.i.i69, %mul.i3.i, !dbg !3236",
+              "consumer": "fadd double %mul.i.i69.consume, %mul.i3.i.consume, !dbg !3236"
+            },
+            {
+              "name": "%mul.i5.i",
+              "opcode": "fmul",
+              "producer": "fmul double %sub9.i, %sub9.i, !dbg !3237",
+              "consumer": "fmul double %sub9.i.scratch, %sub9.i.scratch, !dbg !3237"
+            },
+            {
+              "name": "%add6.i",
+              "opcode": "fadd",
+              "producer": "fadd double %add.i71, %mul.i5.i, !dbg !3239",
+              "consumer": "fadd double %add.i71.consume, %mul.i5.i.consume, !dbg !3239"
+            }
+          ],
+          "final_duplicates": [
+            {
+              "name": "%mul.i.i69",
+              "opcode": "fmul",
+              "producer": "fmul double %sub.i62, %sub.i62, !dbg !3229",
+              "consumer": "fmul double %sub.i62.scratch, %sub.i62.scratch, !dbg !3229"
+            },
+            {
+              "name": "%mul.i3.i",
+              "opcode": "fmul",
+              "producer": "fmul double %sub5.i, %sub5.i, !dbg !3233",
+              "consumer": "fmul double %sub5.i.scratch, %sub5.i.scratch, !dbg !3233"
+            },
+            {
+              "name": "%add.i71",
+              "opcode": "fadd",
+              "producer": "fadd double %mul.i.i69, %mul.i3.i, !dbg !3235",
+              "consumer": "fadd double %mul.i.i69.consume, %mul.i3.i.consume, !dbg !3235"
+            },
+            {
+              "name": "%mul.i5.i",
+              "opcode": "fmul",
+              "producer": "fmul double %sub9.i, %sub9.i, !dbg !3236",
+              "consumer": "fmul double %sub9.i.scratch, %sub9.i.scratch, !dbg !3236"
+            },
+            {
+              "name": "%add6.i",
+              "opcode": "fadd",
+              "producer": "fadd double %add.i71, %mul.i5.i, !dbg !3238",
+              "consumer": "fadd double %add.i71.consume, %mul.i5.i.consume, !dbg !3238"
+            }
+          ],
+          "transfers": [
+            {
+              "Value": "sub.i62",
+              "type": "double",
+              "definition": "fsub double %adjusted_a_coords.sroa.0.0, %35, !dbg !3257",
+              "retained_definition": "fsub double %adjusted_a_coords.sroa.0.0, %41, !dbg !3295"
+            },
+            {
+              "Value": "sub5.i",
+              "type": "double",
+              "definition": "fsub double %adjusted_a_coords.sroa.6.0, %36, !dbg !3261",
+              "retained_definition": "fsub double %adjusted_a_coords.sroa.6.0, %43, !dbg !3299"
+            },
+            {
+              "Value": "sub9.i",
+              "type": "double",
+              "definition": "fsub double %adjusted_a_coords.sroa.9.0, %37, !dbg !3265",
+              "retained_definition": "fsub double %adjusted_a_coords.sroa.9.0, %45, !dbg !3303"
+            },
+            {
+              "Value": "add9.i.i",
+              "type": "double",
+              "definition": "fadd double %40, %mul8.i.i, !dbg !3316",
+              "retained_definition": "fadd double %49, %mul8.i.i, !dbg !3336"
+            },
+            {
+              "Value": "add14.i.i",
+              "type": "double",
+              "definition": "fadd double %42, %mul13.i.i, !dbg !3322",
+              "retained_definition": "fadd double %52, %mul13.i.i, !dbg !3342"
+            }
+          ],
+          "ir_scratch_before": 40960,
+          "ir_scratch_after": 40960,
+          "frame_before": 41024,
+          "frame_after": 41024,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        },
+        "reordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "8",
+              "AnalysisBudgetRemaining": "3355",
+              "Streams": "5",
+              "ScratchBytes": "40960",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "40",
+              "ScratchLoadBytesPerIteration": "40",
+              "DuplicatedOriginalLoadInstructionBytes": "16",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "8",
+              "AnalysisBudgetRemaining": "3355",
+              "Streams": "5",
+              "ScratchBytes": "40960",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "40",
+              "ScratchLoadBytesPerIteration": "40",
+              "DuplicatedOriginalLoadInstructionBytes": "16",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [
+            {
+              "name": "%mul.i.i69",
+              "opcode": "fmul",
+              "producer": "fmul double %sub.i62, %sub.i62, !dbg !3230",
+              "consumer": "fmul double %sub.i62.scratch, %sub.i62.scratch, !dbg !3230"
+            },
+            {
+              "name": "%mul.i3.i",
+              "opcode": "fmul",
+              "producer": "fmul double %sub5.i, %sub5.i, !dbg !3234",
+              "consumer": "fmul double %sub5.i.scratch, %sub5.i.scratch, !dbg !3234"
+            },
+            {
+              "name": "%add.i71",
+              "opcode": "fadd",
+              "producer": "fadd double %mul.i.i69, %mul.i3.i, !dbg !3236",
+              "consumer": "fadd double %mul.i.i69.consume, %mul.i3.i.consume, !dbg !3236"
+            },
+            {
+              "name": "%mul.i5.i",
+              "opcode": "fmul",
+              "producer": "fmul double %sub9.i, %sub9.i, !dbg !3237",
+              "consumer": "fmul double %sub9.i.scratch, %sub9.i.scratch, !dbg !3237"
+            },
+            {
+              "name": "%add6.i",
+              "opcode": "fadd",
+              "producer": "fadd double %add.i71, %mul.i5.i, !dbg !3239",
+              "consumer": "fadd double %add.i71.consume, %mul.i5.i.consume, !dbg !3239"
+            }
+          ],
+          "final_duplicates": [
+            {
+              "name": "%mul.i.i69",
+              "opcode": "fmul",
+              "producer": "fmul double %sub.i62, %sub.i62, !dbg !3229",
+              "consumer": "fmul double %sub.i62.scratch, %sub.i62.scratch, !dbg !3229"
+            },
+            {
+              "name": "%mul.i3.i",
+              "opcode": "fmul",
+              "producer": "fmul double %sub5.i, %sub5.i, !dbg !3233",
+              "consumer": "fmul double %sub5.i.scratch, %sub5.i.scratch, !dbg !3233"
+            },
+            {
+              "name": "%add.i71",
+              "opcode": "fadd",
+              "producer": "fadd double %mul.i.i69, %mul.i3.i, !dbg !3235",
+              "consumer": "fadd double %mul.i.i69.consume, %mul.i3.i.consume, !dbg !3235"
+            },
+            {
+              "name": "%mul.i5.i",
+              "opcode": "fmul",
+              "producer": "fmul double %sub9.i, %sub9.i, !dbg !3236",
+              "consumer": "fmul double %sub9.i.scratch, %sub9.i.scratch, !dbg !3236"
+            },
+            {
+              "name": "%add6.i",
+              "opcode": "fadd",
+              "producer": "fadd double %add.i71, %mul.i5.i, !dbg !3238",
+              "consumer": "fadd double %add.i71.consume, %mul.i5.i.consume, !dbg !3238"
+            }
+          ],
+          "transfers": [
+            {
+              "Value": "sub.i62",
+              "type": "double",
+              "definition": "fsub double %adjusted_a_coords.sroa.0.0, %35, !dbg !3257",
+              "retained_definition": "fsub double %adjusted_a_coords.sroa.0.0, %41, !dbg !3295"
+            },
+            {
+              "Value": "sub5.i",
+              "type": "double",
+              "definition": "fsub double %adjusted_a_coords.sroa.6.0, %36, !dbg !3261",
+              "retained_definition": "fsub double %adjusted_a_coords.sroa.6.0, %43, !dbg !3299"
+            },
+            {
+              "Value": "sub9.i",
+              "type": "double",
+              "definition": "fsub double %adjusted_a_coords.sroa.9.0, %37, !dbg !3265",
+              "retained_definition": "fsub double %adjusted_a_coords.sroa.9.0, %45, !dbg !3303"
+            },
+            {
+              "Value": "add9.i.i",
+              "type": "double",
+              "definition": "fadd double %40, %mul8.i.i, !dbg !3316",
+              "retained_definition": "fadd double %49, %mul8.i.i, !dbg !3336"
+            },
+            {
+              "Value": "add14.i.i",
+              "type": "double",
+              "definition": "fadd double %42, %mul13.i.i, !dbg !3322",
+              "retained_definition": "fadd double %52, %mul13.i.i, !dbg !3342"
+            }
+          ],
+          "ir_scratch_before": 40960,
+          "ir_scratch_after": 40960,
+          "frame_before": 41024,
+          "frame_after": 41024,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        }
+      }
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "source": "benchmarks/dlib/lm-numerical-observation-sweep.cpp",
+      "policies": {
+        "ordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "7",
+              "AnalysisBudgetRemaining": "2941",
+              "Streams": "3",
+              "ScratchBytes": "24000",
+              "ChunkCapacity": "1000",
+              "ScratchStoreBytesPerIteration": "24",
+              "ScratchLoadBytesPerIteration": "24",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "8"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "7",
+              "AnalysisBudgetRemaining": "2941",
+              "Streams": "3",
+              "ScratchBytes": "24000",
+              "ChunkCapacity": "1000",
+              "ScratchStoreBytesPerIteration": "24",
+              "ScratchLoadBytesPerIteration": "24",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "8"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "4",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "div.i",
+              "type": "double",
+              "definition": "fdiv double %sub6.i, %sub9.i, !dbg !62",
+              "retained_definition": "fdiv double %sub6.i, %sub9.i, !dbg !95"
+            },
+            {
+              "Value": "div.1.i",
+              "type": "double",
+              "definition": "fdiv double %sub6.1.i, %sub9.1.i, !dbg !65",
+              "retained_definition": "fdiv double %sub6.1.i, %sub9.1.i, !dbg !98"
+            },
+            {
+              "Value": "div.2.i",
+              "type": "double",
+              "definition": "fdiv double %sub6.2.i, %sub9.2.i, !dbg !66",
+              "retained_definition": "fdiv double %sub6.2.i, %sub9.2.i, !dbg !99"
+            }
+          ],
+          "ir_scratch_before": 24000,
+          "ir_scratch_after": 24000,
+          "frame_before": 24016,
+          "frame_after": 24016,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        },
+        "reordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "7",
+              "AnalysisBudgetRemaining": "2941",
+              "Streams": "3",
+              "ScratchBytes": "24000",
+              "ChunkCapacity": "1000",
+              "ScratchStoreBytesPerIteration": "24",
+              "ScratchLoadBytesPerIteration": "24",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "8"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "7",
+              "AnalysisBudgetRemaining": "2941",
+              "Streams": "3",
+              "ScratchBytes": "24000",
+              "ChunkCapacity": "1000",
+              "ScratchStoreBytesPerIteration": "24",
+              "ScratchLoadBytesPerIteration": "24",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "8"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "4",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "div.i",
+              "type": "double",
+              "definition": "fdiv double %sub6.i, %sub9.i, !dbg !62",
+              "retained_definition": "fdiv double %sub6.i, %sub9.i, !dbg !95"
+            },
+            {
+              "Value": "div.1.i",
+              "type": "double",
+              "definition": "fdiv double %sub6.1.i, %sub9.1.i, !dbg !65",
+              "retained_definition": "fdiv double %sub6.1.i, %sub9.1.i, !dbg !98"
+            },
+            {
+              "Value": "div.2.i",
+              "type": "double",
+              "definition": "fdiv double %sub6.2.i, %sub9.2.i, !dbg !66",
+              "retained_definition": "fdiv double %sub6.2.i, %sub9.2.i, !dbg !99"
+            }
+          ],
+          "ir_scratch_before": 24000,
+          "ir_scratch_after": 24000,
+          "frame_before": 24016,
+          "frame_after": 24016,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        }
+      }
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "source": "benchmarks/ducc/map2alm-scalar-ring-pair.cpp",
+      "policies": {
+        "ordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3655",
+              "Streams": "8",
+              "ScratchBytes": "12864",
+              "ChunkCapacity": "201",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3655",
+              "Streams": "8",
+              "ScratchBytes": "12864",
+              "ChunkCapacity": "201",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul",
+              "type": "double",
+              "definition": "fmul double %4, %5, !dbg !84",
+              "retained_definition": "fmul double %13, %14, !dbg !93"
+            },
+            {
+              "Value": "mul4",
+              "type": "double",
+              "definition": "fmul double %4, %6, !dbg !88",
+              "retained_definition": "fmul double %13, %16, !dbg !97"
+            },
+            {
+              "Value": "mul9",
+              "type": "double",
+              "definition": "fmul double %4, %7, !dbg !92",
+              "retained_definition": "fmul double %13, %18, !dbg !101"
+            },
+            {
+              "Value": "mul14",
+              "type": "double",
+              "definition": "fmul double %4, %8, !dbg !96",
+              "retained_definition": "fmul double %13, %20, !dbg !105"
+            },
+            {
+              "Value": "mul27",
+              "type": "double",
+              "definition": "fmul double %5, %add23, !dbg !108",
+              "retained_definition": "fmul double %14, %add23, !dbg !117"
+            },
+            {
+              "Value": "mul32",
+              "type": "double",
+              "definition": "fmul double %6, %add23, !dbg !109",
+              "retained_definition": "fmul double %16, %add23, !dbg !118"
+            },
+            {
+              "Value": "mul37",
+              "type": "double",
+              "definition": "fmul double %7, %add23, !dbg !110",
+              "retained_definition": "fmul double %18, %add23, !dbg !119"
+            },
+            {
+              "Value": "mul42",
+              "type": "double",
+              "definition": "fmul double %8, %add23, !dbg !111",
+              "retained_definition": "fmul double %20, %add23, !dbg !120"
+            }
+          ],
+          "ir_scratch_before": 12864,
+          "ir_scratch_after": 12864,
+          "frame_before": 12976,
+          "frame_after": 12928,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        },
+        "reordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3655",
+              "Streams": "8",
+              "ScratchBytes": "12864",
+              "ChunkCapacity": "201",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3655",
+              "Streams": "8",
+              "ScratchBytes": "12864",
+              "ChunkCapacity": "201",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul",
+              "type": "double",
+              "definition": "fmul double %4, %5, !dbg !84",
+              "retained_definition": "fmul double %13, %14, !dbg !93"
+            },
+            {
+              "Value": "mul4",
+              "type": "double",
+              "definition": "fmul double %4, %6, !dbg !88",
+              "retained_definition": "fmul double %13, %16, !dbg !97"
+            },
+            {
+              "Value": "mul9",
+              "type": "double",
+              "definition": "fmul double %4, %7, !dbg !92",
+              "retained_definition": "fmul double %13, %18, !dbg !101"
+            },
+            {
+              "Value": "mul14",
+              "type": "double",
+              "definition": "fmul double %4, %8, !dbg !96",
+              "retained_definition": "fmul double %13, %20, !dbg !105"
+            },
+            {
+              "Value": "mul27",
+              "type": "double",
+              "definition": "fmul double %5, %add23, !dbg !108",
+              "retained_definition": "fmul double %14, %add23, !dbg !117"
+            },
+            {
+              "Value": "mul32",
+              "type": "double",
+              "definition": "fmul double %6, %add23, !dbg !109",
+              "retained_definition": "fmul double %16, %add23, !dbg !118"
+            },
+            {
+              "Value": "mul37",
+              "type": "double",
+              "definition": "fmul double %7, %add23, !dbg !110",
+              "retained_definition": "fmul double %18, %add23, !dbg !119"
+            },
+            {
+              "Value": "mul42",
+              "type": "double",
+              "definition": "fmul double %8, %add23, !dbg !111",
+              "retained_definition": "fmul double %20, %add23, !dbg !120"
+            }
+          ],
+          "ir_scratch_before": 12864,
+          "ir_scratch_after": 12864,
+          "frame_before": 12976,
+          "frame_after": 12928,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        }
+      }
+    },
+    {
+      "id": "t000070-map2alm-spin2-ring-pair",
+      "source": "benchmarks/ducc/map2alm-spin2-ring-pair.cpp",
+      "policies": {
+        "ordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3654",
+              "Streams": "8",
+              "ScratchBytes": "8192",
+              "ChunkCapacity": "128",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            },
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3654",
+              "Streams": "8",
+              "ScratchBytes": "8192",
+              "ChunkCapacity": "128",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3654",
+              "Streams": "8",
+              "ScratchBytes": "8192",
+              "ChunkCapacity": "128",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            },
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3654",
+              "Streams": "8",
+              "ScratchBytes": "8192",
+              "ChunkCapacity": "128",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "4",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "4",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul8",
+              "type": "double",
+              "definition": "fmul double %5, %7, !dbg !94",
+              "retained_definition": "fmul double %14, %16, !dbg !103"
+            },
+            {
+              "Value": "mul11",
+              "type": "double",
+              "definition": "fmul double %5, %8, !dbg !98",
+              "retained_definition": "fmul double %14, %18, !dbg !107"
+            },
+            {
+              "Value": "mul15",
+              "type": "double",
+              "definition": "fmul double %5, %9, !dbg !102",
+              "retained_definition": "fmul double %14, %20, !dbg !111"
+            },
+            {
+              "Value": "mul19",
+              "type": "double",
+              "definition": "fmul double %5, %10, !dbg !106",
+              "retained_definition": "fmul double %14, %22, !dbg !115"
+            },
+            {
+              "Value": "mul23",
+              "type": "double",
+              "definition": "fmul double %sub4, %10, !dbg !107",
+              "retained_definition": "fmul double %sub4, %22, !dbg !116"
+            },
+            {
+              "Value": "mul27",
+              "type": "double",
+              "definition": "fmul double %sub4, %9, !dbg !108",
+              "retained_definition": "fmul double %sub4, %20, !dbg !117"
+            },
+            {
+              "Value": "mul31",
+              "type": "double",
+              "definition": "fmul double %sub4, %8, !dbg !109",
+              "retained_definition": "fmul double %sub4, %18, !dbg !118"
+            },
+            {
+              "Value": "mul35",
+              "type": "double",
+              "definition": "fmul double %7, %sub4, !dbg !110",
+              "retained_definition": "fmul double %16, %sub4, !dbg !119"
+            },
+            {
+              "Value": "mul72",
+              "type": "double",
+              "definition": "fmul double %12, %14, !dbg !166",
+              "retained_definition": "fmul double %38, %40, !dbg !175"
+            },
+            {
+              "Value": "mul76",
+              "type": "double",
+              "definition": "fmul double %12, %15, !dbg !170",
+              "retained_definition": "fmul double %38, %42, !dbg !179"
+            },
+            {
+              "Value": "mul80",
+              "type": "double",
+              "definition": "fmul double %12, %16, !dbg !174",
+              "retained_definition": "fmul double %38, %44, !dbg !183"
+            },
+            {
+              "Value": "mul84",
+              "type": "double",
+              "definition": "fmul double %12, %17, !dbg !178",
+              "retained_definition": "fmul double %38, %46, !dbg !187"
+            },
+            {
+              "Value": "mul88",
+              "type": "double",
+              "definition": "fmul double %sub68, %17, !dbg !179",
+              "retained_definition": "fmul double %sub68, %46, !dbg !188"
+            },
+            {
+              "Value": "mul92",
+              "type": "double",
+              "definition": "fmul double %sub68, %16, !dbg !180",
+              "retained_definition": "fmul double %sub68, %44, !dbg !189"
+            },
+            {
+              "Value": "mul96",
+              "type": "double",
+              "definition": "fmul double %sub68, %15, !dbg !181",
+              "retained_definition": "fmul double %sub68, %42, !dbg !190"
+            },
+            {
+              "Value": "mul100",
+              "type": "double",
+              "definition": "fmul double %14, %sub68, !dbg !182",
+              "retained_definition": "fmul double %40, %sub68, !dbg !191"
+            }
+          ],
+          "ir_scratch_before": 16384,
+          "ir_scratch_after": 16384,
+          "frame_before": 8416,
+          "frame_after": 8416,
+          "colored_scratch_objects_before": [
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024
+          ],
+          "colored_scratch_objects_after": [
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024
+          ]
+        },
+        "reordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3654",
+              "Streams": "8",
+              "ScratchBytes": "8192",
+              "ChunkCapacity": "128",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            },
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3654",
+              "Streams": "8",
+              "ScratchBytes": "8192",
+              "ChunkCapacity": "128",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3654",
+              "Streams": "8",
+              "ScratchBytes": "8192",
+              "ChunkCapacity": "128",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            },
+            {
+              "ProducerDepth": "6",
+              "AnalysisBudgetRemaining": "3654",
+              "Streams": "8",
+              "ScratchBytes": "8192",
+              "ChunkCapacity": "128",
+              "ScratchStoreBytesPerIteration": "64",
+              "ScratchLoadBytesPerIteration": "64",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "4",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "4",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul8",
+              "type": "double",
+              "definition": "fmul double %5, %7, !dbg !94",
+              "retained_definition": "fmul double %14, %16, !dbg !103"
+            },
+            {
+              "Value": "mul11",
+              "type": "double",
+              "definition": "fmul double %5, %8, !dbg !98",
+              "retained_definition": "fmul double %14, %18, !dbg !107"
+            },
+            {
+              "Value": "mul15",
+              "type": "double",
+              "definition": "fmul double %5, %9, !dbg !102",
+              "retained_definition": "fmul double %14, %20, !dbg !111"
+            },
+            {
+              "Value": "mul19",
+              "type": "double",
+              "definition": "fmul double %5, %10, !dbg !106",
+              "retained_definition": "fmul double %14, %22, !dbg !115"
+            },
+            {
+              "Value": "mul23",
+              "type": "double",
+              "definition": "fmul double %sub4, %10, !dbg !107",
+              "retained_definition": "fmul double %sub4, %22, !dbg !116"
+            },
+            {
+              "Value": "mul27",
+              "type": "double",
+              "definition": "fmul double %sub4, %9, !dbg !108",
+              "retained_definition": "fmul double %sub4, %20, !dbg !117"
+            },
+            {
+              "Value": "mul31",
+              "type": "double",
+              "definition": "fmul double %sub4, %8, !dbg !109",
+              "retained_definition": "fmul double %sub4, %18, !dbg !118"
+            },
+            {
+              "Value": "mul35",
+              "type": "double",
+              "definition": "fmul double %7, %sub4, !dbg !110",
+              "retained_definition": "fmul double %16, %sub4, !dbg !119"
+            },
+            {
+              "Value": "mul72",
+              "type": "double",
+              "definition": "fmul double %12, %14, !dbg !166",
+              "retained_definition": "fmul double %38, %40, !dbg !175"
+            },
+            {
+              "Value": "mul76",
+              "type": "double",
+              "definition": "fmul double %12, %15, !dbg !170",
+              "retained_definition": "fmul double %38, %42, !dbg !179"
+            },
+            {
+              "Value": "mul80",
+              "type": "double",
+              "definition": "fmul double %12, %16, !dbg !174",
+              "retained_definition": "fmul double %38, %44, !dbg !183"
+            },
+            {
+              "Value": "mul84",
+              "type": "double",
+              "definition": "fmul double %12, %17, !dbg !178",
+              "retained_definition": "fmul double %38, %46, !dbg !187"
+            },
+            {
+              "Value": "mul88",
+              "type": "double",
+              "definition": "fmul double %sub68, %17, !dbg !179",
+              "retained_definition": "fmul double %sub68, %46, !dbg !188"
+            },
+            {
+              "Value": "mul92",
+              "type": "double",
+              "definition": "fmul double %sub68, %16, !dbg !180",
+              "retained_definition": "fmul double %sub68, %44, !dbg !189"
+            },
+            {
+              "Value": "mul96",
+              "type": "double",
+              "definition": "fmul double %sub68, %15, !dbg !181",
+              "retained_definition": "fmul double %sub68, %42, !dbg !190"
+            },
+            {
+              "Value": "mul100",
+              "type": "double",
+              "definition": "fmul double %14, %sub68, !dbg !182",
+              "retained_definition": "fmul double %40, %sub68, !dbg !191"
+            }
+          ],
+          "ir_scratch_before": 16384,
+          "ir_scratch_after": 16384,
+          "frame_before": 8416,
+          "frame_after": 8416,
+          "colored_scratch_objects_before": [
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024
+          ],
+          "colored_scratch_objects_after": [
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024,
+            1024
+          ]
+        }
+      }
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-face",
+      "source": "benchmarks/nek5000/drgtrq-3d-face.c",
+      "policies": {
+        "ordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "5",
+              "AnalysisBudgetRemaining": "2605",
+              "Streams": "6",
+              "ScratchBytes": "3072",
+              "ChunkCapacity": "64",
+              "ScratchStoreBytesPerIteration": "48",
+              "ScratchLoadBytesPerIteration": "48",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "24"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "5",
+              "AnalysisBudgetRemaining": "2605",
+              "Streams": "6",
+              "ScratchBytes": "3072",
+              "ChunkCapacity": "64",
+              "ScratchStoreBytesPerIteration": "48",
+              "ScratchLoadBytesPerIteration": "48",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "24"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "4",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "4",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul53",
+              "type": "double",
+              "definition": "fmul double %mul12, %26, !dbg !299",
+              "retained_definition": "fmul double %mul12, %24, !dbg !334"
+            },
+            {
+              "Value": "mul58",
+              "type": "double",
+              "definition": "fmul double %mul21, %26, !dbg !300",
+              "retained_definition": "fmul double %mul21, %24, !dbg !335"
+            },
+            {
+              "Value": "mul63",
+              "type": "double",
+              "definition": "fmul double %mul30, %26, !dbg !301",
+              "retained_definition": "fmul double %mul30, %24, !dbg !336"
+            },
+            {
+              "Value": "mul71",
+              "type": "double",
+              "definition": "fmul double %add70, %fneg, !dbg !308",
+              "retained_definition": "fmul double %add70, %fneg, !dbg !343"
+            },
+            {
+              "Value": "mul80",
+              "type": "double",
+              "definition": "fmul double %add79, %fneg, !dbg !314",
+              "retained_definition": "fmul double %add79, %fneg, !dbg !349"
+            },
+            {
+              "Value": "mul89",
+              "type": "double",
+              "definition": "fmul double %add88, %fneg, !dbg !320",
+              "retained_definition": "fmul double %add88, %fneg, !dbg !355"
+            }
+          ],
+          "ir_scratch_before": 3072,
+          "ir_scratch_after": 3072,
+          "frame_before": 3184,
+          "frame_after": 3184,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        },
+        "reordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "5",
+              "AnalysisBudgetRemaining": "2605",
+              "Streams": "6",
+              "ScratchBytes": "3072",
+              "ChunkCapacity": "64",
+              "ScratchStoreBytesPerIteration": "48",
+              "ScratchLoadBytesPerIteration": "48",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "24"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "5",
+              "AnalysisBudgetRemaining": "2605",
+              "Streams": "6",
+              "ScratchBytes": "3072",
+              "ChunkCapacity": "64",
+              "ScratchStoreBytesPerIteration": "48",
+              "ScratchLoadBytesPerIteration": "48",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "24"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "4",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "producer",
+              "ProducerVF": "4",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul53",
+              "type": "double",
+              "definition": "fmul double %mul12, %26, !dbg !299",
+              "retained_definition": "fmul double %mul12, %24, !dbg !334"
+            },
+            {
+              "Value": "mul58",
+              "type": "double",
+              "definition": "fmul double %mul21, %26, !dbg !300",
+              "retained_definition": "fmul double %mul21, %24, !dbg !335"
+            },
+            {
+              "Value": "mul63",
+              "type": "double",
+              "definition": "fmul double %mul30, %26, !dbg !301",
+              "retained_definition": "fmul double %mul30, %24, !dbg !336"
+            },
+            {
+              "Value": "mul71",
+              "type": "double",
+              "definition": "fmul double %add70, %fneg, !dbg !308",
+              "retained_definition": "fmul double %add70, %fneg, !dbg !343"
+            },
+            {
+              "Value": "mul80",
+              "type": "double",
+              "definition": "fmul double %add79, %fneg, !dbg !314",
+              "retained_definition": "fmul double %add79, %fneg, !dbg !349"
+            },
+            {
+              "Value": "mul89",
+              "type": "double",
+              "definition": "fmul double %add88, %fneg, !dbg !320",
+              "retained_definition": "fmul double %add88, %fneg, !dbg !355"
+            }
+          ],
+          "ir_scratch_before": 3072,
+          "ir_scratch_after": 3072,
+          "frame_before": 3184,
+          "frame_after": 3184,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        }
+      }
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "source": "benchmarks/nek5000/drgtrq-3d-row.c",
+      "policies": {
+        "ordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "5",
+              "AnalysisBudgetRemaining": "2745",
+              "Streams": "6",
+              "ScratchBytes": "49152",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "48",
+              "ScratchLoadBytesPerIteration": "48",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "24"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "5",
+              "AnalysisBudgetRemaining": "2745",
+              "Streams": "6",
+              "ScratchBytes": "49152",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "48",
+              "ScratchLoadBytesPerIteration": "48",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "24"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul57",
+              "type": "double",
+              "definition": "fmul double %mul16, %41, !dbg !313",
+              "retained_definition": "fmul double %mul16, %38, !dbg !355"
+            },
+            {
+              "Value": "mul62",
+              "type": "double",
+              "definition": "fmul double %mul25, %41, !dbg !314",
+              "retained_definition": "fmul double %mul25, %38, !dbg !356"
+            },
+            {
+              "Value": "mul67",
+              "type": "double",
+              "definition": "fmul double %mul34, %41, !dbg !315",
+              "retained_definition": "fmul double %mul34, %38, !dbg !357"
+            },
+            {
+              "Value": "mul75",
+              "type": "double",
+              "definition": "fmul double %add74, %fneg, !dbg !322",
+              "retained_definition": "fmul double %add74, %fneg, !dbg !364"
+            },
+            {
+              "Value": "mul84",
+              "type": "double",
+              "definition": "fmul double %add83, %fneg, !dbg !328",
+              "retained_definition": "fmul double %add83, %fneg, !dbg !370"
+            },
+            {
+              "Value": "mul93",
+              "type": "double",
+              "definition": "fmul double %add92, %fneg, !dbg !334",
+              "retained_definition": "fmul double %add92, %fneg, !dbg !376"
+            }
+          ],
+          "ir_scratch_before": 49152,
+          "ir_scratch_after": 49152,
+          "frame_before": 49456,
+          "frame_after": 49584,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        },
+        "reordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "5",
+              "AnalysisBudgetRemaining": "2745",
+              "Streams": "6",
+              "ScratchBytes": "49152",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "48",
+              "ScratchLoadBytesPerIteration": "48",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "24"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "5",
+              "AnalysisBudgetRemaining": "2745",
+              "Streams": "6",
+              "ScratchBytes": "49152",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "48",
+              "ScratchLoadBytesPerIteration": "48",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "24"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul57",
+              "type": "double",
+              "definition": "fmul double %mul16, %41, !dbg !313",
+              "retained_definition": "fmul double %mul16, %38, !dbg !355"
+            },
+            {
+              "Value": "mul62",
+              "type": "double",
+              "definition": "fmul double %mul25, %41, !dbg !314",
+              "retained_definition": "fmul double %mul25, %38, !dbg !356"
+            },
+            {
+              "Value": "mul67",
+              "type": "double",
+              "definition": "fmul double %mul34, %41, !dbg !315",
+              "retained_definition": "fmul double %mul34, %38, !dbg !357"
+            },
+            {
+              "Value": "mul75",
+              "type": "double",
+              "definition": "fmul double %add74, %fneg, !dbg !322",
+              "retained_definition": "fmul double %add74, %fneg, !dbg !364"
+            },
+            {
+              "Value": "mul84",
+              "type": "double",
+              "definition": "fmul double %add83, %fneg, !dbg !328",
+              "retained_definition": "fmul double %add83, %fneg, !dbg !370"
+            },
+            {
+              "Value": "mul93",
+              "type": "double",
+              "definition": "fmul double %add92, %fneg, !dbg !334",
+              "retained_definition": "fmul double %add92, %fneg, !dbg !376"
+            }
+          ],
+          "ir_scratch_before": 49152,
+          "ir_scratch_after": 49152,
+          "frame_before": 49440,
+          "frame_after": 49552,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        }
+      }
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "source": "benchmarks/pyscf/vv10-hessian-ft-six-trial-grid.c",
+      "policies": {
+        "ordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "16",
+              "AnalysisBudgetRemaining": "1057",
+              "Streams": "4",
+              "ScratchBytes": "32768",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "32",
+              "ScratchLoadBytesPerIteration": "32",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "104"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "16",
+              "AnalysisBudgetRemaining": "1057",
+              "Streams": "4",
+              "ScratchBytes": "32768",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "32",
+              "ScratchLoadBytesPerIteration": "32",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "104"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul108",
+              "type": "double",
+              "definition": "fmul double %mul88, %add107, !dbg !439",
+              "retained_definition": "fmul double %mul88, %add107, !dbg !482"
+            },
+            {
+              "Value": "mul115",
+              "type": "double",
+              "definition": "fmul double %mul111, %sub114, !dbg !444",
+              "retained_definition": "fmul double %mul111, %sub114, !dbg !487"
+            },
+            {
+              "Value": "mul122",
+              "type": "double",
+              "definition": "fmul double %mul118, %sub121, !dbg !450",
+              "retained_definition": "fmul double %mul118, %sub121, !dbg !493"
+            },
+            {
+              "Value": "mul129",
+              "type": "double",
+              "definition": "fmul double %mul128, %mul98, !dbg !457",
+              "retained_definition": "fmul double %mul128, %mul98, !dbg !500"
+            }
+          ],
+          "ir_scratch_before": 32768,
+          "ir_scratch_after": 32768,
+          "frame_before": 33184,
+          "frame_after": 33152,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        },
+        "reordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "16",
+              "AnalysisBudgetRemaining": "1057",
+              "Streams": "4",
+              "ScratchBytes": "32768",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "32",
+              "ScratchLoadBytesPerIteration": "32",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "104"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "16",
+              "AnalysisBudgetRemaining": "1057",
+              "Streams": "4",
+              "ScratchBytes": "32768",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "32",
+              "ScratchLoadBytesPerIteration": "32",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "104"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul108",
+              "type": "double",
+              "definition": "fmul double %mul88, %add107, !dbg !439",
+              "retained_definition": "fmul double %mul88, %add107, !dbg !482"
+            },
+            {
+              "Value": "mul115",
+              "type": "double",
+              "definition": "fmul double %mul111, %sub114, !dbg !444",
+              "retained_definition": "fmul double %mul111, %sub114, !dbg !487"
+            },
+            {
+              "Value": "mul122",
+              "type": "double",
+              "definition": "fmul double %mul118, %sub121, !dbg !450",
+              "retained_definition": "fmul double %mul118, %sub121, !dbg !493"
+            },
+            {
+              "Value": "mul129",
+              "type": "double",
+              "definition": "fmul double %mul128, %mul98, !dbg !457",
+              "retained_definition": "fmul double %mul128, %mul98, !dbg !500"
+            }
+          ],
+          "ir_scratch_before": 32768,
+          "ir_scratch_after": 32768,
+          "frame_before": 33168,
+          "frame_after": 33104,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        }
+      }
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "source": "benchmarks/pyscf/vv10-hessian-uwabce-grid.c",
+      "policies": {
+        "ordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "11",
+              "AnalysisBudgetRemaining": "3090",
+              "Streams": "2",
+              "ScratchBytes": "16384",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "16",
+              "ScratchLoadBytesPerIteration": "16",
+              "DuplicatedOriginalLoadInstructionBytes": "32",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "4",
+              "AnalysisBudgetRemaining": "3001",
+              "Streams": "1",
+              "ScratchBytes": "8192",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "8",
+              "ScratchLoadBytesPerIteration": "8",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "32"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [
+            {
+              "name": "%mul58",
+              "opcode": "fmul",
+              "producer": "fmul double %13, %add57, !dbg !201",
+              "consumer": "fmul double %13, %add57.scratch, !dbg !201"
+            },
+            {
+              "name": "%add59",
+              "opcode": "fadd",
+              "producer": "fadd double %14, %mul58, !dbg !202",
+              "consumer": "fadd double %14, %mul58.consume, !dbg !202"
+            },
+            {
+              "name": "%mul60",
+              "opcode": "fmul",
+              "producer": "fmul double %24, %add57, !dbg !203",
+              "consumer": "fmul double %.consume, %add57.scratch, !dbg !203"
+            },
+            {
+              "name": "%add61",
+              "opcode": "fadd",
+              "producer": "fadd double %25, %mul60, !dbg !204",
+              "consumer": "fadd double %.consume71, %mul60.consume, !dbg !204"
+            },
+            {
+              "name": "%div",
+              "opcode": "fdiv",
+              "producer": "fdiv double 1.000000e+00, %add59, !dbg !205",
+              "consumer": "fdiv double 1.000000e+00, %add59.consume, !dbg !205"
+            },
+            {
+              "name": "%add62",
+              "opcode": "fadd",
+              "producer": "fadd double %add59, %add61, !dbg !206",
+              "consumer": "fadd double %add59.consume, %add61.consume, !dbg !206"
+            },
+            {
+              "name": "%div63",
+              "opcode": "fdiv",
+              "producer": "fdiv double 1.000000e+00, %add62, !dbg !207",
+              "consumer": "fdiv double 1.000000e+00, %add62.consume, !dbg !207"
+            },
+            {
+              "name": "%div64",
+              "opcode": "fdiv",
+              "producer": "fdiv double -1.500000e+00, %add61, !dbg !208",
+              "consumer": "fdiv double -1.500000e+00, %add61.consume, !dbg !208"
+            },
+            {
+              "name": "%mul65",
+              "opcode": "fmul",
+              "producer": "fmul double %div64, %div, !dbg !209",
+              "consumer": "fmul double %div64.consume, %div.consume, !dbg !209"
+            },
+            {
+              "name": "%mul66",
+              "opcode": "fmul",
+              "producer": "fmul double %mul65, %div63, !dbg !210",
+              "consumer": "fmul double %mul65.consume, %div63.consume, !dbg !210"
+            },
+            {
+              "name": "%mul67",
+              "opcode": "fmul",
+              "producer": "fmul double %29, %30, !dbg !211",
+              "consumer": "fmul double %.consume72, %.consume73, !dbg !211"
+            },
+            {
+              "name": "%mul68",
+              "opcode": "fmul",
+              "producer": "fmul double %mul67, %mul66, !dbg !212",
+              "consumer": "fmul double %mul67.consume, %mul66.consume, !dbg !212"
+            }
+          ],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "add57",
+              "type": "double",
+              "definition": "fadd double %add49, %mul56, !dbg !227",
+              "retained_definition": "fadd double %add49, %mul56, !dbg !267"
+            }
+          ],
+          "ir_scratch_before": 16384,
+          "ir_scratch_after": 8192,
+          "frame_before": 16496,
+          "frame_after": 8272,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        },
+        "reordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "11",
+              "AnalysisBudgetRemaining": "3090",
+              "Streams": "2",
+              "ScratchBytes": "16384",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "16",
+              "ScratchLoadBytesPerIteration": "16",
+              "DuplicatedOriginalLoadInstructionBytes": "32",
+              "MovedOriginalLoadInstructionBytes": "0"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "4",
+              "AnalysisBudgetRemaining": "3001",
+              "Streams": "1",
+              "ScratchBytes": "8192",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "8",
+              "ScratchLoadBytesPerIteration": "8",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "32"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "vscale x 2",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [
+            {
+              "name": "%mul58",
+              "opcode": "fmul",
+              "producer": "fmul double %13, %add57, !dbg !201",
+              "consumer": "fmul double %13, %add57.scratch, !dbg !201"
+            },
+            {
+              "name": "%add59",
+              "opcode": "fadd",
+              "producer": "fadd double %14, %mul58, !dbg !202",
+              "consumer": "fadd double %14, %mul58.consume, !dbg !202"
+            },
+            {
+              "name": "%mul60",
+              "opcode": "fmul",
+              "producer": "fmul double %24, %add57, !dbg !203",
+              "consumer": "fmul double %.consume, %add57.scratch, !dbg !203"
+            },
+            {
+              "name": "%add61",
+              "opcode": "fadd",
+              "producer": "fadd double %25, %mul60, !dbg !204",
+              "consumer": "fadd double %.consume71, %mul60.consume, !dbg !204"
+            },
+            {
+              "name": "%div",
+              "opcode": "fdiv",
+              "producer": "fdiv double 1.000000e+00, %add59, !dbg !205",
+              "consumer": "fdiv double 1.000000e+00, %add59.consume, !dbg !205"
+            },
+            {
+              "name": "%add62",
+              "opcode": "fadd",
+              "producer": "fadd double %add59, %add61, !dbg !206",
+              "consumer": "fadd double %add59.consume, %add61.consume, !dbg !206"
+            },
+            {
+              "name": "%div63",
+              "opcode": "fdiv",
+              "producer": "fdiv double 1.000000e+00, %add62, !dbg !207",
+              "consumer": "fdiv double 1.000000e+00, %add62.consume, !dbg !207"
+            },
+            {
+              "name": "%div64",
+              "opcode": "fdiv",
+              "producer": "fdiv double -1.500000e+00, %add61, !dbg !208",
+              "consumer": "fdiv double -1.500000e+00, %add61.consume, !dbg !208"
+            },
+            {
+              "name": "%mul65",
+              "opcode": "fmul",
+              "producer": "fmul double %div64, %div, !dbg !209",
+              "consumer": "fmul double %div64.consume, %div.consume, !dbg !209"
+            },
+            {
+              "name": "%mul66",
+              "opcode": "fmul",
+              "producer": "fmul double %mul65, %div63, !dbg !210",
+              "consumer": "fmul double %mul65.consume, %div63.consume, !dbg !210"
+            },
+            {
+              "name": "%mul67",
+              "opcode": "fmul",
+              "producer": "fmul double %29, %30, !dbg !211",
+              "consumer": "fmul double %.consume72, %.consume73, !dbg !211"
+            },
+            {
+              "name": "%mul68",
+              "opcode": "fmul",
+              "producer": "fmul double %mul67, %mul66, !dbg !212",
+              "consumer": "fmul double %mul67.consume, %mul66.consume, !dbg !212"
+            }
+          ],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "add57",
+              "type": "double",
+              "definition": "fadd double %add49, %mul56, !dbg !227",
+              "retained_definition": "fadd double %add49, %mul56, !dbg !267"
+            }
+          ],
+          "ir_scratch_before": 16384,
+          "ir_scratch_after": 8192,
+          "frame_before": 16496,
+          "frame_after": 8272,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        }
+      }
+    },
+    {
+      "id": "t000156-gravity-potential-paired-degree",
+      "source": "benchmarks/shtools/gravity-potential-paired-degree.c",
+      "policies": {
+        "ordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "8",
+              "AnalysisBudgetRemaining": "2537",
+              "Streams": "7",
+              "ScratchBytes": "57344",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "56",
+              "ScratchLoadBytesPerIteration": "56",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "1"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "8",
+              "AnalysisBudgetRemaining": "2537",
+              "Streams": "7",
+              "ScratchBytes": "57344",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "56",
+              "ScratchLoadBytesPerIteration": "56",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "1"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul14",
+              "type": "double",
+              "definition": "fmul double %31, %mul11, !dbg !128",
+              "retained_definition": "fmul double %39, %mul11, !dbg !155"
+            },
+            {
+              "Value": "mul25",
+              "type": "double",
+              "definition": "fmul double %31, %mul22, !dbg !134",
+              "retained_definition": "fmul double %39, %mul22, !dbg !161"
+            },
+            {
+              "Value": "mul46",
+              "type": "double",
+              "definition": "fmul double %31, %mul9, !dbg !138",
+              "retained_definition": "fmul double %39, %mul9, !dbg !162"
+            },
+            {
+              "Value": "mul55",
+              "type": "double",
+              "definition": "fmul double %31, %mul19, !dbg !139",
+              "retained_definition": "fmul double %39, %mul19, !dbg !163"
+            },
+            {
+              "Value": "mul79",
+              "type": "double",
+              "definition": "fmul double %mul77, %conv78, !dbg !144",
+              "retained_definition": "fmul double %mul77, %conv78, !dbg !166"
+            },
+            {
+              "Value": "mul132",
+              "type": "double",
+              "definition": "fmul double %31, %mul129, !dbg !163",
+              "retained_definition": "fmul double %39, %mul129, !dbg !182"
+            },
+            {
+              "Value": "mul141",
+              "type": "double",
+              "definition": "fmul double %31, %mul138, !dbg !165",
+              "retained_definition": "fmul double %39, %mul138, !dbg !184"
+            }
+          ],
+          "ir_scratch_before": 57344,
+          "ir_scratch_after": 57344,
+          "frame_before": 57520,
+          "frame_after": 57520,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        },
+        "reordered": {
+          "baseline": [
+            {
+              "ProducerDepth": "8",
+              "AnalysisBudgetRemaining": "2537",
+              "Streams": "7",
+              "ScratchBytes": "57344",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "56",
+              "ScratchLoadBytesPerIteration": "56",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "1"
+            }
+          ],
+          "final": [
+            {
+              "ProducerDepth": "8",
+              "AnalysisBudgetRemaining": "2537",
+              "Streams": "7",
+              "ScratchBytes": "57344",
+              "ChunkCapacity": "1024",
+              "ScratchStoreBytesPerIteration": "56",
+              "ScratchLoadBytesPerIteration": "56",
+              "DuplicatedOriginalLoadInstructionBytes": "0",
+              "MovedOriginalLoadInstructionBytes": "1"
+            }
+          ],
+          "before_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "after_stages": [
+            {
+              "Stage": "consumer",
+              "AccumulatorVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            },
+            {
+              "Stage": "producer",
+              "ProducerVF": "1",
+              "ActualIC": "1",
+              "RequestedVF": "0",
+              "RequestedScalable": "false",
+              "RequestedIC": "0"
+            }
+          ],
+          "baseline_duplicates": [],
+          "final_duplicates": [],
+          "transfers": [
+            {
+              "Value": "mul14",
+              "type": "double",
+              "definition": "fmul double %31, %mul11, !dbg !128",
+              "retained_definition": "fmul double %39, %mul11, !dbg !155"
+            },
+            {
+              "Value": "mul25",
+              "type": "double",
+              "definition": "fmul double %31, %mul22, !dbg !134",
+              "retained_definition": "fmul double %39, %mul22, !dbg !161"
+            },
+            {
+              "Value": "mul46",
+              "type": "double",
+              "definition": "fmul double %31, %mul9, !dbg !138",
+              "retained_definition": "fmul double %39, %mul9, !dbg !162"
+            },
+            {
+              "Value": "mul55",
+              "type": "double",
+              "definition": "fmul double %31, %mul19, !dbg !139",
+              "retained_definition": "fmul double %39, %mul19, !dbg !163"
+            },
+            {
+              "Value": "mul79",
+              "type": "double",
+              "definition": "fmul double %mul77, %conv78, !dbg !144",
+              "retained_definition": "fmul double %mul77, %conv78, !dbg !166"
+            },
+            {
+              "Value": "mul132",
+              "type": "double",
+              "definition": "fmul double %31, %mul129, !dbg !163",
+              "retained_definition": "fmul double %39, %mul129, !dbg !182"
+            },
+            {
+              "Value": "mul141",
+              "type": "double",
+              "definition": "fmul double %31, %mul138, !dbg !165",
+              "retained_definition": "fmul double %39, %mul138, !dbg !184"
+            }
+          ],
+          "ir_scratch_before": 57344,
+          "ir_scratch_after": 57344,
+          "frame_before": 57520,
+          "frame_after": 57520,
+          "colored_scratch_objects_before": null,
+          "colored_scratch_objects_after": null
+        }
+      }
+    }
+  ],
+  "cleanup_experiments": [
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "pipeline": "loop-vectorize",
+      "input_sha256": "bbfc81d67acb16e3fb3c23a4b8e50146ff93925fb423a5ca0feaa0da2a20eeb5",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "pipeline": "instcombine,loop-vectorize",
+      "input_sha256": "bbfc81d67acb16e3fb3c23a4b8e50146ff93925fb423a5ca0feaa0da2a20eeb5",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "4",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "pipeline": "simplifycfg,loop-vectorize",
+      "input_sha256": "bbfc81d67acb16e3fb3c23a4b8e50146ff93925fb423a5ca0feaa0da2a20eeb5",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "pipeline": "simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "bbfc81d67acb16e3fb3c23a4b8e50146ff93925fb423a5ca0feaa0da2a20eeb5",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "4",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),loop-vectorize",
+      "input_sha256": "bbfc81d67acb16e3fb3c23a4b8e50146ff93925fb423a5ca0feaa0da2a20eeb5",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),instcombine,loop-vectorize",
+      "input_sha256": "bbfc81d67acb16e3fb3c23a4b8e50146ff93925fb423a5ca0feaa0da2a20eeb5",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "bbfc81d67acb16e3fb3c23a4b8e50146ff93925fb423a5ca0feaa0da2a20eeb5",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "pipeline": "loop-vectorize",
+      "input_sha256": "484043c162361b22782e93d5d6dfedff6454ff2c610edff035bc3c7e90778481",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "pipeline": "instcombine,loop-vectorize",
+      "input_sha256": "484043c162361b22782e93d5d6dfedff6454ff2c610edff035bc3c7e90778481",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "4",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "pipeline": "simplifycfg,loop-vectorize",
+      "input_sha256": "484043c162361b22782e93d5d6dfedff6454ff2c610edff035bc3c7e90778481",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "pipeline": "simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "484043c162361b22782e93d5d6dfedff6454ff2c610edff035bc3c7e90778481",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "4",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),loop-vectorize",
+      "input_sha256": "484043c162361b22782e93d5d6dfedff6454ff2c610edff035bc3c7e90778481",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),instcombine,loop-vectorize",
+      "input_sha256": "484043c162361b22782e93d5d6dfedff6454ff2c610edff035bc3c7e90778481",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000104-dlib-lm-numerical",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "484043c162361b22782e93d5d6dfedff6454ff2c610edff035bc3c7e90778481",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "pipeline": "loop-vectorize",
+      "input_sha256": "1d3eaf77e2d743e1ef1d6bedc6182873cdf6366b53d1429455cf479b64dcff47",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "pipeline": "instcombine,loop-vectorize",
+      "input_sha256": "1d3eaf77e2d743e1ef1d6bedc6182873cdf6366b53d1429455cf479b64dcff47",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "pipeline": "simplifycfg,loop-vectorize",
+      "input_sha256": "1d3eaf77e2d743e1ef1d6bedc6182873cdf6366b53d1429455cf479b64dcff47",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "pipeline": "simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "1d3eaf77e2d743e1ef1d6bedc6182873cdf6366b53d1429455cf479b64dcff47",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),loop-vectorize",
+      "input_sha256": "1d3eaf77e2d743e1ef1d6bedc6182873cdf6366b53d1429455cf479b64dcff47",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),instcombine,loop-vectorize",
+      "input_sha256": "1d3eaf77e2d743e1ef1d6bedc6182873cdf6366b53d1429455cf479b64dcff47",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "1d3eaf77e2d743e1ef1d6bedc6182873cdf6366b53d1429455cf479b64dcff47",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "pipeline": "loop-vectorize",
+      "input_sha256": "3d0a9147021026642405ae7babe6628c4a16549b44f15b79a5dadb5ab0b2a7d8",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "pipeline": "instcombine,loop-vectorize",
+      "input_sha256": "3d0a9147021026642405ae7babe6628c4a16549b44f15b79a5dadb5ab0b2a7d8",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "pipeline": "simplifycfg,loop-vectorize",
+      "input_sha256": "3d0a9147021026642405ae7babe6628c4a16549b44f15b79a5dadb5ab0b2a7d8",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "pipeline": "simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "3d0a9147021026642405ae7babe6628c4a16549b44f15b79a5dadb5ab0b2a7d8",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),loop-vectorize",
+      "input_sha256": "3d0a9147021026642405ae7babe6628c4a16549b44f15b79a5dadb5ab0b2a7d8",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),instcombine,loop-vectorize",
+      "input_sha256": "3d0a9147021026642405ae7babe6628c4a16549b44f15b79a5dadb5ab0b2a7d8",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000070-map2alm-scalar-ring-pair",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "3d0a9147021026642405ae7babe6628c4a16549b44f15b79a5dadb5ab0b2a7d8",
+      "stages": [
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "pipeline": "loop-vectorize",
+      "input_sha256": "79dd20b89c5fb11f8b4634fa3625afebdd257b5b0f299d31624003f2dc92d9be",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "pipeline": "instcombine,loop-vectorize",
+      "input_sha256": "79dd20b89c5fb11f8b4634fa3625afebdd257b5b0f299d31624003f2dc92d9be",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "pipeline": "simplifycfg,loop-vectorize",
+      "input_sha256": "79dd20b89c5fb11f8b4634fa3625afebdd257b5b0f299d31624003f2dc92d9be",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "pipeline": "simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "79dd20b89c5fb11f8b4634fa3625afebdd257b5b0f299d31624003f2dc92d9be",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),loop-vectorize",
+      "input_sha256": "79dd20b89c5fb11f8b4634fa3625afebdd257b5b0f299d31624003f2dc92d9be",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),instcombine,loop-vectorize",
+      "input_sha256": "79dd20b89c5fb11f8b4634fa3625afebdd257b5b0f299d31624003f2dc92d9be",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "79dd20b89c5fb11f8b4634fa3625afebdd257b5b0f299d31624003f2dc92d9be",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "pipeline": "loop-vectorize",
+      "input_sha256": "b89c388b8499146fa86021f6daf40b7c5a25ed349e2d938f1444e9dfa5844761",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "pipeline": "instcombine,loop-vectorize",
+      "input_sha256": "b89c388b8499146fa86021f6daf40b7c5a25ed349e2d938f1444e9dfa5844761",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "pipeline": "simplifycfg,loop-vectorize",
+      "input_sha256": "b89c388b8499146fa86021f6daf40b7c5a25ed349e2d938f1444e9dfa5844761",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "pipeline": "simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "b89c388b8499146fa86021f6daf40b7c5a25ed349e2d938f1444e9dfa5844761",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),loop-vectorize",
+      "input_sha256": "b89c388b8499146fa86021f6daf40b7c5a25ed349e2d938f1444e9dfa5844761",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),instcombine,loop-vectorize",
+      "input_sha256": "b89c388b8499146fa86021f6daf40b7c5a25ed349e2d938f1444e9dfa5844761",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000141-nek5000-drgtrq-3d-row",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "b89c388b8499146fa86021f6daf40b7c5a25ed349e2d938f1444e9dfa5844761",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "pipeline": "loop-vectorize",
+      "input_sha256": "fbb94ea12b31d4620c086a020309b9871fa1463161ec31d10617ebdc001d767d",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "pipeline": "instcombine,loop-vectorize",
+      "input_sha256": "fbb94ea12b31d4620c086a020309b9871fa1463161ec31d10617ebdc001d767d",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "pipeline": "simplifycfg,loop-vectorize",
+      "input_sha256": "fbb94ea12b31d4620c086a020309b9871fa1463161ec31d10617ebdc001d767d",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "pipeline": "simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "fbb94ea12b31d4620c086a020309b9871fa1463161ec31d10617ebdc001d767d",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),loop-vectorize",
+      "input_sha256": "fbb94ea12b31d4620c086a020309b9871fa1463161ec31d10617ebdc001d767d",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),instcombine,loop-vectorize",
+      "input_sha256": "fbb94ea12b31d4620c086a020309b9871fa1463161ec31d10617ebdc001d767d",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "fbb94ea12b31d4620c086a020309b9871fa1463161ec31d10617ebdc001d767d",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "pipeline": "loop-vectorize",
+      "input_sha256": "b98d35b78d03d805531dc6719d2db813fabc30e0b3185ce7db570725d1cb57d0",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "pipeline": "instcombine,loop-vectorize",
+      "input_sha256": "b98d35b78d03d805531dc6719d2db813fabc30e0b3185ce7db570725d1cb57d0",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "pipeline": "simplifycfg,loop-vectorize",
+      "input_sha256": "b98d35b78d03d805531dc6719d2db813fabc30e0b3185ce7db570725d1cb57d0",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "pipeline": "simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "b98d35b78d03d805531dc6719d2db813fabc30e0b3185ce7db570725d1cb57d0",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),loop-vectorize",
+      "input_sha256": "b98d35b78d03d805531dc6719d2db813fabc30e0b3185ce7db570725d1cb57d0",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),instcombine,loop-vectorize",
+      "input_sha256": "b98d35b78d03d805531dc6719d2db813fabc30e0b3185ce7db570725d1cb57d0",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-ft-six-trial-grid",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "b98d35b78d03d805531dc6719d2db813fabc30e0b3185ce7db570725d1cb57d0",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "pipeline": "loop-vectorize",
+      "input_sha256": "e0d257cfdab1408feea1cffc3b6d5e32d3e5f153a0a47834fe3902d7419b9f97",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "pipeline": "instcombine,loop-vectorize",
+      "input_sha256": "e0d257cfdab1408feea1cffc3b6d5e32d3e5f153a0a47834fe3902d7419b9f97",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "pipeline": "simplifycfg,loop-vectorize",
+      "input_sha256": "e0d257cfdab1408feea1cffc3b6d5e32d3e5f153a0a47834fe3902d7419b9f97",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "pipeline": "simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "e0d257cfdab1408feea1cffc3b6d5e32d3e5f153a0a47834fe3902d7419b9f97",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),loop-vectorize",
+      "input_sha256": "e0d257cfdab1408feea1cffc3b6d5e32d3e5f153a0a47834fe3902d7419b9f97",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),instcombine,loop-vectorize",
+      "input_sha256": "e0d257cfdab1408feea1cffc3b6d5e32d3e5f153a0a47834fe3902d7419b9f97",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "ordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "e0d257cfdab1408feea1cffc3b6d5e32d3e5f153a0a47834fe3902d7419b9f97",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "pipeline": "loop-vectorize",
+      "input_sha256": "122df63621a64eaec2c6fd99cf6405eb80424c096e13b58158ff67cbc3faeeea",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "pipeline": "instcombine,loop-vectorize",
+      "input_sha256": "122df63621a64eaec2c6fd99cf6405eb80424c096e13b58158ff67cbc3faeeea",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "pipeline": "simplifycfg,loop-vectorize",
+      "input_sha256": "122df63621a64eaec2c6fd99cf6405eb80424c096e13b58158ff67cbc3faeeea",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "pipeline": "simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "122df63621a64eaec2c6fd99cf6405eb80424c096e13b58158ff67cbc3faeeea",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),loop-vectorize",
+      "input_sha256": "122df63621a64eaec2c6fd99cf6405eb80424c096e13b58158ff67cbc3faeeea",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "1",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),instcombine,loop-vectorize",
+      "input_sha256": "122df63621a64eaec2c6fd99cf6405eb80424c096e13b58158ff67cbc3faeeea",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    },
+    {
+      "id": "t000159-vv10-hessian-uwabce-grid",
+      "policy": "reordered",
+      "pipeline": "loop-simplify,lcssa,loop(indvars),simplifycfg,instcombine,loop-vectorize",
+      "input_sha256": "122df63621a64eaec2c6fd99cf6405eb80424c096e13b58158ff67cbc3faeeea",
+      "stages": [
+        {
+          "Stage": "consumer",
+          "AccumulatorVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        },
+        {
+          "Stage": "producer",
+          "ProducerVF": "vscale x 2",
+          "ActualIC": "1",
+          "RequestedVF": "0",
+          "RequestedScalable": "false",
+          "RequestedIC": "0"
+        }
+      ]
+    }
+  ],
+  "rejected_storage_experiments": [
+    {
+      "experiment": "control",
+      "variant": "baseline",
+      "decisions": [
+        {
+          "Path": "scalar-IR",
+          "ChunkCapacity": "1024",
+          "ScratchBytes": "40960",
+          "Streams": "5",
+          "OriginalLoadInstructionBytes": "88",
+          "OriginalStoreInstructionBytes": "0",
+          "AdditionalLoadInstructionBytesUpperBound": "16",
+          "DuplicatedOriginalLoadInstructionBytes": "16",
+          "MovedOriginalLoadInstructionBytes": "0",
+          "SingleChunk": "false",
+          "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+          "ConsumerOriginalLoadInstructionBytes": "16",
+          "ReusedBuffers": "0",
+          "ScratchStoreBytesPerIteration": "40",
+          "ScratchLoadBytesPerIteration": "40",
+          "ProducerDepth": "8",
+          "AnalysisBudgetRemaining": "3355"
+        }
+      ],
+      "duplicated_fp": [
+        {
+          "name": "%mul.i.i69",
+          "opcode": "fmul"
+        },
+        {
+          "name": "%mul.i3.i",
+          "opcode": "fmul"
+        },
+        {
+          "name": "%add.i71",
+          "opcode": "fadd"
+        },
+        {
+          "name": "%mul.i5.i",
+          "opcode": "fmul"
+        },
+        {
+          "name": "%add6.i",
+          "opcode": "fadd"
+        }
+      ],
+      "frame": 41024
+    },
+    {
+      "experiment": "control",
+      "variant": "control",
+      "decisions": [
+        {
+          "Path": "scalar-IR",
+          "ChunkCapacity": "1024",
+          "ScratchBytes": "44032",
+          "Streams": "8",
+          "OriginalLoadInstructionBytes": "88",
+          "OriginalStoreInstructionBytes": "0",
+          "AdditionalLoadInstructionBytesUpperBound": "0",
+          "DuplicatedOriginalLoadInstructionBytes": "0",
+          "MovedOriginalLoadInstructionBytes": "0",
+          "SingleChunk": "false",
+          "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+          "ConsumerOriginalLoadInstructionBytes": "0",
+          "ReusedBuffers": "0",
+          "ScratchStoreBytesPerIteration": "43",
+          "ScratchLoadBytesPerIteration": "43",
+          "ProducerDepth": "8",
+          "AnalysisBudgetRemaining": "3389"
+        }
+      ],
+      "duplicated_fp": [],
+      "frame": 43088
+    },
+    {
+      "experiment": "divisions",
+      "variant": "baseline",
+      "decisions": [
+        {
+          "Path": "scalar-IR",
+          "ChunkCapacity": "1024",
+          "ScratchBytes": "16384",
+          "Streams": "2",
+          "OriginalLoadInstructionBytes": "56",
+          "OriginalStoreInstructionBytes": "0",
+          "AdditionalLoadInstructionBytesUpperBound": "32",
+          "DuplicatedOriginalLoadInstructionBytes": "32",
+          "MovedOriginalLoadInstructionBytes": "0",
+          "SingleChunk": "false",
+          "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+          "ConsumerOriginalLoadInstructionBytes": "32",
+          "ReusedBuffers": "0",
+          "ScratchStoreBytesPerIteration": "16",
+          "ScratchLoadBytesPerIteration": "16",
+          "ProducerDepth": "11",
+          "AnalysisBudgetRemaining": "3089"
+        }
+      ],
+      "duplicated_fp": [
+        {
+          "name": "%mul58",
+          "opcode": "fmul"
+        },
+        {
+          "name": "%add59",
+          "opcode": "fadd"
+        },
+        {
+          "name": "%mul60",
+          "opcode": "fmul"
+        },
+        {
+          "name": "%add61",
+          "opcode": "fadd"
+        },
+        {
+          "name": "%div",
+          "opcode": "fdiv"
+        },
+        {
+          "name": "%add62",
+          "opcode": "fadd"
+        },
+        {
+          "name": "%div63",
+          "opcode": "fdiv"
+        },
+        {
+          "name": "%div64",
+          "opcode": "fdiv"
+        },
+        {
+          "name": "%mul65",
+          "opcode": "fmul"
+        },
+        {
+          "name": "%mul66",
+          "opcode": "fmul"
+        },
+        {
+          "name": "%mul67",
+          "opcode": "fmul"
+        },
+        {
+          "name": "%mul68",
+          "opcode": "fmul"
+        }
+      ],
+      "frame": 16464
+    },
+    {
+      "experiment": "divisions",
+      "variant": "divisions",
+      "decisions": [
+        {
+          "Path": "scalar-IR",
+          "ChunkCapacity": "1024",
+          "ScratchBytes": "40960",
+          "Streams": "5",
+          "OriginalLoadInstructionBytes": "56",
+          "OriginalStoreInstructionBytes": "0",
+          "AdditionalLoadInstructionBytesUpperBound": "16",
+          "DuplicatedOriginalLoadInstructionBytes": "16",
+          "MovedOriginalLoadInstructionBytes": "0",
+          "SingleChunk": "false",
+          "TrafficScope": "static access widths; conditional/nested multiplicities vary",
+          "ConsumerOriginalLoadInstructionBytes": "16",
+          "ReusedBuffers": "0",
+          "ScratchStoreBytesPerIteration": "40",
+          "ScratchLoadBytesPerIteration": "40",
+          "ProducerDepth": "11",
+          "AnalysisBudgetRemaining": "3118"
+        }
+      ],
+      "duplicated_fp": [
+        {
+          "name": "%mul65",
+          "opcode": "fmul"
+        },
+        {
+          "name": "%mul66",
+          "opcode": "fmul"
+        },
+        {
+          "name": "%mul67",
+          "opcode": "fmul"
+        },
+        {
+          "name": "%mul68",
+          "opcode": "fmul"
+        }
+      ],
+      "frame": 41072
+    }
+  ],
+  "artifacts": {
+    "build-fission/scalar-fission-mitigation/release-corpus/result.json": "0778786dc75e861ce92acce1566b3bd5e64339b08eea7b5a6c7771a50c551029",
+    "build-fission/scalar-fission-mitigation/release-validation/audit.json": "6239c27c5db6f18b65c320715b42da2f91bdd9a9dfd789e310777b179bf41f2c",
+    "build-fission/scalar-fission-mitigation/timing/result.json": "745ee906bfaa11d23267a54ce50cd4280815a999418c14a8846c0e21aff02e33",
+    "build-fission/scalar-fission-mitigation/cleanup.json": "5f160b72c367627f132d80f3fbe9148a533b932a52b92e5d8dcb85e8fb8d05fb",
+    "build-fission/scalar-fission-mitigation/rejected/result.json": "cf510f1829eed08acb6a4c94982d673014e9ed5dfba89676dd1890552eeaf253",
+    "build-fission/scalar-fission-mitigation/final-lit.log": "195bc13684d30f42942ac33b2134db15d5a83526b974bdcfcce0c23282a8699f",
+    "build-fission/scalar-fission-mitigation/final-unit.log": "1b799e1e60e430196bc06889c85553e6213a35215c7649a9f61865c24ae48015",
+    "build-fission/scalar-fission-mitigation/final-execution.log": "00d53bca896a84997eade883d784555c34c9d825a39cc6bfa3592b0376d50b52",
+    "build-fission/scalar-fission-mitigation/baseline/CMakeCache.txt": "71ce58695457810119172250420d5ab8b8596883740b20e9f57a1b29fd710b02",
+    "build-fission/scalar-fission-mitigation/cleanup.py": "00cbbe787d17fd143cb5afeab545c628ea655f24bd5365f10fec611b0e033888",
+    "build-fission/scalar-fission-mitigation/rejected.py": "0987dc38decbb5b1fd06af133a0697c81387b8121520843bfc0209822fbe417c",
+    "build-fission/scalar-fission-mitigation/measure.py": "c0dc6cc772fdda7febbffbe3c71122ddb47b8c9750ba13e5c53ab3ec878befcb",
+    "build-fission/scalar-fission-mitigation/summarize.py": "d7b1c7d6f842e6ccc00e025beac37c53068a0de4b486e00dcc5485b900a296ba",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/divisions-final.ll": "e89b56ebe8a695d53f7bc7378634c23a1f0c8771f73b6695c424bdd7e70a5635",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/baseline-cleanup.command.json": "ed95aa87070cc0797d9f95e9c4f76c00a850f93a68144d5638539e037740c2ea",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/baseline.s": "55ef9ae0ccb3910a031574f30431ffcd995fd08deb89a23d5ac47f8b109167f2",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/ScalarFission.cpp": "03279fa0015731ec67dd26cc7fea3364f470b5eb3c1ae0aa1d5e3f646e55b1ff",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/baseline.command.json": "6c7ec7ad6550f68e868eec161c7013345ea9c61b070b48885392431a530924de",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/divisions-codegen.command.json": "56e87f321a43d12d677f7584ccabf657a4a77955a2a69ee6bc659618bca730fb",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/divisions.s": "5db29ca58382692f520270ab9c93aceeab8e4b25a0c7f462e3fdf98c33dc1775",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/baseline-codegen.command.json": "97f923d1dd76ef9a1e31ff60eb3b63804f0044e8f437c35d906cf894b71dce4e",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/divisions.ll": "7b8c0ed0c3e45934109b0161f51ac6a77e432de2265a1221e07324c172fab45f",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/build.commands.json": "26cb0c44397ffb848685af2c130708d20cb52ff14d00e53c10fb628561e8862f",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/divisions-cleanup.command.json": "375e5a410dfb96543b120a1eb22ed3f71354b58f463dac332c167b8ae6a289e3",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/baseline.ll": "b0eafb47e52997b953937caf0d663698181bd14770557dfd9a42a848f7f4417e",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/divisions.command.json": "a03b27d3ad8039a1c2ff113c3eb0ef2384a7533766ef774c645ca95a848fd69f",
+    "build-fission/scalar-fission-mitigation/rejected/divisions/baseline-final.ll": "3cb31e13b63fb7a28e7a20a68d3fb79fe0c7e4501a8d7c2d417fb2b7187134fd",
+    "build-fission/scalar-fission-mitigation/rejected/control/baseline-cleanup.command.json": "219aed8efa918167e3c1d1aa4190a9ce969419d638229c115bf3299ad879203c",
+    "build-fission/scalar-fission-mitigation/rejected/control/baseline.s": "b8698d21d1418febda5852bcfcd84399dd68700d3ab0d506348faae1ddfb75b8",
+    "build-fission/scalar-fission-mitigation/rejected/control/control.command.json": "33ba92c169fcc87b1dd1fe84e1dede24a52944ccc7d02931ec807f124f3948e6",
+    "build-fission/scalar-fission-mitigation/rejected/control/control.s": "a202044e68e865764d750bed050368382810a93c1b7e856be4e8ca780067388e",
+    "build-fission/scalar-fission-mitigation/rejected/control/control.ll": "f237ef64d87058ebe8779a001b8c676eb3d06669b8ab22414a102a0fe0d1259b",
+    "build-fission/scalar-fission-mitigation/rejected/control/ScalarFission.cpp": "6c00073f1593ca5ff11b0fc99fdc2c8e451a4043323be8bebb84b808ef918103",
+    "build-fission/scalar-fission-mitigation/rejected/control/baseline.command.json": "d99ab88fbb3ee9a48b69aa7f37573c995a816003df1ae564a57ed0e18e6aad30",
+    "build-fission/scalar-fission-mitigation/rejected/control/control-cleanup.command.json": "674e74b78995bf6de4a9295c2db034af008c3d9ab867af9c4cf000c6eca14823",
+    "build-fission/scalar-fission-mitigation/rejected/control/control-final.ll": "3d4b9d8dc3dd2c41a5044f855fc6b55d9c6ef9902c2c11b9cd7e9a4e540bd648",
+    "build-fission/scalar-fission-mitigation/rejected/control/baseline-codegen.command.json": "1b167692e49ff583b649b175cb1a19d406e331e0e33b98f32e81f3a1dbf9f1c6",
+    "build-fission/scalar-fission-mitigation/rejected/control/control-codegen.command.json": "228aad56d99805d2a5fec2abdd3288c141d78350581f5348c5ea4d1391b250ab",
+    "build-fission/scalar-fission-mitigation/rejected/control/build.commands.json": "60943454a3d7a0eab7c0a7e5e525b80967f4e63e8b0bddb4afae1ac7de35b98d",
+    "build-fission/scalar-fission-mitigation/rejected/control/baseline.ll": "a34c927f8a70b574082e1890be4a4851a8041c017b26e5723c299235c5b7c8aa",
+    "build-fission/scalar-fission-mitigation/rejected/control/baseline-final.ll": "b2ec8119fcd1beaa8d781a65581a41a817d54b47fb46b969795bbee11e52aa6a"
+  },
+  "retained_experiments": [
+    "direct integer comparison inversion and nonpoison capacity conjunction",
+    "one private arithmetic layer when collapsing the final pair of streams"
+  ],
+  "rejected_experiments": [
+    "broad unconditional cleanup pipeline",
+    "extra shared-division buffers",
+    "automatic predicate buffers",
+    "smaller global capacity without runtime evidence"
+  ],
+  "rvv_runtime": "unmeasured; no runner available",
+  "net_profitability": "unmeasured",
+  "benchmark_recheck": {
+    "status": "passed",
+    "completed_utc": "2026-10-20T03:16:43.591718+00:00",
+    "fresh_frontend_compilations": 117,
+    "optimizer_configurations": 585,
+    "rvv_machine_verified_configurations": 585,
+    "baseline_optimizer_configurations": 585,
+    "baseline_rvv_machine_verified_configurations": 585,
+    "paired_optimizer_and_codegen_configurations": 1170,
+    "baseline_compiler": {
+      "clang": "f6946194c63e5508700f6b2ff31aa77290b3474aa311276188e584b39f71ea50",
+      "opt": "e9f0ab1a60fcb8aa98295f93bf2001e8541f800ca57f3f4665966a249b86ac58",
+      "llc": "7e0f9e9fe9dfe118e5ca6a149d0d0880750e1f6352ce9191f3b5d06f8677beac"
+    },
+    "compiler": {
+      "clang": "b9f3e00512c4975043ccea93be644216e5641e7175c68de945064a31ea9c8e44",
+      "opt": "6009b8d9a4a4654d4b6c9d9c1c85daa95c224a0a8284f6943cba53491738bdb1",
+      "llc": "cd9262bda18e92014b692c9eb4ec95e271fc780f50e95d19b3a71079c8541768"
+    },
+    "implementation_sha256": "cafcf3e5f915449798735e808ad68f290a3a7b8d8ff20efa5181f7b29d66eead",
+    "manifest_sha256": "b60b4ce8c4f3f69b6dcd56e5cb0a8c2f2bfddaf30c5d0682c6f2213f4f1a2c3d",
+    "pinned_sources_unchanged": true,
+    "comparisons": {
+      "last_commit": {
+        "target_and_helper_decision_changes": [],
+        "identical_frontend_inputs": true,
+        "revision_metadata_only_frontend_difference": false
+      },
+      "previous_validation": {
+        "target_and_helper_decision_changes": [],
+        "identical_frontend_inputs": false,
+        "revision_metadata_only_frontend_difference": true
+      }
+    },
+    "selected_target_counts": {
+      "early-fp0": 6,
+      "early-fp1": 6,
+      "late-fp0": 9,
+      "late-fp1": 9
+    },
+    "native_targets": 9,
+    "native_fission_configurations": 54,
+    "native_output_comparisons": 60396,
+    "native_mismatches": 0,
+    "native_capacities": [
+      1,
+      3,
+      1024
+    ],
+    "native_fp_policies": [
+      "ordered",
+      "reordered"
+    ],
+    "both_spin2_schedules_verified": true,
+    "bounded_contribution_frontier_record_matches_against_da9c6d542": 18,
+    "matrix_configurations": 1080,
+    "matrix_status_counts": {
+      "available": 834,
+      "unavailable": 246
+    },
+    "known_rejection": "SHTools gradient: analysis-budget under all four fission configurations; no partial emission",
+    "baseline_exclusion": "Vina maximum seed 18446744073709551615 invalid in unsplit reference; same established exclusion",
+    "rvv_runtime": "unmeasured; no runner available",
+    "summary_path": "build-fission/benchmark-recheck-20261020-025812/summary.json",
+    "summary_sha256": "e68ef2aadb98a4099f3703a1f35cfd3faa01ac08319c9eb1f1798468502864f1",
+    "frontend_comparison_path": "build-fission/benchmark-recheck-20261020-025812/frontend-comparison.json",
+    "frontend_comparison_sha256": "b18b276e423298bc5606c7fb6d3bfaa022a188d47a75e4f325c81d994396e99a"
+  }
+}
