@@ -99,6 +99,8 @@ pythonenv*
 
 # External dataset, archived input, and local calibration outputs.
 /dataset.sqlite*
+/search-dataset.sqlite*
+/validation-dataset.sqlite*
 /results.sqlite.old*
 /utils/vplan-tools/.venv/
 /utils/vplan-tools/.cache/
