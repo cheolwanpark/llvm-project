@@ -15,6 +15,11 @@ def selection_row(benchmark, result, expected_vlen=None):
     if result.returncode:
         row["reason"] = result.stderr[-3000:]
         return row
+    outcome = getattr(result, "driver_result", {})
+    if outcome.get("status") == "backend-observation-unavailable":
+        row.update(status=outcome["status"], reason=outcome["reason"],
+                   unavailable_candidates=outcome["unavailable_candidates"])
+        return row
     manifest, final = result.manifest, result.final_manifest
     if (final["selections"] != result.selection["selections"] or final["failures"]
             or final["candidates"] != manifest["candidates"] or final["loops"] != manifest["loops"]
@@ -43,13 +48,14 @@ def selection_row(benchmark, result, expected_vlen=None):
         return row
     row["measured_cycles"] = {str(v): c for v, c in benchmark.measured.items()}
     row["ignored_measured_cycles"] = {str(v): c for v, c in benchmark.ignored_measured.items()}
-    if actual["scalar"]:
-        row.update(status="scalar-selection", reason=actual.get("reason"))
-        return row
     statuses = {s["id"]: s for s in result.candidate_status["candidates"]}
     middle_end = result.candidate_status.get("policy", {}).get("name") == "llvm-middle-end"
-    if expected_vlen and not middle_end and statuses[actual["id"]].get("vlen") != expected_vlen:
+    if expected_vlen and not middle_end and any(s.get("vlen") != expected_vlen
+            for s in statuses.values() if s["status"] == "scored"):
         row.update(status="vlen-mismatch", reason="analytics VLEN differs from measured VLEN")
+        return row
+    if actual["scalar"]:
+        row.update(status="scalar-selection", reason=actual.get("reason"))
         return row
     vf = candidate["vf"]
     if vf.startswith("s"):
@@ -62,7 +68,8 @@ def selection_row(benchmark, result, expected_vlen=None):
     else:
         winner = min(measured, key=lambda v: (measured[v], v))
         row.update(status="scored", eligible=True, top1_correct=selected == winner,
-                   top1_regret=measured[selected] / measured[winner] - 1)
+                   top1_regret=measured[selected] / measured[winner] - 1,
+                   regret_exact={"numerator": measured[selected] - measured[winner], "denominator": measured[winner]})
     return row
 
 

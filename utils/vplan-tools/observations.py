@@ -87,13 +87,28 @@ def bind_observation(a, candidate, loop, run_id):
         for key in ('Error', 'CPU', 'DependencyCoverage'):
             if not isinstance(a[key], str):
                 raise ValueError('invalid analytics strings')
+        if a['Error'] == 'observation precedes complete RA':
+            raise ValueError(a['Error'])
         for key in ('VLen', 'Width'):
             if type(a[key]) is not int:
                 raise ValueError('invalid analytics geometry')
+        if a['VLen'] <= 0 or a['Width'] < 0:
+            raise ValueError('invalid analytics geometry')
+        block_ids = set()
+        for block in a['Blocks']:
+            if (type(block['ID']) is not int or block['ID'] in block_ids
+                    or block['Role'] not in ('body', 'entry', 'outside', 'other-loop-or-tail')
+                    or not isinstance(block['Successors'], list)):
+                raise ValueError('invalid analytics block')
+            block_ids.add(block['ID'])
+        if any(type(s) is not int or s not in block_ids for b in a['Blocks'] for s in b['Successors']):
+            raise ValueError('invalid block successor')
         for i in a['Instructions']:
             for key in ('ID', 'Block', 'Group8', 'SEW', 'Bytes', 'Predicate'):
                 if type(i[key]) is not int:
                     raise ValueError('invalid instruction geometry')
+            if i['Block'] not in block_ids or i['ID'] < 0 or i['Bytes'] < 0:
+                raise ValueError('invalid instruction block/identity/size')
             for key in ('Meta', 'Barrier', 'ConfigUnused', 'ScalableBytes', 'SameCopy', 'Masked', 'Load', 'Store', 'Stack', 'Spill', 'SpillSlotAccess'):
                 if type(i[key]) is not bool:
                     raise ValueError('invalid instruction flags')
@@ -106,6 +121,8 @@ def bind_observation(a, candidate, loop, run_id):
                 for key in ('Vector', 'Def', 'Implicit', 'Dead', 'EarlyClobber', 'SubReg', 'Undef', 'Tied'):
                     if type(operand[key]) is not bool:
                         raise ValueError('invalid operand flags')
+        if [i['ID'] for i in a['Instructions']] != list(range(len(a['Instructions']))):
+            raise ValueError('invalid instruction identity/order')
         for edge in a['Edges']:
             if any(type(edge[k]) is not int for k in ('Source', 'Destination', 'OperandIndex', 'Distance')):
                 raise ValueError('invalid dependency edge')

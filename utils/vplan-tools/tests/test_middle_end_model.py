@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cost_model import MAX_COST, more_profitable, multiply, score_candidate
-from selection import select_loops
+from selection import PolicyBase, select_loops
 from selection_policy import Policy
 from model_errors import ToolError
 from fixed_evaluation import compare
@@ -26,9 +26,19 @@ def loop(trip=0, scalar=2):
 
 
 def choose(candidates, context=None):
+    class PureMiddleEnd(PolicyBase):
+        name = "test-pure-middle-end"
+
+        def choose_loop(self, rows, context):
+            best = None
+            for c, s in rows:
+                if s["status"] == "scored" and more_profitable(c, best, context):
+                    best = c
+            return best
+
     context = context or loop()
-    statuses = [Policy().evaluate_middle_end(c, context) for c in candidates]
-    return select_loops(Policy(), {"loops": [context], "candidates": candidates}, statuses)[0]
+    statuses = [score_candidate(c, context) for c in candidates]
+    return select_loops(PureMiddleEnd(), {"loops": [context], "candidates": candidates}, statuses)[0]
 
 
 class CostTests(unittest.TestCase):
@@ -87,8 +97,8 @@ class CostTests(unittest.TestCase):
         self.assertEqual(multiply(MAX_COST // 4 + 1, 1), MAX_COST)
         self.assertIsNone(multiply(None, 0))
 
-    def test_model_does_not_require_backend_or_weights(self):
-        self.assertFalse(Policy.requires_backend)
+    def test_model_requires_backend_and_rejects_weights(self):
+        self.assertTrue(Policy.requires_backend)
         self.assertFalse(Policy.supports_fit)
         with self.assertRaises(ToolError):
             Policy("weights.json")

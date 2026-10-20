@@ -11,7 +11,7 @@ import sys
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "vplan-tools"))
-from model_errors import ToolError
+from model_errors import ToolError, ObservationUnavailable
 from observations import validate_manifest, bind_observation
 from selection import load_policy, select_loops
 
@@ -162,37 +162,33 @@ class Driver:
             if not row["probeable"]:
                 status["reason"] = row.get("reason", "not probeable")
                 continue
+            if row["middle_end"]["original"] is None and not analytics_only:
+                status.update(status="invalid-cost", reason="invalid LLVM middle-end cost")
+                continue
             label = f"probe-{index:04d}"
             analytics_path = self.work / f"{label}.analytics.json"
             probe_manifest = self.work / f"{label}.manifest.json"
             mir = self.work / f"{label}.mir"
-            try:
-                self.run(label, [*common, *report_flags,
-                    *llvm_flag("vplan-probe-candidate", row["id"]),
-                    *llvm_flag("vplan-candidates-output", str(probe_manifest)),
-                    *llvm_flag("vplan-analytics-output", str(analytics_path)),
-                    *llvm_flag("stop-after", "riscv-vplan-analytics"), "-S", "-o", str(mir)])
-            except MetaCompileError as exc:
-                status.update(status="probe-failed", reason=str(exc))
-                if probe_manifest.exists():
-                    failed = self.manifest(probe_manifest, run_id)
-                    if failed["candidates"] != manifest["candidates"] or failed["loops"] != manifest["loops"]:
-                        raise MetaCompileError(f"{label}: candidate context changed")
-                    reasons = [f["reason"] for f in failed["failures"] if f["id"] == row["id"]]
-                    if reasons:
-                        status["reason"] = "; ".join(reasons)
-                continue
+            self.run(label, [*common, *report_flags,
+                *llvm_flag("vplan-probe-candidate", row["id"]),
+                *llvm_flag("vplan-candidates-output", str(probe_manifest)),
+                *llvm_flag("vplan-analytics-output", str(analytics_path)),
+                *llvm_flag("stop-after", "riscv-vplan-analytics"), "-S", "-o", str(mir)])
             probe = self.manifest(probe_manifest, run_id)
             if probe["candidates"] != manifest["candidates"] or probe["loops"] != manifest["loops"]:
                 raise MetaCompileError(f"{label}: candidate set/context changed during replay")
             failures = [f for f in probe["failures"] if f["id"] == row["id"]]
             if failures:
-                status.update(status="probe-failed", reason=failures[0]["reason"])
+                status.update(status="illegal", reason=failures[0]["reason"])
                 continue
             choice = {"function": row["function"], "loop": row["loop"], "scalar": False,
                       "id": row["id"], "ic": 1, "epilogue_vf": "f0"}
             if probe["selections"] != [choice]:
                 raise MetaCompileError(f"{label}: requested candidate/configuration not materialized")
+            if not analytics_path.exists():
+                status.update(status="backend-observation-unavailable", reason="missing analytics file",
+                              compiler_log=str(self.work / f"{label}.stderr"))
+                continue
             try:
                 observation = bind_observation(json.loads(analytics_path.read_text()), row,
                     loops[(row["function"], row["loop"])], run_id)
@@ -200,12 +196,13 @@ class Driver:
                     raise ValueError("missing MIR")
             except (OSError, ValueError) as exc:
                 raise MetaCompileError(f"{label}: invalid backend result: {exc}") from exc
-            status.update(status="collected", analytics=str(analytics_path), vlen=observation["VLen"])
+            status.update(status="collected", analytics=str(analytics_path),
+                          compiler_log=str(self.work / f"{label}.stderr"), vlen=observation["VLen"])
             if not analytics_only:
                 try:
                     status.update(policy.evaluate(row, observation))
-                except ToolError as exc:
-                    status.update(status="unsupported", reason=str(exc))
+                except ObservationUnavailable as exc:
+                    status.update(status="backend-observation-unavailable", reason=str(exc))
         if policy and not policy.requires_backend:
             # Check the chosen vector's materialization and runtime safety in
             # LLVM IR. This needs no RA analytics and never changes its cost.
@@ -233,6 +230,15 @@ class Driver:
         statuses_path = self.work / "candidate-status.json"
         write_json(statuses_path, {"version": 3, "run_id": run_id, "candidates": statuses,
                                    "policy": policy.identity if policy else None})
+        unavailable = [s for s in statuses if s["status"] in ("unavailable", "backend-observation-unavailable")]
+        if policy and policy.requires_backend and unavailable:
+            result = {"version": 3, "run_id": run_id, "status": "backend-observation-unavailable",
+                      "reason": "; ".join(s["id"] + ": " + s.get("reason", s["status"]) for s in unavailable),
+                      "unavailable_candidates": unavailable, "policy": policy.identity,
+                      "manifest": str(manifest_path), "candidate_status": str(statuses_path),
+                      "stage": "post-ra-cleanup", "analytics_only": False}
+            write_json(self.work / "result.json", result)
+            return result
         selection_path = self.work / "selection.json"
         if not analytics_only:
             selections = select_loops(policy, manifest, statuses)

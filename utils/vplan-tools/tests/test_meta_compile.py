@@ -67,8 +67,8 @@ class MetaCompilerTests(unittest.TestCase):
         for selection in final['selections']:
             self.assertEqual(selection['ic'], 1)
             self.assertEqual(selection['epilogue_vf'], 'f0')
-        self.assertFalse(list(work.glob('*.analytics.json')))
-        self.assertTrue(list(work.glob('check-*.manifest.json')))
+        self.assertTrue(list(work.glob('*.analytics.json')))
+        self.assertTrue(list(work.glob('probe-*.manifest.json')))
         for path in work.glob('*.analytics.json'):
             raw = json.loads(path.read_text())
             self.assertEqual(raw['Error'], '')
@@ -143,7 +143,7 @@ class MetaCompilerTests(unittest.TestCase):
                 ['-O3', '--target=riscv64-unknown-elf', '-march=rv64gcv',
                  '-mcpu=xiangshan-kunminghu', '-ffreestanding'])
             def run(instance, label, command, **kw):
-                if label.startswith('check-'):
+                if label.startswith('probe-'):
                     raise Error('injected compiler failure')
                 return original(instance, label, command, **kw)
             with patch.object(Driver, 'run', run), self.assertRaisesRegex(Error, 'injected'):
@@ -183,7 +183,7 @@ class MetaCompilerTests(unittest.TestCase):
                 ['-O3', '--target=riscv64-unknown-elf', '-march=rv64gcv', '-mcpu=xiangshan-kunminghu'])
             def run(instance, label, command, **kw):
                 result = original(instance, label, command, **kw)
-                if label.startswith('check-'):
+                if label.startswith('probe-'):
                     path = instance.work / (label + '.manifest.json')
                     value = json.loads(path.read_text()); value['run_id'] = 'wrong'
                     path.write_text(json.dumps(value))
@@ -234,3 +234,100 @@ class MetaCompilerTests(unittest.TestCase):
             self.assertEqual(selection['candidates'], [])
             self.assertTrue(selection['selections'][0]['scalar'])
             self.assertFalse(list((root / 'work').glob('probe-*.analytics.json')))
+
+@unittest.skipUnless(CLANG, 'set VPLAN_CLANG to the built clang for integration tests')
+class BackendFailureTests(unittest.TestCase):
+    def driver(self, root):
+        src = root / 'kernel.c'
+        src.write_text(SOURCE)
+        return API['Driver'](Path(CLANG), src, root / 'work',
+            ['-O3', '--target=riscv64-unknown-elf', '-march=rv64gcv',
+             '-mcpu=xiangshan-kunminghu', '-ffreestanding'])
+
+    def test_unavailable_candidate_excludes_entire_benchmark_before_final(self):
+        from unittest.mock import patch
+        Driver = API['Driver']; original = Driver.run
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); driver = self.driver(root)
+            def run(instance, label, command, **kwargs):
+                r = original(instance, label, command, **kwargs)
+                if label == 'probe-0000':
+                    p = instance.work / (label + '.analytics.json')
+                    value = json.loads(p.read_text())
+                    value['Error'] = 'conditional body blocks are unsupported'
+                    p.write_text(json.dumps(value))
+                return r
+            with patch.object(Driver, 'run', run):
+                r = driver.compile(root / 'out.o', 'obj', False, False)
+            self.assertEqual(r['status'], 'backend-observation-unavailable')
+            self.assertTrue(r['unavailable_candidates'])
+            statuses = json.loads((root / 'work/candidate-status.json').read_text())['candidates']
+            self.assertTrue(any(s['status'] == 'scored' for s in statuses))
+            self.assertFalse((root / 'work/selection.json').exists())
+            self.assertFalse((root / 'work/final.manifest.json').exists())
+            self.assertFalse((root / 'out.o').exists())
+
+    def test_structural_rejection_is_distinct_from_missing_observation(self):
+        from unittest.mock import patch
+        Driver = API['Driver']; original = Driver.run
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); driver = self.driver(root)
+            def run(instance, label, command, **kwargs):
+                r = original(instance, label, command, **kwargs)
+                if label.startswith('probe-'):
+                    p = instance.work / (label + '.manifest.json')
+                    value = json.loads(p.read_text())
+                    candidate_id = value['selections'][0]['id']
+                    value['failures'] = [{'id': candidate_id, 'reason': 'always-failing-memory-check'}]
+                    value['selections'] = []
+                    p.write_text(json.dumps(value))
+                return r
+            with patch.object(Driver, 'run', run):
+                r = driver.compile(root / 'out.ll', 'llvm', False, False)
+            self.assertEqual(r['stage'], 'final')
+            statuses = json.loads((root / 'work/candidate-status.json').read_text())['candidates']
+            self.assertTrue(all(s['status'] == 'illegal' for s in statuses))
+            self.assertTrue(json.loads((root / 'work/selection.json').read_text())['selections'][0]['scalar'])
+
+    def test_crash_timeout_bad_json_and_identity_are_fatal(self):
+        from unittest.mock import patch
+        from model_errors import ToolError
+        Driver = API['Driver']; original = Driver.run
+        for mode in ('crash', 'timeout', 'bad-json', 'identity'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as td:
+                root = Path(td); driver = self.driver(root)
+                def run(instance, label, command, **kwargs):
+                    if label.startswith('probe-') and mode in ('crash', 'timeout'):
+                        raise API['MetaCompileError']('compiler failed (-11)' if mode == 'crash' else 'compiler timed out')
+                    r = original(instance, label, command, **kwargs)
+                    if label.startswith('probe-'):
+                        p = instance.work / (label + '.analytics.json')
+                        if mode == 'bad-json':
+                            p.write_text('{broken')
+                        else:
+                            value = json.loads(p.read_text()); value['Candidate'] = 'stale'
+                            p.write_text(json.dumps(value))
+                    return r
+                with patch.object(Driver, 'run', run), self.assertRaises(ToolError):
+                    driver.compile(root / 'out.o', 'obj', False, False)
+                self.assertFalse((root / 'work/final.manifest.json').exists())
+
+    def test_detail_does_not_change_manifest_selection_or_emitted_ir(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / 'kernel.c'; src.write_text(SOURCE)
+            values = []
+            for detailed in (False, True):
+                work = root / str(detailed)
+                driver = API['Driver'](Path(CLANG), src, work,
+                    ['-O3', '--target=riscv64-unknown-elf', '-march=rv64gcv',
+                     '-mcpu=xiangshan-kunminghu', '-ffreestanding'])
+                out = root / (str(detailed) + '.ll')
+                import contextlib, io
+                with contextlib.redirect_stderr(io.StringIO()):
+                    driver.compile(out, 'llvm', False, detailed)
+                manifest = json.loads((work / 'final.manifest.json').read_text())
+                # Module identifiers record the checkpoint path; IR is otherwise identical.
+                ir = out.read_text().replace(str(work), '<work>')
+                values.append((manifest['candidates'], manifest['loops'], manifest['selections'], ir))
+            self.assertEqual(values[0], values[1])

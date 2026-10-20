@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""Generate the backend spill comparison report from verified evaluation JSON."""
+from collections import Counter
+from fractions import Fraction
+import json
+from pathlib import Path
+import re
+import sqlite3
+import statistics
+import sys
+import argparse
+
+from provenance import digest
+from selection import load_policy
+import vplan_tools as vt
+
+
+def best(row):
+    return min(map(int, row['measured_cycles']), key=lambda v: (row['measured_cycles'][str(v)], v))
+
+
+def regret(row):
+    c = row['measured_cycles']
+    return Fraction(c[str(row['selected_vf'])], c[str(best(row))]) - 1
+
+
+def percent(value):
+    return f'{float(value):.4%}'
+
+
+def vf(row):
+    return (row.get('actual_selection') or {}).get('main_vf', '—')
+
+
+def metrics(rows):
+    values = sorted(regret(r) for r in rows)
+    pos = Fraction(len(values) - 1) * Fraction(95, 100)
+    lo = int(pos); delta = pos - lo
+    p95 = values[lo] if not delta else values[lo] * (1 - delta) + values[lo + 1] * delta
+    return [len(rows), sum(r['top1_correct'] for r in rows),
+            percent(Fraction(sum(r['top1_correct'] for r in rows), len(rows))),
+            percent(sum(values) / len(values)), percent(statistics.median(values)), percent(p95)]
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--summary', type=Path, required=True)
+    parser.add_argument('--baseline', type=Path, required=True, help='preserved previous model summary')
+    parser.add_argument('--corpus', type=Path, required=True, help='detail corpus summary')
+    parser.add_argument('--db', type=Path, default=Path('search-dataset.sqlite'))
+    parser.add_argument('--output', type=Path, default=Path('wrong-predictions-spillcost.md'))
+    args = parser.parse_args(argv)
+    new, old, corpus = [json.loads(p.read_text()) for p in (args.summary, args.baseline, args.corpus)]
+    for name, report in (('new', new), ('baseline', old), ('corpus', corpus)):
+        if not report.get('complete') or not report.get('successful'):
+            raise vt.ToolError(f'{name} report is incomplete or unsuccessful')
+    if new['policy'] != load_policy().identity:
+        raise vt.ToolError('evaluation policy differs from current implementation')
+    if old['policy']['name'] != 'llvm-middle-end' or old['metadata'] != new['metadata']:
+        raise vt.ToolError('baseline identity/measurement context mismatch')
+    if digest(args.db) != new['provenance']['database_sha256']:
+        raise vt.ToolError('database changed since evaluation')
+    if corpus['errors'] or corpus['unsupported']:
+        raise vt.ToolError('detail corpus contains errors/unsupported records')
+    rows = new['benchmarks']; previous = {r['id']: r for r in old['benchmarks']}
+    if len(rows) != len({r['id'] for r in rows}) or set(previous) != {r['id'] for r in rows}:
+        raise vt.ToolError('comparison population mismatch')
+    with sqlite3.connect(args.db.resolve().as_uri() + '?mode=ro', uri=True) as db:
+        ids = {r[0] for r in db.execute('SELECT id FROM benchmarks')}
+        measured = {(b, v): c for b, v, c in db.execute('SELECT benchmark_id,vf,cycles FROM measurements')}
+        sources = dict(db.execute('SELECT id,source FROM benchmarks'))
+    if ids != set(previous):
+        raise vt.ToolError('report does not cover the whole database')
+    for r in rows + list(previous.values()):
+        for v, c in (r['measured_cycles'] | r['ignored_measured_cycles']).items():
+            if measured[r['id'], int(v)] != c:
+                raise vt.ToolError(f"measurement mismatch: {r['id']}")
+        if r['eligible']:
+            if (set(map(int, r['measured_cycles'])) != set(r['evaluated_vfs'])
+                    or r['top1_correct'] != (r['selected_vf'] == best(r))
+                    or abs(float(regret(r)) - r['top1_regret']) > 1e-14):
+                raise vt.ToolError(f"metric mismatch: {r['id']}")
+    def link(path, label):
+        path = Path(path)
+        if not path.exists():
+            raise vt.ToolError(f'missing artifact: {path}')
+        import os
+        return f'[{label}]({Path(os.path.relpath(path.resolve(), args.output.resolve().parent)).as_posix()})'
+    def artifacts(r):
+        directory = Path(r['artifacts'])
+        runs = list(directory.glob('run-*'))
+        if len(runs) != 1:
+            raise vt.ToolError(f'ambiguous artifacts: {directory}')
+        source = next(p for p in runs[0].glob('kernel.*') if p.suffix in ('.c', '.cpp'))
+        if source.read_text() != sources[r['id']]:
+            raise vt.ToolError(f"source mismatch: {r['id']}")
+        return source, runs[0] / 'backend/candidate-status.json'
+    scored = [r for r in rows if r['eligible']]
+    excluded = [r for r in rows if not r['eligible']]
+    common = [r for r in scored if previous[r['id']]['eligible']]
+    wrong = sorted((r for r in scored if not r['top1_correct']), key=lambda r: (-regret(r), r['id']))
+    solved = [r for r in common if not previous[r['id']]['top1_correct'] and r['top1_correct']]
+    newly_wrong = [r for r in common if previous[r['id']]['top1_correct'] and not r['top1_correct']]
+    newly_excluded = [r for r in excluded if previous[r['id']]['eligible']]
+    newly_eligible = [r for r in scored if not previous[r['id']]['eligible']]
+    changes = Counter('improved' if regret(r) < regret(previous[r['id']]) else
+                      'worsened' if regret(r) > regret(previous[r['id']]) else 'unchanged' for r in common)
+    provenance = new['provenance']
+    lines = ['# Backend spill 교체 후 오예측 재평가', '',
+        f"전체 {len(rows)}개 중 **{len(scored)}개 평가 가능**, **{len(scored)-len(wrong)}개 정답**, **{len(wrong)}개 오예측**, **{len(excluded)}개 제외**, **{new['metrics']['compile_failed']}개 컴파일 실패**다. 정확도는 **{percent(Fraction(len(scored)-len(wrong), len(scored)))}**, 평균 regret은 **{percent(sum(regret(r) for r in scored)/len(scored))}**다.", '',
+        '고정 LLVM 비용에서 spill/reload 항만 post-RA 관측 기반으로 교체했다. 학습·계수 fitting·새 런타임 측정 없이 기존 DB cycles를 사용했다. backend 비용은 TTI 모델 단위이며 실측 cycles가 아니다.', '',
+        '## 입력과 비용', '',
+        f"- DB SHA-256: `{provenance['database_sha256']}`.",
+        f"- HEAD: `{provenance['head']}`. 실행 당시 working tree 및 관련 Python/driver 파일별 SHA-256은 {link(args.summary, 'summary.json')}의 `provenance`에 있다.",
+        f"- 모델: `{new['policy']['name']}` / `{new['policy']['model_version']}`. 정책 구현 SHA-256: `{new['policy']['implementation']}`. 비용·spill projection·observation·selection 구현 hash도 policy identity에 포함한다.",
+        f"- compiler SHA-256: `{provenance['compiler_sha256']}`. `{provenance['compiler_version'].splitlines()[0]}`.",
+        '- 공유 `build-vplan-tools` symlink의 기존 compiler를 `--skip-build`로 사용했다. LLVM C++ 소스와 공유 빌드는 변경하지 않았다.',
+        '- 모든 비용은 정수 quarter-unit이다. bank 순서는 GPR/FPR/vector이며 vector group은 1/2/4/8이다.', '',
+        '```text',
+        'Qraw = Σ group × (observed_spills × TTI_spill_unit + observed_reloads × TTI_reload_unit)',
+        'r = backend_iteration_width / candidate.estimated_width  (검증된 양의 정수)',
+        'Qbackend = saturate(trunc_toward_zero(Qraw / r))',
+        'Qeffective = add_sat(add_sat(Qprecomputed, Qvector_region), Qbackend)',
+        'C = Qeffective / 4',
+        'unknown T: C/W; scalar tail: C*floor(T/W)+S*(T%W); folded tail: C*ceil(T/W)',
+        '```', '',
+        '`original`과 `estimated_spill`은 manifest에 그대로 보존한다. 파생 비용은 candidate-status의 breakdown에만 기록한다. 선택은 기존 compiler 순서·pairwise 비교·incoming tail 정책·scalable 동률 규칙을 유지한다. 합법적인 후보의 관측이 하나라도 부족하면 benchmark 전체를 제외하며, 후보를 제거해 정답 모집단을 줄이지 않는다.', '',
+        '## 전체 및 공통 집합 비교', '',
+        '| 집합 / 모델 | 평가 수 | 정답 수 | 정확도 | 평균 regret | 중앙값 | P95 |',
+        '| --- | ---: | ---: | ---: | ---: | ---: | ---: |']
+    for label, group in [('이전 전체', [r for r in previous.values() if r['eligible']]), ('새 모델 전체', scored),
+                         ('공통 / 이전', [previous[r['id']] for r in common]), ('공통 / 새 모델', common)]:
+        lines.append('| ' + label + ' | ' + ' | '.join(map(str, metrics(group))) + ' |')
+    lines += ['', f"Coverage: 이전 {old['metrics']['scored']}/{len(rows)} ({percent(Fraction(old['metrics']['scored'],len(rows)))}), 새 모델 {len(scored)}/{len(rows)} ({percent(Fraction(len(scored),len(rows)))}). 공통 집합 {len(common)}개에서 regret 개선 {changes['improved']}개, 악화 {changes['worsened']}개, 동일 {changes['unchanged']}개다.", '',
+        f"일반 LLVM 비교: {new['agreement']['comparable']}개 비교 가능, VF/전체 선택 일치 {new['agreement']['same_vf']}/{new['agreement']['same_decision']}개. ordinary LLVM과 다른 선택은 모델 변경의 결과다. 이전 모델 결과는 {link(args.baseline, '보존된 baseline')}을 사용했다.", '',
+        '## 새 오예측 전체', '',
+        'Regret은 `(선택 cycles / 최소 cycles) - 1`이다. 정렬·비교는 정수/유리수로 수행하고 표시할 때만 반올림했다. 동률은 ID 오름차순이다. 측정 cycles 동률의 정답은 기존 evaluator처럼 작은 VF다. source는 DB 소스, cost는 후보별 원본/파생 비용 및 관측 링크다.', '',
+        '| 순위 | Benchmark / artifact | 선택 VF | 최적 VF | 선택 cycles | 최소 cycles | 초과 cycles | regret | 이전 VF | 이전 regret |',
+        '| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+    for index, r in enumerate(wrong, 1):
+        source, cost = artifacts(r); oldr = previous[r['id']]
+        a, b = r['measured_cycles'][str(r['selected_vf'])], r['measured_cycles'][str(best(r))]
+        lines.append(f"| {index} | {link(source,r['id'])} · {link(cost,'cost')} | {vf(r)} | s{best(r)} | {a:,} | {b:,} | {a-b:,} | {percent(regret(r))} | {vf(oldr)} | {percent(regret(oldr)) if oldr['eligible'] else '평가 제외'} |")
+    lines += ['', '## 판정 변화', '']
+    for label, group in [('이전 오예측 해결', solved), ('새 오예측', newly_wrong),
+                         ('새 평가 제외', newly_excluded), ('새 평가 가능', newly_eligible)]:
+        lines.append(f"- {label} ({len(group)}개): " + (', '.join('`'+r['id']+'`' for r in sorted(group,key=lambda r:r['id'])) or '없음') + '.')
+    lines += ['', '평가 제외로 바뀐 항목은 오예측 해결에 포함하지 않았다.', '', '## 전체 제외 목록', '',
+        '| Benchmark | 상태 | 구체적 사유 / artifact |', '| --- | --- | --- |']
+    for r in sorted(excluded, key=lambda r:r['id']):
+        source, cost = artifacts(r)
+        reason = r['reason'] or ''
+        observations = []
+        for c in r.get('unavailable_candidates', []):
+            for key, label in [('analytics','analytics'), ('compiler_log','compiler log')]:
+                if c.get(key):
+                    observations.append(link(c[key], c['id']+' '+label))
+        lines.append(f"| {link(source,r['id'])} | `{r['status']}` | {reason.replace('|', '&#124;')} · {link(cost,'status')} {'; '.join(observations)} |")
+    ges = next(r for r in scored if r['id'] == 'polybench/p32-gesummv-l00')
+    gesold = previous[ges['id']]; _, gescost = artifacts(ges)
+    statuses = json.loads(gescost.read_text())['candidates']
+    from vplan_report import parse_reports, validate_manifest_costs
+    ges_detail = next(r for r in corpus['benchmarks'] if r['id'] == ges['id'])
+    manifest = json.loads((gescost.parent / 'candidates.json').read_text())
+    matched = validate_manifest_costs(parse_reports(Path(ges_detail['raw']).read_text()), manifest)
+    if vf(ges) != 's4' or regret(ges) != 0:
+        raise vt.ToolError('gesummv regression failed')
+    final = json.loads((gescost.parent / 'final.manifest.json').read_text())
+    if final['candidates'] != manifest['candidates'] or final['selections'][0]['id'] != ges['actual_selection']['id']:
+        raise vt.ToolError('gesummv final replay mismatch')
+    lines += ['', '## gesummv 회귀와 가장 큰 regret', '',
+        f"`polybench/p32-gesummv-l00`: 이전 {vf(gesold)} / regret {percent(regret(gesold))} → 새 {vf(ges)} / regret {percent(regret(ges))}. {link(gescost,'후보별 비용 및 관측')}과 같은 디렉터리의 final.manifest.json에서 s4 materialization을 확인했다.", '',
+        '| VF | 기존 body | LLVM spill 추정 | m8 spill/reload | 새 spill 비용 | effective body | whole-loop score |',
+        '| --- | ---: | ---: | ---: | ---: | ---: | ---: |']
+    for s in statuses:
+        if s['id'].rsplit(':',1)[1] not in ('s4','s8','f16'):
+            continue
+        d = s['breakdown']; bucket = d['spill_counts'][-1]
+        lines.append(f"| {s['id'].rsplit(':',1)[1]} | {d['original']/4:g} | {d['estimated_spill']/4:g} | {bucket['spills']}/{bucket['reloads']} | {d['backend_spill_quarters']/4:g} | {d['body']:g} | {s['score']:g} |")
+    largest = wrong[0]; source, cost = artifacts(largest)
+    largest_status = json.loads(cost.read_text())['candidates']
+    largest_evidence = ['', '| VF | LLVM body | LLVM spill 추정 | backend spill 비용 | effective body | model score | DB cycles |',
+                        '| --- | ---: | ---: | ---: | ---: | ---: | ---: |']
+    for status in largest_status:
+        factor = status['id'].rsplit(':', 1)[1]
+        if factor not in (vf(largest), 's' + str(best(largest))):
+            continue
+        d = status['breakdown']
+        largest_evidence.append(f"| {factor} | {d['original']/4:g} | {d['estimated_spill']/4:g} | {d['backend_spill_quarters']/4:g} | {d['body']:g} | {status['score']:g} | {largest['measured_cycles'][factor[1:]]:,} |")
+    lines += ['', f"새 모델에서 가장 큰 regret은 {link(source,largest['id'])}: {vf(largest)} 선택, 최적 s{best(largest)}, regret {percent(regret(largest))}. {link(cost,'모든 fixed/scalable 후보 비용')}에 원본 LLVM 비용, 실제 spill/reload bank/group, TTI 단가와 effective cost가 있다."]
+    lines += largest_evidence
+    lines += ['', '## Detail parser 검증', '',
+        f"gesummv {link(ges_detail['raw'],'원본 detail')} → {link(ges_detail['json'],'parser JSON')} → 원본 manifest 비용 {matched}개 후보의 일치를 검증했다. 보정 후 비용은 별도 derived breakdown으로 확인했다.",
+        f"현재 checkout의 report_version=2 전체 구조를 지원한다. {len(corpus['benchmarks'])}개 benchmark에서 {corpus['reports']}개 report를 검사했고, 미인식 {corpus['unsupported']}개, 오류 {corpus['errors']}개다. {link(args.corpus,'corpus summary')}에 각 원본 detail.txt / parser JSON 경로와 record별 coverage가 있다.",
+        '- 실제 gesummv detail, 중첩 계산, 같은 VF의 반복 evaluation, scalar instruction/block weighting, candidate/component 합계와 원본 manifest 대응을 검사했다.',
+        '- DB에 없는 size/epilogue/shortcut/Invalid/fractional/forced-cost 경로는 renderer와 기존 AArch64 LLVM 테스트에 근거한 합성 fixture로 검사했다. 공유 빌드에는 opt/AArch64 target이 없어 그 타깃의 compiler 테스트는 실행하지 않았다.',
+        f"- 전체 알려진 record inventory와 fixture 대응: {link(vt.TOOLS/'tests/fixtures/README.md','coverage 표')}. strict 모드는 report 내부 새 record/field와 잘린 경계, 중복 ID, 잘못된 참조 및 accounting 오류를 거부한다. TTI 내부 계산은 추정해 만들지 않는다.", '',
+        '## 재현', '', '```sh',
+        'uv run --project utils/vplan-tools python utils/vplan-tools/evaluate \\',
+        '  --db search-dataset.sqlite --output-dir .cache/backend-spill-new-run \\',
+        '  --artifacts-dir .cache/backend-spill-new-run/artifacts \\',
+        '  --skip-build --build-dir build-vplan-tools --compare-baseline',
+        'uv run --project utils/vplan-tools python utils/vplan-tools/validate-detail-corpus \\',
+        '  --db search-dataset.sqlite --output-dir .cache/detail-new-run \\',
+        '  --skip-build --build-dir build-vplan-tools',
+        'uv run --project utils/vplan-tools python utils/vplan-tools/write-updated-report \\',
+        f'  --summary {args.summary} \\', f'  --baseline {args.baseline} \\',
+        f'  --corpus {args.corpus} --db {args.db} --output {args.output}', '```', '',
+        'Artifact는 `.cache/`에 저장되어 Git에서 추적하지 않는다. 문서를 이동할 때 source·analytics·compiler logs·JSON도 함께 보존해야 한다. 기존 `wrong-predictions-baseline.md`, baseline artifact 및 측정 DB는 보존했다.', '']
+    args.output.write_text('\n'.join(lines))
+    # Verify all emitted local links, including exact ranking's source/cost links.
+    for target in re.findall(r'\]\(([^)]+)\)', args.output.read_text()):
+        if not (args.output.parent / target).exists():
+            raise vt.ToolError(f'broken report link: {target}')
+    print(f'Wrote {args.output}: {len(wrong)} wrong, {len(common)} common, {len(excluded)} excluded; DB values and links verified.')
+    return 0
+
+
+if __name__ == '__main__':
+    vt.cli(main)

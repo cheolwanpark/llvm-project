@@ -11,25 +11,9 @@ from selection_evaluation import summarize_rows
 
 
 def report_sections(text):
-    sections, current = [], None
-    for line in text.splitlines():
-        if line.startswith('VPlan report_version='):
-            if current is not None:
-                raise vt.ReportError('nested VPlan report')
-            header = vt.fields(line)
-            if header.get('report_version') != '2':
-                raise vt.ReportError('unsupported VPlan report version')
-            current = (header, [])
-        elif line == 'End VPlan report':
-            if current is None:
-                raise vt.ReportError('VPlan report end without header')
-            sections.append(current)
-            current = None
-        elif current is not None:
-            current[1].append(line)
-    if current is not None:
-        raise vt.ReportError('truncated VPlan report')
-    return [(h, lines) for h, lines in sections if h.get('function') == 'selected_kernel']
+    from vplan_report import parse_reports
+    return [r for r in parse_reports(text)['reports']
+            if r['header']['function'] == 'selected_kernel']
 
 
 def selection_row(benchmark, result):
@@ -48,27 +32,20 @@ def selection_row(benchmark, result):
             row.update(status='ambiguous-loops' if sections else 'no-report',
                        reason=f'expected one selected_kernel report, found {len(sections)}')
             return row
-        header, lines = sections[0]
-        selections = [vt.fields(line) for line in lines if line.startswith('  selected-for-main ')]
-        epilogues = [vt.fields(line) for line in lines if line.startswith('  selected-for-epilogue ')]
-        interleaves = [vt.fields(line) for line in lines if line.startswith('  selected_interleave_count=')]
-        outcomes = [vt.fields(line)['outcome'] for line in lines if line.startswith('  outcome=')]
-        if any(len(v) != 1 for v in (selections, epilogues, interleaves, outcomes)):
-            raise vt.ReportError('missing or duplicate final selection/outcome fields')
-        choice, epilogue, outcome = selections[0], epilogues[0], outcomes[0]
-        vf, ic = choice.get('vf'), interleaves[0]['selected_interleave_count']
+        report = sections[0]
+        header = report['header']
+        singletons = report['singletons']
+        choice = singletons['selected-for-main']['fields']
+        epilogue = singletons['selected-for-epilogue']['fields']
+        outcome = singletons['outcome']['fields']['outcome']
+        vf = choice.get('vf')
+        ic = singletons['selected_interleave_count']['fields']['selected_interleave_count']
         if vf != 'not-evaluated' and not re.fullmatch(r'[fs][1-9][0-9]*', vf or ''):
             raise vt.ReportError('invalid selected VF')
         if outcome not in ('vectorization-emitted', 'vectorization-rejected', 'no-plan'):
             raise vt.ReportError('unknown transformation outcome')
-        candidates = set()
-        for line in lines:
-            if line.startswith('    main | '):
-                columns = [s.strip() for s in line.split('|')]
-                if len(columns) != 10:
-                    raise vt.ReportError('malformed main candidate row')
-                if re.fullmatch(r's[1-9][0-9]*', columns[2]):
-                    candidates.add(int(columns[2][1:]))
+        candidates = {int(n['fields']['vf'][1:]) for n in report['candidates']
+                      if n['fields']['phase'] == 'main' and n['fields']['vf'].startswith('s')}
         if vf and vf.startswith('s'):
             candidates.add(int(vf[1:]))
         row['evaluated_vfs'] = sorted(candidates)
@@ -101,8 +78,8 @@ def selection_row(benchmark, result):
             row.update(status='scored', eligible=True, selected_vf=selected,
                        top1_correct=selected == winner,
                        top1_regret=benchmark.measured[selected] / benchmark.measured[winner] - 1)
-    except (vt.ReportError, KeyError, ValueError) as exc:
-        row.update(status='invalid-report', reason=str(exc))
+    except (vt.ToolError, KeyError, ValueError) as exc:
+        row.update(status='invalid-report', compile_failed=True, failure_kind='report-parse', reason=str(exc))
     return row
 
 

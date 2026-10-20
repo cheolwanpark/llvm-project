@@ -324,11 +324,13 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                 result = subprocess.run(command, capture_output=True, text=True, errors="replace")
                 result.artifact_root = root
                 if result.returncode == 0:
+                    result.driver_result = json.loads((root / "backend/result.json").read_text())
                     result.manifest = json.loads((root / "backend/candidates.json").read_text())
                     result.candidate_status = json.loads((root / "backend/candidate-status.json").read_text())
-                    if not analytics_only:
+                    excluded = result.driver_result.get("status") == "backend-observation-unavailable"
+                    if not analytics_only and not excluded:
                         result.selection = json.loads((root / "backend/selection.json").read_text())
-                    if not stop_after_ra:
+                    if not stop_after_ra and not excluded:
                         result.final_manifest = json.loads((root / "backend/final.manifest.json").read_text())
                     if detail:
                         result.stderr += (root / "backend/discover.stderr").read_text()
@@ -532,6 +534,7 @@ def print_vplans_main(argv: list[str] | None = None) -> int:
     parser = argument_parser("Print VPlan costs for a benchmark stored in a dataset database.")
     parser.add_argument("--benchmark", required=True, help="exact benchmark ID")
     parser.add_argument("--detail", action="store_true", help="include detailed cost calculations")
+    parser.add_argument("--skip-build", action="store_true", help="use existing compiler binaries")
     parser.add_argument("--weights", type=resolved_path)
     parser.add_argument("--spill-count-unit", choices=("instruction", "register"))
     args = parser.parse_args(argv)
@@ -544,7 +547,10 @@ def print_vplans_main(argv: list[str] | None = None) -> int:
         raise ToolError(f"unknown benchmark: {args.benchmark}")
     if args.compiler_mode == "meta":
         load_policy(args.llvm_path, args.weights, args.spill_count_unit)
-    clang = ensure_compiler(args.llvm_path, args.build_dir, args.jobs)
+    clang = ((args.build_dir or args.llvm_path / "build-vplan-tools") / "bin/clang" if args.skip_build
+             else ensure_compiler(args.llvm_path, args.build_dir, args.jobs))
+    if args.skip_build and not all(p.is_file() and os.access(p, os.X_OK) for p in (clang, clang.parent / "llvm-extract")):
+        raise ToolError("existing clang/llvm-extract binaries are missing or not executable")
     result = compile_report(clang, benchmark, args.detail, args.timeout,
                             compiler_mode=args.compiler_mode,
                             meta_script=args.llvm_path.resolve() / "utils/vplan-meta-compile",
@@ -555,10 +561,12 @@ def print_vplans_main(argv: list[str] | None = None) -> int:
             print(f"{row['id']}: {row['status']} " + (f"score={row['score']:.12g}" if 'score' in row else row.get('reason', '')))
             if args.detail and 'breakdown' in row:
                 print(json.dumps(row['breakdown'], sort_keys=True))
-        for choice in result.selection["selections"]:
+        for choice in getattr(result, "selection", {}).get("selections", []):
             print(f"{choice['function']} loop={choice['loop']}: " +
                   ("scalar (" + choice['reason'] + ")" if choice['scalar'] else "selected=" + choice['id']) +
                   " IC=1 epilogue=f0")
+        if result.driver_result.get("status"):
+            print(result.driver_result["status"] + ": " + result.driver_result["reason"])
     sys.stdout.write(result.stderr)
     if result.returncode:
         raise ToolError(f"compilation failed for {benchmark.id} (exit {result.returncode})")

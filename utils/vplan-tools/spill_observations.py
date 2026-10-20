@@ -1,5 +1,5 @@
 """Cost-free projection of common post-RA facts into six spill buckets."""
-from model_errors import ToolError
+from model_errors import ObservationUnavailable as ToolError
 
 BUCKETS = (("gpr", 1), ("fpr", 1), ("vector", 1), ("vector", 2), ("vector", 4), ("vector", 8))
 
@@ -12,6 +12,8 @@ def iteration_ratio(candidate, observation):
         raise ToolError("unproven-iteration-width")
     if not any(b["Role"] == "body" for b in observation["Blocks"]):
         raise ToolError("missing-loop")
+    if not observation["Instructions"]:
+        raise ToolError("empty-instruction-observation")
     return observed // original
 
 

@@ -1,0 +1,1948 @@
+VPlan report_version=2 module=fixtures/gesummv.bc invocation=1 function=selected_kernel loop=0 header=for.body depth=2
+  target=riscv64-unknown-unknown-elf cpu=xiangshan-kunminghu
+  cost_kind=reciprocal_throughput units=model-units opt_for_size=0 tuning_vscale=2 user_vf=s0 user_ic=1 location=vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  scalar-baseline cost=13
+  candidates:
+    phase | plan | vf | estimated_width | body_cost | score | score_kind | vs_incumbent | vs_scalar | reason
+    main | 1 | f2 | 2 | 13 | 26000 | whole-loop | yes (plan=0 vf=f1; known-trip-count) | yes (scalar; known-trip-count) | -
+    main | 1 | f4 | 4 | 24 | 24000 | whole-loop | yes (plan=1 vf=f2; known-trip-count) | yes (scalar; known-trip-count) | -
+    main | 1 | f8 | 8 | 46 | 23000 | whole-loop | yes (plan=1 vf=f4; known-trip-count) | yes (scalar; known-trip-count) | -
+    main | 1 | f16 | 16 | 90 | 22500 | whole-loop | yes (plan=1 vf=f8; known-trip-count) | yes (scalar; known-trip-count) | -
+    main | 2 | s1 | 2 | 13 | 26000 | whole-loop | no (plan=1 vf=f16; known-trip-count-scalable-tie) | yes (scalar; known-trip-count-scalable-tie) | -
+    main | 2 | s2 | 4 | 24 | 24000 | whole-loop | no (plan=1 vf=f16; known-trip-count-scalable-tie) | yes (scalar; known-trip-count-scalable-tie) | -
+    main | 2 | s4 | 8 | 46 | 23000 | whole-loop | no (plan=1 vf=f16; known-trip-count-scalable-tie) | yes (scalar; known-trip-count-scalable-tie) | -
+    main | 2 | s8 | 16 | 90 | 22500 | whole-loop | yes (plan=1 vf=f16; known-trip-count-scalable-tie) | yes (scalar; known-trip-count-scalable-tie) | -
+  register-pressure-policy vf=f1 enabled=1 reason=target-preference
+  register-pressure-policy vf=f2 enabled=1 reason=target-preference occurrences=2
+  register-pressure-policy vf=f4 enabled=1 reason=target-preference
+  register-pressure-policy vf=f8 enabled=1 reason=target-preference
+  register-pressure-policy vf=f16 enabled=1 reason=target-preference
+  register-pressure-policy vf=s1 enabled=1 reason=target-preference occurrences=2
+  register-pressure-policy vf=s2 enabled=1 reason=target-preference
+  register-pressure-policy vf=s4 enabled=1 reason=target-preference
+  register-pressure-policy vf=s8 enabled=1 reason=target-preference
+  epilogue-selection status=skipped reason=disabled
+  selected-for-main plan=2 vf=s8
+  selected-for-epilogue plan=none vf=not-evaluated
+  selected_interleave_count=1 reason=InterleavingNotBeneficialAndDisabled
+  outcome=vectorization-emitted
+  details:
+  plan=0
+    tail_folded=0 scalar_tail=1
+VPlan 'Initial VPlan for VF={1},UF>=1' {
+Live-in vp<%0> = VF
+Live-in vp<%1> = VF * UF
+Live-in vp<%2> = vector-trip-count
+Live-in ir<4000> = original trip-count
+
+ir-bb<entry>:
+  [R0] IR   %tmp0.promoted = load double, ptr @tmp0, align 8, !tbaa !19
+  [R1] IR   %y0.promoted = load double, ptr @y0, align 8, !tbaa !19
+Successor(s): scalar.ph, vector.ph
+
+vector.ph:
+  [R20] EMIT vp<%3> = reduction-start-vector reassoc nnan ninf nsz arcp afn ir<%tmp0.promoted>, ir<0.000000e+00>, ir<1>
+  [R21] EMIT vp<%4> = reduction-start-vector reassoc nnan ninf nsz arcp afn ir<%y0.promoted>, ir<0.000000e+00>, ir<1>
+Successor(s): vector loop
+
+<x1> vector loop: {
+vp<%5> = CANONICAL-IV
+
+  vector.body:
+    [R22] WIDEN-REDUCTION-PHI ir<%add69> = phi (fadd) reassoc nnan ninf nsz arcp afn vp<%3>, ir<%add>
+    [R23] WIDEN-REDUCTION-PHI ir<%add878> = phi (fadd) reassoc nnan ninf nsz arcp afn vp<%4>, ir<%add8>
+    [R24] vp<%6> = SCALAR-STEPS vp<%5>, ir<1>, vp<%0>
+    [R25] CLONE ir<%arrayidx> = getelementptr inbounds nuw ir<@A>, vp<%6>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:37
+    [R26] CLONE ir<%0> = load ir<%arrayidx>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:37 (!tbaa !19)
+    [R27] CLONE ir<%arrayidx2> = getelementptr inbounds nuw ir<@x>, vp<%6>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:42
+    [R28] CLONE ir<%1> = load ir<%arrayidx2>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:42 (!tbaa !19)
+    [R29] CLONE ir<%mul> = fmul reassoc nnan ninf nsz arcp afn ir<%1>, ir<%0>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:41
+    [R30] CLONE ir<%add> = fadd reassoc nnan ninf nsz arcp afn ir<%mul>, ir<%add69>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:46
+    [R31] CLONE ir<%arrayidx4> = getelementptr inbounds nuw ir<@B>, vp<%6>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:56
+    [R32] CLONE ir<%2> = load ir<%arrayidx4>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:56 (!tbaa !19)
+    [R33] CLONE ir<%mul7> = fmul reassoc nnan ninf nsz arcp afn ir<%2>, ir<%1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:60
+    [R34] CLONE ir<%add8> = fadd reassoc nnan ninf nsz arcp afn ir<%mul7>, ir<%add878>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:65
+    [R35] EMIT vp<%index.next> = add nuw vp<%5>, vp<%1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:26
+    [R36] EMIT branch-on-count vp<%index.next>, vp<%2>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  No successors
+}
+Successor(s): middle.block
+
+middle.block:
+  [R37] EMIT vp<%8> = compute-reduction-result (fadd) reassoc nnan ninf nsz arcp afn ir<%add>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  [R38] EMIT vp<%9> = compute-reduction-result (fadd) reassoc nnan ninf nsz arcp afn ir<%add8>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  [R39] EMIT vp<%cmp.n> = icmp eq ir<4000>, vp<%2>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  [R40] EMIT branch-on-cond vp<%cmp.n>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+Successor(s): ir-bb<for.cond.cleanup>, scalar.ph
+
+ir-bb<for.cond.cleanup>:
+  [R41] IR   %add.lcssa = phi double [ %add, %for.body ], !dbg !22 (extra operand: vp<%8> from middle.block)
+  [R42] IR   %add8.lcssa = phi double [ %add8, %for.body ], !dbg !23 (extra operand: vp<%9> from middle.block)
+  [R43] IR   store double %add.lcssa, ptr @tmp0, align 8, !dbg !24, !tbaa !19
+  [R44] IR   store double %add8.lcssa, ptr @y0, align 8, !dbg !25, !tbaa !19
+No successors
+
+scalar.ph:
+  [R2] EMIT-SCALAR vp<%bc.resume.val> = phi [ vp<%2>, middle.block ], [ ir<0>, ir-bb<entry> ]
+  [R3] EMIT-SCALAR vp<%bc.merge.rdx> = phi [ vp<%8>, middle.block ], [ ir<%tmp0.promoted>, ir-bb<entry> ]
+  [R4] EMIT-SCALAR vp<%bc.merge.rdx>.1 = phi [ vp<%9>, middle.block ], [ ir<%y0.promoted>, ir-bb<entry> ]
+Successor(s): ir-bb<for.body>
+
+ir-bb<for.body>:
+  [R5] IR   %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ] (extra operand: vp<%bc.resume.val> from scalar.ph)
+  [R6] IR   %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ] (extra operand: vp<%bc.merge.rdx> from scalar.ph)
+  [R7] IR   %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ] (extra operand: vp<%bc.merge.rdx>.1 from scalar.ph)
+  [R8] IR   %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+  [R9] IR   %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+  [R10] IR   %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+  [R11] IR   %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+  [R12] IR   %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+  [R13] IR   %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+  [R14] IR   %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+  [R15] IR   %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+  [R16] IR   %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+  [R17] IR   %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+  [R18] IR   %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+  [R19] IR   %exitcond.not = icmp eq i64 %indvars.iv.next, 4000, !dbg !33
+No successors
+}
+  plan=1
+    tail_folded=0 scalar_tail=1
+VPlan 'Initial VPlan for VF={2,4,8,16},UF>=1' {
+Live-in vp<%0> = VF
+Live-in vp<%1> = VF * UF
+Live-in vp<%2> = vector-trip-count
+Live-in ir<4000> = original trip-count
+
+ir-bb<entry>:
+  [R0] IR   %tmp0.promoted = load double, ptr @tmp0, align 8, !tbaa !19
+  [R1] IR   %y0.promoted = load double, ptr @y0, align 8, !tbaa !19
+Successor(s): scalar.ph, vector.ph
+
+vector.ph:
+  [R20] EMIT vp<%3> = reduction-start-vector reassoc nnan ninf nsz arcp afn ir<%tmp0.promoted>, ir<0.000000e+00>, ir<1>
+  [R21] EMIT vp<%4> = reduction-start-vector reassoc nnan ninf nsz arcp afn ir<%y0.promoted>, ir<0.000000e+00>, ir<1>
+Successor(s): vector loop
+
+<x1> vector loop: {
+vp<%5> = CANONICAL-IV
+
+  vector.body:
+    [R22] WIDEN-REDUCTION-PHI ir<%add69> = phi (fadd) reassoc nnan ninf nsz arcp afn vp<%3>, ir<%add>
+    [R23] WIDEN-REDUCTION-PHI ir<%add878> = phi (fadd) reassoc nnan ninf nsz arcp afn vp<%4>, ir<%add8>
+    [R24] vp<%6> = SCALAR-STEPS vp<%5>, ir<1>, vp<%0>
+    [R25] CLONE ir<%arrayidx> = getelementptr inbounds nuw ir<@A>, vp<%6>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:37
+    [R26] vp<%7> = vector-pointer inbounds nuw ir<%arrayidx>, ir<1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:37
+    [R27] WIDEN ir<%0> = load vp<%7>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:37 (!tbaa !19)
+    [R28] CLONE ir<%arrayidx2> = getelementptr inbounds nuw ir<@x>, vp<%6>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:42
+    [R29] vp<%8> = vector-pointer inbounds nuw ir<%arrayidx2>, ir<1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:42
+    [R30] WIDEN ir<%1> = load vp<%8>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:42 (!tbaa !19)
+    [R31] WIDEN ir<%mul> = fmul reassoc nnan ninf nsz arcp afn ir<%1>, ir<%0>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:41
+    [R32] WIDEN ir<%add> = fadd reassoc nnan ninf nsz arcp afn ir<%mul>, ir<%add69>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:46
+    [R33] CLONE ir<%arrayidx4> = getelementptr inbounds nuw ir<@B>, vp<%6>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:56
+    [R34] vp<%9> = vector-pointer inbounds nuw ir<%arrayidx4>, ir<1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:56
+    [R35] WIDEN ir<%2> = load vp<%9>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:56 (!tbaa !19)
+    [R36] WIDEN ir<%mul7> = fmul reassoc nnan ninf nsz arcp afn ir<%2>, ir<%1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:60
+    [R37] WIDEN ir<%add8> = fadd reassoc nnan ninf nsz arcp afn ir<%mul7>, ir<%add878>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:65
+    [R38] EMIT vp<%index.next> = add nuw vp<%5>, vp<%1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:26
+    [R39] EMIT branch-on-count vp<%index.next>, vp<%2>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  No successors
+}
+Successor(s): middle.block
+
+middle.block:
+  [R40] EMIT vp<%11> = compute-reduction-result (fadd) reassoc nnan ninf nsz arcp afn ir<%add>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  [R41] EMIT vp<%12> = compute-reduction-result (fadd) reassoc nnan ninf nsz arcp afn ir<%add8>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  [R42] EMIT vp<%cmp.n> = icmp eq ir<4000>, vp<%2>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  [R43] EMIT branch-on-cond vp<%cmp.n>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+Successor(s): ir-bb<for.cond.cleanup>, scalar.ph
+
+ir-bb<for.cond.cleanup>:
+  [R44] IR   %add.lcssa = phi double [ %add, %for.body ], !dbg !22 (extra operand: vp<%11> from middle.block)
+  [R45] IR   %add8.lcssa = phi double [ %add8, %for.body ], !dbg !23 (extra operand: vp<%12> from middle.block)
+  [R46] IR   store double %add.lcssa, ptr @tmp0, align 8, !dbg !24, !tbaa !19
+  [R47] IR   store double %add8.lcssa, ptr @y0, align 8, !dbg !25, !tbaa !19
+No successors
+
+scalar.ph:
+  [R2] EMIT-SCALAR vp<%bc.resume.val> = phi [ vp<%2>, middle.block ], [ ir<0>, ir-bb<entry> ]
+  [R3] EMIT-SCALAR vp<%bc.merge.rdx> = phi [ vp<%11>, middle.block ], [ ir<%tmp0.promoted>, ir-bb<entry> ]
+  [R4] EMIT-SCALAR vp<%bc.merge.rdx>.1 = phi [ vp<%12>, middle.block ], [ ir<%y0.promoted>, ir-bb<entry> ]
+Successor(s): ir-bb<for.body>
+
+ir-bb<for.body>:
+  [R5] IR   %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ] (extra operand: vp<%bc.resume.val> from scalar.ph)
+  [R6] IR   %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ] (extra operand: vp<%bc.merge.rdx> from scalar.ph)
+  [R7] IR   %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ] (extra operand: vp<%bc.merge.rdx>.1 from scalar.ph)
+  [R8] IR   %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+  [R9] IR   %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+  [R10] IR   %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+  [R11] IR   %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+  [R12] IR   %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+  [R13] IR   %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+  [R14] IR   %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+  [R15] IR   %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+  [R16] IR   %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+  [R17] IR   %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+  [R18] IR   %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+  [R19] IR   %exitcond.not = icmp eq i64 %indvars.iv.next, 4000, !dbg !33
+No successors
+}
+    costs vf=f2
+    evaluation=0 plan=1 vf=f2 phase=main-selection
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f2
+          ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          }
+          term=getArithmeticInstrCost result=1 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=1 coverage=opaque-legacy ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+      legacy category=induction contribution=1 ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f2
+          ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=0 coverage=opaque-legacy ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy category=induction contribution=0 ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy_precomputed=1
+      R22 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=f2
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ]
+      R23 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=f2
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ]
+      R24 scope=vector-region
+        calculation=VPScalarIVStepsRecipe::computeCost {
+          vf=f2
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R25 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f2
+          replication single_scalar=1 minimum_lanes=2 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+      R26 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R27 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f2
+          memory opcode=load type=<2 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+      R28 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f2
+          replication single_scalar=1 minimum_lanes=2 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+      R29 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R30 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f2
+          memory opcode=load type=<2 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+      R31 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f2
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f2
+            operation opcode=fmul type=<2 x double> vf=f2
+            term=getArithmeticInstrCost result=2 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+      R32 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f2
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f2
+            operation opcode=fadd type=<2 x double> vf=f2
+            term=getArithmeticInstrCost result=2 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+      R33 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f2
+          replication single_scalar=1 minimum_lanes=2 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+      R34 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R35 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f2
+          memory opcode=load type=<2 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+      R36 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f2
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f2
+            operation opcode=fmul type=<2 x double> vf=f2
+            term=getArithmeticInstrCost result=2 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+      R37 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f2
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f2
+            operation opcode=fadd type=<2 x double> vf=f2
+            term=getArithmeticInstrCost result=2 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+      R38 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=f2
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R39 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=f2
+          term=getCmpSelInstrCost result=1 coverage=tti-leaf
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded
+      region-backedge region=vector loop cost=0 forced=0
+      vector_region_body=12
+      vector_region=12
+      register_class=0 local_peak=3 invariant_usage=1 limit=31
+      register_class=2 local_peak=4 invariant_usage=0 limit=32
+      register_pressure=considered policy=shouldConsiderRegPressureForVF spill_cost=0
+      candidate_cost=13 status=evaluated
+      validity-checks passed=30 recipes=R0-R21, R40-R47
+    costs vf=f4
+    evaluation=1 plan=1 vf=f4 phase=main-selection
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f4
+          ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          }
+          term=getArithmeticInstrCost result=1 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=1 coverage=opaque-legacy ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+      legacy category=induction contribution=1 ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f4
+          ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=0 coverage=opaque-legacy ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy category=induction contribution=0 ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy_precomputed=1
+      R22 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=f4
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ]
+      R23 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=f4
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ]
+      R24 scope=vector-region
+        calculation=VPScalarIVStepsRecipe::computeCost {
+          vf=f4
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R25 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f4
+          replication single_scalar=1 minimum_lanes=4 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+      R26 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R27 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f4
+          memory opcode=load type=<4 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+      R28 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f4
+          replication single_scalar=1 minimum_lanes=4 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+      R29 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R30 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f4
+          memory opcode=load type=<4 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+      R31 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f4
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f4
+            operation opcode=fmul type=<4 x double> vf=f4
+            term=getArithmeticInstrCost result=4 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+      R32 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f4
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f4
+            operation opcode=fadd type=<4 x double> vf=f4
+            term=getArithmeticInstrCost result=4 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+      R33 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f4
+          replication single_scalar=1 minimum_lanes=4 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+      R34 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R35 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f4
+          memory opcode=load type=<4 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+      R36 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f4
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f4
+            operation opcode=fmul type=<4 x double> vf=f4
+            term=getArithmeticInstrCost result=4 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+      R37 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f4
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f4
+            operation opcode=fadd type=<4 x double> vf=f4
+            term=getArithmeticInstrCost result=4 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+      R38 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=f4
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R39 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=f4
+          term=getCmpSelInstrCost result=1 coverage=tti-leaf
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded
+      region-backedge region=vector loop cost=0 forced=0
+      vector_region_body=23
+      vector_region=23
+      register_class=0 local_peak=3 invariant_usage=1 limit=31
+      register_class=2 local_peak=8 invariant_usage=0 limit=32
+      register_pressure=considered policy=shouldConsiderRegPressureForVF spill_cost=0
+      candidate_cost=24 status=evaluated
+      validity-checks passed=30 recipes=R0-R21, R40-R47
+    costs vf=f8
+    evaluation=2 plan=1 vf=f8 phase=main-selection
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f8
+          ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          }
+          term=getArithmeticInstrCost result=1 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=1 coverage=opaque-legacy ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+      legacy category=induction contribution=1 ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f8
+          ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=0 coverage=opaque-legacy ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy category=induction contribution=0 ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy_precomputed=1
+      R22 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=f8
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ]
+      R23 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=f8
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ]
+      R24 scope=vector-region
+        calculation=VPScalarIVStepsRecipe::computeCost {
+          vf=f8
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R25 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f8
+          replication single_scalar=1 minimum_lanes=8 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+      R26 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R27 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f8
+          memory opcode=load type=<8 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+      R28 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f8
+          replication single_scalar=1 minimum_lanes=8 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+      R29 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R30 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f8
+          memory opcode=load type=<8 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+      R31 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f8
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f8
+            operation opcode=fmul type=<8 x double> vf=f8
+            term=getArithmeticInstrCost result=8 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+      R32 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f8
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f8
+            operation opcode=fadd type=<8 x double> vf=f8
+            term=getArithmeticInstrCost result=8 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+      R33 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f8
+          replication single_scalar=1 minimum_lanes=8 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+      R34 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R35 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f8
+          memory opcode=load type=<8 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+      R36 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f8
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f8
+            operation opcode=fmul type=<8 x double> vf=f8
+            term=getArithmeticInstrCost result=8 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+      R37 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f8
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f8
+            operation opcode=fadd type=<8 x double> vf=f8
+            term=getArithmeticInstrCost result=8 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+      R38 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=f8
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R39 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=f8
+          term=getCmpSelInstrCost result=1 coverage=tti-leaf
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded
+      region-backedge region=vector loop cost=0 forced=0
+      vector_region_body=45
+      vector_region=45
+      register_class=0 local_peak=3 invariant_usage=1 limit=31
+      register_class=2 local_peak=16 invariant_usage=0 limit=32
+      register_pressure=considered policy=shouldConsiderRegPressureForVF spill_cost=0
+      candidate_cost=46 status=evaluated
+      validity-checks passed=30 recipes=R0-R21, R40-R47
+    costs vf=f16
+    evaluation=3 plan=1 vf=f16 phase=main-selection
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f16
+          ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          }
+          term=getArithmeticInstrCost result=1 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=1 coverage=opaque-legacy ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+      legacy category=induction contribution=1 ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f16
+          ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=0 coverage=opaque-legacy ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy category=induction contribution=0 ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy_precomputed=1
+      R22 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=f16
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ]
+      R23 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=f16
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ]
+      R24 scope=vector-region
+        calculation=VPScalarIVStepsRecipe::computeCost {
+          vf=f16
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R25 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f16
+          replication single_scalar=1 minimum_lanes=16 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+      R26 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R27 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f16
+          memory opcode=load type=<16 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+      R28 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f16
+          replication single_scalar=1 minimum_lanes=16 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+      R29 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R30 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f16
+          memory opcode=load type=<16 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+      R31 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f16
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f16
+            operation opcode=fmul type=<16 x double> vf=f16
+            term=getArithmeticInstrCost result=16 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=16 coverage=expanded
+        }
+        cost=16 contribution=16 source=recipe status=evaluated coverage=expanded ir=  %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+      R32 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f16
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f16
+            operation opcode=fadd type=<16 x double> vf=f16
+            term=getArithmeticInstrCost result=16 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=16 coverage=expanded
+        }
+        cost=16 contribution=16 source=recipe status=evaluated coverage=expanded ir=  %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+      R33 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=f16
+          replication single_scalar=1 minimum_lanes=16 scalable=0
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+      R34 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R35 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=f16
+          memory opcode=load type=<16 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+      R36 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f16
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f16
+            operation opcode=fmul type=<16 x double> vf=f16
+            term=getArithmeticInstrCost result=16 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=16 coverage=expanded
+        }
+        cost=16 contribution=16 source=recipe status=evaluated coverage=expanded ir=  %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+      R37 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=f16
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f16
+            operation opcode=fadd type=<16 x double> vf=f16
+            term=getArithmeticInstrCost result=16 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=16 coverage=expanded
+        }
+        cost=16 contribution=16 source=recipe status=evaluated coverage=expanded ir=  %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+      R38 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=f16
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R39 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=f16
+          term=getCmpSelInstrCost result=1 coverage=tti-leaf
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded
+      region-backedge region=vector loop cost=0 forced=0
+      vector_region_body=89
+      vector_region=89
+      register_class=0 local_peak=3 invariant_usage=1 limit=31
+      register_class=2 local_peak=32 invariant_usage=0 limit=32
+      register_pressure=considered policy=shouldConsiderRegPressureForVF spill_cost=0
+      candidate_cost=90 status=evaluated
+      validity-checks passed=30 recipes=R0-R21, R40-R47
+  plan=2
+    tail_folded=0 scalar_tail=1
+VPlan 'Initial VPlan for VF={vscale x 1,vscale x 2,vscale x 4,vscale x 8},UF>=1' {
+Live-in vp<%0> = VF
+Live-in vp<%1> = VF * UF
+Live-in vp<%2> = vector-trip-count
+Live-in ir<4000> = original trip-count
+
+ir-bb<entry>:
+  [R0] IR   %tmp0.promoted = load double, ptr @tmp0, align 8, !tbaa !19
+  [R1] IR   %y0.promoted = load double, ptr @y0, align 8, !tbaa !19
+Successor(s): scalar.ph, vector.ph
+
+vector.ph:
+  [R20] EMIT vp<%3> = reduction-start-vector reassoc nnan ninf nsz arcp afn ir<%tmp0.promoted>, ir<0.000000e+00>, ir<1>
+  [R21] EMIT vp<%4> = reduction-start-vector reassoc nnan ninf nsz arcp afn ir<%y0.promoted>, ir<0.000000e+00>, ir<1>
+Successor(s): vector loop
+
+<x1> vector loop: {
+vp<%5> = CANONICAL-IV
+
+  vector.body:
+    [R22] WIDEN-REDUCTION-PHI ir<%add69> = phi (fadd) reassoc nnan ninf nsz arcp afn vp<%3>, ir<%add>
+    [R23] WIDEN-REDUCTION-PHI ir<%add878> = phi (fadd) reassoc nnan ninf nsz arcp afn vp<%4>, ir<%add8>
+    [R24] vp<%6> = SCALAR-STEPS vp<%5>, ir<1>, vp<%0>
+    [R25] CLONE ir<%arrayidx> = getelementptr inbounds nuw ir<@A>, vp<%6>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:37
+    [R26] vp<%7> = vector-pointer inbounds nuw ir<%arrayidx>, ir<1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:37
+    [R27] WIDEN ir<%0> = load vp<%7>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:37 (!tbaa !19)
+    [R28] CLONE ir<%arrayidx2> = getelementptr inbounds nuw ir<@x>, vp<%6>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:42
+    [R29] vp<%8> = vector-pointer inbounds nuw ir<%arrayidx2>, ir<1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:42
+    [R30] WIDEN ir<%1> = load vp<%8>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:42 (!tbaa !19)
+    [R31] WIDEN ir<%mul> = fmul reassoc nnan ninf nsz arcp afn ir<%1>, ir<%0>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:41
+    [R32] WIDEN ir<%add> = fadd reassoc nnan ninf nsz arcp afn ir<%mul>, ir<%add69>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:46
+    [R33] CLONE ir<%arrayidx4> = getelementptr inbounds nuw ir<@B>, vp<%6>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:56
+    [R34] vp<%9> = vector-pointer inbounds nuw ir<%arrayidx4>, ir<1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:56
+    [R35] WIDEN ir<%2> = load vp<%9>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:56 (!tbaa !19)
+    [R36] WIDEN ir<%mul7> = fmul reassoc nnan ninf nsz arcp afn ir<%2>, ir<%1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:60
+    [R37] WIDEN ir<%add8> = fadd reassoc nnan ninf nsz arcp afn ir<%mul7>, ir<%add878>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:65
+    [R38] EMIT vp<%index.next> = add nuw vp<%5>, vp<%1>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:26
+    [R39] EMIT branch-on-count vp<%index.next>, vp<%2>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  No successors
+}
+Successor(s): middle.block
+
+middle.block:
+  [R40] EMIT vp<%11> = compute-reduction-result (fadd) reassoc nnan ninf nsz arcp afn ir<%add>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  [R41] EMIT vp<%12> = compute-reduction-result (fadd) reassoc nnan ninf nsz arcp afn ir<%add8>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  [R42] EMIT vp<%cmp.n> = icmp eq ir<4000>, vp<%2>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+  [R43] EMIT branch-on-cond vp<%cmp.n>, !dbg vec_benchmarks/polybench/p32-gesummv-l00.c:4:5
+Successor(s): ir-bb<for.cond.cleanup>, scalar.ph
+
+ir-bb<for.cond.cleanup>:
+  [R44] IR   %add.lcssa = phi double [ %add, %for.body ], !dbg !22 (extra operand: vp<%11> from middle.block)
+  [R45] IR   %add8.lcssa = phi double [ %add8, %for.body ], !dbg !23 (extra operand: vp<%12> from middle.block)
+  [R46] IR   store double %add.lcssa, ptr @tmp0, align 8, !dbg !24, !tbaa !19
+  [R47] IR   store double %add8.lcssa, ptr @y0, align 8, !dbg !25, !tbaa !19
+No successors
+
+scalar.ph:
+  [R2] EMIT-SCALAR vp<%bc.resume.val> = phi [ vp<%2>, middle.block ], [ ir<0>, ir-bb<entry> ]
+  [R3] EMIT-SCALAR vp<%bc.merge.rdx> = phi [ vp<%11>, middle.block ], [ ir<%tmp0.promoted>, ir-bb<entry> ]
+  [R4] EMIT-SCALAR vp<%bc.merge.rdx>.1 = phi [ vp<%12>, middle.block ], [ ir<%y0.promoted>, ir-bb<entry> ]
+Successor(s): ir-bb<for.body>
+
+ir-bb<for.body>:
+  [R5] IR   %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ] (extra operand: vp<%bc.resume.val> from scalar.ph)
+  [R6] IR   %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ] (extra operand: vp<%bc.merge.rdx> from scalar.ph)
+  [R7] IR   %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ] (extra operand: vp<%bc.merge.rdx>.1 from scalar.ph)
+  [R8] IR   %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+  [R9] IR   %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+  [R10] IR   %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+  [R11] IR   %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+  [R12] IR   %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+  [R13] IR   %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+  [R14] IR   %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+  [R15] IR   %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+  [R16] IR   %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+  [R17] IR   %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+  [R18] IR   %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+  [R19] IR   %exitcond.not = icmp eq i64 %indvars.iv.next, 4000, !dbg !33
+No successors
+}
+    costs vf=s1
+    evaluation=4 plan=2 vf=s1 phase=main-selection
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=s1
+          ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          }
+          term=getArithmeticInstrCost result=1 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=1 coverage=opaque-legacy ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+      legacy category=induction contribution=1 ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=s1
+          ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=0 coverage=opaque-legacy ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy category=induction contribution=0 ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy_precomputed=1
+      R22 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=s1
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ]
+      R23 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=s1
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ]
+      R24 scope=vector-region
+        calculation=VPScalarIVStepsRecipe::computeCost {
+          vf=s1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R25 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s1
+          replication single_scalar=1 minimum_lanes=1 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+      R26 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R27 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s1
+          memory opcode=load type=<vscale x 1 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+      R28 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s1
+          replication single_scalar=1 minimum_lanes=1 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+      R29 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R30 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s1
+          memory opcode=load type=<vscale x 1 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+      R31 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s1
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s1
+            operation opcode=fmul type=<vscale x 1 x double> vf=s1
+            term=getArithmeticInstrCost result=2 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+      R32 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s1
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s1
+            operation opcode=fadd type=<vscale x 1 x double> vf=s1
+            term=getArithmeticInstrCost result=2 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+      R33 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s1
+          replication single_scalar=1 minimum_lanes=1 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+      R34 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R35 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s1
+          memory opcode=load type=<vscale x 1 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+      R36 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s1
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s1
+            operation opcode=fmul type=<vscale x 1 x double> vf=s1
+            term=getArithmeticInstrCost result=2 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+      R37 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s1
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s1
+            operation opcode=fadd type=<vscale x 1 x double> vf=s1
+            term=getArithmeticInstrCost result=2 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+      R38 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=s1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R39 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=s1
+          term=getCmpSelInstrCost result=1 coverage=tti-leaf
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded
+      region-backedge region=vector loop cost=0 forced=0
+      vector_region_body=12
+      vector_region=12
+      register_class=0 local_peak=3 invariant_usage=1 limit=31
+      register_class=2 local_peak=4 invariant_usage=0 limit=32
+      register_pressure=considered policy=shouldConsiderRegPressureForVF spill_cost=0
+      candidate_cost=13 status=evaluated
+      validity-checks passed=30 recipes=R0-R21, R40-R47
+    costs vf=s2
+    evaluation=5 plan=2 vf=s2 phase=main-selection
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=s2
+          ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          }
+          term=getArithmeticInstrCost result=1 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=1 coverage=opaque-legacy ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+      legacy category=induction contribution=1 ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=s2
+          ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=0 coverage=opaque-legacy ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy category=induction contribution=0 ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy_precomputed=1
+      R22 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=s2
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ]
+      R23 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=s2
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ]
+      R24 scope=vector-region
+        calculation=VPScalarIVStepsRecipe::computeCost {
+          vf=s2
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R25 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s2
+          replication single_scalar=1 minimum_lanes=2 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+      R26 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R27 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s2
+          memory opcode=load type=<vscale x 2 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+      R28 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s2
+          replication single_scalar=1 minimum_lanes=2 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+      R29 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R30 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s2
+          memory opcode=load type=<vscale x 2 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+      R31 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s2
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s2
+            operation opcode=fmul type=<vscale x 2 x double> vf=s2
+            term=getArithmeticInstrCost result=4 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+      R32 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s2
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s2
+            operation opcode=fadd type=<vscale x 2 x double> vf=s2
+            term=getArithmeticInstrCost result=4 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+      R33 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s2
+          replication single_scalar=1 minimum_lanes=2 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+      R34 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R35 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s2
+          memory opcode=load type=<vscale x 2 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        cost=2 contribution=2 source=recipe status=evaluated coverage=expanded ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+      R36 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s2
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s2
+            operation opcode=fmul type=<vscale x 2 x double> vf=s2
+            term=getArithmeticInstrCost result=4 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+      R37 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s2
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s2
+            operation opcode=fadd type=<vscale x 2 x double> vf=s2
+            term=getArithmeticInstrCost result=4 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+      R38 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=s2
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R39 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=s2
+          term=getCmpSelInstrCost result=1 coverage=tti-leaf
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded
+      region-backedge region=vector loop cost=0 forced=0
+      vector_region_body=23
+      vector_region=23
+      register_class=0 local_peak=3 invariant_usage=1 limit=31
+      register_class=2 local_peak=8 invariant_usage=0 limit=32
+      register_pressure=considered policy=shouldConsiderRegPressureForVF spill_cost=0
+      candidate_cost=24 status=evaluated
+      validity-checks passed=30 recipes=R0-R21, R40-R47
+    costs vf=s4
+    evaluation=6 plan=2 vf=s4 phase=main-selection
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=s4
+          ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          }
+          term=getArithmeticInstrCost result=1 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=1 coverage=opaque-legacy ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+      legacy category=induction contribution=1 ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=s4
+          ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=0 coverage=opaque-legacy ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy category=induction contribution=0 ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy_precomputed=1
+      R22 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=s4
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ]
+      R23 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=s4
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ]
+      R24 scope=vector-region
+        calculation=VPScalarIVStepsRecipe::computeCost {
+          vf=s4
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R25 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s4
+          replication single_scalar=1 minimum_lanes=4 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+      R26 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R27 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s4
+          memory opcode=load type=<vscale x 4 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+      R28 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s4
+          replication single_scalar=1 minimum_lanes=4 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+      R29 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R30 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s4
+          memory opcode=load type=<vscale x 4 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+      R31 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s4
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s4
+            operation opcode=fmul type=<vscale x 4 x double> vf=s4
+            term=getArithmeticInstrCost result=8 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+      R32 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s4
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s4
+            operation opcode=fadd type=<vscale x 4 x double> vf=s4
+            term=getArithmeticInstrCost result=8 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+      R33 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s4
+          replication single_scalar=1 minimum_lanes=4 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+      R34 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R35 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s4
+          memory opcode=load type=<vscale x 4 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        cost=4 contribution=4 source=recipe status=evaluated coverage=expanded ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+      R36 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s4
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s4
+            operation opcode=fmul type=<vscale x 4 x double> vf=s4
+            term=getArithmeticInstrCost result=8 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+      R37 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s4
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s4
+            operation opcode=fadd type=<vscale x 4 x double> vf=s4
+            term=getArithmeticInstrCost result=8 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+      R38 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=s4
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R39 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=s4
+          term=getCmpSelInstrCost result=1 coverage=tti-leaf
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded
+      region-backedge region=vector loop cost=0 forced=0
+      vector_region_body=45
+      vector_region=45
+      register_class=0 local_peak=3 invariant_usage=1 limit=31
+      register_class=2 local_peak=16 invariant_usage=0 limit=32
+      register_pressure=considered policy=shouldConsiderRegPressureForVF spill_cost=0
+      candidate_cost=46 status=evaluated
+      validity-checks passed=30 recipes=R0-R21, R40-R47
+    costs vf=s8
+    evaluation=7 plan=2 vf=s8 phase=main-selection
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=s8
+          ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          }
+          term=getArithmeticInstrCost result=1 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=1 coverage=opaque-legacy ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+      legacy category=induction contribution=1 ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=s8
+          ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-fallback raw_cost=0 coverage=opaque-legacy ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy category=induction contribution=0 ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+      legacy_precomputed=1
+      R22 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=s8
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ]
+      R23 scope=vector-region
+        calculation=VPHeaderPHIRecipe::computeCost {
+          vf=s8
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ]
+      R24 scope=vector-region
+        calculation=VPScalarIVStepsRecipe::computeCost {
+          vf=s8
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R25 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s8
+          replication single_scalar=1 minimum_lanes=8 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+      R26 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R27 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s8
+          memory opcode=load type=<vscale x 8 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+      R28 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s8
+          replication single_scalar=1 minimum_lanes=8 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+      R29 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R30 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s8
+          memory opcode=load type=<vscale x 8 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+      R31 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s8
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s8
+            operation opcode=fmul type=<vscale x 8 x double> vf=s8
+            term=getArithmeticInstrCost result=16 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=16 coverage=expanded
+        }
+        cost=16 contribution=16 source=recipe status=evaluated coverage=expanded ir=  %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+      R32 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s8
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s8
+            operation opcode=fadd type=<vscale x 8 x double> vf=s8
+            term=getArithmeticInstrCost result=16 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=16 coverage=expanded
+        }
+        cost=16 contribution=16 source=recipe status=evaluated coverage=expanded ir=  %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+      R33 scope=vector-region
+        calculation=VPReplicateRecipe::computeCost {
+          vf=s8
+          replication single_scalar=1 minimum_lanes=8 scalable=1
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded ir=  %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+      R34 scope=vector-region
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R35 scope=vector-region
+        calculation=VPWidenMemoryRecipe::computeCost {
+          vf=s8
+          memory opcode=load type=<vscale x 8 x double> alignment=8 address_space=0 masked=0 consecutive=1
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        cost=8 contribution=8 source=recipe status=evaluated coverage=expanded ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+      R36 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s8
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s8
+            operation opcode=fmul type=<vscale x 8 x double> vf=s8
+            term=getArithmeticInstrCost result=16 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=16 coverage=expanded
+        }
+        cost=16 contribution=16 source=recipe status=evaluated coverage=expanded ir=  %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+      R37 scope=vector-region
+        calculation=VPWidenRecipe::computeCost {
+          vf=s8
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=s8
+            operation opcode=fadd type=<vscale x 8 x double> vf=s8
+            term=getArithmeticInstrCost result=16 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode(getOpcode(), VF, Ctx) result=16 coverage=expanded
+        }
+        cost=16 contribution=16 source=recipe status=evaluated coverage=expanded ir=  %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+      R38 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=s8
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R39 scope=vector-region
+        calculation=VPInstruction::computeCost {
+          vf=s8
+          term=getCmpSelInstrCost result=1 coverage=tti-leaf
+        }
+        cost=1 contribution=1 source=recipe status=evaluated coverage=expanded
+      region-backedge region=vector loop cost=0 forced=0
+      vector_region_body=89
+      vector_region=89
+      register_class=0 local_peak=3 invariant_usage=1 limit=31
+      register_class=2 local_peak=32 invariant_usage=0 limit=32
+      register_pressure=considered policy=shouldConsiderRegPressureForVF spill_cost=0
+      candidate_cost=90 status=evaluated
+      validity-checks passed=30 recipes=R0-R21, R40-R47
+    evaluation=8 plan=2 vf=s8 phase=outside-loop-profitability
+      R40 scope=outside-loop-profitability
+        calculation=VPInstruction::computeCost {
+          vf=s8
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R41 scope=outside-loop-profitability
+        calculation=VPInstruction::computeCost {
+          vf=s8
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      R42 scope=outside-loop-profitability
+        calculation=VPInstruction::computeCost {
+          vf=s8
+          calculation=VPRecipeWithIRFlags::getCostForRecipeWithOpcode {
+            vf=f1
+            operation opcode=icmp type=i1 vf=f1
+            term=getCmpSelInstrCost result=1 coverage=tti-leaf
+          }
+          term=getCostForRecipeWithOpcode result=1 coverage=expanded
+        }
+        cost=1 contribution=0 source=recipe status=evaluated coverage=expanded
+      R43 scope=outside-loop-profitability
+        calculation=VPInstruction::computeCost {
+          vf=s8
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      outside-loop runtime_checks=0 early_exit=0 middle_block=1 total=1 epilogue_cost=omitted
+      not-evaluated count=44 recipes=R0-R39, R44-R47
+    ranking-context plan=1 vf=f2 phase=main maximum_trip_count=4000 has_tail=1
+    ranking-context plan=1 vf=f4 phase=main maximum_trip_count=4000 has_tail=1
+    ranking-context plan=1 vf=f8 phase=main maximum_trip_count=4000 has_tail=1
+    ranking-context plan=1 vf=f16 phase=main maximum_trip_count=4000 has_tail=1
+    ranking-context plan=2 vf=s1 phase=main maximum_trip_count=4000 has_tail=1
+    ranking-context plan=2 vf=s2 phase=main maximum_trip_count=4000 has_tail=1
+    ranking-context plan=2 vf=s4 phase=main maximum_trip_count=4000 has_tail=1
+    ranking-context plan=2 vf=s8 phase=main maximum_trip_count=4000 has_tail=1
+  known_trip_count=4000 maximum_trip_count=4000 scalar_tail_policy=3
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f2
+          ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f2
+          ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f2
+          ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f4
+          ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f4
+          ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f4
+          ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f8
+          ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f8
+          ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f8
+          ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f16
+          ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f16
+          ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=f16
+          ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s1
+          ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s1
+          ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s1
+          ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=1 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=1 coverage=expanded
+          term=Cost result=1 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s2
+          ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s2
+          ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s2
+          ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=2 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=2 coverage=expanded
+          term=Cost result=2 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s4
+          ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s4
+          ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s4
+          ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=4 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=4 coverage=expanded
+          term=Cost result=4 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s8
+          ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s8
+          ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        calculation=LoopVectorizationCostModel::getConsecutiveMemOpCost {
+          vf=s8
+          ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+          term=initialize Cost result=0 coverage=expanded
+          term=getMemoryOpCost result=8 coverage=tti-leaf
+          term=Cost += getMemoryOpCost result=8 coverage=expanded
+          term=Cost result=8 coverage=expanded
+        }
+        scalar-baseline-details phase=main-selection
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-instruction raw_cost=0 coverage=opaque-legacy
+    scalar cost=0 forced=0 ir=  %indvars.iv = phi i64 [ 0, %entry ], [ %indvars.iv.next, %for.body ]
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ]
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-instruction raw_cost=0 coverage=opaque-legacy
+    scalar cost=0 forced=0 ir=  %add69 = phi double [ %tmp0.promoted, %entry ], [ %add, %for.body ]
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ]
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-instruction raw_cost=0 coverage=opaque-legacy
+    scalar cost=0 forced=0 ir=  %add878 = phi double [ %y0.promoted, %entry ], [ %add8, %for.body ]
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+          term=0 result=0 coverage=expanded
+        }
+        legacy-instruction raw_cost=0 coverage=opaque-legacy
+    scalar cost=0 forced=0 ir=  %arrayidx = getelementptr inbounds nuw [8 x i8], ptr @A, i64 %indvars.iv, !dbg !27
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+          calculation=LoopVectorizationCostModel::getMemoryInstructionCost {
+            vf=f1
+            ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+            term=getAddressComputationCost result=0 coverage=tti-leaf
+            term=getMemoryOpCost result=1 coverage=tti-leaf
+            term=getAddressComputationCost + getMemoryOpCost result=1 coverage=expanded
+          }
+          term=getMemoryInstructionCost(I, VF) result=1 coverage=expanded
+        }
+        legacy-instruction raw_cost=1 coverage=opaque-legacy
+    scalar cost=1 forced=0 ir=  %0 = load double, ptr %arrayidx, align 8, !dbg !27, !tbaa !19
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+          term=0 result=0 coverage=expanded
+        }
+        legacy-instruction raw_cost=0 coverage=opaque-legacy
+    scalar cost=0 forced=0 ir=  %arrayidx2 = getelementptr inbounds nuw [8 x i8], ptr @x, i64 %indvars.iv, !dbg !28
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+          calculation=LoopVectorizationCostModel::getMemoryInstructionCost {
+            vf=f1
+            ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+            term=getAddressComputationCost result=0 coverage=tti-leaf
+            term=getMemoryOpCost result=1 coverage=tti-leaf
+            term=getAddressComputationCost + getMemoryOpCost result=1 coverage=expanded
+          }
+          term=getMemoryInstructionCost(I, VF) result=1 coverage=expanded
+        }
+        legacy-instruction raw_cost=1 coverage=opaque-legacy
+    scalar cost=1 forced=0 ir=  %1 = load double, ptr %arrayidx2, align 8, !dbg !28, !tbaa !19
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+          }
+          term=getArithmeticInstrCost result=2 coverage=tti-leaf
+        }
+        legacy-instruction raw_cost=2 coverage=opaque-legacy
+    scalar cost=2 forced=0 ir=  %mul = fmul reassoc nnan ninf nsz arcp afn double %1, %0, !dbg !29
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+          }
+          term=getArithmeticInstrCost result=2 coverage=tti-leaf
+        }
+        legacy-instruction raw_cost=2 coverage=opaque-legacy
+    scalar cost=2 forced=0 ir=  %add = fadd reassoc nnan ninf nsz arcp afn double %mul, %add69, !dbg !22
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+          term=0 result=0 coverage=expanded
+        }
+        legacy-instruction raw_cost=0 coverage=opaque-legacy
+    scalar cost=0 forced=0 ir=  %arrayidx4 = getelementptr inbounds nuw [8 x i8], ptr @B, i64 %indvars.iv, !dbg !30
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+          calculation=LoopVectorizationCostModel::getMemoryInstructionCost {
+            vf=f1
+            ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+            term=getAddressComputationCost result=0 coverage=tti-leaf
+            term=getMemoryOpCost result=1 coverage=tti-leaf
+            term=getAddressComputationCost + getMemoryOpCost result=1 coverage=expanded
+          }
+          term=getMemoryInstructionCost(I, VF) result=1 coverage=expanded
+        }
+        legacy-instruction raw_cost=1 coverage=opaque-legacy
+    scalar cost=1 forced=0 ir=  %2 = load double, ptr %arrayidx4, align 8, !dbg !30, !tbaa !19
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+          }
+          term=getArithmeticInstrCost result=2 coverage=tti-leaf
+        }
+        legacy-instruction raw_cost=2 coverage=opaque-legacy
+    scalar cost=2 forced=0 ir=  %mul7 = fmul reassoc nnan ninf nsz arcp afn double %2, %1, !dbg !31
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+          }
+          term=getArithmeticInstrCost result=2 coverage=tti-leaf
+        }
+        legacy-instruction raw_cost=2 coverage=opaque-legacy
+    scalar cost=2 forced=0 ir=  %add8 = fadd reassoc nnan ninf nsz arcp afn double %mul7, %add878, !dbg !23
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          calculation=LoopVectorizationCostModel::getReductionPatternCost {
+            vf=f1
+            ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+          }
+          term=getArithmeticInstrCost result=1 coverage=tti-leaf
+        }
+        legacy-instruction raw_cost=1 coverage=opaque-legacy
+    scalar cost=1 forced=0 ir=  %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1, !dbg !32
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  %exitcond.not = icmp eq i64 %indvars.iv.next, 4000, !dbg !33
+          term=getCmpSelInstrCost result=1 coverage=tti-leaf
+        }
+        legacy-instruction raw_cost=1 coverage=opaque-legacy
+    scalar cost=1 forced=0 ir=  %exitcond.not = icmp eq i64 %indvars.iv.next, 4000, !dbg !33
+        calculation=LoopVectorizationCostModel::getInstructionCost {
+          vf=f1
+          ir=  br i1 %exitcond.not, label %for.cond.cleanup, label %for.body, !dbg !34, !llvm.loop !35
+          term=getCFInstrCost result=0 coverage=tti-leaf
+        }
+        legacy-instruction raw_cost=0 coverage=opaque-legacy
+    scalar cost=0 forced=0 ir=  br i1 %exitcond.not, label %for.cond.cleanup, label %for.body, !dbg !34, !llvm.loop !35
+    scalar-block block=for.body instruction_sum=13 divisor=1 weighted_cost=13
+  interleave-selection plan=2 reused_body_cost=90
+        calculation=runtime-checks {
+        }
+  outside-loop runtime_checks=0 scalar_iteration_cost=13 vector_iteration_cost=90
+  outside-loop estimated_width=16 denominator=118 min_tc_1=1 min_tc_2=0 max_min_tc=1 align_to_vf=0 min_tc=1
+  outside-loop expected_trip_count=4000
+        outside-loop decision=1 reason=minimum-trip-count-satisfied-or-unknown
+End VPlan report

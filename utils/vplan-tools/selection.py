@@ -41,10 +41,14 @@ def load_policy(checkout=None, weights_path=None, spill_count_unit=None):
     spec.loader.exec_module(module)
     policy = module.Policy(weights_path, spill_count_unit)
     policy.identity = {"name": policy.name, "implementation": digest,
+                       "model_version": getattr(policy, "version", None),
                        "spill_count_unit": policy.spill_count_unit if policy.supports_spill_count_unit else None,
                        "weights": hashlib.sha256(Path(weights_path).read_bytes()).hexdigest() if weights_path else None}
     policy.identity["cost_model"] = hashlib.sha256((directory / "cost_model.py").read_bytes()).hexdigest() \
         if (directory / "cost_model.py").is_file() else None
+    for name in ("spill_observations", "observations", "selection"):
+        source = directory / (name + ".py")
+        policy.identity[name] = hashlib.sha256(source.read_bytes()).hexdigest() if source.is_file() else None
     return policy
 
 

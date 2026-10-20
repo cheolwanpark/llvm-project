@@ -2,14 +2,15 @@
 
 LLVM checkpoints IR before LoopVectorize, enumerates vector candidates, and
 reproduces explicitly selected candidates. `utils/vplan-tools/selection_policy.py`
-supplies the fixed `llvm-middle-end` policy for evaluation, printing and
-`utils/vplan-meta-compile`. `cost_model.py` consumes the ordinary LLVM cost
-observations; it has no parameters to fit and reads no database or measurements.
+supplies the fixed `llvm-backend-spill` policy for evaluation, printing and
+`utils/vplan-meta-compile`. `cost_model.py` keeps ordinary LLVM costs and replaces
+only spill/reload estimates with post-RA observations. It has no parameters to fit
+and reads no database or measurements.
 
 ```text
 prepare checkpoint → discover candidates + middle-end loop context
-                   → fixed Python costs and scalar/vector comparison
-                   → materialize selected candidates to LLVM IR for safety checks
+                   → post-RA probe of every cost-evaluable fixed/scalable candidate
+                   → replace spill estimates; scalar/vector comparison
                    → LLVM replay → IR / assembly / object
 ```
 
@@ -17,13 +18,14 @@ The interface supports non-LTO RISCV64 O2/O3, inner loops, IC=1, without a vecto
 epilogue. The fixed policy targets the RISC-V throughput configuration used by
 `search-dataset.sqlite`. It ranks both fixed and scalable vectors against scalar
 f1, using compiler order and LLVM's scalable tie preference. Structured safety
-rejections leave the affected loop scalar; compiler errors remain errors.
+rejections are recorded as illegal candidates; unavailable observations exclude
+the whole benchmark before selection, and compiler errors remain errors.
 Multiple loops are selected independently, without function-level aggregation.
 
 ## Cost model
 
-Let C be `middle_end.original / 4`, W be the candidate's `estimated_width`,
-S be `scalar_cost`, and T be `max_trip_count`:
+Let C be `add_sat(add_sat(precomputed, vector_region), backend_spill) / 4`,
+W be the candidate's `estimated_width`, S be `scalar_cost`, and T be `max_trip_count`:
 
 | Condition | Comparison score |
 | --- | --- |
@@ -31,9 +33,11 @@ S be `scalar_cost`, and T be `max_trip_count`:
 | Scalar remainder | C × floor(T/W) + S × (T % W) |
 | Folded tail | C × ceil(T/W) |
 
-C already includes precomputed legacy costs, VPlan region costs and LLVM's
-estimated register-pressure spill cost. Comparisons preserve integer quarter
-units, saturation, invalid propagation and the incoming candidate's tail policy
+`backend_spill` is the sum of observed spill/reload counts times physical-register
+group size and the candidate's existing TTI units, divided by a proven positive
+integer backend-to-candidate iteration ratio, then truncated once in quarter
+units and saturated. The original manifest and LLVM estimate remain unchanged.
+Comparisons preserve integer quarter units, saturation, invalid propagation and the incoming candidate's tail policy
 on both sides. Scores are model units, not CPU cycles. The previous learned
 backend resource/latency model and tail coefficient have been removed.
 
@@ -42,14 +46,16 @@ size optimization, some candidate filters, and outside-loop profitability can
 still cause differences from ordinary LLVM. Use `evaluate --compare-baseline`
 to measure agreement. See [the tools README](utils/vplan-tools/README.md).
 
-## Optional backend observations
+## Backend observations
 
 `--analytics-only --stop-after-ra` retains the raw-observation pipeline.
 `RISCVVPlanAnalytics` runs after register allocation cleanup and exposes raw
 instructions, register geometry, operand banks, memory direction, spill objects,
 predicates, regions, and proven physical RAW dependencies. Its version remains 2.
-These facts are not inputs to the fixed model. The default path does not invoke
-RA probes or require their iteration-mapping/dependency coverage.
+The default model consumes spill facts and proven iteration mapping. It excludes
+the entire benchmark if any legal cost-evaluable candidate has unsupported
+coverage. A missing dependency graph alone does not preclude spill costing when
+execution frequency is proven. Malformed facts, crashes and timeouts are errors.
 
 ## Usage
 
@@ -63,7 +69,7 @@ uv run --project utils/vplan-tools python utils/vplan-meta-compile \
 
 Use an empty work directory. `--emit llvm|asm|obj` selects the final output.
 `--stop-after-ra` remains the compatibility name for stopping before final replay;
-with the fixed policy this stops after middle-end scoring and IR safety checks.
+with the fixed policy this stops after post-RA scoring.
 `--analytics-only --stop-after-ra` instead collects raw backend observations.
 `--weights` is rejected. `--detail` retains ordinary VPlan diagnostics and
 `--timeout` applies per invocation. `--extract-function NAME` optionally isolates
@@ -93,7 +99,8 @@ Each candidate also carries `middle_end`: `precomputed`, `vector_region`,
 `estimated_spill`, `original`, `pressure`, `spill_units`, `reload_units`, and
 `cost_scale: 4`. Costs are exact integer quarter units, or null if invalid;
 unit arrays use GPR/FPR/vector order. These are ordinary middle-end/TTI facts,
-not backend scores. Invalid middle-end costs do not remove common probe candidates.
+not backend scores. Invalid middle-end costs remain in the manifest, explicitly
+marked invalid and excluded from model scoring.
 The full context is checked again during discovery, probing and final replay.
 
 Selection input contains `version: 3`, `run_id`, the full original `loops` and
@@ -111,17 +118,17 @@ Duplicate/missing/stale decisions, unsupported settings, changed loop/candidate
 context, and final materialization mismatches are errors.
 
 Artifacts include `identity.json`, `pre-vectorize.bc`, `candidates.json`,
-`check-*.manifest.json` and LLVM IR for selected-candidate safety checks,
+`probe-*.manifest.json`, post-RA analytics, MIR and compiler logs,
 `candidate-status.json`
 (status, reason, Python score and breakdown), `selection.json`,
-`final.manifest.json`, and `result.json`. The optional raw analytics mode also
-emits per-probe analytics, MIR and logs. Preparation/discovery failure and identity/schema
+`final.manifest.json`, and `result.json`. Raw analytics mode emits the same
+observations without derived costs. Preparation/discovery failure and identity/schema
 corruption in successful probe output fail the driver. Final replay failure
 never becomes a scalar fallback.
 
 Protocol v2 manifests/feedback and old weights are rejected. Recollect
 observations with protocol v3; no refitting is needed. Raw analytics remain v2.
-The fixed model is `llvm-middle-end-v1` and accepts no weights.
+The fixed model is `llvm-backend-spill-v1` and accepts no weights.
 The fixed policy does not consume old analytics caches or weights.
 
 ## Verification

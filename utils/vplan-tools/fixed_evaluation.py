@@ -9,6 +9,7 @@ import llvm_baseline
 from selection import load_policy
 from selection_evaluation import selection_row, summarize_rows
 import vplan_tools as vt
+from provenance import snapshot
 
 
 def decision(row):
@@ -57,9 +58,10 @@ def main(argv=None):
         clang = vt.ensure_compiler(args.llvm_path, args.build_dir, args.jobs)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     rows, baseline_rows, comparisons = [], [], []
-    report = dict(schema_version=1, evaluation="fixed-llvm-middle-end", database=str(args.db),
+    report = dict(schema_version=1, evaluation="fixed-llvm-backend-spill", database=str(args.db),
                   metadata=metadata, compiler=str(clang), policy=policy.identity,
                   complete=False, benchmarks=rows, baseline=baseline_rows, comparisons=comparisons)
+    report["provenance"] = snapshot(args.llvm_path, args.db, clang)
     started = time.perf_counter()
     for index, benchmark in enumerate(benchmarks, 1):
         print(f"[{index}/{len(benchmarks)}] {benchmark.id}", file=sys.stderr, flush=True)
@@ -71,11 +73,12 @@ def main(argv=None):
                     artifacts_dir=artifacts)
                 if mode == "meta" and not result.returncode and result.candidate_status["policy"] != policy.identity:
                     raise vt.ToolError("driver/evaluator policy mismatch")
-                row = (selection_row(benchmark, result) if mode == "meta"
+                row = (selection_row(benchmark, result, metadata.get("measurement_protocol", {}).get("vlen_bits")) if mode == "meta"
                        else llvm_baseline.selection_row(benchmark, result))
             except (vt.ToolError, OSError, ValueError, KeyError) as exc:
                 result = SimpleNamespace(returncode=1, stderr=str(exc))
                 row = selection_row(benchmark, result)
+            row["artifacts"] = str(artifacts) if artifacts else None
             (rows if mode == "meta" else baseline_rows).append(row)
             if not row["eligible"]:
                 print(f"  {mode}: {row['status']}: {row['reason'] or ''}", file=sys.stderr, flush=True)

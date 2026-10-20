@@ -1,0 +1,118 @@
+external diagnostic before report
+VPlan report_version=2 module=module with spaces.bc invocation=2 function=variants loop=3 header=body depth=2
+  target=aarch64-unknown-linux-gnu cpu=generic
+  cost_kind=code_size units=model-units opt_for_size=1 tuning_vscale=unknown user_vf=f0 user_ic=0 location=source with spaces.c:1:2
+  scalar-baseline cost=1.5
+  candidates:
+    phase | plan | vf | estimated_width | body_cost | score | score_kind | vs_incumbent | vs_scalar | reason
+    main | 0 | f2 | 2 | 3 | 3 | code-size | yes (scalar; code-size-less-than-or-tie-larger-width) | yes (scalar; code-size-less-than-or-tie-larger-width) | -
+    epilogue | 0 | f2 | 2 | 3 | not-evaluated | not-evaluated | yes (none; first-eligible-candidate) | not-evaluated | -
+  invalid-cost plan=0 vf=s4 recipe=R1 scope=validity-only source=recipe ir=  call { i32, i64 } @f(i32 0)
+  discarded plan=0 reason=invalid-user-vf-cost
+  known_trip_count=10 maximum_trip_count=10 scalar_tail_policy=allowed
+  selection-override reason=forced-vectorization real_scalar_cost=1.5 incumbent_sentinel=0
+  rejection vectorization_reason=example interleave_reason=example
+  outside-loop-profitability bypass=forced-vectorization
+  interleave-register-class=0 local_peak=2 invariant_usage=1 limit=32 induction_heuristic=1 register_limited_ic=2
+  selected-for-main plan=0 vf=f2 reason=user-vf
+  selected-for-epilogue plan=0 vf=f2 source_plan=0 cost=reused
+  selected_interleave_count=1 reason=InterleavingNotBeneficial
+  outcome=vectorization-emitted
+  details:
+  plan=0
+    tail_folded=0 scalar_tail=1
+VPlan 'fixture based on renderer and AArch64/print-vplans-costs.ll' {
+Live-in ir<{i32, i64} zeroinitializer> = payload
+entry:
+  [R0] CLONE ir<%x> = load ir<%p>, payload { i32, i64 }, !dbg source file.c:1
+  [R1] IR call void @outside()
+  [R2] IR ret void
+Successor(s): body
+<x1> vector loop: {
+  body:
+  No successors
+}
+No successors
+}
+    costs vf=f2
+    evaluation=0 plan=0 vf=f2 phase=main-selection
+      legacy category=induction contribution=0.75 ir=  %iv = phi i64 [ 0, %entry ]
+      legacy_precomputed=0.75
+      R0 scope=vector-region
+        calculation=expanded-fixture {
+          vf=f2
+          ir=  %a = call { i32, i64 } @g(ptr %p)
+          operation opcode=add type=<2 x { i32, i64 }> vf=f2
+          cast source_type={ i32, i64 } result_type=<2 x { i32, i64 }> context_hint=0
+          replication single_scalar=0 minimum_lanes=2 scalable=0
+          memory opcode=load type=<2 x i64> alignment=8 address_space=0 masked=0 consecutive=1
+          interleave factor=2 type=<4 x i64> alignment=8 address_space=0 masked=1 mask_for_gaps=1 reverse=0 members=0,1
+          predication block=then header_frequency=100 block_frequency=50 rounded_divisor=2
+          div-rem scalarization_cost=2 masked_cost=4 vf=f2
+          scalar_operation = 0 + 1 = 1 pointer_type=ptr addrspace(1)
+          replicated_operations = 1 * 2 = 2
+          unweighted_subtotal = 2 + 0 = 2
+          predication_divisor=2 numerator=2
+          weighted_subtotal=1
+          replacement=emulated-mask-memory-penalty original=1 replacement_cost=3000000
+          getInstructionCost=1 ir=  %v = add i32 1, 2
+          hoisted-memory-checks numerator=2 divisor=2 minimum=1 result=1
+          legacy-fallback raw_cost=1 coverage=opaque-legacy ir=  %v = add i32 1, 2
+          calculation=nested {
+            term=I == RetI ? (RedCost + ExtraExtCost) : 0 result=1.25 coverage=expanded
+          }
+          term=getMemoryOpCost result=1.25 coverage=tti-leaf
+        }
+        owner=R0
+        replacement=force-target-instruction-cost original=1.25
+        cost=1.25 contribution=1.25 source=recipe status=evaluated coverage=expanded
+      R1 scope=validity-only
+        cost=1 contribution=0 source=legacy status=evaluated coverage=opaque-legacy
+      region-backedge region=vector loop cost=0.5 forced=0
+      vector_region_body=1.75
+      vector_region=1.75
+      register_class=0 local_peak=3 invariant_usage=1 limit=1
+        coverage=expanded excess=2 getRegisterClassSpillCost=0.25 getRegisterClassReloadCost=0 spill_plus_reload=0.25 multiply=0.5
+      register_pressure=considered policy=shouldConsiderRegPressureForVF spill_cost=0.5
+      candidate_cost=3 status=evaluated
+      validity-checks passed=1 recipes=R1
+      not-evaluated count=1 recipes=R2
+    evaluation=1 plan=0 vf=f2 phase=outside-loop-profitability
+      R0 scope=outside-loop-profitability
+        calculation=outside {
+          term=0 result=0 coverage=expanded
+        }
+        cost=0 contribution=0 source=recipe status=evaluated coverage=expanded
+      outside-loop runtime_checks=1 early_exit=0 middle_block=0 total=1 epilogue_cost=omitted
+      not-evaluated count=2 recipes=R1-R2
+    ranking-context plan=0 vf=f2 phase=main maximum_trip_count=10 has_tail=1
+        scalar-baseline-details phase=main-selection
+        calculation=scalar {
+          term=opaque result=3 coverage=opaque-legacy
+        }
+        legacy-instruction raw_cost=3 coverage=opaque-legacy
+    scalar cost=1 forced=0 ir=  %x = add i32 1, 2
+    scalar cost=2 forced=1 ir=  %y = add i32 3, 4
+    scalar status=ignored rule=values-to-ignore ir=  br label %loop
+    scalar-block block=then instruction_sum=3 divisor=2 weighted_cost=1.5
+  interleave-selection plan=0 reused_body_cost=3
+  outside-loop runtime_checks=0 scalar_iteration_cost=1.5 vector_iteration_cost=3
+  outside-loop estimated_width=2 denominator=3 min_tc_1=1 min_tc_2=0 max_min_tc=1 align_to_vf=0 min_tc=1
+  outside-loop expected_trip_count=10
+        outside-loop decision=1 reason=minimum-trip-count-satisfied-or-unknown
+End VPlan report
+VPlan report_version=2 module=module.bc invocation=3 function=shortcut loop=0 header=body depth=1
+  target=aarch64-unknown-linux-gnu cpu=generic
+  cost_kind=reciprocal_throughput units=model-units opt_for_size=0 tuning_vscale=unknown user_vf=f0 user_ic=0 location=unknown
+  scalar-baseline cost=not-evaluated
+  candidates:
+    phase | plan | vf | estimated_width | body_cost | score | score_kind | vs_incumbent | vs_scalar | reason
+    none
+  no-plan reason=base-plan-construction-failed
+  epilogue-selection status=skipped reason=disabled
+  selected-for-main plan=none vf=not-evaluated
+  selected-for-epilogue plan=none vf=not-evaluated
+  selected_interleave_count=not-evaluated
+  outcome=no-plan
+End VPlan report
+external diagnostic after report
