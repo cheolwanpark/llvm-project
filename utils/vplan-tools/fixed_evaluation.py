@@ -39,10 +39,11 @@ def main(argv=None):
     parser.add_argument("--compare-baseline", action="store_true",
                         help="also compile with ordinary LLVM and report decision agreement")
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument('--candidate-scope', choices=('scalable', 'all'), default='scalable')
     args = parser.parse_args(argv)
     if args.compiler_mode != "meta":
         parser.error("fixed evaluation requires meta mode; use evaluate-baseline for direct mode")
-    policy = load_policy(args.llvm_path)
+    policy = load_policy(args.llvm_path, candidate_scope=args.candidate_scope)
     if policy.supports_fit:
         raise vt.ToolError("fixed evaluation requires a non-fittable policy")
     benchmarks, metadata = vt.load_database(args.db, benchmark_id=args.benchmark)
@@ -58,7 +59,7 @@ def main(argv=None):
         clang = vt.ensure_compiler(args.llvm_path, args.build_dir, args.jobs)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     rows, baseline_rows, comparisons = [], [], []
-    report = dict(schema_version=1, evaluation="fixed-llvm-backend-spill", database=str(args.db),
+    report = dict(schema_version=1, evaluation="fixed-llvm-backend-spill", candidate_scope=args.candidate_scope, database=str(args.db),
                   metadata=metadata, compiler=str(clang), policy=policy.identity,
                   complete=False, benchmarks=rows, baseline=baseline_rows, comparisons=comparisons)
     report["provenance"] = snapshot(args.llvm_path, args.db, clang)
@@ -70,7 +71,7 @@ def main(argv=None):
             try:
                 result = vt.compile_report(clang, benchmark, False, args.timeout,
                     compiler_mode=mode, meta_script=args.llvm_path / "utils/vplan-meta-compile",
-                    artifacts_dir=artifacts)
+                    artifacts_dir=artifacts, candidate_scope=args.candidate_scope if mode == 'meta' else 'all')
                 if mode == "meta" and not result.returncode and result.candidate_status["policy"] != policy.identity:
                     raise vt.ToolError("driver/evaluator policy mismatch")
                 row = (selection_row(benchmark, result, metadata.get("measurement_protocol", {}).get("vlen_bits")) if mode == "meta"

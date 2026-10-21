@@ -55,7 +55,8 @@ def selection_row(benchmark, result, expected_vlen=None):
         row.update(status="vlen-mismatch", reason="analytics VLEN differs from measured VLEN")
         return row
     if actual["scalar"]:
-        row.update(status="scalar-selection", reason=actual.get("reason"))
+        scoped = result.candidate_status.get('policy', {}).get('candidate_scope') == 'scalable'
+        row.update(status="no-scalable-candidates" if scoped else "scalar-selection", reason=actual.get("reason"))
         return row
     vf = candidate["vf"]
     if vf.startswith("s"):

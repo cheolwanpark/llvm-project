@@ -95,6 +95,11 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(row['ignored_measured_cycles'], {'32': 1, '64': 2})
         self.assertEqual(self.benchmark.measured[32], 1)
 
+    def test_scalable_evaluation_without_vector_choice_is_explicit(self):
+        r = result(scalar=True)
+        r.candidate_status['policy'] = {'candidate_scope': 'scalable'}
+        self.assertEqual(selection_row(self.benchmark, r, 128)['status'], 'no-scalable-candidates')
+
     def test_missing_unselected_compiler_vf_still_excludes(self):
         del self.benchmark.measured[4]
         row = selection_row(self.benchmark, result(), 128)

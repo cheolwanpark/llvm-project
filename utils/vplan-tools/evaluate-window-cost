@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""Calibrate/replay the maximum-window memory replacement on saved scalable plans."""
+import argparse
+import copy
+import csv
+from dataclasses import asdict, replace
+from fractions import Fraction as F
+from functools import lru_cache
+from itertools import product
+import json
+from pathlib import Path
+
+from cost_model import add, backend_cost
+from selection_policy import choose_priced
+from evaluation_scope import scope_prepared
+from memory_evaluation import compare, encode, project
+from memory_observations import llvm_memory_cost
+from memory_window_cost import (MODEL_VERSION, Parameters, memory_quarters, normalized_terms,
+                                operation_value, window_peak, window_terms, replace_memory_cost)
+from observations import bind_observation
+from provenance import digest
+from vplan_report import validate_manifest_costs
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def decode(v):
+    return F(v['numerator'],v['denominator']) if set(v)=={'numerator','denominator'} else v
+
+
+def read(path):
+    return json.loads(Path(path).read_text(),object_hook=decode)
+
+
+class Replay:
+    def __init__(self, args):
+        self.inputs = {}
+        def source(path):
+            self.inputs[str(path)] = digest(path)
+            return read(path)
+        ref=source(args.features)
+        assert ref['load_scope']=='all' and ref['candidate_scope']=='scalable'
+        base=source(args.baseline); corpus=source(args.corpus)
+        assert base['complete'] and base['successful'] and corpus['complete'] and corpus['successful']
+        assert base['provenance']['compiler_sha256']==corpus['provenance']['compiler_sha256']
+        assert digest(base['database'])==base['provenance']['database_sha256']
+        # Verify cached facts' original source files as well as their container.
+        for path, expected in ref['input_hashes'].items():
+            assert digest(Path(path))==expected, path
+        self.provenance=base['provenance']
+        self.olds={r['id']:r for r in base['benchmarks']}
+        self.preps={bid:scope_prepared(p) for bid,p in ref['features'].items()}
+        self.strided=source(args.strided)['runs']['residual-stride']['rows']
+        self.previous=source(args.previous)['profiles']['recommended']['versus_strided']['rows']
+        self.baseline=[project(self.olds[bid],p) for bid,p in self.preps.items()]
+        self.basemap={r['id']:r for r in self.baseline}
+        assert {r['id'] for r in self.baseline if r['eligible']}=={r['id'] for r in self.strided if r['eligible']}
+        self.items={}; self.benchmarks={}
+        paths={r['id']:r['json'] for r in corpus['benchmarks']}
+        for bid,prep in self.preps.items():
+            assert not prep['errors'] and not prep['removal_errors'], bid
+            if not prep['data']:
+                continue
+            parsed=source(Path(paths[bid]))
+            validate_manifest_costs(parsed,prep['manifest'])
+            loops={(l['function'],l['loop']):l for l in prep['manifest']['loops']}
+            entries=[]
+            for c,s in zip(prep['manifest']['candidates'],prep['statuses'],strict=True):
+                assert c['vf'].startswith('s')
+                if s['status']!='scored':
+                    continue
+                facts=prep['data'][c['id']]['facts']
+                obs=bind_observation(source(Path(s['analytics'])),c,loops[c['function'],c['loop']],prep['manifest']['run_id'])
+                spill=backend_cost(c,obs)
+                assert spill['effective_body_quarters']==s['breakdown']['effective_body_quarters']
+                removals={scope:llvm_memory_cost(c,parsed,removal_scope=scope) for scope in ('recipes','hooks')}
+                removals['none']=dict(quarters=0,evidence=[])
+                assert removals['hooks']['quarters']<=removals['recipes']['quarters']
+                bases={scope:replace_memory_cost(c,obs,dict(service=F(0),interaction=F(0)),r['quarters'])['effective_body_quarters']
+                       for scope,r in removals.items()}
+                item=dict(candidate=c,facts=facts,observation=obs,removals=removals,
+                          bases=bases,loop=loops[c['function'],c['loop']])
+                self.items[bid,c['id']]=item
+                entries.append(item)
+            self.benchmarks[bid]=entries
+
+    @lru_cache(maxsize=50000)
+    def prices(self,bid,cid,weights,overrides,interval,strength):
+        weights,overrides = dict(weights),dict(overrides)
+        return tuple(operation_value(r,weights,overrides,interval,strength)
+                     for r in self.items[bid,cid]['facts']['records'])
+
+    @lru_cache(maxsize=50000)
+    def peak(self,bid,cid,size,price_key):
+        return window_peak(self.items[bid,cid]['facts'],self.prices(bid,cid,*price_key),size)[0]
+
+    def costs(self,p):
+        # Cache operation prices and window peaks across geometry sweeps;
+        # both replay paths use the model's pricing and normalization functions.
+        service_key=(tuple(sorted(p.service_costs.items())),tuple(sorted(p.service_opcode_costs.items())),
+                     p.stride_interval_bytes,p.stride_service_strength)
+        demand_key=(tuple(sorted(p.demand_weights.items())),tuple(sorted(p.demand_opcode_counts.items())),
+                    p.stride_interval_bytes,p.stride_demand_strength)
+        costs={}
+        for (bid,cid),item in self.items.items():
+            service=sum(self.prices(bid,cid,*service_key),F(0))
+            peak=self.peak(bid,cid,p.window_size,demand_key)
+            terms=normalized_terms(item['facts'],p,service,peak)
+            costs[bid,cid]=add(item['bases'][p.llvm_memory_removal],memory_quarters(terms))
+        return costs
+
+    def fast(self,p):
+        costs=self.costs(p); rows=[]
+        for bid,base in self.basemap.items():
+            row={k:v for k,v in base.items() if k!='candidates'}
+            if not base['eligible']:
+                rows.append(row); continue
+            entries=self.benchmarks[bid]
+            local={i['candidate']['id']:costs[bid,i['candidate']['id']] for i in entries}
+            best=choose_priced([i['candidate'] for i in entries],entries[0]['loop'],local,scalable_only=True)
+            assert best is not None
+            vf=best['vf']; measured=self.olds[bid]['measured_cycles']
+            actual=min(measured,key=lambda v:(measured[v],int(v)))
+            assert vf[1:] in measured
+            row.update(vf=vf,cycles=measured[vf[1:]],regret=F(measured[vf[1:]],measured[actual])-1,correct=vf[1:]==actual)
+            rows.append(row)
+        return rows
+
+    def verify(self,p):
+        costs=self.costs(p); fast={r['id']:r for r in self.fast(p)}
+        rows=[]; details={}
+        for bid,prep in self.preps.items():
+            changed=dict(prep,statuses=copy.deepcopy(prep['statuses']))
+            for c,s in zip(changed['manifest']['candidates'],changed['statuses'],strict=True):
+                if (bid,c['id']) not in self.items:
+                    continue
+                item=self.items[bid,c['id']]
+                terms=window_terms(item['facts'],p)
+                removal=item['removals'][p.llvm_memory_removal]
+                derived=replace_memory_cost(c,item['observation'],terms,removal['quarters'])
+                assert costs[bid,c['id']]==derived['effective_body_quarters'],(bid,c['id'])
+                s['breakdown'].update(derived)
+                details.setdefault(bid,{})[c['id']]=dict(terms=terms,removed=removal,
+                    kept_recipe_quarters=item['removals']['recipes']['quarters']-removal['quarters'],
+                    body_quarters=derived['effective_body_quarters'],added=derived['memory_added_quarters'])
+            row=project(self.olds[bid],changed)
+            assert all(row[k]==fast[bid][k] for k in ('vf','eligible','regret','correct'))
+            rows.append(row)
+        return dict(parameters=asdict(p),versus_strided=compare(rows,self.strided),
+                    versus_previous=compare(rows,self.previous),details=details,
+                    verified_candidate_costs=len(costs))
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    defaults=dict(features='scalable-unit-half-segment3-20261021/results.json',
+                  baseline='wrong-predictions-20261021/spill/summary.json',
+                  corpus='stridedload-reeval-20261021/corpus/summary-normalized.json',
+                  strided='scalable-strided-comparison-20261021/results.json',
+                  previous='vf-scaling-verification-20261021/results.json')
+    for name,path in defaults.items():
+        parser.add_argument('--'+name,type=Path,default=ROOT/'.cache'/path)
+    parser.add_argument('--output-dir',type=Path,required=True)
+    parser.add_argument('--parameters',type=Path,help='Replay one explicit profile instead of searching')
+    parser.add_argument('--stride-sweep',action='store_true',help='Calibrate only stride factors around --parameters')
+    parser.add_argument('--service-sweep',action='store_true',help='Compare memory retention scopes and smaller service scales around --parameters')
+    args=parser.parse_args()
+    if args.output_dir.exists() and any(args.output_dir.iterdir()):
+        parser.error('output directory must be new or empty')
+    if (args.stride_sweep or args.service_sweep) and not args.parameters:
+        parser.error('a targeted sweep requires --parameters')
+    if args.stride_sweep and args.service_sweep:
+        parser.error('choose one targeted sweep')
+    replay=Replay(args); tested=[]; seen=set()
+    window_reference=None
+    def test(p,stage):
+        key=json.dumps(asdict(p),default=encode,sort_keys=True)
+        if key in seen:return
+        seen.add(key)
+        rows=replay.fast(p)
+        comparisons=[compare(rows,r) for r in (replay.strided,replay.previous)]
+        a,b=comparisons
+        assert not a['newly_excluded'] and not a['newly_included'] and not a['fallbacks']
+        tested.append(dict(parameters=asdict(p),stage=stage,metrics=a['metrics'],
+                           regressions=len(a['regressions']),improvements=len(a['improvements']),
+                           previous_regressions=len(b['regressions']),previous_improvements=len(b['improvements'])))
+        if window_reference is not None:
+            c=compare(rows,window_reference)
+            tested[-1].update(window_regressions=len(c['regressions']),window_improvements=len(c['improvements']))
+    def ranked():
+        return sorted(tested,key=lambda r:(r['metrics']['mean'],r['regressions'],-r['metrics']['correct']))
+    def progress(stage):
+        best=ranked()[0]
+        print(stage,'settings',len(tested),'mean_regret_percent',100*float(best['metrics']['mean']),
+              'regressions',best['regressions'],flush=True)
+    if args.parameters:
+        replay.inputs[str(args.parameters)]=digest(args.parameters)
+        p=Parameters.from_mapping(read(args.parameters)['parameters'])
+        if args.service_sweep:
+            window_reference=replay.fast(p)
+            profiles={'unadjusted':p}
+            for scope in ('recipes','hooks','none'):
+                for scale in (F(i,16) for i in range(17)):
+                    test(replace(p,llvm_memory_removal=scope,service_scale=scale),scope)
+                candidates=sorted((r for r in tested if r['stage']==scope),
+                                  key=lambda r:(r['metrics']['mean'],r['window_regressions']))
+                profiles[scope+'_best']=Parameters.from_mapping(candidates[0]['parameters'])
+                profiles[scope+'_same_service']=replace(p,llvm_memory_removal=scope)
+                profiles[scope+'_zero_service']=replace(p,llvm_memory_removal=scope,service_scale=F(0))
+                safe=[r for r in candidates if r['window_regressions']==0]
+                if safe:profiles[scope+'_no_window_regressions']=Parameters.from_mapping(safe[0]['parameters'])
+                progress(scope)
+        elif args.stride_sweep:
+            p=replace(p,stride_service_strength=F(0),stride_demand_strength=F(0))
+            window_reference=replay.fast(p)
+            test(p,'unadjusted')
+            profiles={'unadjusted':p}
+            intervals=(4,8,16,32,64,128,256,512,1024)
+            strengths=tuple(map(F,('1/16','1/8','3/16','1/4','1/2','3/4','1')))
+            for mode in ('service','demand','both'):
+                for interval,strength in product(intervals,strengths):
+                    test(replace(p,stride_interval_bytes=interval,
+                        stride_service_strength=strength if mode!='demand' else F(0),
+                        stride_demand_strength=strength if mode!='service' else F(0)),mode)
+                best=min((r for r in tested if r['stage']==mode),
+                         key=lambda r:(r['metrics']['mean'],r['window_regressions']))
+                profiles[mode+'_best']=Parameters.from_mapping(best['parameters'])
+                progress(mode)
+            # Also allow service and demand to have independent strengths.
+            for interval,s,d in product(intervals,strengths,strengths):
+                test(replace(p,stride_interval_bytes=interval,stride_service_strength=s,stride_demand_strength=d),'independent')
+            profiles['best_mean']=Parameters.from_mapping(ranked()[0]['parameters'])
+            safe=[r for r in ranked() if r['window_regressions']==0]
+            profiles['no_window_regressions']=Parameters.from_mapping(safe[0]['parameters'])
+            for name,key in [('fewest_strided_regressions','regressions'),('fewest_previous_regressions','previous_regressions')]:
+                best=min(tested,key=lambda r:(r[key],r['metrics']['mean']))
+                profiles[name]=Parameters.from_mapping(best['parameters'])
+        else:
+            test(p,'explicit')
+            profiles={'explicit':p}
+    else:
+        test(Parameters(),'default')
+        for size,throughput,refwidth in product((2,4,8,16,32),map(F,('1/4','1/2','1','2','4','8')), (4,8,16)):
+            test(Parameters(window_size=size,throughput=throughput,reference_width=refwidth),'geometry')
+        progress('geometry')
+        # Separate Cost(op) calibration with fixed Demand(op).
+        seeds=ranked()[:3]
+        for seed in seeds:
+            p=Parameters.from_mapping(seed['parameters'])
+            for u,s,g,i in product(map(F,('1/4','1/2','1')),map(F,('1/2','1','2')),
+                                   map(F,('1','2','3')),map(F,('1/2','1','2'))):
+                test(replace(p,service_costs=dict(unit=u,strided=s,segment=g,indexed=i)),'service')
+        progress('service')
+        # Revisit time/window geometry after service calibration, including
+        # intermediate widths and gains. This is still a finite staged search.
+        p=Parameters.from_mapping(ranked()[0]['parameters'])
+        for size,throughput,refwidth,gain in product((2,3,4,6,8,12,16,32),
+                map(F,('1/2','1','3/2','2','3','4','6','8')),(4,6,8,12,16),map(F,('1/2','1','2'))):
+            test(replace(p,window_size=size,throughput=throughput,reference_width=refwidth,
+                         interaction_weight=gain),'geometry_refinement')
+        progress('geometry_refinement')
+        # Then independent demand calibration, without changing service cost.
+        seeds=ranked()[:3]
+        for seed in seeds:
+            p=Parameters.from_mapping(seed['parameters'])
+            for u,s,g,i in product(map(F,('1/2','1','2')),map(F,('1/2','1','2')),
+                                   map(F,('1','2','3')),map(F,('1/2','1','2'))):
+                test(replace(p,demand_weights=dict(unit=u,strided=s,segment=g,indexed=i)),'demand')
+        progress('demand')
+        best=ranked()[0]
+        profiles={'default':Parameters(),'best_mean':Parameters.from_mapping(best['parameters'])}
+        for name,key in [('fewest_regressions','regressions'),('fewest_previous_regressions','previous_regressions')]:
+            best=min(tested,key=lambda r:(r[key],r['metrics']['mean']))
+            profiles[name]=Parameters.from_mapping(best['parameters'])
+        for name,predicate in [('no_regressions',lambda r:r['regressions']==0),
+                               ('no_previous_regressions',lambda r:r['previous_regressions']==0)]:
+            candidates=[r for r in ranked() if predicate(r)]
+            if candidates:profiles[name]=Parameters.from_mapping(candidates[0]['parameters'])
+        p=profiles['best_mean']
+        profiles['best_service_only']=replace(p,interaction_weight=F(0))
+        profiles['best_without_vf_time']=replace(p,reference_width=F(1000000))
+    verified={}
+    for name,p in profiles.items():
+        verified[name]=replay.verify(p)
+        if window_reference is not None:
+            verified[name]['versus_window']=compare(verified[name]['versus_strided']['rows'],window_reference)
+        a=verified[name]['versus_strided']
+        print(name,'n',a['metrics']['n'],'correct',a['metrics']['correct'],
+              'mean_regret_percent',100*float(a['metrics']['mean']),
+              'improvements',len(a['improvements']),'regressions',len(a['regressions']),flush=True)
+    report=dict(complete=True,model_version=MODEL_VERSION,candidate_scope='scalable',
+                evaluation='in-sample calibration on historical cycles; no compilation or new measurement',
+                input_hashes=replay.inputs,provenance=replay.provenance,
+                source_hashes={str(p):digest(p) for p in [Path(__file__),*Path(__file__).parent.glob('*.py')]},
+                sweep=tested,profiles=verified)
+    args.output_dir.mkdir(parents=True,exist_ok=True)
+    (args.output_dir/'results.json').write_text(json.dumps(report,default=encode,indent=2)+'\n')
+    for name,p in profiles.items():
+        (args.output_dir/(name+'.json')).write_text(json.dumps(dict(parameters=asdict(p)),default=encode,indent=2)+'\n')
+    with (args.output_dir/'summary.csv').open('w',newline='') as stream:
+        writer=csv.writer(stream)
+        writer.writerow(['profile','n','correct','mean_regret_pct','p95_regret_pct','max_regret_pct',
+                         'improved_vs_strided','regressed_vs_strided','improved_vs_previous','regressed_vs_previous'])
+        for name,profile in verified.items():
+            a,b=profile['versus_strided'],profile['versus_previous'];m=a['metrics']
+            writer.writerow([name,m['n'],m['correct'],*[100*float(m[k]) for k in ('mean','p95','maximum')],
+                             len(a['improvements']),len(a['regressions']),len(b['improvements']),len(b['regressions'])])
+    with (args.output_dir/'changes.csv').open('w',newline='') as stream:
+        writer=csv.writer(stream)
+        writer.writerow(['profile','reference','change','benchmark','old_vf','new_vf','old_regret_pct','new_regret_pct','delta_pp'])
+        for name,profile in verified.items():
+            for reference in ('versus_strided','versus_previous','versus_window'):
+                if reference not in profile:continue
+                for change in ('improvements','regressions'):
+                    for row in profile[reference][change]:
+                        writer.writerow([name,reference,change,row['id'],row['old_vf'],row['new_vf'],
+                                         *[100*float(row[k]) for k in ('old_regret','new_regret','delta')]])
+
+
+if __name__=='__main__':main()

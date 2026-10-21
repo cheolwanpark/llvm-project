@@ -30,7 +30,9 @@ class PolicyBase:
         return self.choose(rows)
 
 
-def load_policy(checkout=None, weights_path=None, spill_count_unit=None):
+def load_policy(checkout=None, weights_path=None, spill_count_unit=None, *, candidate_scope='all'):
+    if candidate_scope not in ('scalable', 'all'):
+        raise ToolError('unknown candidate scope')
     directory = Path(checkout) / "utils/vplan-tools" if checkout else Path(__file__).resolve().parent
     path = directory / "selection_policy.py"
     if not path.is_file():
@@ -40,6 +42,7 @@ def load_policy(checkout=None, weights_path=None, spill_count_unit=None):
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
     policy = module.Policy(weights_path, spill_count_unit)
+    policy.candidate_scope = candidate_scope
     policy.identity = {"name": policy.name, "implementation": digest,
                        "model_version": getattr(policy, "version", None),
                        "spill_count_unit": policy.spill_count_unit if policy.supports_spill_count_unit else None,
@@ -49,6 +52,9 @@ def load_policy(checkout=None, weights_path=None, spill_count_unit=None):
     for name in ("spill_observations", "observations", "selection"):
         source = directory / (name + ".py")
         policy.identity[name] = hashlib.sha256(source.read_bytes()).hexdigest() if source.is_file() else None
+    if candidate_scope == 'scalable':
+        policy.identity['candidate_scope'] = candidate_scope
+        policy.scalar_reason = 'no evaluable scalable candidates'
     return policy
 
 

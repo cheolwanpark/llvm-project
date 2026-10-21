@@ -18,13 +18,18 @@ def _walk(nodes):
         yield from _walk(n.get('children', []))
 
 
-def llvm_memory_cost(candidate, parsed):
+def llvm_memory_cost(candidate, parsed, *, removal_scope='hooks'):
     """Exact additive vector-region memory-hook subtotal, in quarter units.
 
 Interleaved hooks include their opaque shuffle/lowering costs; removing the hook
 removes those too. Address computation and separately reported shuffles remain.
 Reject non-additive/weighted/opaque memory recipes instead of guessing.
+With removal_scope='recipes', remove the complete cost of recipes containing
+a memory hook, including address/shuffle terms within those recipes. Separately
+reported recipes remain. Both scopes preserve the default attribution checks.
 """
+    if removal_scope not in ('hooks', 'recipes'):
+        raise ValueError('unknown memory removal scope')
     variants = []
     for report in parsed['reports']:
         if (report['header']['function'], int(report['header']['loop'])) != (candidate['function'], candidate['loop']):
@@ -57,10 +62,14 @@ Reject non-additive/weighted/opaque memory recipes instead of guessing.
                     values = [rational(n['result']) for n in leaves]
                     if isinstance(cost, str) or any(isinstance(v, str) for v in values) or cost != contribution or sum(values) != cost:
                         raise ValueError('non-additive memory recipe R' + str(rec['id']))
-                    for n in mem:
-                        value = rational(n['result'])
-                        subtotal += value
-                        evidence.append(dict(recipe=rec['id'], hook=n['term'], cost=value))
+                    if removal_scope == 'recipes':
+                        subtotal += contribution
+                        evidence.append(dict(recipe=rec['id'], hook='whole-memory-recipe', cost=contribution))
+                    else:
+                        for n in mem:
+                            value = rational(n['result'])
+                            subtotal += value
+                            evidence.append(dict(recipe=rec['id'], hook=n['term'], cost=value))
                 q = subtotal * 4
                 if q.denominator != 1 or not 0 <= q <= candidate['middle_end']['vector_region']:
                     raise ValueError('invalid memory subtotal')
@@ -137,7 +146,53 @@ def _step(ins, raw, regs):
     regs['X0'] = (None, 0)
 
 
-def extract_memory(candidate, observation, mir):
+def _all_memory_shape(ins, vlen):
+    """Full-active access shape; segment requests count individual fields.
+
+    Group8 is per-field EMUL for ordinary/segment memory, and data LMUL
+    for indexed memory. Indexed opcode EEW describes indices, not data.
+    Tuple operands need not carry the analytics Vector flag.
+    """
+    op = ins['Base'] or ins['Opcode']
+    group = F(ins['Group8'], 8)
+    whole = re.fullmatch(r'VL([1248])RE(?:8|16|32|64)_V|VS([1248])R_V', op)
+    ordinary = re.fullmatch(r'V[LS](S?)E(8|16|32|64)(?:FF)?_V', op)
+    segment = re.fullmatch(r'V[LS](S?)SEG([2-8])E(8|16|32|64)(?:FF)?_V', op)
+    indexed = re.fullmatch(r'V[LS][OU]X(?:SEG([2-8]))?EI(8|16|32|64)_V', op)
+    fields, stride = 1, None
+    if whole:
+        kind, eew = 'unit', 8
+        vl = F(int(whole[1] or whole[2]) * vlen, 8)
+        requests, stride = vl / 16, 1
+    elif ordinary or segment or indexed:
+        if group <= 0:
+            raise ValueError('missing memory register group for ' + op)
+        if indexed:
+            kind, eew = 'indexed', ins['SEW']
+            fields = int(indexed[1] or 1)
+            if eew not in (8, 16, 32, 64):
+                raise ValueError('missing indexed data SEW for ' + op)
+        elif segment:
+            fields, eew = int(segment[2]), int(segment[3])
+            kind = 'segment-strided' if segment[1] else 'segment'
+            stride = None if segment[1] else fields * eew // 8
+        else:
+            kind, eew = ('strided' if ordinary[1] else 'unit'), int(ordinary[2])
+            stride = None if ordinary[1] else eew // 8
+        vl = F(vlen) * group / eew
+        requests = vl * eew / 128 if kind == 'unit' else vl * fields
+    elif op.startswith('V') or any(o['Vector'] for o in ins['Operands']):
+        raise ValueError('unsupported vector memory opcode ' + op)
+    else:
+        kind, vl, requests, stride = 'scalar', F(1), F(1), 0
+        eew = ins['Bytes'] * 8 if not ins['ScalableBytes'] else 0
+    return dict(kind=kind, eew=eew, vl=vl, requests=requests,
+                fields=fields, stride=stride)
+
+
+def extract_memory(candidate, observation, mir, *, load_scope='strided'):
+    if load_scope not in ('strided', 'all'):
+        raise ValueError('unknown load scope')
     ratio = iteration_ratio(candidate, observation)
     body_ids = {b['ID'] for b in observation['Blocks'] if b['Role'] == 'body'}
     if len(body_ids) != 1:
@@ -159,7 +214,10 @@ def extract_memory(candidate, observation, mir):
                 whole = re.fullmatch(r'VL([1248])RE(?:8|16|32|64)_V|VS([1248])R_V', op)
                 ordinary = re.fullmatch(r'V[LS](S?)E(8|16|32|64)_V', op)
                 group = F(i['Group8'], 8)
-                if whole:
+                shape = _all_memory_shape(i, observation['VLen']) if load_scope == 'all' else None
+                if shape:
+                    kind, eew, vl, requests = (shape[k] for k in ('kind', 'eew', 'vl', 'requests'))
+                elif whole:
                     kind, eew = 'unit', 8
                     vl = F(int(whole[1] or whole[2]) * observation['VLen'], 8)
                     requests = vl / 16
@@ -175,13 +233,19 @@ def extract_memory(candidate, observation, mir):
                 requests = F(-(-requests.numerator // requests.denominator))
                 uses = [o for o in i['Operands'] if o.get('Use') and not o['Implicit'] and o['Bank'] == 'gpr']
                 address = regs.get(uses[0]['Name']) if uses else None
-                stride = regs.get(uses[1]['Name']) if kind == 'strided' and len(uses) > 1 else None
+                stride = regs.get(uses[1]['Name']) if kind in ('strided', 'segment-strided') and len(uses) > 1 else None
                 if address and (address[0] is None or address[0].startswith('$pcrel:')):
                     address = None
+                if kind == 'indexed':
+                    address = None  # The scalar base alone does not describe vector offsets.
+                stride_bytes = stride[1] if stride and stride[0] is None else None
+                if shape and kind not in ('strided', 'segment-strided'):
+                    stride_bytes = shape['stride']
                 records.append(dict(id=i['ID'], position=pos, opcode=op, kind=kind, load=i['Load'],
                                     eew=eew, group=group, vl=vl, requests=requests,
                                     masked=i['Masked'], address=address,
-                                    stride=stride[1] if stride and stride[0] is None else None))
+                                    stride=stride_bytes,
+                                    **({'fields': shape['fields']} if shape else {})))
             _step(i, raw[i['ID']], regs)
         passes.append(records)
     for first, second in zip(*passes, strict=True):

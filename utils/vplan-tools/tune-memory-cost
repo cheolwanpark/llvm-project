@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Explicit in-sample coefficient search for residual-stride memory costs.
 
-Selection sees costs only. Historical cycles rank completed selections. Keep all
-fixed/scalable candidates and reject coverage-losing settings for recommendation.
+Selection sees costs only. Historical cycles rank completed selections. Respect
+the requested candidate scope and reject coverage-losing settings for recommendation.
 No changes to default parameters, compiler, database, or runtime measurements.
 """
 import argparse
@@ -11,11 +11,13 @@ from fractions import Fraction as F
 import itertools
 import json
 from pathlib import Path
-import runpy
 
-from cost_model import add, more_profitable
+from cost_model import add
 from memory_cost import Parameters, memory_terms
+from memory_evaluation import encode, metrics
+from selection_policy import choose_priced
 from provenance import digest
+from evaluation_scope import scope_prepared
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,25 +28,19 @@ def decode(value):
     return value
 
 
-def encode(value):
-    if isinstance(value, F):
-        return dict(numerator=value.numerator, denominator=value.denominator)
-    raise TypeError(type(value))
-
-
 def choose(prep, parameters):
+    prep = scope_prepared(prep, prep.get('candidate_scope', 'scalable'))
     manifest = prep['manifest']
     assert len(manifest['loops']) == 1
     loop = manifest['loops'][0]
-    best, costs = None, {}
+    costs = {}
     for c, status in zip(manifest['candidates'], prep['statuses'], strict=True):
         if status['status'] != 'scored':
             continue
         terms = memory_terms(prep['data'][c['id']]['facts'], parameters, include_address=False)
         extra = int(4 * (terms['distance'] + terms['stride_adjustment']))
         costs[c['id']] = add(status['breakdown']['effective_body_quarters'], extra)
-        if more_profitable(c, best, loop, costs):
-            best = c
+    best = choose_priced(manifest['candidates'],loop,costs,scalable_only=prep['candidate_scope']=='scalable')
     return 'f1' if best is None else best['vf']
 
 
@@ -58,16 +54,20 @@ def main():
     parser.add_argument('--baseline', type=Path, default=ROOT/'.cache/memory-burst-spill-B/summary.json')
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--grid', choices=('broad', 'refine'), default='broad')
+    parser.add_argument('--candidate-scope', choices=('scalable', 'all'), default='scalable')
     args = parser.parse_args()
     if args.output_dir.exists() and any(args.output_dir.iterdir()):
         parser.error('output directory must be new or empty')
     reference = json.loads(args.reference.read_text(), object_hook=decode)
+    if reference.get('candidate_scope', 'all') != args.candidate_scope:
+        parser.error('reference candidate scope differs; regenerate evaluate-memory-cost with the requested scope')
+    reference['features'] = {bid: scope_prepared(prep, args.candidate_scope)
+                             for bid, prep in reference['features'].items()}
     base = json.loads(args.baseline.read_text())
     assert reference['complete'] and base['complete'] and base['successful']
     assert digest(base['database']) == base['provenance']['database_sha256']
     for path, sha in reference['input_hashes'].items():
         assert digest(path) == sha, path
-    metrics = runpy.run_path(str(Path(__file__).with_name('evaluate-memory-cost')))['metrics']
     refs = reference['runs']['residual-stride']['rows']
     ref_by_id = {r['id']: r for r in refs}
     old_by_id = {r['id']: r for r in base['benchmarks']}
@@ -147,7 +147,7 @@ def main():
     profile = dict(parameters=selected['parameters'], mode='residual', stage='stride',
                    provenance='In-sample coefficient search on the existing 117-benchmark dataset; no held-out validation. Minimize common-cohort mean regret with no coverage loss or per-case regression against original residual-stride.',
                    reference_sha256=digest(args.reference), search_index=selected['index'])
-    report = dict(complete=True, grid=args.grid, axes=axes, runs=runs, best_full_coverage=best,
+    report = dict(complete=True, candidate_scope=args.candidate_scope, grid=args.grid, axes=axes, runs=runs, best_full_coverage=best,
                   best_no_regression=safe, selected=selected, per_case=per_case,
                   reference_metrics=reference['runs']['residual-stride']['metrics'],
                   input_hashes={str(args.reference):digest(args.reference),str(args.baseline):digest(args.baseline)},

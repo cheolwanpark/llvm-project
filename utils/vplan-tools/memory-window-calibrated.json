@@ -1,0 +1,25 @@
+{
+  "model_version": "backend-memory-window-v3",
+  "provenance": "2026-10-21 in-sample historical scalable-only replay, 1533 settings; minimize regression count then mean regret against strided model. Not held-out validation or a global optimum.",
+  "results": ".cache/window-memory-final-20261021/results.json",
+  "parameters": {
+    "window_size": 12,
+    "throughput": "2",
+    "reference_width": "8",
+    "headroom": "0",
+    "interaction_weight": "2",
+    "llvm_memory_removal": "recipes",
+    "service_scale": "1",
+    "stride_service_strength": "0",
+    "stride_demand_strength": "0",
+    "service_costs": {
+      "unit": "1/4",
+      "strided": "1/2",
+      "segment": "1",
+      "indexed": "1/2"
+    },
+    "demand_weights": {},
+    "service_opcode_costs": {},
+    "demand_opcode_counts": {}
+  }
+}

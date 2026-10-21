@@ -285,7 +285,8 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                    compiler_mode: str = "meta", meta_script: Path | None = None,
                    artifacts_dir: Path | None = None,
                    *, stop_after_ra: bool = False, analytics_only: bool = False,
-                   weights: Path | None = None, spill_count_unit: str | None = None) -> subprocess.CompletedProcess:
+                   weights: Path | None = None, spill_count_unit: str | None = None,
+                   candidate_scope: str = 'all') -> subprocess.CompletedProcess:
     flags = benchmark_flags(benchmark)
     with tempfile.TemporaryDirectory(prefix="vplan-tools-") as temporary:
         root = Path(temporary)
@@ -316,6 +317,8 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                 command += ["--weights", str(weights)]
             if spill_count_unit:
                 command += ["--spill-count-unit", spill_count_unit]
+            if candidate_scope != 'all':
+                command += ['--candidate-scope', candidate_scope]
             if detail:
                 command.append("--detail")
             command += ["--", *flags]

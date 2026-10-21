@@ -116,12 +116,15 @@ class Driver:
 
     def compile(self, output: Path | None, emit: str, stop_after_ra: bool,
                 detail: bool, analytics_only: bool = False, weights_path: Path | None = None,
-                spill_count_unit: str | None = None) -> dict:
+                spill_count_unit: str | None = None, candidate_scope: str = 'all') -> dict:
+        if candidate_scope not in ('scalable', 'all'):
+            raise MetaCompileError('unknown candidate scope')
         if analytics_only and not stop_after_ra:
             raise MetaCompileError("--analytics-only requires --stop-after-ra")
         if analytics_only and (weights_path or spill_count_unit):
             raise MetaCompileError("raw analytics do not consume weights or spill count options")
-        policy = None if analytics_only else load_policy(weights_path=weights_path, spill_count_unit=spill_count_unit)
+        policy = None if analytics_only else load_policy(weights_path=weights_path, spill_count_unit=spill_count_unit,
+                                                         candidate_scope=candidate_scope)
         validate_flags(self.flags)
         if self.work.exists() and any(self.work.iterdir()):
             raise MetaCompileError(f"work directory must be empty: {self.work}")
@@ -155,6 +158,9 @@ class Driver:
         for index, row in enumerate(manifest["candidates"]):
             status = {"id": row["id"], "status": "unavailable"}
             statuses.append(status)
+            if candidate_scope == 'scalable' and not row['vf'].startswith('s'):
+                status.update(status='ignored-fixed', reason='scalable-only evaluation')
+                continue
             if policy and not policy.requires_backend:
                 status.update(policy.evaluate_middle_end(
                     row, loops[(row["function"], row["loop"])]))
@@ -286,6 +292,7 @@ def main(argv=None) -> int:
     parser.add_argument("--analytics-only", action="store_true", help="collect raw facts without computing backend costs")
     parser.add_argument("--weights", type=Path, help="legacy option; rejected by the fixed policy")
     parser.add_argument("--spill-count-unit", choices=("instruction", "register"))
+    parser.add_argument('--candidate-scope', choices=('scalable', 'all'), default='all')
     parser.add_argument("--detail", action="store_true")
     parser.add_argument("--extract-function", help="isolate a function at the pre-vectorizer checkpoint")
     parser.add_argument("--llvm-extract", type=Path, help="matching llvm-extract binary")
@@ -301,7 +308,7 @@ def main(argv=None) -> int:
         result = Driver(args.clang, args.input, args.work_dir, flags, args.timeout,
                         args.extract_function, args.llvm_extract).compile(
             args.output, args.emit, args.stop_after_ra, args.detail, args.analytics_only, args.weights,
-            args.spill_count_unit)
+            args.spill_count_unit, args.candidate_scope)
         print(json.dumps(result))
         return 0
     except (ToolError, OSError) as exc:

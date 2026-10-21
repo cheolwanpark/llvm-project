@@ -29,7 +29,8 @@ class EvaluationTests(unittest.TestCase):
     def compile(self, clang, benchmark, *args, **kwargs):
         self.calls.append(benchmark.id)
         result = replay_result(vf="s2", candidate_vfs=("s1", "s2"))
-        result.candidate_status["policy"] = load_policy().identity
+        self.assertEqual(kwargs['candidate_scope'], 'scalable')
+        result.candidate_status["policy"] = load_policy(candidate_scope='scalable').identity
         return result
 
     def run_evaluation(self, name="out", extra=()):

@@ -9,7 +9,7 @@ from fractions import Fraction as F
 
 from cost_model import MAX_COST, add, backend_cost
 
-MODEL_VERSION = 'backend-memory-interaction-v2'
+MODEL_VERSION = 'backend-memory-interaction-v3'
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,11 @@ class Parameters:
     line_bytes: int = 64
     reverse_weight: F = F(0)
     unknown_stride_weight: F = F(1)
+    segment_overhead: F = F(1)
+    segment_strided_overhead: F = F(1)
+    indexed_overhead: F = F(1)
+    unit_request_scale: F = F(1)
+    nonunit_request_scale: F = F(1)
 
     def __post_init__(self):
         for name in ('alpha', 'reverse_weight', 'unknown_stride_weight'):
@@ -28,6 +33,16 @@ class Parameters:
             if value < 0:
                 raise ValueError(name + ' must be nonnegative')
             object.__setattr__(self, name, value)
+        for name in ('segment_overhead', 'segment_strided_overhead', 'indexed_overhead',
+                     'nonunit_request_scale'):
+            value = F(getattr(self, name))
+            if value < 1:
+                raise ValueError(name + ' must be at least one')
+            object.__setattr__(self, name, value)
+        scale = F(self.unit_request_scale)
+        if not 0 < scale <= 1:
+            raise ValueError('unit_request_scale must be positive and at most one')
+        object.__setattr__(self, 'unit_request_scale', scale)
         for name in ('threshold', 'distance_scale', 'locality_bytes', 'line_bytes'):
             value = getattr(self, name)
             if type(value) is not int or value < (0 if name == 'threshold' else 1):
@@ -36,18 +51,32 @@ class Parameters:
     @classmethod
     def from_mapping(cls, values):
         values = dict(values)
-        for name in ('alpha', 'reverse_weight', 'unknown_stride_weight'):
+        for name in ('alpha', 'reverse_weight', 'unknown_stride_weight',
+                     'segment_overhead', 'segment_strided_overhead', 'indexed_overhead',
+                     'unit_request_scale', 'nonunit_request_scale'):
             if name in values:
                 value = values[name]
                 values[name] = F(value['numerator'], value['denominator']) if isinstance(value, dict) else F(str(value))
         return cls(**values)
 
 
+def request_cost(record, p):
+    """Price observed requests without changing access footprints or store costs."""
+    if not record['load']:
+        return record['requests']
+    if record['kind'] == 'unit':
+        return record['requests'] * p.unit_request_scale
+    multiplier = {'segment': p.segment_overhead,
+                  'segment-strided': p.segment_strided_overhead,
+                  'indexed': p.indexed_overhead}
+    return record['requests'] * p.nonunit_request_scale * multiplier.get(record['kind'], F(1))
+
+
 def locality(record, p):
     stride = record['stride']
     if stride is None:
         return p.unknown_stride_weight  # explicitly report unknown
-    if stride < 0 and abs(stride) == record['eew'] // 8:
+    if stride < 0 and abs(stride) == record['eew'] * record.get('fields', 1) // 8:
         return p.reverse_weight  # extra contention only, not base service
     return min(F(1), F(p.locality_bytes, max(1, abs(stride))))
 
@@ -60,6 +89,8 @@ def _shared_lines(a, b, p):
         return F(0)
     if a['stride'] is None or b['stride'] is None:
         return F(0)
+    if a['eew'] <= 0 or b['eew'] <= 0:
+        return F(0)
     if a['vl'].denominator != 1 or b['vl'].denominator != 1:
         return F(0)
     total = F(0)
@@ -69,16 +100,20 @@ def _shared_lines(a, b, p):
             lines = set()
             for k in range(int(r['vl'])):
                 start = base + r['address'][1] + k * r['stride']
-                lines.update(range(start // p.line_bytes, (start + r['eew']//8 - 1)//p.line_bytes + 1))
+                size = max(1, (r['eew'] * r.get('fields', 1) + 7) // 8)
+                lines.update(range(start // p.line_bytes, (start + size - 1)//p.line_bytes + 1))
             sets.append(lines)
         total += F(len(sets[0] & sets[1]), max(1, min(map(len, sets))))
     return total / p.line_bytes
 
 
-def memory_terms(facts, p=Parameters(), *, include_address=True):
+def memory_terms(facts, p=Parameters(), *, include_address=True, load_scope='strided'):
+    if load_scope not in ('strided', 'all'):
+        raise ValueError('unknown load scope')
     rs = facts['records']
-    loads = [r for r in rs if r['kind'] == 'strided' and r['load']]
-    stores = [r for r in rs if r['kind'] == 'strided' and not r['load']]
+    selected = [r for r in rs if load_scope == 'all' or r['kind'] == 'strided']
+    loads = [r for r in selected if r['load']]
+    stores = [r for r in selected if not r['load']]
     distance = stride_adjustment = address = F(0)
     pairs, address_pairs = [], []
     n = facts['body_length']
@@ -88,7 +123,7 @@ def memory_terms(facts, p=Parameters(), *, include_address=True):
         gap = b['position'] + (n if wrap else 0) - a['position'] - 1
         near = F(p.distance_scale, p.distance_scale + gap)
         # Steady-state cyclic adjacency: no finite-trip discount or dependence gate.
-        raw = p.alpha * near * max(F(0), a['requests'] + b['requests'] - p.threshold)
+        raw = p.alpha * near * max(F(0), request_cost(a, p) + request_cost(b, p) - p.threshold)
         gated = raw * min(locality(a, p), locality(b, p))
         distance += raw
         stride_adjustment += gated - raw
@@ -99,14 +134,14 @@ def memory_terms(facts, p=Parameters(), *, include_address=True):
         for b in stores:
             share = _shared_lines(a, b, p)
             gap = abs(b['position'] - a['position']) - 1
-            value = p.alpha * F(p.distance_scale, p.distance_scale + gap) * share * min(locality(a, p), locality(b, p)) * max(F(0), a['requests'] + b['requests'] - p.threshold)
+            value = p.alpha * F(p.distance_scale, p.distance_scale + gap) * share * min(locality(a, p), locality(b, p)) * max(F(0), request_cost(a, p) + request_cost(b, p) - p.threshold)
             options.append((value, b['id'], share))
         if options:
             value, store, share = max(options)
             address += value
             address_pairs.append(dict(load=a['id'], store=store, share=share, cost=value))
     ratio = facts['iteration_ratio']
-    return dict(service=sum((r['requests'] for r in rs), F(0)) / ratio,
+    return dict(service=sum((request_cost(r, p) for r in rs), F(0)) / ratio,
                 distance=distance / ratio, stride_adjustment=stride_adjustment / ratio,
                 address=address / ratio, pairs=pairs, address_pairs=address_pairs,
                 unknown_stride=[r['id'] for r in loads + stores if r['stride'] is None],

@@ -3,6 +3,18 @@ from selection import PolicyBase
 from cost_model import MODEL_VERSION, backend_cost, more_profitable, score_candidate
 
 
+def choose_priced(candidates, loop, costs, *, scalable_only=False):
+    """Select in compiler order using the same trip/tail and tie rules."""
+    best = None
+    for candidate in candidates:
+        if scalable_only and not candidate['vf'].startswith('s'):
+            continue
+        if costs.get(candidate['id']) is not None and (
+                (scalable_only and best is None) or more_profitable(candidate,best,loop,costs)):
+            best = candidate
+    return best
+
+
 class Policy(PolicyBase):
     name = "llvm-backend-spill"
     version = MODEL_VERSION
@@ -20,10 +32,9 @@ class Policy(PolicyBase):
         return result
 
     def choose_loop(self, rows, loop):
-        best = None
+        scalable_only = getattr(self, 'candidate_scope', 'all') == 'scalable'
+        if scalable_only:
+            rows = [(c, s) for c, s in rows if c['vf'].startswith('s')]
         costs = {c["id"]: s["breakdown"]["effective_body_quarters"]
                  for c, s in rows if s["status"] == "scored"}
-        for candidate, status in rows:
-            if status["status"] == "scored" and more_profitable(candidate, best, loop, costs):
-                best = candidate
-        return best
+        return choose_priced([c for c,_ in rows],loop,costs,scalable_only=scalable_only)

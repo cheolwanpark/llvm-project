@@ -95,6 +95,28 @@ class MetaCompilerTests(unittest.TestCase):
             manifest = json.loads((root / 'work/candidates.json').read_text())
             self.assertTrue(any(c['scalar_tail'] and int(c['vf'][1:]) > 1 for c in manifest['candidates']))
 
+    def test_scalable_evaluation_skips_fixed_backend_costs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            result = self.compile(root, ['-O3', '-fno-unroll-loops', '-mrvv-vector-bits=128',
+                                         '-mllvm', '-scalable-vectorization=always'], source=SOURCE.replace('i < n', 'i < 64'),
+                                  extra=('--candidate-scope', 'scalable'))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            work = root / 'work'
+            manifest = json.loads((work / 'candidates.json').read_text())
+            statuses = json.loads((work / 'candidate-status.json').read_text())['candidates']
+            commands = json.loads((work / 'commands.json').read_text())
+            fixed = [(n, s) for n, (c, s) in enumerate(zip(manifest['candidates'], statuses)) if c['vf'].startswith('f')]
+            self.assertTrue(fixed)
+            for n, status in fixed:
+                self.assertEqual(status['status'], 'ignored-fixed')
+                self.assertNotIn('breakdown', status)
+                self.assertNotIn('analytics', status)
+                self.assertFalse(any(c['stage'] == f'probe-{n:04d}' for c in commands))
+            choices = json.loads((work / 'selection.json').read_text())['selections']
+            self.assertEqual(choices, select_loops(load_policy(candidate_scope='scalable'), manifest, statuses))
+            self.assertTrue(all(not c['scalar'] and c['id'].rsplit(':', 1)[-1].startswith('s') for c in choices))
+
     def test_unsupported_optimization_level(self):
         with tempfile.TemporaryDirectory() as td:
             result = self.compile(Path(td), ['-O1'])

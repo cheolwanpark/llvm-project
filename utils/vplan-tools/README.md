@@ -8,6 +8,160 @@ been removed. PyTorch and NumPy are no longer required.
 
 ## Experimental memory interactions
 
+### Maximum sliding-window replacement
+
+`memory_window_cost.py` implements `backend-memory-window-v3`. Service cost
+and demand are independent functions of each non-spill load/store. Kind weights
+multiply raw requests; optional opcode overrides specify an absolute per-op
+cost or demand. Unit accesses use `ceil(bytes/16)` raw requests, strided and
+indexed accesses use VL, and segmented accesses use VL times the field count.
+Scalar accesses use one request.
+
+The model's operation pricing, cyclic window scan, normalization and quarter-cost
+rounding are shared by direct evaluation and the cached calibration path.
+`memory_evaluation.py` provides model-independent candidate projection and regret
+metrics; the window evaluator imports it directly without loading the earlier
+adjacent-pair CLI. Both evaluators use `selection_policy.choose_priced` for the
+compiler's VF comparison and scalar-tail rules. Calibration caches operation
+prices and window peaks, while the detailed replay checks every candidate cost.
+
+```text
+S = sum(Cost(op))
+L = min(window_size, body_instruction_count)
+T = L * max(1, backend_iteration_width / reference_width)
+Q = max over cyclic windows of L instructions (sum(Demand(op)))
+I = interaction_weight * max(0, Q - headroom - throughput*T) / throughput
+memory = (service_scale*S + I) / backend_to_original_iteration_ratio
+body = precomputed + vector_region - selected_memory_subtotal + backend_spill + memory
+```
+
+The body is duplicated twice to scan all windows crossing the loop boundary.
+Only the first body's start positions are used, service is counted once, and
+overlapping windows contribute their maximum penalty. Windows are capped at
+one body, so duplication never doubles demand. Positions include all body
+instructions. Throughput is demand per proxy time unit; VF increases available
+window time, not physical bandwidth. The model deliberately omits adjacent-pair,
+address-alias and queue-state interactions. It is a throughput
+heuristic, not a prediction of latency in hardware cycles.
+
+By default replacement removes the **complete additive memory recipe contributions**,
+including address/shuffle costs inside those recipes. Standalone non-memory
+recipes and measured backend spills remain. The combined memory term is
+converted to quarter-cost units once; normal candidate selection then handles
+VF normalization and scalar tails. Fixed candidates are excluded before costing.
+
+```sh
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate-window-cost \
+  --output-dir .cache/window-memory-calibration-new
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate-window-cost \
+  --parameters utils/vplan-tools/memory-window-calibrated.json \
+  --output-dir .cache/window-memory-replay-new
+```
+
+The evaluator defaults to the saved 2026-10-21 all-load facts, original spill
+baseline, parsed corpus, strided comparison, and prior VF-scaling comparison.
+Each can be overridden with its named CLI argument. It verifies source input
+hashes, recomputes complete recipe attribution, and checks selected profiles'
+cached costs and choices against the general implementation and canonical
+selection. Output contains every tested parameter set and summary, exact
+candidate terms for selected profiles, all regressions/improvements against
+both references, and service-only/no-VF-time ablations. Calibration is a staged,
+finite **in-sample** search, not a global optimum or held-out validation. No
+new hardware timings are collected and the compiler's default spill policy
+is unchanged.
+
+`memory-window-calibrated.json` preserves the setting with the fewest regressions
+against the strided reference, breaking ties by mean regret. On the inspected
+189-case cohort it changes mean regret from 6.7163% to 4.7930%, with nine
+improvements and one regression (s1232: 0% to 3.0730%). Against the preceding
+VF-threshold model there are two regressions: s1232 and s351 (0% to 7.6064%).
+It is an explicit experimental profile; `Parameters()` is not calibrated.
+
+#### Retaining LLVM costs and scaling service
+
+Version 3 adds `llvm_memory_removal` and nonnegative `service_scale`, with
+defaults `recipes` and 1 preserving the preceding model's costs. Scope `recipes`
+removes complete memory recipes; `hooks` removes only their recognized memory
+TTI leaves and retains separately itemized address/shuffle costs inside them;
+`none` retains all LLVM memory costs. With `none`, the model is an additive
+correction, not memory replacement. Opaque lowering/shuffle costs embedded
+inside a memory hook cannot be separated and are still removed in `hooks` mode.
+Precomputed/non-memory costs and backend spill costs are preserved in all modes.
+
+`service_scale` multiplies the complete new service sum, including opcode
+overrides, before iteration normalization and combined quarter-cost rounding.
+It never scales demand, the capacity threshold or the interaction penalty.
+
+```sh
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate-window-cost \
+  --parameters utils/vplan-tools/memory-window-calibrated.json --service-sweep \
+  --output-dir .cache/window-service-retention-new
+```
+
+The sweep holds all other parameters fixed and compares all three removal
+scopes at service scales 0 through 1 in increments of 1/16. The 2026-10-21
+replay tested 51 settings around each of the two window profiles, with all 189
+eligible cases retained. For the fewest-regressions profile, preserving hook
+ancillaries gives mean regret 4.9036% instead of 4.7930% at every tested scale.
+Only s127 changes, from s16 (0% regret) to s8 (20.9060%). At s16 LLVM adds two
+address-computation leaves of 16 cost units each; these survive `hooks` removal.
+Keeping all LLVM memory costs produces the same selected VFs in this sweep.
+The mean-oriented profile similarly worsens from 4.5946% to 5.1752% because
+s127 changes to s2. These are fixed-geometry, uniform-service-scale experiments,
+not a claim about the optimum after independently retuning per-kind coefficients.
+Results are in `.cache/window-service-retention-20261021/` and
+`.cache/window-service-retention-mean-20261021/`. Defaults remain unchanged.
+
+#### Optional known-stride interval adjustment
+
+Version 2 adds independent stride factors for service and demand. Both strengths
+default to zero, reproducing version 1 costs exactly. For an ordinary strided
+load or store with a known signed byte stride:
+
+```text
+density = min(1, stride_interval_bytes / max(1, abs(stride_bytes)))
+factor(strength) = (1 - strength) + strength * density
+Cost(op)   = old_Cost(op)   * factor(stride_service_strength)
+Demand(op) = old_Demand(op) * factor(stride_demand_strength)
+```
+
+Each strength is in [0,1]. Unknown strides retain factor one, zero stride retains
+factor one, and reverse strides use their magnitude. Unit, indexed, segmented,
+and segment-strided operations are unchanged. Absolute opcode overrides take
+precedence over stride factors. Reports count known/unknown strided accesses.
+
+This is a spatial request-density hypothesis for contention, not a claim that
+large strides intrinsically have cheaper memory service or fewer cache misses.
+Its use in service is an empirical ablation. A service adjustment proportional
+to VF can cancel during per-element comparison; demand can change selection
+through the window capacity threshold.
+
+```sh
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate-window-cost \
+  --parameters utils/vplan-tools/memory-window-calibrated.json --stride-sweep \
+  --output-dir .cache/window-stride-interval-new
+```
+
+This holds the supplied service/demand weights and window geometry fixed and
+tests service-only, demand-only, equal-strength joint, and independent-strength
+adjustments. It reports comparisons against the unadjusted window model as well
+as the original strided and previous VF-threshold models. The search includes
+the disabled adjustment; a result with zero strengths means no better adjustment
+was found, not that stride information is universally unhelpful.
+
+The 2026-10-21 replay tested 568 settings around each of the two window profiles.
+Neither search improved its starting mean regret with this density factor alone.
+Around the fewest-regressions profile, demand strength 1/8 and interval 8 bytes
+fix s1232 (s2 to s16), but lose gains in symm-l00, s257 and gramschmidt-l03:
+mean regret is 5.0501% instead of 4.7930%. Against the original strided model
+this is six improvements and zero regressions; against the previous VF-threshold
+model s351 still regresses. Results and exact profiles are in
+`.cache/window-stride-interval-refined-20261021/`; the mean-oriented search is
+in `.cache/window-stride-interval-mean-refined-20261021/`. No default coefficient
+was changed based on this experiment.
+
+### Earlier adjacent-pair model
+
 `memory_cost.py` adds an opt-in, offline model with independently reported
 distance/request, stride-adjustment, and load/store address terms.
 `memory_observations.py` recovers facts from saved post-RA analytics/MIR and
@@ -30,7 +184,9 @@ The default inputs are `.cache/memory-burst-spill-B/summary.json` and
 `--corpus` override them. Inputs must retain the artifact paths referenced by
 their manifests. The command checks the database hash, baseline/corpus compiler
 identity, manifest costs, and zero-correction selections. It never recompiles,
-times kernels, changes the database, fits parameters, or filters fixed candidates.
+times kernels, changes the database, or fits parameters. Evaluation defaults to
+scalable candidates only, excluding fixed candidates before pricing. Use
+`--candidate-scope all` only to reproduce historical full-candidate evaluation.
 
 The fixed initial hypotheses are:
 
@@ -80,16 +236,16 @@ aligned unit service and first-two-iteration address recovery are assumptions.
 Cache state, exact bank mapping, dynamic issue order and config/shuffle service
 are not modeled. Historical measured binaries are not verified identical to the
 probed MIR. Unsupported candidates trigger whole-benchmark baseline fallback,
-reported separately. New unmeasured fixed/scalar choices remain explicit
-exclusions; each variant reports its own and common-population regret, all
+reported separately. In full-candidate mode, new unmeasured fixed/scalar choices
+remain explicit exclusions; each variant reports its own and common-population regret, all
 regressions, per-candidate terms, and source/input hashes in `results.json`.
 
 ### Explicit coefficient tuning
 
 `tune-memory-cost` searches coefficients against the already inspected measured
 cycles. This is **in-sample tuning**, not independent validation. It uses the
-original residual-stride replay as the reference, retains every fixed/scalable
-candidate, and recommends only settings with no new unmeasured choices and no
+original residual-stride replay as the reference, defaults to scalable-only
+candidates, and recommends only settings with no new unmeasured choices and no
 per-case regret increase. It reports the unconstrained full-coverage winner too.
 
 ```sh
