@@ -1,226 +1,210 @@
-# LLVM middle-end model: wrong predictions
+# LLVM middle-end 오예측 평가
 
-평가일: 2026-10-20 (Asia/Seoul). 현재 체크아웃의 고정 `llvm-middle-end` 모델로 `search-dataset.sqlite` 전체를 다시 평가했다. 요청의 DB 이름은 확인 후 실제 파일명인 `search-dataset.sqlite`로 적용했다.
+평가일: 2026-10-21 (Asia/Seoul). 현재 `search-dataset.sqlite` 전체 203개 benchmark, 901개 측정을 사용했다. 기존 split 표시는 필터로 사용하지 않았다.
 
-전체 **117개** 중 **100개**를 평가했고, **59개가 오예측**, **41개가 정답**이다. Top-1 정확도는 **41.00%**이며, 평가 제외는 **17개**, 컴파일 실패는 **0개**다.
+전체 **203개** 중 **191개 평가 가능**, **69개 정답**, **122개 오예측**, **12개 제외**다. 정확도 **36.1257%**, 평균 regret **8.9375%**, P95 **35.9612%**, 최대 regret **167.2611%**다. 입력 수집의 컴파일 실패는 **0개**다.
 
-일반 LLVM middle-end와 비교 가능한 **103개 모두 VF와 전체 선택이 일치**했다. 비교 불가능한 14개는 일치율 분모에서 제외했다. 아래 오예측 59개도 모두 일반 LLVM과 같은 선택을 했다.
+## 모델과 입력
 
-## 판정 및 정렬 기준
+- DB SHA-256: `3d5e09ed2346be109a887192c36422073a4a6650b0f38cc29765d72ad063ff37`.
+- Probe compiler SHA-256: `9c455960b6753d54beac15fa564c458a1bcc73ef4caa445ffb805fab96096ff9`. 세 모델에서 같은 compiler를 사용했다.
+- 타깃은 XiangShan v2, RISC-V VLEN=128, IC=1, vector epilogue 없음이다. DB의 소스와 컴파일 옵션으로 비용을 수집했다. 새 runtime 측정이나 계수 fitting은 하지 않았다.
+- 모델은 `llvm-middle-end-v1`이다. `020efcd18350561115cd34abb1d507d4f7e3d7c3`의 도구 소스를 별도 경로에 복원해 평가했다. LLVM의 원본 middle-end 비용과 spill 추정치를 그대로 사용한다.
+- 후보 순서에 따른 pairwise 비교, scalar 비교, trip count와 tail 비용, scalable 동률 선호를 재현한다. backend 관측 비용은 반영하지 않는다.
+- [평가 JSON](.cache/wrong-predictions-20261021/baseline/summary.json), [실행 소스 hash](.cache/wrong-predictions-20261021/baseline-source/source-provenance.json), [DB·compiler 실행 provenance](.cache/wrong-predictions-20261021/run-provenance.json).
 
-- 평가 단위는 benchmark ID 하나이며, `tuning`/`validation`이라는 기존 split 이름과 관계없이 전체를 평가했다. 학습이나 파라미터 조정은 하지 않았다.
-- 최적 VF는 **현재 컴파일러가 생성한 scalable 후보 중 측정 cycles가 최소인 VF**다. DB에만 있고 현재 후보 집합에는 없는 VF는 제외했다.
-- 오예측은 모델 선택 VF가 최적 VF와 다른 경우다. 측정 cycles 동률은 evaluator와 동일하게 작은 VF를 정답으로 택한다. 이번 오예측에는 regret이 0인 동률 사례가 없다.
-- `regret = (모델 선택 VF의 측정 cycles / 최적 VF의 측정 cycles) - 1`. 표는 regret을 백분율로 표시하며, 반올림 전 정확한 비율 내림차순, 동률이면 benchmark ID 오름차순이다.
-- `sN`은 scalable VF 계수이며 `s1`도 벡터다. Scalar `f1`이나 LMUL 값으로 해석하지 않는다. 실행 조건은 RISC-V, VLEN=128, IC=1, vector epilogue 없음이다.
-- cycles는 DB에 저장된 workload 전체 측정값이다. 정규화한 단일 반복 비용이나 모델 cost 단위가 아니다. 새 실행 측정은 하지 않았다.
+## 판정 기준
 
-평가 가능 100개 전체의 평균 regret은 **7.3184%**, 중앙값은 **2.0987%**, P95는 **24.8170%**다. 오예측 59개만의 평균 regret은 **12.4041%**다.
+- 최적 VF는 각 evaluator가 정한 compiler scalable 후보 중 DB cycles가 최소인 VF다. DB에만 있는 VF는 제외하며, 후보 측정 누락·fixed/scalar 선택 등은 제외 사유로 보고한다.
+- 측정 동률에서는 작은 VF를 정답으로 삼는다. `s1`도 scalable vector이며 scalar `f1`과 다르다.
+- `regret = 선택 cycles / 최소 cycles - 1`. 표는 정확한 유리수 regret 내림차순, 동률은 benchmark ID 오름차순이다. cycles는 workload 전체의 DB 측정값이다.
 
-## 오예측 전체 — regret 내림차순
+## 같은 데이터셋의 모델 비교
 
-Benchmark 링크는 해당 DB에서 추출한 소스, cost 링크는 현재 모델의 후보별 cost 및 breakdown이다. `초과 cycles = 선택 cycles − 최적 cycles`다.
+| 집합 / 모델 | 평가 수 | 정답 | 오예측 | 정확도 | 평균 regret | P95 | 최대 regret |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 전체 / Baseline | 191 | 69 | 122 | 36.1257% | 8.9375% | 35.9612% | 167.2611% |
+| 전체 / SpillCost | 188 | 81 | 107 | 43.0851% | 7.2806% | 32.8053% | 167.2611% |
+| 전체 / Strided tuned | 188 | 83 | 105 | 44.1489% | 6.7520% | 30.0131% | 167.2611% |
+| 공통 187개 / Baseline | 187 | 69 | 118 | 36.8984% | 8.8737% | 36.3301% | 167.2611% |
+| 공통 187개 / SpillCost | 187 | 81 | 106 | 43.3155% | 7.2077% | 32.8082% | 167.2611% |
+| 공통 187개 / Strided tuned | 187 | 83 | 104 | 44.3850% | 6.6763% | 30.1410% | 167.2611% |
 
-| 순위 | Benchmark / 모델 cost | 선택 VF | 최적 VF | 선택 cycles | 최적 cycles | 초과 cycles | Regret |
-| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | [polybench/p32-gesummv-l00](.cache/wrong-predictions-current/artifacts/polybench_p32-gesummv-l00-dafb28b1/meta/run-ss57f9ye/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/polybench_p32-gesummv-l00-dafb28b1/meta/run-ss57f9ye/backend/candidate-status.json) | s8 | s4 | 55,020 | 32,696 | 22,324 | 68.2775% |
-| 2 | [tsvc/tsvc-s111-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s111-l00-90373715/meta/run-bn1har9k/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s111-l00-90373715/meta/run-bn1har9k/backend/candidate-status.json) | s8 | s2 | 373,527 | 248,153 | 125,374 | 50.5229% |
-| 3 | [tsvc/tsvc-s1213-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s1213-l00-34954cae/meta/run-035ef2tt/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s1213-l00-34954cae/meta/run-035ef2tt/backend/candidate-status.json) | s16 | s8 | 263,150 | 182,483 | 80,667 | 44.2052% |
-| 4 | [tsvc/tsvc-s128-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s128-l00-28527a6c/meta/run-9j83rj7t/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s128-l00-28527a6c/meta/run-9j83rj7t/backend/candidate-status.json) | s8 | s2 | 388,255 | 283,639 | 104,616 | 36.8835% |
-| 5 | [lcals/fir-inner](.cache/wrong-predictions-current/artifacts/lcals_fir-inner-04446895/meta/run-vsg2ygoc/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_fir-inner-04446895/meta/run-vsg2ygoc/backend/candidate-status.json) | s8 | s16 | 329 | 259 | 70 | 27.0270% |
-| 6 | [polybench/p421-jacobi-1d-l01](.cache/wrong-predictions-current/artifacts/polybench_p421-jacobi-1d-l01-4aae641c/meta/run-ulpq_ivo/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/polybench_p421-jacobi-1d-l01-4aae641c/meta/run-ulpq_ivo/backend/candidate-status.json) | s8 | s2 | 133,310 | 106,904 | 26,406 | 24.7007% |
-| 7 | [polybench/p32-jacobi-1d-imper-l00](.cache/wrong-predictions-current/artifacts/polybench_p32-jacobi-1d-imper-l00-e35be639/meta/run-75rte_ay/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/polybench_p32-jacobi-1d-imper-l00-e35be639/meta/run-75rte_ay/backend/candidate-status.json) | s8 | s2 | 132,591 | 107,049 | 25,542 | 23.8601% |
-| 8 | [polybench/p421-jacobi-1d-l00](.cache/wrong-predictions-current/artifacts/polybench_p421-jacobi-1d-l00-9ab66748/meta/run-vwkencpn/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/polybench_p421-jacobi-1d-l00-9ab66748/meta/run-vwkencpn/backend/candidate-status.json) | s8 | s2 | 132,591 | 107,049 | 25,542 | 23.8601% |
-| 9 | [rajaperf/dot](.cache/wrong-predictions-current/artifacts/rajaperf_dot-e736b8f0/meta/run-mdl2k9gr/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_dot-e736b8f0/meta/run-mdl2k9gr/backend/candidate-status.json) | s8 | s2 | 6,255 | 5,138 | 1,117 | 21.7400% |
-| 10 | [lcals/first-diff](.cache/wrong-predictions-current/artifacts/lcals_first-diff-1e964f79/meta/run-ed9ec5e7/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_first-diff-1e964f79/meta/run-ed9ec5e7/backend/candidate-status.json) | s8 | s4 | 1,606 | 1,322 | 284 | 21.4826% |
-| 11 | [tsvc/tsvc-s116-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s116-l00-abbc6fd5/meta/run-lxdo0i46/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s116-l00-abbc6fd5/meta/run-lxdo0i46/backend/candidate-status.json) | s16 | s8 | 123,524 | 102,133 | 21,391 | 20.9443% |
-| 12 | [polybench/p32-gemver-l02](.cache/wrong-predictions-current/artifacts/polybench_p32-gemver-l02-2380c05b/meta/run-2wcg5tqi/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/polybench_p32-gemver-l02-2380c05b/meta/run-2wcg5tqi/backend/candidate-status.json) | s8 | s2 | 23,624 | 19,724 | 3,900 | 19.7729% |
-| 13 | [rajaperf/init3](.cache/wrong-predictions-current/artifacts/rajaperf_init3-95a32e1a/meta/run-s7k58_62/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_init3-95a32e1a/meta/run-s7k58_62/backend/candidate-status.json) | s8 | s4 | 17,207 | 14,424 | 2,783 | 19.2942% |
-| 14 | [lcals/pressure-calc-l01](.cache/wrong-predictions-current/artifacts/lcals_pressure-calc-l01-aa0a9cb1/meta/run-4g0mh_nw/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_pressure-calc-l01-aa0a9cb1/meta/run-4g0mh_nw/backend/candidate-status.json) | s8 | s2 | 3,061 | 2,604 | 457 | 17.5499% |
-| 15 | [tsvc/tsvc-s124-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s124-l00-cdbb075b/meta/run-ph93cyob/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s124-l00-cdbb075b/meta/run-ph93cyob/backend/candidate-status.json) | s16 | s8 | 303,655 | 260,248 | 43,407 | 16.6791% |
-| 16 | [lcals/energy-calc-l01](.cache/wrong-predictions-current/artifacts/lcals_energy-calc-l01-edf5400a/meta/run-xp7tgw1b/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_energy-calc-l01-edf5400a/meta/run-xp7tgw1b/backend/candidate-status.json) | s8 | s4 | 7,993 | 6,870 | 1,123 | 16.3464% |
-| 17 | [rajaperf/pi-reduce](.cache/wrong-predictions-current/artifacts/rajaperf_pi-reduce-76f86157/meta/run-c9tn5kqy/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_pi-reduce-76f86157/meta/run-c9tn5kqy/backend/candidate-status.json) | s8 | s4 | 8,710 | 7,487 | 1,223 | 16.3350% |
-| 18 | [rajaperf/gen-lin-recur-reverse](.cache/wrong-predictions-current/artifacts/rajaperf_gen-lin-recur-reverse-52b65c3b/meta/run-8u9uxrot/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_gen-lin-recur-reverse-52b65c3b/meta/run-8u9uxrot/backend/candidate-status.json) | s8 | s4 | 14,480 | 12,609 | 1,871 | 14.8386% |
-| 19 | [tsvc/tsvc-s176-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s176-l00-a186d0cf/meta/run-xq7sh5xz/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s176-l00-a186d0cf/meta/run-xq7sh5xz/backend/candidate-status.json) | s16 | s4 | 49,181 | 42,984 | 6,197 | 14.4170% |
-| 20 | [lcals/band-lin-eq-outer](.cache/wrong-predictions-current/artifacts/lcals_band-lin-eq-outer-4e64cad2/meta/run-kut_00nx/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_band-lin-eq-outer-4e64cad2/meta/run-kut_00nx/backend/candidate-status.json) | s4 | s8 | 1,571 | 1,374 | 197 | 14.3377% |
-| 21 | [rajaperf/reduce-struct](.cache/wrong-predictions-current/artifacts/rajaperf_reduce-struct-2fb15f36/meta/run-bwgwmgfw/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_reduce-struct-2fb15f36/meta/run-bwgwmgfw/backend/candidate-status.json) | s4 | s2 | 6,809 | 6,019 | 790 | 13.1251% |
-| 22 | [polybench/p421-gemm-l01](.cache/wrong-predictions-current/artifacts/polybench_p421-gemm-l01-192dbd1e/meta/run-8v45mzux/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/polybench_p421-gemm-l01-192dbd1e/meta/run-8v45mzux/backend/candidate-status.json) | s8 | s4 | 6,695 | 5,963 | 732 | 12.2757% |
-| 23 | [rajaperf/daxpy](.cache/wrong-predictions-current/artifacts/rajaperf_daxpy-3966eff4/meta/run-_kjzcpxm/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_daxpy-3966eff4/meta/run-_kjzcpxm/backend/candidate-status.json) | s8 | s2 | 5,844 | 5,208 | 636 | 12.2120% |
-| 24 | [tsvc/tsvc-s171-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s171-l00-21a03b56/meta/run-47_nzh92/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s171-l00-21a03b56/meta/run-47_nzh92/backend/candidate-status.json) | s16 | s4 | 112,967 | 100,680 | 12,287 | 12.2040% |
-| 25 | [tsvc/tsvc-s172-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s172-l00-c3a4cfce/meta/run-cguj2h5y/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s172-l00-c3a4cfce/meta/run-cguj2h5y/backend/candidate-status.json) | s16 | s4 | 112,967 | 100,680 | 12,287 | 12.2040% |
-| 26 | [tsvc/tsvc-s119-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s119-l00-7c5e355c/meta/run-crhyk8kb/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s119-l00-7c5e355c/meta/run-crhyk8kb/backend/candidate-status.json) | s16 | s8 | 1,068 | 960 | 108 | 11.2500% |
-| 27 | [lcals/energy-calc-l05](.cache/wrong-predictions-current/artifacts/lcals_energy-calc-l05-91e76067/meta/run-0ylqmgpj/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_energy-calc-l05-91e76067/meta/run-0ylqmgpj/backend/candidate-status.json) | s8 | s4 | 7,456 | 6,715 | 741 | 11.0350% |
-| 28 | [rajaperf/gen-lin-recur-forward](.cache/wrong-predictions-current/artifacts/rajaperf_gen-lin-recur-forward-2d89df0b/meta/run-xiqw04n7/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_gen-lin-recur-forward-2d89df0b/meta/run-xiqw04n7/backend/candidate-status.json) | s8 | s4 | 13,844 | 12,530 | 1,314 | 10.4868% |
-| 29 | [tsvc/tsvc-s114-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s114-l00-9cee7768/meta/run-tzmph590/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s114-l00-9cee7768/meta/run-tzmph590/backend/candidate-status.json) | s16 | s2 | 5,835 | 5,342 | 493 | 9.2288% |
-| 30 | [tsvc/tsvc-s118-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s118-l00-fc4312b6/meta/run-5h5rpzui/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s118-l00-fc4312b6/meta/run-5h5rpzui/backend/candidate-status.json) | s16 | s1 | 6,744 | 6,180 | 564 | 9.1262% |
-| 31 | [rajaperf/triad](.cache/wrong-predictions-current/artifacts/rajaperf_triad-74b1a1d1/meta/run-fppeojo4/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_triad-74b1a1d1/meta/run-fppeojo4/backend/candidate-status.json) | s8 | s2 | 6,800 | 6,269 | 531 | 8.4703% |
-| 32 | [tsvc/tsvc-s1119-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s1119-l00-4f9ad8fa/meta/run-oej1our8/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s1119-l00-4f9ad8fa/meta/run-oej1our8/backend/candidate-status.json) | s16 | s4 | 1,045 | 964 | 81 | 8.4025% |
-| 33 | [lcals/energy-calc-l03](.cache/wrong-predictions-current/artifacts/lcals_energy-calc-l03-5a111bb6/meta/run-ek496k8v/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_energy-calc-l03-5a111bb6/meta/run-ek496k8v/backend/candidate-status.json) | s8 | s4 | 1,527 | 1,418 | 109 | 7.6869% |
-| 34 | [rajaperf/reduce-sum](.cache/wrong-predictions-current/artifacts/rajaperf_reduce-sum-c7209cc1/meta/run-ud1uby48/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_reduce-sum-c7209cc1/meta/run-ud1uby48/backend/candidate-status.json) | s8 | s4 | 3,257 | 3,057 | 200 | 6.5424% |
-| 35 | [rajaperf/muladdsub](.cache/wrong-predictions-current/artifacts/rajaperf_muladdsub-350a953b/meta/run-hb70192m/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_muladdsub-350a953b/meta/run-hb70192m/backend/candidate-status.json) | s8 | s4 | 15,641 | 14,689 | 952 | 6.4810% |
-| 36 | [lcals/fir-outer](.cache/wrong-predictions-current/artifacts/lcals_fir-outer-16dfa90e/meta/run-7xdyy4c7/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_fir-outer-16dfa90e/meta/run-7xdyy4c7/backend/candidate-status.json) | s8 | s16 | 8,258 | 7,798 | 460 | 5.8989% |
-| 37 | [rajaperf/eos](.cache/wrong-predictions-current/artifacts/rajaperf_eos-a5c99505/meta/run-2sg0hbij/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_eos-a5c99505/meta/run-2sg0hbij/backend/candidate-status.json) | s4 | s2 | 21,994 | 20,795 | 1,199 | 5.7658% |
-| 38 | [tsvc/tsvc-s1232-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s1232-l00-e402d643/meta/run-vfbhkh_x/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s1232-l00-e402d643/meta/run-vfbhkh_x/backend/candidate-status.json) | s8 | s16 | 19,471 | 18,455 | 1,016 | 5.5053% |
-| 39 | [rajaperf/first-diff](.cache/wrong-predictions-current/artifacts/rajaperf_first-diff-62f6f81e/meta/run-79j67but/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_first-diff-62f6f81e/meta/run-79j67but/backend/candidate-status.json) | s8 | s4 | 9,510 | 9,019 | 491 | 5.4441% |
-| 40 | [rajaperf/if-quad](.cache/wrong-predictions-current/artifacts/rajaperf_if-quad-183490a8/meta/run-khrda9ub/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_if-quad-183490a8/meta/run-khrda9ub/backend/candidate-status.json) | s4 | s2 | 19,624 | 18,646 | 978 | 5.2451% |
-| 41 | [rajaperf/if-quad-builtin](.cache/wrong-predictions-current/artifacts/rajaperf_if-quad-builtin-6c7a4061/meta/run-wm1rle1_/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_if-quad-builtin-6c7a4061/meta/run-wm1rle1_/backend/candidate-status.json) | s4 | s2 | 19,624 | 18,646 | 978 | 5.2451% |
-| 42 | [lcals/pressure-calc-l00](.cache/wrong-predictions-current/artifacts/lcals_pressure-calc-l00-eb73f211/meta/run-46r31u7q/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_pressure-calc-l00-eb73f211/meta/run-46r31u7q/backend/candidate-status.json) | s8 | s4 | 1,009 | 961 | 48 | 4.9948% |
-| 43 | [polybench/p32-gemm-l00](.cache/wrong-predictions-current/artifacts/polybench_p32-gemm-l00-ac3f2df9/meta/run-70p9yj4n/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/polybench_p32-gemm-l00-ac3f2df9/meta/run-70p9yj4n/backend/candidate-status.json) | s8 | s1 | 69,305 | 67,207 | 2,098 | 3.1217% |
-| 44 | [tsvc/tsvc-s173-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s173-l00-48d51ecc/meta/run-x4f2ljyv/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s173-l00-48d51ecc/meta/run-x4f2ljyv/backend/candidate-status.json) | s16 | s4 | 59,268 | 57,554 | 1,714 | 2.9781% |
-| 45 | [tsvc/tsvc-s174-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s174-l00-bd9fa068/meta/run-7thc8ogo/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s174-l00-bd9fa068/meta/run-7thc8ogo/backend/candidate-status.json) | s16 | s4 | 59,268 | 57,554 | 1,714 | 2.9781% |
-| 46 | [lcals/init3](.cache/wrong-predictions-current/artifacts/lcals_init3-3d272b8a/meta/run-guctvpk0/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_init3-3d272b8a/meta/run-guctvpk0/backend/candidate-status.json) | s8 | s2 | 2,784 | 2,714 | 70 | 2.5792% |
-| 47 | [polybench/p32-atax-l00](.cache/wrong-predictions-current/artifacts/polybench_p32-atax-l00-671335a6/meta/run-9_28wk_h/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/polybench_p32-atax-l00-671335a6/meta/run-9_28wk_h/backend/candidate-status.json) | s8 | s2 | 13,752 | 13,436 | 316 | 2.3519% |
-| 48 | [polybench/p32-bicg-l00](.cache/wrong-predictions-current/artifacts/polybench_p32-bicg-l00-68d57011/meta/run-gvh5jri2/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/polybench_p32-bicg-l00-68d57011/meta/run-gvh5jri2/backend/candidate-status.json) | s8 | s2 | 13,752 | 13,436 | 316 | 2.3519% |
-| 49 | [tsvc/tsvc-s132-l00](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s132-l00-f0d6c836/meta/run-r72tnv4o/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/tsvc_tsvc-s132-l00-f0d6c836/meta/run-r72tnv4o/backend/candidate-status.json) | s16 | s8 | 1,024 | 1,002 | 22 | 2.1956% |
-| 50 | [lcals/muladdsub](.cache/wrong-predictions-current/artifacts/lcals_muladdsub-977367b6/meta/run-_iih2yki/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_muladdsub-977367b6/meta/run-_iih2yki/backend/candidate-status.json) | s8 | s2 | 2,767 | 2,708 | 59 | 2.1787% |
-| 51 | [polybench/p32-bicg-l01](.cache/wrong-predictions-current/artifacts/polybench_p32-bicg-l01-e0d83bc0/meta/run-udm_f3gl/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/polybench_p32-bicg-l01-e0d83bc0/meta/run-udm_f3gl/backend/candidate-status.json) | s8 | s4 | 40,732 | 39,926 | 806 | 2.0187% |
-| 52 | [lcals/inner-prod](.cache/wrong-predictions-current/artifacts/lcals_inner-prod-93100f71/meta/run-uaodr6am/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_inner-prod-93100f71/meta/run-uaodr6am/backend/candidate-status.json) | s8 | s4 | 1,292 | 1,267 | 25 | 1.9732% |
-| 53 | [rajaperf/first-sum](.cache/wrong-predictions-current/artifacts/rajaperf_first-sum-7312297a/meta/run-ju0_sv6z/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_first-sum-7312297a/meta/run-ju0_sv6z/backend/candidate-status.json) | s8 | s4 | 5,609 | 5,545 | 64 | 1.1542% |
-| 54 | [hpcc/stream-copy](.cache/wrong-predictions-current/artifacts/hpcc_stream-copy-ad6615d9/meta/run-r2krgnwr/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/hpcc_stream-copy-ad6615d9/meta/run-r2krgnwr/backend/candidate-status.json) | s8 | s4 | 5,007 | 4,960 | 47 | 0.9476% |
-| 55 | [rajaperf/trap-int](.cache/wrong-predictions-current/artifacts/rajaperf_trap-int-0734d10c/meta/run-1atmzbko/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_trap-int-0734d10c/meta/run-1atmzbko/backend/candidate-status.json) | s8 | s4 | 15,214 | 15,074 | 140 | 0.9288% |
-| 56 | [rajaperf/trap-int-builtin](.cache/wrong-predictions-current/artifacts/rajaperf_trap-int-builtin-4f51b51f/meta/run-ql0xcde8/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_trap-int-builtin-4f51b51f/meta/run-ql0xcde8/backend/candidate-status.json) | s8 | s4 | 15,214 | 15,074 | 140 | 0.9288% |
-| 57 | [rajaperf/add](.cache/wrong-predictions-current/artifacts/rajaperf_add-0d156cf5/meta/run-2zhvl9b6/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/rajaperf_add-0d156cf5/meta/run-2zhvl9b6/backend/candidate-status.json) | s8 | s4 | 7,469 | 7,418 | 51 | 0.6875% |
-| 58 | [lcals/band-lin-eq-inner](.cache/wrong-predictions-current/artifacts/lcals_band-lin-eq-inner-ed39b648/meta/run-efhn4yz0/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/lcals_band-lin-eq-inner-ed39b648/meta/run-efhn4yz0/backend/candidate-status.json) | s4 | s8 | 719 | 715 | 4 | 0.5594% |
-| 59 | [polybench/p421-floyd-warshall-full](.cache/wrong-predictions-current/artifacts/polybench_p421-floyd-warshall-full-e582b111/meta/run-eqyr59nu/kernel.c) · [cost](.cache/wrong-predictions-current/artifacts/polybench_p421-floyd-warshall-full-e582b111/meta/run-eqyr59nu/backend/candidate-status.json) | s16 | s8 | 847,706 | 847,655 | 51 | 0.0060% |
+공통 187개는 세 모델 모두 평가 가능하고 비교에 사용한 측정 VF 집합·cycles도 같은 항목이다. 전체 지표의 평가 범위는 모델별로 다르므로 개선 판단에는 공통 집합을 함께 본다.
 
-## 평가 제외 전체
+관련 문서: [Baseline](wrong-predictions-baseline.md), [SpillCost](wrong-predictions-spillcost.md), [Strided-load](wrong-predictions-stridedload.md).
 
-아래 사례는 최적 VF 대비 regret을 확정할 수 없어 오예측 목록과 정확도 분모에 넣지 않았다. 다중 루프는 하나의 VF로 축약하지 않았고, 고정 VF 선택에는 해당 측정값이 없다.
+## 일반 LLVM과 선택 일치
 
-| Benchmark | 상태 | 제외 사유 |
+일반 LLVM direct compile과 비교 가능한 193개 중 VF 일치 191개, VF·IC·epilogue·emission 전체 선택 일치 191개다. 비교 불가능 10개는 일치율 분모에서 제외했다.
+
+| Benchmark | 모델 VF | 일반 LLVM VF | 전체 선택 일치 |
+| --- | --- | --- | --- |
+| tsvc/tsvc-s1111-l00 | f32 | s8 | 아니오 |
+| tsvc/tsvc-s127-l00 | f32 | s8 | 아니오 |
+
+## 오예측 전체
+
+Benchmark는 DB에서 추출한 소스에 연결된다. 후보 비용 링크는 원본 후보별 cost와 관측을 제공한다.
+
+| 순위 | Benchmark / 후보 비용 | 선택 VF | 최적 VF | 선택 cycles | 최소 cycles | 초과 cycles | regret |
+| ---: | --- | --- | --- | ---: | ---: | ---: | ---: |
+| 1 | [tsvc/tsvc-s351-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s351-l00-be55ca3d/meta/run-dkp_pt1o/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s351-l00-be55ca3d/meta/run-dkp_pt1o/backend/candidate-status.json) | s2 | s4 | 1,094,247 | 409,430 | 684,817 | 167.2611% |
+| 2 | [tsvc/tsvc-s353-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s353-l00-3fc028fb/meta/run-xvaiqy9u/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s353-l00-3fc028fb/meta/run-xvaiqy9u/backend/candidate-status.json) | s2 | s16 | 1,548,929 | 817,807 | 731,122 | 89.4003% |
+| 3 | [tsvc/tsvc-s253-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s253-l00-e3ca68c1/meta/run-pjf54gol/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s253-l00-e3ca68c1/meta/run-pjf54gol/backend/candidate-status.json) | s16 | s8 | 410,278 | 245,036 | 165,242 | 67.4358% |
+| 4 | [tsvc/tsvc-s2710-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2710-l00-e65703ab/meta/run-f5d8au3k/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2710-l00-e65703ab/meta/run-f5d8au3k/backend/candidate-status.json) | s16 | s8 | 706,679 | 447,505 | 259,174 | 57.9153% |
+| 5 | [tsvc/tsvc-s111-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s111-l00-90373715/meta/run-6o5uqa08/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s111-l00-90373715/meta/run-6o5uqa08/backend/candidate-status.json) | s8 | s2 | 373,527 | 248,153 | 125,374 | 50.5229% |
+| 6 | [tsvc/tsvc-s276-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s276-l00-edb1b306/meta/run-pk3r25sm/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s276-l00-edb1b306/meta/run-pk3r25sm/backend/candidate-status.json) | s8 | s4 | 536,926 | 372,737 | 164,189 | 44.0496% |
+| 7 | [tsvc/tsvc-s243-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s243-l00-4bc5ccbf/meta/run-3hup87ux/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s243-l00-4bc5ccbf/meta/run-3hup87ux/backend/candidate-status.json) | s16 | s8 | 432,259 | 308,784 | 123,475 | 39.9875% |
+| 8 | [tsvc/tsvc-s2244-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2244-l00-d85baaea/meta/run-siw2b6yt/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2244-l00-d85baaea/meta/run-siw2b6yt/backend/candidate-status.json) | s16 | s8 | 254,429 | 182,149 | 72,280 | 39.6818% |
+| 9 | [tsvc/tsvc-s272-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s272-l00-8aeac6a7/meta/run-vm3s45my/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s272-l00-8aeac6a7/meta/run-vm3s45my/backend/candidate-status.json) | s16 | s8 | 431,322 | 313,896 | 117,426 | 37.4092% |
+| 10 | [tsvc/tsvc-s128-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s128-l00-28527a6c/meta/run-7_wz14qx/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s128-l00-28527a6c/meta/run-7_wz14qx/backend/candidate-status.json) | s8 | s2 | 388,255 | 283,639 | 104,616 | 36.8835% |
+| 11 | [polybench/p32-jacobi-1d-imper-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-jacobi-1d-imper-l00-e35be639/meta/run-1ynhqpug/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-jacobi-1d-imper-l00-e35be639/meta/run-1ynhqpug/backend/candidate-status.json) | s8 | s4 | 134,361 | 99,498 | 34,863 | 35.0389% |
+| 12 | [polybench/p421-jacobi-1d-l01](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-jacobi-1d-l01-4aae641c/meta/run-b15vjn1v/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-jacobi-1d-l01-4aae641c/meta/run-b15vjn1v/backend/candidate-status.json) | s8 | s4 | 25,107 | 18,891 | 6,216 | 32.9046% |
+| 13 | [tsvc/tsvc-s252-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s252-l00-87217f91/meta/run-90hazch2/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s252-l00-87217f91/meta/run-90hazch2/backend/candidate-status.json) | s16 | s4 | 212,418 | 159,922 | 52,496 | 32.8260% |
+| 14 | [tsvc/tsvc-s471-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s471-l00-51169cb6/meta/run-nfw8kbeo/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s471-l00-51169cb6/meta/run-nfw8kbeo/backend/candidate-status.json) | s16 | s8 | 349,458 | 263,212 | 86,246 | 32.7667% |
+| 15 | [tsvc/tsvc-s152-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s152-l00-b083be54/meta/run-wrqwoydb/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s152-l00-b083be54/meta/run-wrqwoydb/backend/candidate-status.json) | s16 | s8 | 333,909 | 255,070 | 78,839 | 30.9088% |
+| 16 | [tsvc/tsvc-s1279-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1279-l00-1a01b8ee/meta/run-vuolgpa8/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1279-l00-1a01b8ee/meta/run-vuolgpa8/backend/candidate-status.json) | s16 | s8 | 376,311 | 292,923 | 83,388 | 28.4675% |
+| 17 | [polybench/polybench-fdtd-2d-l03](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-fdtd-2d-l03-b8f160c0/meta/run-ujzrm581/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-fdtd-2d-l03-b8f160c0/meta/run-ujzrm581/backend/candidate-status.json) | s4 | s2 | 18,861 | 14,694 | 4,167 | 28.3585% |
+| 18 | [tsvc/tsvc-s255-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s255-l00-0ec3afcf/meta/run-4d8lgrh6/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s255-l00-0ec3afcf/meta/run-4d8lgrh6/backend/candidate-status.json) | s16 | s8 | 268,225 | 208,980 | 59,245 | 28.3496% |
+| 19 | [lcals/fir-inner](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_fir-inner-04446895/meta/run-16uc5gc3/kernel.cpp) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_fir-inner-04446895/meta/run-16uc5gc3/backend/candidate-status.json) | s8 | s16 | 329 | 259 | 70 | 27.0270% |
+| 20 | [polybench/polybench-jacobi-2d-imper-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-jacobi-2d-imper-l00-0f779552/meta/run-2d7i1_7e/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-jacobi-2d-imper-l00-0f779552/meta/run-2d7i1_7e/backend/candidate-status.json) | s8 | s4 | 15,596 | 12,411 | 3,185 | 25.6627% |
+| 21 | [polybench/p421-jacobi-1d-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-jacobi-1d-l00-9ab66748/meta/run-f9j418ps/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-jacobi-1d-l00-9ab66748/meta/run-f9j418ps/backend/candidate-status.json) | s8 | s2 | 25,498 | 20,336 | 5,162 | 25.3836% |
+| 22 | [tsvc/tsvc-s1281-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1281-l00-a26e8495/meta/run-xsgmwemb/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1281-l00-a26e8495/meta/run-xsgmwemb/backend/candidate-status.json) | s16 | s8 | 393,157 | 313,722 | 79,435 | 25.3202% |
+| 23 | [tsvc/tsvc-s2101-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2101-l00-5bf538b9/meta/run-8jwi4z8a/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2101-l00-5bf538b9/meta/run-8jwi4z8a/backend/candidate-status.json) | s8 | s2 | 13,293 | 10,683 | 2,610 | 24.4313% |
+| 24 | [polybench/p32-gesummv-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-gesummv-l00-dafb28b1/meta/run-wh_cuq66/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-gesummv-l00-dafb28b1/meta/run-wh_cuq66/backend/candidate-status.json) | s8 | s4 | 40,023 | 32,694 | 7,329 | 22.4170% |
+| 25 | [tsvc/tsvc-s233-l01](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s233-l01-6756cfda/meta/run-s_n0ettl/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s233-l01-6756cfda/meta/run-s_n0ettl/backend/candidate-status.json) | s8 | s2 | 14,572 | 11,906 | 2,666 | 22.3921% |
+| 26 | [lcals/first-diff](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_first-diff-1e964f79/meta/run-5fnxhb72/kernel.cpp) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_first-diff-1e964f79/meta/run-5fnxhb72/backend/candidate-status.json) | s8 | s4 | 1,606 | 1,322 | 284 | 21.4826% |
+| 27 | [polybench/polybench-adi-l01](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-adi-l01-a1be4de9/meta/run-zsbi24sj/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-adi-l01-a1be4de9/meta/run-zsbi24sj/backend/candidate-status.json) | s8 | s1 | 211,014 | 174,093 | 36,921 | 21.2076% |
+| 28 | [tsvc/tsvc-s331-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s331-l00-910994c5/meta/run-c9lk1cdm/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s331-l00-910994c5/meta/run-c9lk1cdm/backend/candidate-status.json) | s16 | s8 | 64,160 | 52,949 | 11,211 | 21.1732% |
+| 29 | [tsvc/tsvc-s1251-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1251-l00-cc7e7448/meta/run-6434268x/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1251-l00-cc7e7448/meta/run-6434268x/backend/candidate-status.json) | s16 | s8 | 380,187 | 313,966 | 66,221 | 21.0918% |
+| 30 | [polybench/p32-atax-l02](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-atax-l02-5a3cb64a/meta/run-yitkw7da/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-atax-l02-5a3cb64a/meta/run-yitkw7da/backend/candidate-status.json) | s8 | s2 | 23,984 | 19,813 | 4,171 | 21.0518% |
+| 31 | [rajaperf/dot](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_dot-e736b8f0/meta/run-730xhwxe/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_dot-e736b8f0/meta/run-730xhwxe/backend/candidate-status.json) | s8 | s2 | 6,324 | 5,232 | 1,092 | 20.8716% |
+| 32 | [tsvc/tsvc-s257-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s257-l00-9897e012/meta/run-82_usmov/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s257-l00-9897e012/meta/run-82_usmov/backend/candidate-status.json) | s8 | s2 | 14,633 | 12,194 | 2,439 | 20.0016% |
+| 33 | [polybench/polybench-symm-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-symm-l00-248585b3/meta/run-isjpqrg7/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-symm-l00-248585b3/meta/run-isjpqrg7/backend/candidate-status.json) | s4 | s1 | 213,053 | 177,811 | 35,242 | 19.8199% |
+| 34 | [tsvc/tsvc-s293-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s293-l00-7a431fd2/meta/run-37z7zehn/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s293-l00-7a431fd2/meta/run-37z7zehn/backend/candidate-status.json) | s16 | s8 | 57,167 | 47,911 | 9,256 | 19.3192% |
+| 35 | [rajaperf/init3](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_init3-95a32e1a/meta/run-kiybl9ij/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_init3-95a32e1a/meta/run-kiybl9ij/backend/candidate-status.json) | s8 | s4 | 17,207 | 14,424 | 2,783 | 19.2942% |
+| 36 | [polybench/p421-atax-l01](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-atax-l01-fb8f6463/meta/run-3ln4x27q/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-atax-l01-fb8f6463/meta/run-3ln4x27q/backend/candidate-status.json) | s8 | s4 | 12,476 | 10,599 | 1,877 | 17.7092% |
+| 37 | [polybench/p32-mvt-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-mvt-l00-a2db5bae/meta/run-7398tesc/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-mvt-l00-a2db5bae/meta/run-7398tesc/backend/candidate-status.json) | s8 | s2 | 23,787 | 20,246 | 3,541 | 17.4899% |
+| 38 | [lcals/energy-calc-l03](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_energy-calc-l03-5a111bb6/meta/run-0haro30r/kernel.cpp) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_energy-calc-l03-5a111bb6/meta/run-0haro30r/backend/candidate-status.json) | s8 | s4 | 1,647 | 1,409 | 238 | 16.8914% |
+| 39 | [tsvc/tsvc-s124-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s124-l00-cdbb075b/meta/run-duwwwnd8/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s124-l00-cdbb075b/meta/run-duwwwnd8/backend/candidate-status.json) | s16 | s8 | 303,655 | 260,248 | 43,407 | 16.6791% |
+| 40 | [tsvc/tsvc-s3251-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s3251-l00-66539c1d/meta/run-_gpco75c/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s3251-l00-66539c1d/meta/run-_gpco75c/backend/candidate-status.json) | s16 | s8 | 414,743 | 358,654 | 56,089 | 15.6387% |
+| 41 | [lcals/pressure-calc-l01](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_pressure-calc-l01-aa0a9cb1/meta/run-i2bo87cj/kernel.cpp) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_pressure-calc-l01-aa0a9cb1/meta/run-i2bo87cj/backend/candidate-status.json) | s8 | s2 | 2,993 | 2,610 | 383 | 14.6743% |
+| 42 | [polybench/p32-atax-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-atax-l00-671335a6/meta/run-60gyz9d5/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-atax-l00-671335a6/meta/run-60gyz9d5/backend/candidate-status.json) | s8 | s1 | 14,462 | 12,626 | 1,836 | 14.5414% |
+| 43 | [polybench/p32-bicg-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-bicg-l00-68d57011/meta/run-qavmtwoq/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-bicg-l00-68d57011/meta/run-qavmtwoq/backend/candidate-status.json) | s8 | s1 | 14,462 | 12,626 | 1,836 | 14.5414% |
+| 44 | [tsvc/tsvc-s176-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s176-l00-a186d0cf/meta/run-cw1p08nu/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s176-l00-a186d0cf/meta/run-cw1p08nu/backend/candidate-status.json) | s16 | s4 | 49,181 | 42,984 | 6,197 | 14.4170% |
+| 45 | [rajaperf/gen-lin-recur-reverse](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_gen-lin-recur-reverse-52b65c3b/meta/run-x1cvxizt/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_gen-lin-recur-reverse-52b65c3b/meta/run-x1cvxizt/backend/candidate-status.json) | s8 | s4 | 14,459 | 12,650 | 1,809 | 14.3004% |
+| 46 | [rajaperf/pi-reduce](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_pi-reduce-76f86157/meta/run-enenhjfc/kernel.cpp) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_pi-reduce-76f86157/meta/run-enenhjfc/backend/candidate-status.json) | s8 | s4 | 8,374 | 7,368 | 1,006 | 13.6536% |
+| 47 | [tsvc/tsvc-s171-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s171-l00-21a03b56/meta/run-3gqjdq3x/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s171-l00-21a03b56/meta/run-3gqjdq3x/backend/candidate-status.json) | s16 | s4 | 112,967 | 100,680 | 12,287 | 12.2040% |
+| 48 | [tsvc/tsvc-s172-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s172-l00-c3a4cfce/meta/run-p847h5pj/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s172-l00-c3a4cfce/meta/run-p847h5pj/backend/candidate-status.json) | s16 | s4 | 112,967 | 100,680 | 12,287 | 12.2040% |
+| 49 | [tsvc/tsvc-s119-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s119-l00-7c5e355c/meta/run-rowebbdc/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s119-l00-7c5e355c/meta/run-rowebbdc/backend/candidate-status.json) | s16 | s8 | 1,068 | 960 | 108 | 11.2500% |
+| 50 | [tsvc/tsvc-s332-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s332-l00-c4d65a47/meta/run-l8vr684e/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s332-l00-c4d65a47/meta/run-l8vr684e/backend/candidate-status.json) | s16 | s4 | 69,138 | 62,398 | 6,740 | 10.8016% |
+| 51 | [rajaperf/gen-lin-recur-forward](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_gen-lin-recur-forward-2d89df0b/meta/run-xe6cxn7u/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_gen-lin-recur-forward-2d89df0b/meta/run-xe6cxn7u/backend/candidate-status.json) | s8 | s4 | 13,744 | 12,425 | 1,319 | 10.6157% |
+| 52 | [polybench/polybench-correlation-l02](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-correlation-l02-a2134135/meta/run-hq5ypait/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-correlation-l02-a2134135/meta/run-hq5ypait/backend/candidate-status.json) | s8 | s4 | 11,011 | 9,967 | 1,044 | 10.4746% |
+| 53 | [tsvc/tsvc-s151-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s151-l00-5e5365d8/meta/run-n0ejatg2/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s151-l00-5e5365d8/meta/run-n0ejatg2/backend/candidate-status.json) | s16 | s8 | 115,304 | 104,679 | 10,625 | 10.1501% |
+| 54 | [tsvc/tsvc-s273-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s273-l00-99d6486e/meta/run-8z5t8x7t/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s273-l00-99d6486e/meta/run-8z5t8x7t/backend/candidate-status.json) | s16 | s4 | 431,872 | 395,308 | 36,564 | 9.2495% |
+| 55 | [tsvc/tsvc-s1119-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1119-l00-4f9ad8fa/meta/run-0j7syuo4/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1119-l00-4f9ad8fa/meta/run-0j7syuo4/backend/candidate-status.json) | s16 | s4 | 1,106 | 1,025 | 81 | 7.9024% |
+| 56 | [tsvc/tsvc-s2275-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2275-l00-18913cc7/meta/run-61b9u_al/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2275-l00-18913cc7/meta/run-61b9u_al/backend/candidate-status.json) | s8 | s2 | 22,291 | 20,664 | 1,627 | 7.8736% |
+| 57 | [tsvc/tsvc-s441-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s441-l00-0e99ec37/meta/run-ymq80bxl/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s441-l00-0e99ec37/meta/run-ymq80bxl/backend/candidate-status.json) | s16 | s8 | 398,516 | 370,376 | 28,140 | 7.5977% |
+| 58 | [lcals/energy-calc-l01](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_energy-calc-l01-edf5400a/meta/run-egp_npsw/kernel.cpp) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_energy-calc-l01-edf5400a/meta/run-egp_npsw/backend/candidate-status.json) | s8 | s4 | 7,959 | 7,420 | 539 | 7.2642% |
+| 59 | [polybench/polybench-adi-l03](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-adi-l03-1f3947f8/meta/run-ar1043z5/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-adi-l03-1f3947f8/meta/run-ar1043z5/backend/candidate-status.json) | s8 | s4 | 21,538 | 20,096 | 1,442 | 7.1756% |
+| 60 | [polybench/polybench-gramschmidt-l03](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-gramschmidt-l03-49576383/meta/run-2v7dwtdq/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-gramschmidt-l03-49576383/meta/run-2v7dwtdq/backend/candidate-status.json) | s8 | s1 | 53,685 | 50,257 | 3,428 | 6.8209% |
+| 61 | [polybench/polybench-correlation-l03](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-correlation-l03-127b3fe5/meta/run-7cej998u/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-correlation-l03-127b3fe5/meta/run-7cej998u/backend/candidate-status.json) | s8 | s1 | 18,122 | 16,986 | 1,136 | 6.6879% |
+| 62 | [rajaperf/reduce-sum](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_reduce-sum-c7209cc1/meta/run-4b33znut/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_reduce-sum-c7209cc1/meta/run-4b33znut/backend/candidate-status.json) | s8 | s4 | 3,257 | 3,057 | 200 | 6.5424% |
+| 63 | [rajaperf/muladdsub](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_muladdsub-350a953b/meta/run-vadk_eww/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_muladdsub-350a953b/meta/run-vadk_eww/backend/candidate-status.json) | s8 | s4 | 15,641 | 14,689 | 952 | 6.4810% |
+| 64 | [tsvc/tsvc-s4115-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s4115-l00-05ec2080/meta/run-dufwwbt0/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s4115-l00-05ec2080/meta/run-dufwwbt0/backend/candidate-status.json) | s16 | s8 | 522,823 | 491,223 | 31,600 | 6.4329% |
+| 65 | [lcals/fir-outer](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_fir-outer-16dfa90e/meta/run-3s31e40v/kernel.cpp) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_fir-outer-16dfa90e/meta/run-3s31e40v/backend/candidate-status.json) | s8 | s16 | 8,258 | 7,798 | 460 | 5.8989% |
+| 66 | [tsvc/tsvc-s114-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s114-l00-9cee7768/meta/run-k86v4coc/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s114-l00-9cee7768/meta/run-k86v4coc/backend/candidate-status.json) | s16 | s2 | 5,728 | 5,416 | 312 | 5.7607% |
+| 67 | [rajaperf/first-diff](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_first-diff-62f6f81e/meta/run-dp6c5sih/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_first-diff-62f6f81e/meta/run-dp6c5sih/backend/candidate-status.json) | s8 | s4 | 9,510 | 9,019 | 491 | 5.4441% |
+| 68 | [polybench/polybench-gramschmidt-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-gramschmidt-l00-67be4a8d/meta/run-2nrbzew2/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-gramschmidt-l00-67be4a8d/meta/run-2nrbzew2/backend/candidate-status.json) | s8 | s4 | 20,877 | 19,876 | 1,001 | 5.0362% |
+| 69 | [polybench/polybench-mvt-l01](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-mvt-l01-7194602f/meta/run-6p0irco_/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-mvt-l01-7194602f/meta/run-6p0irco_/backend/candidate-status.json) | s8 | s1 | 113,179 | 108,235 | 4,944 | 4.5678% |
+| 70 | [polybench/polybench-gemver-l01](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-gemver-l01-025f9229/meta/run-2i2y9lzw/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-gemver-l01-025f9229/meta/run-2i2y9lzw/backend/candidate-status.json) | s8 | s1 | 113,510 | 108,564 | 4,946 | 4.5558% |
+| 71 | [lcals/energy-calc-l05](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_energy-calc-l05-91e76067/meta/run-6yde51el/kernel.cpp) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_energy-calc-l05-91e76067/meta/run-6yde51el/backend/candidate-status.json) | s8 | s4 | 7,373 | 7,052 | 321 | 4.5519% |
+| 72 | [tsvc/tsvc-s1351-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1351-l00-02a90d44/meta/run-gt5_fot8/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1351-l00-02a90d44/meta/run-gt5_fot8/backend/candidate-status.json) | s16 | s8 | 132,676 | 127,480 | 5,196 | 4.0759% |
+| 73 | [polybench/polybench-reg_detect-l02](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-reg_detect-l02-526fd6c3/meta/run-w0fc3a29/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-reg_detect-l02-526fd6c3/meta/run-w0fc3a29/backend/candidate-status.json) | s4 | s1 | 237 | 228 | 9 | 3.9474% |
+| 74 | [tsvc/tsvc-s1232-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1232-l00-e402d643/meta/run-bqiabz3l/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1232-l00-e402d643/meta/run-bqiabz3l/backend/candidate-status.json) | s8 | s16 | 19,284 | 18,581 | 703 | 3.7834% |
+| 75 | [tsvc/tsvc-s423-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s423-l00-8e6be173/meta/run-tdeyrfl9/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s423-l00-8e6be173/meta/run-tdeyrfl9/backend/candidate-status.json) | s16 | s8 | 111,099 | 107,055 | 4,044 | 3.7775% |
+| 76 | [tsvc/tsvc-s173-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s173-l00-48d51ecc/meta/run-y1tjlpyy/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s173-l00-48d51ecc/meta/run-y1tjlpyy/backend/candidate-status.json) | s16 | s4 | 59,268 | 57,554 | 1,714 | 2.9781% |
+| 77 | [tsvc/tsvc-s174-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s174-l00-bd9fa068/meta/run-y5eq8bm5/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s174-l00-bd9fa068/meta/run-y5eq8bm5/backend/candidate-status.json) | s16 | s4 | 59,268 | 57,554 | 1,714 | 2.9781% |
+| 78 | [polybench/p32-jacobi-1d-imper-l01](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-jacobi-1d-imper-l01-37dcc1ba/meta/run-hpzyjm9x/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-jacobi-1d-imper-l01-37dcc1ba/meta/run-hpzyjm9x/backend/candidate-status.json) | s8 | s4 | 53,732 | 52,199 | 1,533 | 2.9368% |
+| 79 | [polybench/polybench-2mm-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-2mm-l00-9cf36e64/meta/run-n7r5xlle/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-2mm-l00-9cf36e64/meta/run-n7r5xlle/backend/candidate-status.json) | s8 | s1 | 69,316 | 67,402 | 1,914 | 2.8397% |
+| 80 | [polybench/p32-gemm-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-gemm-l00-ac3f2df9/meta/run-q80_pjb9/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-gemm-l00-ac3f2df9/meta/run-q80_pjb9/backend/candidate-status.json) | s8 | s2 | 69,281 | 67,394 | 1,887 | 2.8000% |
+| 81 | [polybench/polybench-3mm-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-3mm-l00-8dbcfe1b/meta/run-xhdc9yq1/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-3mm-l00-8dbcfe1b/meta/run-xhdc9yq1/backend/candidate-status.json) | s8 | s1 | 69,206 | 67,392 | 1,814 | 2.6917% |
+| 82 | [polybench/polybench-3mm-l01](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-3mm-l01-e1456f5d/meta/run-g4deywa8/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-3mm-l01-e1456f5d/meta/run-g4deywa8/backend/candidate-status.json) | s8 | s1 | 69,206 | 67,392 | 1,814 | 2.6917% |
+| 83 | [tsvc/tsvc-s4113-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s4113-l00-25a1b22a/meta/run-x7kp6z4k/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s4113-l00-25a1b22a/meta/run-x7kp6z4k/backend/candidate-status.json) | s16 | s1 | 1,050,125 | 1,023,601 | 26,524 | 2.5912% |
+| 84 | [lcals/init3](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_init3-3d272b8a/meta/run-gn3croqq/kernel.cpp) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_init3-3d272b8a/meta/run-gn3croqq/backend/candidate-status.json) | s8 | s2 | 2,784 | 2,714 | 70 | 2.5792% |
+| 85 | [polybench/polybench-2mm-l01](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-2mm-l01-1406980f/meta/run-dk089rzn/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-2mm-l01-1406980f/meta/run-dk089rzn/backend/candidate-status.json) | s8 | s1 | 69,002 | 67,332 | 1,670 | 2.4802% |
+| 86 | [polybench/polybench-3mm-l02](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-3mm-l02-f0259f1f/meta/run-emf1_3vz/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-3mm-l02-f0259f1f/meta/run-emf1_3vz/backend/candidate-status.json) | s8 | s1 | 69,002 | 67,332 | 1,670 | 2.4802% |
+| 87 | [polybench/polybench-adi-l04](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-adi-l04-8b33d052/meta/run-he831af1/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-adi-l04-8b33d052/meta/run-he831af1/backend/candidate-status.json) | s8 | s2 | 8,350 | 8,164 | 186 | 2.2783% |
+| 88 | [lcals/muladdsub](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_muladdsub-977367b6/meta/run-7du9vucx/kernel.cpp) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_muladdsub-977367b6/meta/run-7du9vucx/backend/candidate-status.json) | s8 | s2 | 2,767 | 2,708 | 59 | 2.1787% |
+| 89 | [tsvc/tsvc-s2233-l01](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2233-l01-47053e9d/meta/run-gca5rshd/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2233-l01-47053e9d/meta/run-gca5rshd/backend/candidate-status.json) | s16 | s8 | 989 | 968 | 21 | 2.1694% |
+| 90 | [polybench/polybench-doitgen-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-doitgen-l00-7a07cca4/meta/run-5lk7d84q/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-doitgen-l00-7a07cca4/meta/run-5lk7d84q/backend/candidate-status.json) | s8 | s1 | 2,756 | 2,698 | 58 | 2.1497% |
+| 91 | [polybench/p32-gemver-l03](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-gemver-l03-ca7ea0a4/meta/run-cxtkhimm/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-gemver-l03-ca7ea0a4/meta/run-cxtkhimm/backend/candidate-status.json) | s8 | s4 | 22,288 | 21,846 | 442 | 2.0233% |
+| 92 | [tsvc/tsvc-s274-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s274-l00-5dd5fc6d/meta/run-91eb4ife/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s274-l00-5dd5fc6d/meta/run-91eb4ife/backend/candidate-status.json) | s16 | s4 | 353,893 | 347,016 | 6,877 | 1.9818% |
+| 93 | [tsvc/tsvc-s4121-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s4121-l00-6c622614/meta/run-f9akux0w/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s4121-l00-6c622614/meta/run-f9akux0w/backend/candidate-status.json) | s16 | s8 | 169,209 | 165,945 | 3,264 | 1.9669% |
+| 94 | [tsvc/tsvc-s271-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s271-l00-2d3fed60/meta/run-_6y2njha/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s271-l00-2d3fed60/meta/run-_6y2njha/backend/candidate-status.json) | s16 | s8 | 169,175 | 165,991 | 3,184 | 1.9182% |
+| 95 | [polybench/p32-gemver-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-gemver-l00-4fc51a44/meta/run-3p4kfjqu/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-gemver-l00-4fc51a44/meta/run-3p4kfjqu/backend/candidate-status.json) | s8 | s4 | 33,249 | 32,691 | 558 | 1.7069% |
+| 96 | [tsvc/tsvc-s2711-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2711-l00-49cc1527/meta/run-3pfz9tep/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2711-l00-49cc1527/meta/run-3pfz9tep/backend/candidate-status.json) | s16 | s8 | 168,586 | 165,815 | 2,771 | 1.6711% |
+| 97 | [polybench/p32-bicg-l01](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-bicg-l01-e0d83bc0/meta/run-br5k65ps/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-bicg-l01-e0d83bc0/meta/run-br5k65ps/backend/candidate-status.json) | s8 | s4 | 33,214 | 32,675 | 539 | 1.6496% |
+| 98 | [tsvc/tsvc-s2712-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2712-l00-b9b14b9b/meta/run-q34jltm_/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2712-l00-b9b14b9b/meta/run-q34jltm_/backend/candidate-status.json) | s16 | s8 | 170,319 | 167,562 | 2,757 | 1.6454% |
+| 99 | [rajaperf/eos](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_eos-a5c99505/meta/run-mfpkho7k/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_eos-a5c99505/meta/run-mfpkho7k/backend/candidate-status.json) | s4 | s2 | 24,716 | 24,325 | 391 | 1.6074% |
+| 100 | [lcals/energy-calc-l00](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_energy-calc-l00-578547e0/meta/run-5ty3vw8d/kernel.cpp) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/lcals_energy-calc-l00-578547e0/meta/run-5ty3vw8d/backend/candidate-status.json) | s8 | s4 | 2,993 | 2,952 | 41 | 1.3889% |
+| 101 | [rajaperf/triad](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_triad-74b1a1d1/meta/run-zyv286zx/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_triad-74b1a1d1/meta/run-zyv286zx/backend/candidate-status.json) | s8 | s4 | 6,735 | 6,646 | 89 | 1.3392% |
+| 102 | [polybench/p421-gemm-l01](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-gemm-l01-192dbd1e/meta/run-ze8t313a/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-gemm-l01-192dbd1e/meta/run-ze8t313a/backend/candidate-status.json) | s8 | s4 | 7,189 | 7,100 | 89 | 1.2535% |
+| 103 | [tsvc/tsvc-s1421-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1421-l00-bbe52dfd/meta/run-gmely_gq/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1421-l00-bbe52dfd/meta/run-gmely_gq/backend/candidate-status.json) | s16 | s8 | 57,945 | 57,269 | 676 | 1.1804% |
+| 104 | [rajaperf/first-sum](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_first-sum-7312297a/meta/run-9bsu04ln/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_first-sum-7312297a/meta/run-9bsu04ln/backend/candidate-status.json) | s8 | s4 | 5,609 | 5,545 | 64 | 1.1542% |
+| 105 | [tsvc/tsvc-s118-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s118-l00-fc4312b6/meta/run-8um04_1f/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s118-l00-fc4312b6/meta/run-8um04_1f/backend/candidate-status.json) | s16 | s1 | 6,139 | 6,069 | 70 | 1.1534% |
+| 106 | [tsvc/tsvc-s2102-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2102-l00-71c9b926/meta/run-scvbq1av/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s2102-l00-71c9b926/meta/run-scvbq1av/backend/candidate-status.json) | s16 | s1 | 5,580 | 5,517 | 63 | 1.1419% |
+| 107 | [hpcc/stream-copy](.cache/wrong-predictions-20261021/baseline/artifacts/hpcc_stream-copy-ad6615d9/meta/run-yk81rdhd/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/hpcc_stream-copy-ad6615d9/meta/run-yk81rdhd/backend/candidate-status.json) | s8 | s4 | 5,007 | 4,960 | 47 | 0.9476% |
+| 108 | [polybench/polybench-correlation-l01](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-correlation-l01-226a26ff/meta/run-4tb25bq3/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-correlation-l01-226a26ff/meta/run-4tb25bq3/backend/candidate-status.json) | s8 | s4 | 13,852 | 13,743 | 109 | 0.7931% |
+| 109 | [tsvc/tsvc-s443-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s443-l00-f507db71/meta/run-d5ff7qau/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s443-l00-f507db71/meta/run-d5ff7qau/backend/candidate-status.json) | s16 | s8 | 229,501 | 227,775 | 1,726 | 0.7578% |
+| 110 | [rajaperf/add](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_add-0d156cf5/meta/run-lxo2tlnw/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_add-0d156cf5/meta/run-lxo2tlnw/backend/candidate-status.json) | s8 | s4 | 7,469 | 7,418 | 51 | 0.6875% |
+| 111 | [tsvc/tsvc-s491-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s491-l00-10776da5/meta/run-4wgwgeb7/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s491-l00-10776da5/meta/run-4wgwgeb7/backend/candidate-status.json) | s16 | s4 | 633,661 | 629,679 | 3,982 | 0.6324% |
+| 112 | [tsvc/tsvc-s4116-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s4116-l00-80467e9e/meta/run-4uo3caez/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s4116-l00-80467e9e/meta/run-4uo3caez/backend/candidate-status.json) | s16 | s8 | 2,443 | 2,431 | 12 | 0.4936% |
+| 113 | [polybench/polybench-fdtd-2d-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-fdtd-2d-l00-c5d9d238/meta/run-priuv2ss/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-fdtd-2d-l00-c5d9d238/meta/run-priuv2ss/backend/candidate-status.json) | s8 | s2 | 3,512 | 3,499 | 13 | 0.3715% |
+| 114 | [polybench/polybench-durbin-l02](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-durbin-l02-de927056/meta/run-19g6b87e/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-durbin-l02-de927056/meta/run-19g6b87e/backend/candidate-status.json) | s8 | s1 | 100,501 | 100,133 | 368 | 0.3675% |
+| 115 | [tsvc/tsvc-s424-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s424-l00-db233916/meta/run-uyzrtwas/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s424-l00-db233916/meta/run-uyzrtwas/backend/candidate-status.json) | s16 | s4 | 120,235 | 119,906 | 329 | 0.2744% |
+| 116 | [polybench/polybench-covariance-l02](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-covariance-l02-be853ecc/meta/run-u65q3b4s/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-covariance-l02-be853ecc/meta/run-u65q3b4s/backend/candidate-status.json) | s8 | s4 | 13,753 | 13,734 | 19 | 0.1383% |
+| 117 | [rajaperf/trap-int](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_trap-int-0734d10c/meta/run-_rerovbj/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/rajaperf_trap-int-0734d10c/meta/run-_rerovbj/backend/candidate-status.json) | s8 | s4 | 15,158 | 15,143 | 15 | 0.0991% |
+| 118 | [polybench/polybench-correlation-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-correlation-l00-4f2fc9b1/meta/run-z6tmtkgr/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-correlation-l00-4f2fc9b1/meta/run-z6tmtkgr/backend/candidate-status.json) | s8 | s4 | 13,773 | 13,767 | 6 | 0.0436% |
+| 119 | [polybench/polybench-covariance-l00](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-covariance-l00-fe2a359d/meta/run-6cfxzggq/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-covariance-l00-fe2a359d/meta/run-6cfxzggq/backend/candidate-status.json) | s8 | s4 | 13,773 | 13,767 | 6 | 0.0436% |
+| 120 | [polybench/polybench-gramschmidt-l02](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-gramschmidt-l02-87e132e9/meta/run-lglg75fp/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_polybench-gramschmidt-l02-87e132e9/meta/run-lglg75fp/backend/candidate-status.json) | s8 | s2 | 41,509 | 41,504 | 5 | 0.0120% |
+| 121 | [polybench/p421-floyd-warshall-full](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-floyd-warshall-full-e582b111/meta/run-yu507prl/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-floyd-warshall-full-e582b111/meta/run-yu507prl/backend/candidate-status.json) | s16 | s8 | 847,706 | 847,655 | 51 | 0.0060% |
+| 122 | [tsvc/tsvc-s251-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s251-l00-4ce5a866/meta/run-n3ax1upc/kernel.c) · [후보 비용](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s251-l00-4ce5a866/meta/run-n3ax1upc/backend/candidate-status.json) | s16 | s8 | 194,988 | 194,978 | 10 | 0.0051% |
+
+## 전체 제외 목록
+
+| Benchmark / 후보 상태 | 상태 | 사유 |
 | --- | --- | --- |
-| `polybench/p32-adi-full` | `ambiguous-loops` | expected one selected_kernel loop |
-| `polybench/p32-fdtd-2d-full` | `ambiguous-loops` | expected one selected_kernel loop |
-| `polybench/p32-jacobi-1d-imper-full` | `ambiguous-loops` | expected one selected_kernel loop |
-| `polybench/p32-jacobi-2d-imper-full` | `ambiguous-loops` | expected one selected_kernel loop |
-| `polybench/p421-fdtd-2d-full` | `ambiguous-loops` | expected one selected_kernel loop |
-| `polybench/p421-heat-3d-full` | `ambiguous-loops` | expected one selected_kernel loop |
-| `polybench/p421-jacobi-1d-full` | `ambiguous-loops` | expected one selected_kernel loop |
-| `polybench/p421-jacobi-1d-outer` | `ambiguous-loops` | expected one selected_kernel loop |
-| `polybench/p421-jacobi-2d-full` | `ambiguous-loops` | expected one selected_kernel loop |
-| `rajaperf/planckian` | `missing-measurements` | missing measurements for compiler VF(s): s1 |
-| `tsvc/tsvc-s1111-l00` | `unmeasured-vf` | no measurement for f32 |
-| `tsvc/tsvc-s1113-l00` | `ambiguous-loops` | expected one selected_kernel loop |
-| `tsvc/tsvc-s1161-l00` | `ambiguous-loops` | expected one selected_kernel loop |
-| `tsvc/tsvc-s127-l00` | `unmeasured-vf` | no measurement for f32 |
-| `tsvc/tsvc-s161-l00` | `ambiguous-loops` | expected one selected_kernel loop |
-| `tsvc/tsvc-s212-l00` | `ambiguous-loops` | expected one selected_kernel loop |
-| `tsvc/tsvc-s221-l00` | `ambiguous-loops` | expected one selected_kernel loop |
+| [polybench/p32-adi-full](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-adi-full-2fd7f411/meta/run-_zvg8yfm/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-adi-full-2fd7f411/meta/run-_zvg8yfm/backend/candidate-status.json) | `ambiguous-loops` | expected one selected_kernel loop |
+| [polybench/p32-fdtd-2d-full](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-fdtd-2d-full-85f4b50e/meta/run-k10lp2ot/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-fdtd-2d-full-85f4b50e/meta/run-k10lp2ot/backend/candidate-status.json) | `ambiguous-loops` | expected one selected_kernel loop |
+| [polybench/p32-jacobi-1d-imper-full](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-jacobi-1d-imper-full-e61c1c36/meta/run-sc6b6n2c/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-jacobi-1d-imper-full-e61c1c36/meta/run-sc6b6n2c/backend/candidate-status.json) | `ambiguous-loops` | expected one selected_kernel loop |
+| [polybench/p32-jacobi-2d-imper-full](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-jacobi-2d-imper-full-67087142/meta/run-ytvpkcvq/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p32-jacobi-2d-imper-full-67087142/meta/run-ytvpkcvq/backend/candidate-status.json) | `ambiguous-loops` | expected one selected_kernel loop |
+| [polybench/p421-fdtd-2d-full](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-fdtd-2d-full-3b80f0fa/meta/run-bg6nqe_c/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-fdtd-2d-full-3b80f0fa/meta/run-bg6nqe_c/backend/candidate-status.json) | `ambiguous-loops` | expected one selected_kernel loop |
+| [polybench/p421-heat-3d-full](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-heat-3d-full-422ad5f5/meta/run-em8uiv9x/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-heat-3d-full-422ad5f5/meta/run-em8uiv9x/backend/candidate-status.json) | `ambiguous-loops` | expected one selected_kernel loop |
+| [polybench/p421-jacobi-1d-full](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-jacobi-1d-full-cb6eb4ac/meta/run-wqk6s9ak/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-jacobi-1d-full-cb6eb4ac/meta/run-wqk6s9ak/backend/candidate-status.json) | `ambiguous-loops` | expected one selected_kernel loop |
+| [polybench/p421-jacobi-1d-outer](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-jacobi-1d-outer-c96619a9/meta/run-6p59k357/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-jacobi-1d-outer-c96619a9/meta/run-6p59k357/backend/candidate-status.json) | `ambiguous-loops` | expected one selected_kernel loop |
+| [polybench/p421-jacobi-2d-full](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-jacobi-2d-full-ab8ba81c/meta/run-syq6vluc/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/polybench_p421-jacobi-2d-full-ab8ba81c/meta/run-syq6vluc/backend/candidate-status.json) | `ambiguous-loops` | expected one selected_kernel loop |
+| [tsvc/tsvc-s1111-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1111-l00-ad05c621/meta/run-grsgdlox/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s1111-l00-ad05c621/meta/run-grsgdlox/backend/candidate-status.json) | `unmeasured-vf` | no measurement for f32 |
+| [tsvc/tsvc-s127-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s127-l00-05409684/meta/run-36cps490/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s127-l00-05409684/meta/run-36cps490/backend/candidate-status.json) | `unmeasured-vf` | no measurement for f32 |
+| [tsvc/tsvc-s31111-l00](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s31111-l00-48dde2b5/meta/run-14522mnv/kernel.c) · [후보 상태](.cache/wrong-predictions-20261021/baseline/artifacts/tsvc_tsvc-s31111-l00-48dde2b5/meta/run-14522mnv/backend/candidate-status.json) | `missing-measurements` | missing measurements for compiler VF(s): s4 |
 
-## 입력 및 재현
+## 검증과 한계
 
-- 체크아웃 commit: `020efcd18350561115cd34abb1d507d4f7e3d7c3`.
-- 모델: `llvm-middle-end-v1`; policy SHA-256: `2a7f596d7fb099fe48789076d0d38e0780ff0a821050a5ff530bfa4d2d3933f9`.
-- `cost_model.py` SHA-256: `9fc2806774b21999fe704b5c145f6d43a78c307b1fe928a454348630fc4baf7b`.
-- DB SHA-256: `6793f637b8e48e5795f2c167419bd38c399cccb029cd3ae39a1aed1a1703a8d8`.
-- 측정 target: `xiangshan-v2/MinimalConfig@e7bab53e66dfb3c4a1d11cf9519b0396f8576cae`.
-- 평가 compiler: `clang version 23.1.3 (https://github.com/cheolwanpark/llvm-project.git 9d0ab6c42aa515a07eaac633ff50260004f16465)`.
-- 기존 `../llvm-cost-model/build-vplan-tools` 빌드를 사용했다. 빌드에 기록된 revision과 현재 HEAD의 `llvm/`, `clang/` 소스 차이가 없음을 확인했다.
-- 전체 평가 결과: [summary.json](.cache/wrong-predictions-current/summary.json). 소스·후보 cost·선택·최종 replay manifest는 [artifacts](.cache/wrong-predictions-current/artifacts/)에 보존했다. `.cache/`는 Git 추적 대상이 아니므로 문서를 다른 곳으로 옮길 때 링크 자료도 함께 보존해야 한다.
+- DB hash, 전체 benchmark ID, 소스 artifact와 DB 소스의 일치, 측정 cycles, 정오답과 유리수 regret, 문서 내 모든 파일 링크를 검증했다. Baseline·SpillCost는 compiler를 다시 실행하고 meta 선택의 final replay를 검증했다. Strided 선택은 저장된 후보에 대한 offline replay 결과다.
+- 모델 비용은 실제 하드웨어 실행 시간을 완전히 설명하지 않는다. probe compiler와 DB 측정 바이너리의 동일성은 검증되지 않았다.
 
-저장소 루트에서 실행한 명령:
+## 재현
+
+출력은 새 경로 또는 빈 디렉터리를 사용한다. 소스 복원은 평가 도구만 별도 경로에 추출하며 현재 작업 트리를 바꾸지 않는다.
 
 ```sh
-uv run --project utils/vplan-tools python utils/vplan-tools/evaluate \
-  --db search-dataset.sqlite \
-  --output-dir .cache/wrong-predictions-current \
-  --artifacts-dir .cache/wrong-predictions-current/artifacts \
-  --skip-build --build-dir ../llvm-cost-model/build-vplan-tools \
-  --compare-baseline
+mkdir -p <run>/baseline-source
+git archive 020efcd18 utils | tar -x -C <run>/baseline-source
+uv run --project utils/vplan-tools python <run>/baseline-source/utils/vplan-tools/evaluate \
+  --db search-dataset.sqlite --llvm-path <run>/baseline-source \
+  --skip-build --build-dir build-vplan-tools --compare-baseline \
+  --output-dir <run>/baseline --artifacts-dir <run>/baseline/artifacts
 ```
 
-재실행 시 `--output-dir`는 새 경로나 빈 디렉터리를 지정한다. 결과의 `benchmarks`에서 `eligible == true && top1_correct == false`인 항목을 추리고, 위 regret 식으로 정렬하면 같은 목록을 재생성할 수 있다.
-
-현재 모델은 LLVM의 middle-end 비용 및 선택 비교를 재현하지만 모든 힌트·후보 필터·루프 외부 수익성 정책을 구현하지는 않는다. 여기의 LLVM 일치는 이번 DB에 대한 실측 비교 결과이며, 모든 입력에 대한 동일성을 뜻하지 않는다.
-
-## 1위 원인 분석: `polybench/p32-gesummv-l00`
-
-**가장 강한 원인 증거는 backend scheduling/레지스터 할당 이후 생기는 spill을 middle-end가 예측하지 못한다는 점이다.** LLVM은 `s8`의 vector register peak를 32, spill cost를 0으로 계산한다. 실제 생성 코드에서는 매 vector iteration마다 **spill 3회 + reload 3회**, 추가로 벡터 그룹 copy 2회가 발생한다. 최적 측정 VF인 `s4`에는 이 spill/reload가 없다.
-
-이 진단은 현재 compiler의 일반 LLVM pipeline에서 `--print-detailed-vplans`를 출력하고, `s4`/`s8`를 각각 강제해 IR·레지스터 할당 전후 MIR·최종 assembly를 비교한 결과다. 자동 선택 assembly와 강제 `s8` assembly의 함수 명령열도 동일함을 확인했다. 별도로 VPlan의 post-RA analytics에서도 같은 spill을 확인했다.
-
-### LLVM은 왜 `s8`을 선택하는가
-
-커널은 4,000개 double에 대해 두 개의 독립적인 누산을 수행한다. `x[j]`는 양쪽 곱셈에서 공유된다. `FP_CONTRACT OFF`가 지정되어 있고, 실제 생성 코드도 FMA 대신 곱셈과 덧셈을 따로 수행한다.
-
-```c
-for (int j = 0; j < 4000; j++) {
-    tmp0 = A[j] * x[j] + tmp0;
-    y0   = B[j] * x[j] + y0;
-}
-```
-
-[LLVM 상세 출력](.cache/gesummv-analysis/llvm-detail.txt)의 주요 수치는 다음과 같다. 이 double 커널의 VLEN=128 조건에서는 `s4`가 LMUL=4, `s8`이 LMUL=8에 해당한다.
-
-| 항목 | s4 | s8 |
-| --- | ---: | ---: |
-| 실제 vector width | 8 doubles | 16 doubles |
-| Vector iteration 수 | 500 | 250 |
-| Load 3개의 모델 비용 | 3 × 4 = 12 | 3 × 8 = 24 |
-| fmul 2개 + fadd 2개의 모델 비용 | 4 × 8 = 32 | 4 × 16 = 64 |
-| Induction + loop-control 비용 | 2 | 2 |
-| 예측 body cost | 46 | 90 |
-| 예측 whole-loop score | 23,000 | **22,500** |
-| 예측 vector register peak / 한도 | 16 / 32 | 32 / 32 |
-| 예측 spill cost | 0 | 0 |
-| 실제 생성 코드의 iteration당 spill / reload | 0 / 0 | **3 / 3** |
-| DB 측정 cycles | **32,696** | 55,020 |
-
-모델상 vector 연산 비용은 LMUL에 선형 비례하고, iteration당 고정 비용 2만 더해진다. 따라서 이 커널에서는 `body cost = 11 × LMUL + 2`, `score = 22,000 + 4,000 / LMUL`이 되어 큰 LMUL을 선호한다. `s8`의 예측상 이득은 `s4` 대비 **2.1739%**뿐인데, 실제 측정에서는 **68.2775% 느리다**. 모델 cost는 cycles 단위가 아니므로 절대값끼리 비교하지 않는다.
-
-4,000은 8과 16 모두로 나누어떨어지고, 실제 IR에도 scalar remainder loop가 없다. 따라서 이 비교의 역전은 scalar-tail 비용 차이로 설명되지 않는다.
-
-### 레지스터 압력을 낮게 계산한 지점
-
-[VPlanAnalysis.cpp](llvm/lib/Transforms/Vectorize/VPlanAnalysis.cpp)의 `calculateRegisterUsageForPlan()`은 **VPlan recipe 순서**를 따라 값의 생존 구간을 추정한다. 해당 계획은 대략 다음 순서다.
-
-```text
-A load → x load → A*x → tmp 누산 갱신 → B load → B*x → y 누산 갱신
-```
-
-이 순서에서는 누산기 2개와 입력/중간값을 합쳐 vector 값 4개 수준으로 계산된다. 그래서 `s8`의 peak는 `4 × 8 = 32`다. 같은 파일의 `VPRegisterUsage::spillCost()`는 `MaxUsers > AvailableRegs`일 때만 spill을 추가하므로, **32 == 32이면 spill cost가 0**이다.
-
-반면 [일반 LLVM의 레지스터 할당 전 MIR](.cache/gesummv-analysis/direct-s8-pre-ra.mir)은 세 load를 먼저 배치한다.
-
-```text
-A load → x load → B load → A*x → B*x → tmp 누산 갱신 → y 누산 갱신
-```
-
-세 번째 load 직후에는 **누산기 2개 + A/x/B 입력 3개 = vector 값 5개**가 동시에 필요하다. 이 순서의 물리 레지스터 수요는 `s4`에서 `5 × 4 = 20`으로 한도 안이지만, `s8`에서는 `5 × 8 = 40`으로 32개 한도를 넘는다. 실제 backend의 명령 순서와 VPlan이 가정한 순서의 차이가 spill 추정을 깨뜨린다. 이것은 모든 스케줄에서 LMUL=8이 반드시 spill된다는 뜻은 아니다.
-
-[s8 최종 assembly](.cache/gesummv-analysis/direct-s8.s)의 vector loop에는 다음 명령이 존재한다. 주석의 spill/reload 표시는 compiler가 출력한 것이다.
-
-```asm
-vs8r.v  v8,  (a6)   # Folded Spill: A
-vs8r.v  v8,  (a6)   # Folded Spill: B
-vl8r.v  v24, (a6)   # Folded Reload: A
-vfmul.vv v24, v0, v24
-vs8r.v  v24, (a6)   # Folded Spill: A*x
-vl8r.v  v8,  (a6)   # Folded Reload: B
-...
-vl8r.v  v0,  (a6)   # Folded Reload: A*x
-```
-
-위 코드는 spill 흐름만 발췌한 것으로, 각 접근 사이의 주소 계산·다른 명령은 생략했다. A와 A*x는 같은 stack slot을 재사용하며, B는 다른 slot을 쓴다. [s4 assembly](.cache/gesummv-analysis/direct-s4.s)에는 vector stack 접근이 없다.
-
-VLEN=128에서 LMUL=8 그룹은 128 bytes이므로, 추가 stack 전송량은 `6 × 128 × 250 = 192,000 bytes`다. 본래 배열 load는 `3 × 4000 × 8 = 96,000 bytes`다. 따라서 명령이 요구하는 vector 메모리 전송량은 spill 때문에 약 3배가 된다. 이는 **논리적 load/store 바이트 수**이며 실제 DRAM traffic을 뜻하지 않는다. 루프마다 발생하는 `vmv8r.v` 두 개와 spill 주소 계산도 추가 부담이다.
-
-### 결론과 수정 방향
-
-이 사례에서 우선 살펴볼 부분은 **VPlan의 순서 기반 register-pressure 추정과 backend schedule의 불일치**다. 현재 구현은 spill 항 자체를 갖고 있지만, 입력 peak가 32로 낮게 잡혀 항이 활성화되지 않는다. LLVM 비용을 재생하는 Python 모델도 같은 입력을 사용하므로 동일하게 틀린다.
-
-수정 후보는 load를 앞당겼을 때의 생존값 중첩을 pressure 추정에 반영하거나, backend에서 register pressure를 고려해 load/연산 순서를 유지하도록 하는 것이다. 레지스터 한도에 임의의 여유분을 빼는 보정은 이 사례를 피할 수 있어도 다른 커널에 대한 타당성은 별도 검증이 필요하다. **이번 작업에서는 cost model이나 backend를 수정하지 않았다.**
-
-확인된 사실은 현재 compiler의 `s8` 코드에만 큰 spill/reload 부담이 생긴다는 것이다. 이것이 측정 역전의 가장 강한 원인 후보지만, DB 측정 compiler revision은 현재 compiler와 다르고 당시 실행 trace 및 바이너리는 DB에 없다. 따라서 22,324 cycles의 차이 전부를 spill에 정량 귀속하거나 현재 바이너리의 성능으로 단정하지 않는다. 정확한 기여도 검증에는 원래 측정 환경에서 재측정이 필요하다.
-
-### 공유 빌드와 분석 재현
-
-현재 체크아웃에 `build-vplan-tools -> ../llvm-cost-model/build-vplan-tools` 심볼릭 링크를 만들었다. 기존 빌드를 그대로 사용했으며 재빌드는 하지 않았다.
-
-```sh
-uv run --project utils/vplan-tools python .cache/gesummv-analysis/reproduce.py
-```
-
-[재현 스크립트](.cache/gesummv-analysis/reproduce.py)는 DB에서 소스를 읽고 기존 compiler로 상세 출력과 s4/s8 코드를 생성한다. 자동 선택 코드와 s8 코드의 일치, s4의 spill/reload 0회, s8의 spill/reload 각각 3회를 검사한다. 실제 실행 cycles는 새로 측정하지 않는다. [직접 컴파일 명령 목록](.cache/gesummv-analysis/direct-commands.json)도 저장했다.
-
-전체 evaluator에서 이 링크를 사용할 때는 `--skip-build`를 지정한다. 현재 `print-vplans` CLI에는 `--skip-build`가 없고 다른 체크아웃의 CMake cache를 거부하므로, 위 스크립트는 `compile_report()`로 기존 compiler를 직접 호출한다.
+평가 JSON과 artifact는 `.cache/`에 보존하며 Git에서 추적하지 않는다. 문서를 이동할 때 재현에 필요한 source·manifest·analytics·상세 비용·결과 JSON과 측정 DB도 함께 보존해야 한다.
