@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Replay saved candidates with separable memory terms; never compile or time kernels."""
+import argparse
+import copy
+from dataclasses import asdict
+from fractions import Fraction as F
+import json
+from pathlib import Path
+import sys
+
+from cost_model import backend_cost
+from memory_cost import MODEL_VERSION, Parameters, apply_memory_cost, memory_terms
+from memory_observations import extract_memory, llvm_memory_cost
+from observations import bind_observation
+from provenance import digest
+from selection import select_loops
+from selection_policy import Policy
+from vplan_report import validate_manifest_costs
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def encode(value):
+    if isinstance(value, F):
+        return dict(numerator=value.numerator, denominator=value.denominator)
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(type(value))
+
+
+def metrics(rows):
+    values = sorted(r['regret'] for r in rows if r['eligible'])
+    if not values:
+        return dict(n=0, correct=0, mean=None, p95=None, maximum=None)
+    pos = F(95, 100) * (len(values) - 1)
+    lo = int(pos)
+    return dict(n=len(values), correct=sum(r['correct'] for r in rows if r['eligible']),
+                mean=sum(values)/len(values), p95=values[lo] + (values[min(lo+1, len(values)-1)] - values[lo])*(pos-lo), maximum=max(values))
+
+
+def prepare(old, detail, inputs, parameters=Parameters()):
+    directory = next(Path(old['artifacts']).glob('run-*/backend'))
+    def read(path):
+        inputs[str(path)] = digest(path)
+        return json.loads(path.read_text())
+    manifest = read(directory/'candidates.json')
+    statuses = read(directory/'candidate-status.json')['candidates']
+    result = dict(manifest=manifest, statuses=statuses, data={}, errors=[], removal_errors=[])
+    if old['status'] == 'backend-observation-unavailable':
+        return result
+    saved = read(directory/'selection.json')['selections']
+    assert select_loops(Policy(), manifest, statuses) == saved, old['id']
+    parsed = read(Path(detail['json']))
+    validate_manifest_costs(parsed, manifest)
+    loops = {(l['function'], l['loop']): l for l in manifest['loops']}
+    for c, status in zip(manifest['candidates'], statuses, strict=True):
+        if status['status'] != 'scored':
+            continue
+        path = Path(status['analytics'])
+        obs = bind_observation(read(path), c, loops[c['function'], c['loop']], manifest['run_id'])
+        assert backend_cost(c, obs)['effective_body_quarters'] == status['breakdown']['effective_body_quarters'], (old['id'], c['id'])
+        data = dict(observation=obs)
+        try:
+            mir = path.with_suffix('').with_suffix('.mir')
+            inputs[str(mir)] = digest(mir)
+            data['facts'] = extract_memory(c, obs, mir.read_text())
+            data['terms'] = memory_terms(data['facts'], parameters)
+        except ValueError as error:
+            result['errors'].append(dict(candidate=c['id'], reason=str(error)))
+        try:
+            data['llvm_memory'] = llvm_memory_cost(c, parsed)
+        except ValueError as error:
+            result['removal_errors'].append(dict(candidate=c['id'], reason=str(error)))
+        result['data'][c['id']] = data
+    return result
+
+
+def project(old, prep, mode=None, stage=None):
+    statuses = copy.deepcopy(prep['statuses'])
+    fallback = prep['errors'] + (prep['removal_errors'] if mode == 'replace' else []) if mode else []
+    candidates = {}
+    for c, s in zip(prep['manifest']['candidates'], statuses, strict=True):
+        if s['status'] != 'scored':
+            continue
+        data = prep['data'].get(c['id'])
+        if mode and not fallback and data:
+            derived = apply_memory_cost(c, data['observation'], data['terms'], mode=mode, stage=stage,
+                                        llvm_memory_quarters=data.get('llvm_memory', {}).get('quarters', 0))
+            s['breakdown'] = s['breakdown'] | derived
+        q = s['breakdown']['effective_body_quarters']
+        candidates[c['id']] = dict(vf=c['vf'], body_quarters=q,
+                                   per_element=F(q, 4*c['estimated_width']) if q is not None else None,
+                                   added=s['breakdown'].get('memory_added_quarters', 0),
+                                   removed=s['breakdown'].get('memory_removed_quarters', 0))
+    out = dict(id=old['id'], vf=(old.get('actual_selection') or {}).get('main_vf'),
+               eligible=False, status=old['status'], regret=None, correct=None,
+               fallback=fallback, candidates=candidates,
+               strided=any(any(r['kind']=='strided' for r in d.get('facts', {}).get('records', [])) for d in prep['data'].values()))
+    if old['status'] in ('backend-observation-unavailable', 'ambiguous-loops', 'no-loop', 'missing-measurements', 'vlen-mismatch'):
+        return out
+    choices = select_loops(Policy(), prep['manifest'], statuses)
+    assert len(choices) == 1
+    choice = choices[0]
+    vf = 'f1' if choice['scalar'] else next(c['vf'] for c in prep['manifest']['candidates'] if c['id'] == choice['id'])
+    out['vf'] = vf
+    measured = old['measured_cycles']
+    if not vf.startswith('s') or vf[1:] not in measured:
+        out['status'] = 'unmeasured-vf'
+        return out
+    best = min(measured, key=lambda v: (measured[v], int(v)))
+    out.update(eligible=True, status='scored', cycles=measured[vf[1:]],
+               regret=F(measured[vf[1:]], measured[best])-1, correct=vf[1:]==best)
+    return out
+
+
+def compare(rows, baseline):
+    ref = {r['id']: r for r in baseline}
+    common = [r for r in rows if r['eligible'] and ref[r['id']]['eligible']]
+    changes = [dict(id=r['id'], old_vf=ref[r['id']]['vf'], new_vf=r['vf'],
+                    old_regret=ref[r['id']]['regret'], new_regret=r['regret'],
+                    delta=r['regret']-ref[r['id']]['regret']) for r in common if r['vf'] != ref[r['id']]['vf']]
+    return dict(metrics=metrics(rows), common=metrics(common),
+                baseline_common=metrics([ref[r['id']] for r in common]),
+                regressions=sorted([r for r in changes if r['delta'] > 0], key=lambda r:-r['delta']),
+                improvements=sorted([r for r in changes if r['delta'] < 0], key=lambda r:r['delta']),
+                newly_excluded=[r['id'] for r in rows if ref[r['id']]['eligible'] and not r['eligible']],
+                newly_included=[r['id'] for r in rows if not ref[r['id']]['eligible'] and r['eligible']],
+                fallbacks=[r['id'] for r in rows if r['fallback']],
+                cohorts={kind:metrics([r for r in common if r['strided']==flag]) for kind,flag in [('strided', True), ('unit-only',False)]}, rows=rows)
+
+
+def pct(v):
+    return '-' if v is None else f'{100*float(v):.3f}%'
+
+
+def write_report(path, report):
+    lines = ['# Backend memory interaction replay', '',
+             'Frozen candidates and historical cycles; no recompilation or new runtime measurements. All costs are model units.', '',
+             'Parameters: ' + ', '.join(f'{k}={v}' for k,v in report['parameters'].items()) + '. See parameter provenance below.', '',
+             'Parameter provenance: ' + report.get('parameter_provenance', 'original exploratory defaults') + '.', '',
+             '`add = spill baseline + service + interaction`; `replace = baseline - observed LLVM memory hooks + service + interaction`; `residual = baseline + interaction`.', '',
+             'Stages: distance; distance + stride adjustment; distance + stride adjustment + address. Reverse/unknown stride weights affect extra contention only, not base service.', '',
+             'Load pairs use steady-state cyclic adjacency, with no finite-trip frequency factor or direct-dependence gate.', '',
+             'Replacement removes additive vector-region memory hooks, including opaque interleaved-hook shuffle costs. Separate address/shuffle costs, precomputed cost, scalar comparator/tail and backend spill remain. Any unsupported legal candidate triggers whole-benchmark baseline fallback.', '',
+             '| Variant | N | Correct | Mean regret | P95 | Common baseline → model | Excluded | Fallback |',
+             '| --- | ---: | ---: | ---: | ---: | --- | ---: | ---: |']
+    for name, run in report['runs'].items():
+        m=run['metrics']
+        lines.append(f"| {name} | {m['n']} | {m['correct']} | {pct(m['mean'])} | {pct(m['p95'])} | {pct(run['baseline_common']['mean'])} → {pct(run['common']['mean'])} | {len(run['newly_excluded'])} | {len(run['fallbacks'])} |")
+    lines += ['', '## Focal features (s4, normalized per original body)', '',
+              '| Benchmark | Service | Distance | Stride adjustment | Address | Unknown stride/address |', '| --- | ---: | ---: | ---: | ---: | --- |']
+    for bid, prep in report['features'].items():
+        if bid not in ('tsvc/tsvc-s111-l00','tsvc/tsvc-s128-l00','tsvc/tsvc-s1232-l00'):
+            continue
+        d=next((d for cid,d in prep['data'].items() if cid.endswith(':s4')),None)
+        if d and 'terms' in d:
+            t=d['terms']
+            lines.append('| '+bid+' | '+' | '.join(f'{float(t[k]):.5f}' for k in ('service','distance','stride_adjustment','address'))+f" | {t['unknown_stride']} / {t['unknown_address']} |")
+    for name, run in report['runs'].items():
+        if name=='baseline': continue
+        lines += ['', '## '+name, '', f"New exclusions: {', '.join(run['newly_excluded']) or 'none'}", '',
+                  f"Whole-benchmark fallbacks: {', '.join(run['fallbacks']) or 'none'}", '',
+                  '| Benchmark | VF | Old regret | New regret | Delta pp |', '| --- | --- | ---: | ---: | ---: |']
+        for r in run['regressions']:
+            lines.append(f"| {r['id']} | {r['old_vf']} → {r['new_vf']} | {pct(r['old_regret'])} | {pct(r['new_regret'])} | {100*float(r['delta']):.3f} |")
+        lines += ['', 'Focal choices: '+', '.join(r['id'].split('/')[-1]+'='+str(r['vf']) for r in run['rows'] if r['id'] in ('tsvc/tsvc-s111-l00','tsvc/tsvc-s128-l00','tsvc/tsvc-s1232-l00'))]
+    lines += ['', 'Full per-candidate terms, pairs, unknown facts, fallback reasons, common-cohort metrics, and hashes: [results.json](results.json).', '']
+    path.write_text('\n'.join(lines))
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--baseline',type=Path,default=ROOT/'.cache/memory-burst-spill-B/summary.json')
+    parser.add_argument('--corpus',type=Path,default=ROOT/'.cache/backend-spill-detail-corpus-final/summary.json')
+    parser.add_argument('--output-dir',type=Path,required=True)
+    parser.add_argument('--benchmark',action='append')
+    parser.add_argument('--memory-parameters',type=Path,help='Explicit parameter JSON; defaults remain unchanged')
+    args=parser.parse_args()
+    if args.output_dir.exists() and any(args.output_dir.iterdir()):
+        parser.error('output directory must be new or empty')
+    base=json.loads(args.baseline.read_text()); corpus=json.loads(args.corpus.read_text())
+    assert base['complete'] and base['successful'] and corpus['complete'] and corpus['successful']
+    assert base['provenance']['compiler_sha256']==corpus['provenance']['compiler_sha256']
+    assert digest(base['database'])==base['provenance']['database_sha256']
+    details={r['id']:r for r in corpus['benchmarks']}
+    olds=[r for r in base['benchmarks'] if not args.benchmark or r['id'] in args.benchmark]
+    if args.benchmark and set(args.benchmark)!={r['id'] for r in olds}:
+        parser.error('unknown benchmark')
+    inputs={str(args.baseline):digest(args.baseline), str(args.corpus):digest(args.corpus)}
+    parameters = Parameters()
+    parameter_provenance = 'original exploratory defaults; not a held-out validation'
+    if args.memory_parameters:
+        profile = json.loads(args.memory_parameters.read_text())
+        parameters = Parameters.from_mapping(profile['parameters'])
+        inputs[str(args.memory_parameters)] = digest(args.memory_parameters)
+        parameter_provenance = profile.get('provenance', str(args.memory_parameters))
+    prepared={}
+    for old in olds:
+        prepared[old['id']]=prepare(old,details[old['id']],inputs,parameters)
+    baseline=[project(r,prepared[r['id']]) for r in olds]
+    for row,old in zip(baseline,olds,strict=True):
+        assert row['eligible']==old['eligible'] and row['vf']==(old.get('actual_selection') or {}).get('main_vf'), old['id']
+    runs={'baseline':compare(baseline,baseline)}
+    for mode in ('residual','add','replace'):
+        for stage in ('distance','stride','address'):
+            rows=[project(r,prepared[r['id']],mode,stage) for r in olds]
+            runs[mode+'-'+stage]=compare(rows,baseline)
+    # Avoid copying full backend analytics into the report; original artifacts
+    # and hashes remain available for auditing all source facts.
+    for prep in prepared.values():
+        for d in prep['data'].values(): d.pop('observation',None)
+    report=dict(complete=True, model_version=MODEL_VERSION, parameters=asdict(parameters), parameter_provenance=parameter_provenance,
+                input_hashes=inputs, source_hashes={str(p):digest(p) for p in [Path(__file__), *Path(__file__).parent.glob('*.py')]},
+                provenance=base['provenance'], features=prepared, runs=runs,
+                limitations=['frozen candidate selection; historical measured binaries not verified identical to probed MIR',
+                             'full-active VL and masks, aligned 16-byte unit service, no cache-state/bank/TLB model',
+                             'first two iterations for symbolic provenance; unknown facts are reported, not imputed as known',
+                             'measured cycles are used only after selection; fixed/scalar missing measurements are excluded explicitly'])
+    args.output_dir.mkdir(parents=True,exist_ok=True)
+    (args.output_dir/'results.json').write_text(json.dumps(report,default=encode,indent=2)+'\n')
+    write_report(args.output_dir/'report.md',report)
+    for name,run in runs.items():
+        print(name, 'N',run['metrics']['n'],'correct',run['metrics']['correct'],'mean',pct(run['metrics']['mean']),
+              'excluded',len(run['newly_excluded']),'fallback',len(run['fallbacks']))
+    print(args.output_dir/'report.md')
+
+
+if __name__=='__main__':
+    main()

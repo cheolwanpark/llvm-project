@@ -70,3 +70,86 @@ The [baseline report](wrong-predictions-baseline.md) and
 exclusions, and artifact links. See the [tools guide](utils/vplan-tools/README.md)
 for parser usage and reproduction commands. Evaluation artifacts remain under
 `.cache/`.
+
+# StridedMemoryCost
+
+This patch adds an experimental strided-load interaction cost on top of
+SpillCost. Counting each memory instruction independently can underestimate
+the cost of nearby strided loads at wide vector widths. The new
+`memory_cost.py` module models this interaction using backend instruction
+order, estimated request counts, and byte strides recovered from saved MIR.
+The model version is `backend-memory-interaction-v2`. It is currently an
+opt-in offline replay model; the default compilation policy remains SpillCost.
+
+Each non-spill strided load pairs with the next strided load in body order.
+The last load pairs with the first load of the next iteration, including a
+self-pair when the body has only one strided load. The residual-stride variant
+retains LLVM's existing memory costs and adds the following penalty:
+
+```text
+w(stride) = 1                              if stride is unknown
+            0                              if reverse-contiguous
+            min(1, L / max(1, abs(stride))) otherwise
+P = sum(alpha * H/(H + gap) * max(0, q_i + q_j - K)
+        * min(w(stride_i), w(stride_j))) / iteration_ratio
+Qeffective = add_sat(Qspill_baseline, saturate(floor(4 * P)))
+```
+
+`gap` counts intervening non-meta backend instructions, not issue cycles.
+For strided loads, `q` is the estimated active element count, derived from
+VLEN, EMUL, and element width with full-active VL/masks assumed. Strides and
+`L` are in bytes. The iteration ratio is the same proven backend-to-candidate
+normalization used for spills. `P` uses model units and is converted to integer
+quarter units once after summation. Scalar costs, tail policy, and observed
+spill/reload costs retain their existing behavior.
+
+Version 2 keeps the stride weight but removes the finite-iteration frequency
+factor and direct-RAW-dependence gate. Wrap pairs receive full weight even in
+a one-body loop. The model therefore does not account for dependence
+serialization. Large strides attenuate the extra interaction penalty; this is
+an exploratory hypothesis, not a measured hardware contention law.
+
+| Parameter | Default | Experimental tuned profile |
+| --- | ---: | ---: |
+| Strength, alpha | 0.5 | 0.5 |
+| Request threshold, K | 8 | 8 |
+| Distance scale, H | 4 | 8 |
+| Stride scale, L | 16 bytes | 8 bytes |
+
+The replay tool also compares adding a backend request-service cost while
+keeping LLVM memory costs (`add`) against replacing the observed additive
+LLVM memory-hook subtotal (`replace`). The former can double-count service;
+the latter can discard shuffle/lowering costs bundled into interleaved memory
+hooks. A separate experimental load/store shared-line term remains available
+but is excluded from residual-stride. Unsupported memory observations cause
+a reported whole-benchmark fallback to SpillCost; newly selected unmeasured
+fixed/scalar VFs are explicit exclusions.
+
+Validation replays all 117 benchmarks with frozen candidates and historical
+measurements. Both coefficient settings preserve the previous VF choices,
+eligibility, and regret after removing the frequency/dependence factors, across
+all replay modes and stages. The Python suite passes 102 tests; 15 tests requiring
+a compiler environment are skipped.
+
+| Evaluation | SpillCost | Strided default | Strided tuned |
+| --- | ---: | ---: | ---: |
+| Eligible benchmarks | 99 | 99 | 99 |
+| Wrong predictions | 53 | 51 | 51 |
+| Mean regret on these same 99 benchmarks | 6.2521% | 5.2482% | 5.1916% |
+| Regressions relative to SpillCost | — | 0 | 0 |
+
+The default interaction term changes s111 and s128 from s16 to their measured
+optimal s2, while retaining s16 for s1232. The tuned profile additionally changes
+band-lin-eq-outer from s4 to s2, lowering its regret from 14.34% to 8.73%.
+That extra gain depends on the extractor reporting an unknown stride: supplying
+the actual +40-byte stride removes it. The profile was selected by in-sample
+coefficient search and has no held-out validation. Historical measured binaries
+are not verified identical to the probed MIR. These results concern VF selection;
+no new runtime measurements or compiler changes were made.
+
+See the [default replay](.cache/memory-interaction-v2-default-20261021/report.md),
+[tuned replay](.cache/memory-interaction-v2-tuned-20261021/report.md), and
+[StridedMemoryCost report](wrong-predictions-stridedload.md) for full rankings,
+exclusions, per-case results, and limitations. The
+[tools guide](utils/vplan-tools/README.md) documents replay commands and the
+[tuned profile](utils/vplan-tools/memory-cost-tuned.json).

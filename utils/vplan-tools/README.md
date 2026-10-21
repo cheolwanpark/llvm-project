@@ -6,6 +6,124 @@ has no fitted parameters and does not read measured cycles when selecting a plan
 The previous 19-parameter backend model, fitting objectives and five-fold CV have
 been removed. PyTorch and NumPy are no longer required.
 
+## Experimental memory interactions
+
+`memory_cost.py` adds an opt-in, offline model with independently reported
+distance/request, stride-adjustment, and load/store address terms.
+`memory_observations.py` recovers facts from saved post-RA analytics/MIR and
+attributes additive LLVM memory-hook costs from the saved detailed cost report.
+The default compilation/selection policy remains the spill model.
+
+Replay the three focal kernels before evaluating the complete saved dataset:
+
+```sh
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate-memory-cost \
+  --output-dir .cache/memory-focal-new \
+  --benchmark tsvc/tsvc-s111-l00 --benchmark tsvc/tsvc-s128-l00 \
+  --benchmark tsvc/tsvc-s1232-l00
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate-memory-cost \
+  --output-dir .cache/memory-full-new
+```
+
+The default inputs are `.cache/memory-burst-spill-B/summary.json` and
+`.cache/backend-spill-detail-corpus-final/summary.json`; `--baseline` and
+`--corpus` override them. Inputs must retain the artifact paths referenced by
+their manifests. The command checks the database hash, baseline/corpus compiler
+identity, manifest costs, and zero-correction selections. It never recompiles,
+times kernels, changes the database, fits parameters, or filters fixed candidates.
+
+The fixed initial hypotheses are:
+
+```text
+q = active element count for strided memory; ceil(bytes/16) for unit memory;
+    one request for scalar memory (non-spill body accesses only)
+near(gap) = 4 / (4 + gap)           # instruction positions, not CPU cycles
+pair(i,j) = (1/2) * near(gap) * max(0, q_i + q_j - 8)
+locality(stride) = min(1, 16 / max(1, abs(stride_bytes)))
+                  zero for reverse-contiguous; one for unknown stride
+distance = sum(pair)               # next strided load, including iteration wrap
+stride_adjustment = sum(pair * (min(locality_i, locality_j) - 1))
+address = sum(max same-object strided load/store pair cost per load)
+```
+
+The address pair cost uses the same request threshold/distance factor, stride
+locality, and average shared-line fraction over 64 possible base alignments.
+Only same-object pairs with known offsets/stride and equal sampled iteration
+deltas qualify. Different/unknown objects contribute no address term, without
+claiming they cannot contend. True byte overlap and cache-line sharing are not
+treated as equivalent. This first address term is within one iteration; the
+load/load term includes iteration wrap at full weight, even for a one-body loop.
+Version 2 removes the finite-trip frequency factor and direct-dependence gate;
+stride locality is the only extra weight on the distance/request penalty.
+The interaction heuristic does not model dependence serialization. Unknown
+stride/address facts are listed.
+
+All terms divide by the proven backend/original iteration ratio. The three
+stages are `distance`, `distance + stride_adjustment`, and all three terms.
+Every stage is evaluated with three composition modes:
+
+* `residual`: spill baseline + interaction terms.
+* `add`: spill baseline + backend request service + interaction terms. This
+  deliberately retains the existing memory cost to expose double counting.
+* `replace`: spill baseline - observed LLVM memory hooks + the same backend
+  service and interaction terms.
+
+Replacement subtracts the additive **vector-region memory hook subtotal**,
+not an estimated fraction of the entire loop cost. Opaque interleaved hooks
+include lowering/shuffle costs: these disappear on replacement and are not
+recreated by simple request counting. Separate address/shuffle recipes,
+precomputed costs, scalar comparator/tail, and observed spill costs remain.
+Subtraction occurs before saturated addition; quarters are truncated once.
+
+These are exploratory model units, not a cycle simulator. Full-active VL/masks,
+aligned unit service and first-two-iteration address recovery are assumptions.
+Cache state, exact bank mapping, dynamic issue order and config/shuffle service
+are not modeled. Historical measured binaries are not verified identical to the
+probed MIR. Unsupported candidates trigger whole-benchmark baseline fallback,
+reported separately. New unmeasured fixed/scalar choices remain explicit
+exclusions; each variant reports its own and common-population regret, all
+regressions, per-candidate terms, and source/input hashes in `results.json`.
+
+### Explicit coefficient tuning
+
+`tune-memory-cost` searches coefficients against the already inspected measured
+cycles. This is **in-sample tuning**, not independent validation. It uses the
+original residual-stride replay as the reference, retains every fixed/scalable
+candidate, and recommends only settings with no new unmeasured choices and no
+per-case regret increase. It reports the unconstrained full-coverage winner too.
+
+```sh
+uv run --project utils/vplan-tools python utils/vplan-tools/tune-memory-cost \
+  --grid broad --output-dir .cache/memory-tuning-new
+uv run --project utils/vplan-tools python utils/vplan-tools/tune-memory-cost \
+  --grid refine --output-dir .cache/memory-refinement-new
+uv run --project utils/vplan-tools python utils/vplan-tools/evaluate-memory-cost \
+  --memory-parameters utils/vplan-tools/memory-cost-tuned.json \
+  --output-dir .cache/memory-tuned-replay-new
+```
+
+The broad grid has 4,050 settings and the follow-up refinement has 1,750. All
+settings, losses of coverage, regressions, and reachable VF choices are retained.
+`reverse_weight` (default 0) and `unknown_stride_weight` (default 1) expose the
+previous constants; coefficient validation rejects negative or invalid values.
+Profile JSON stores exact rational strings or numerator/denominator objects.
+
+The experimental profile changes `distance_scale` 4→8 and `locality_bytes` 16→8;
+the default `Parameters()` and compilation policy remain unchanged. On the
+frozen dataset this lowers band-lin-eq-outer regret from 14.34% to 8.73%, with no
+other selection changes. However, its gain depends on the current unknown-stride
+extraction for that kernel: diagnosing it with the actual +40-byte stride removes
+the gain. The profile is an experiment, not a recommended production default.
+The [StridedMemoryCost report](../../wrong-predictions-stridedload.md) records the
+full rankings, exclusions, sensitivity artifacts, and remaining failure cases.
+
+Version 2 retains these coefficients and removes only the load-pair finite-trip
+factor and direct-dependence gate. Replaying all 117 benchmarks with both default
+and tuned coefficients preserves every VF choice and eligibility result across
+all composition modes/stages. Tuned residual-stride still scores 99 benchmarks,
+with 48 optimal choices and 5.192% mean regret. The default remains 5.248%.
+This is a frozen-data check, not new timing or validation on unseen workloads.
+
 ## Commands
 
 Run from the repository root with Python 3.12+, `uv`, CMake, Ninja and a host C++

@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Explicit in-sample coefficient search for residual-stride memory costs.
+
+Selection sees costs only. Historical cycles rank completed selections. Keep all
+fixed/scalable candidates and reject coverage-losing settings for recommendation.
+No changes to default parameters, compiler, database, or runtime measurements.
+"""
+import argparse
+from dataclasses import asdict
+from fractions import Fraction as F
+import itertools
+import json
+from pathlib import Path
+import runpy
+
+from cost_model import add, more_profitable
+from memory_cost import Parameters, memory_terms
+from provenance import digest
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def decode(value):
+    if isinstance(value, dict) and set(value) == {'numerator', 'denominator'}:
+        return F(value['numerator'], value['denominator'])
+    return value
+
+
+def encode(value):
+    if isinstance(value, F):
+        return dict(numerator=value.numerator, denominator=value.denominator)
+    raise TypeError(type(value))
+
+
+def choose(prep, parameters):
+    manifest = prep['manifest']
+    assert len(manifest['loops']) == 1
+    loop = manifest['loops'][0]
+    best, costs = None, {}
+    for c, status in zip(manifest['candidates'], prep['statuses'], strict=True):
+        if status['status'] != 'scored':
+            continue
+        terms = memory_terms(prep['data'][c['id']]['facts'], parameters, include_address=False)
+        extra = int(4 * (terms['distance'] + terms['stride_adjustment']))
+        costs[c['id']] = add(status['breakdown']['effective_body_quarters'], extra)
+        if more_profitable(c, best, loop, costs):
+            best = c
+    return 'f1' if best is None else best['vf']
+
+
+def pct(value):
+    return '-' if value is None else f'{100*float(value):.4f}%'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--reference', type=Path, default=ROOT/'.cache/memory-interaction-20261021/results.json')
+    parser.add_argument('--baseline', type=Path, default=ROOT/'.cache/memory-burst-spill-B/summary.json')
+    parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--grid', choices=('broad', 'refine'), default='broad')
+    args = parser.parse_args()
+    if args.output_dir.exists() and any(args.output_dir.iterdir()):
+        parser.error('output directory must be new or empty')
+    reference = json.loads(args.reference.read_text(), object_hook=decode)
+    base = json.loads(args.baseline.read_text())
+    assert reference['complete'] and base['complete'] and base['successful']
+    assert digest(base['database']) == base['provenance']['database_sha256']
+    for path, sha in reference['input_hashes'].items():
+        assert digest(path) == sha, path
+    metrics = runpy.run_path(str(Path(__file__).with_name('evaluate-memory-cost')))['metrics']
+    refs = reference['runs']['residual-stride']['rows']
+    ref_by_id = {r['id']: r for r in refs}
+    old_by_id = {r['id']: r for r in base['benchmarks']}
+    active = {}
+    for bid, prep in reference['features'].items():
+        has_load = any(any(r['kind']=='strided' and r['load'] for r in d['facts']['records'])
+                       for d in prep['data'].values() if 'facts' in d)
+        if has_load and len(prep['manifest']['loops']) == 1 and not prep['errors'] and old_by_id[bid]['status'] in ('scored', 'unmeasured-vf'):
+            active[bid] = prep
+    for bid, prep in active.items():
+        assert choose(prep, Parameters()) == ref_by_id[bid]['vf'], bid
+
+    def evaluate(parameters):
+        rows, changes, excluded = [], [], []
+        choices = {}
+        for ref in refs:
+            bid = ref['id']
+            row = dict(ref)
+            if bid in active:
+                vf = choose(active[bid], parameters)
+                choices[bid] = vf
+                cycles = old_by_id[bid]['measured_cycles']
+                row.update(vf=vf, eligible=False, regret=None, correct=None)
+                if vf.startswith('s') and vf[1:] in cycles:
+                    winner = min(cycles, key=lambda v:(cycles[v],int(v)))
+                    row.update(eligible=True, regret=F(cycles[vf[1:]],cycles[winner])-1, correct=vf[1:]==winner)
+                if ref['eligible'] and not row['eligible']:
+                    excluded.append(bid)
+                if ref['eligible'] and row['eligible'] and row['regret'] != ref['regret']:
+                    changes.append(dict(id=bid, old_vf=ref['vf'], new_vf=vf,
+                                        old_regret=ref['regret'], new_regret=row['regret'],
+                                        delta=row['regret']-ref['regret']))
+            rows.append(row)
+        common = [r for r in rows if r['eligible'] and ref_by_id[r['id']]['eligible']]
+        regressions = sorted([r for r in changes if r['delta']>0], key=lambda r:-r['delta'])
+        return dict(parameters=asdict(parameters), metrics=metrics(rows), common=metrics(common),
+                    regressions=regressions, improvements=[r for r in changes if r['delta']<0],
+                    newly_excluded=excluded, choices=choices)
+
+    # Declared before evaluating results; the full Cartesian search is retained.
+    axes = dict(alpha=[F(1,8),F(1,4),F(1,2),F(1),F(2),F(4),F(8),F(16),F(32)],
+                threshold=[0,2,4,8,16], distance_scale=[1,4,16],
+                locality_bytes=[16,64,256,1024,8192], reverse_weight=[F(0),F(1,4),F(1)],
+                unknown_stride_weight=[F(0),F(1)])
+    if args.grid == 'refine':
+        # Follow-up to the broad search: separate global strength from the
+        # stride attenuation scale. Unknown/reverse policies stay explicit.
+        axes = dict(alpha=[F(1,8),F(1,4),F(1,2),F(1),F(2),F(4),F(8)],
+                    threshold=[2,4,6,8,12], distance_scale=[1,4,8,16,32],
+                    locality_bytes=[1,2,4,8,12], reverse_weight=[F(0),F(1)],
+                    unknown_stride_weight=[F(1)])
+    runs = []
+    for index, values in enumerate(itertools.product(*axes.values())):
+        p = Parameters(**dict(zip(axes, values, strict=True)))
+        run = evaluate(p)
+        run['index'] = index
+        runs.append(run)
+        if (index+1) % 500 == 0:
+            print(f'evaluated {index+1} settings', flush=True)
+    eligible = [r for r in runs if not r['newly_excluded']]
+    conservative = [r for r in eligible if not r['regressions']]
+    defaults = asdict(Parameters())
+    def rank(r):
+        return (r['common']['mean'], -r['common']['correct'],
+                sum(v != defaults[k] for k,v in r['parameters'].items()), r['index'])
+    best = min(eligible, key=rank)
+    safe = min(conservative, key=rank) if conservative else None
+    selected = safe or best
+    per_case = {}
+    for bid in active:
+        cycles = old_by_id[bid]['measured_cycles']
+        reachable = sorted({r['choices'][bid] for r in eligible})
+        measured = [v for v in reachable if v.startswith('s') and v[1:] in cycles]
+        per_case[bid] = dict(previous_vf=ref_by_id[bid]['vf'], previous_regret=ref_by_id[bid]['regret'],
+                            coverage_preserving_reachable=reachable,
+                            best_reachable=min(measured, key=lambda v:cycles[v[1:]]) if measured else None)
+    profile = dict(parameters=selected['parameters'], mode='residual', stage='stride',
+                   provenance='In-sample coefficient search on the existing 117-benchmark dataset; no held-out validation. Minimize common-cohort mean regret with no coverage loss or per-case regression against original residual-stride.',
+                   reference_sha256=digest(args.reference), search_index=selected['index'])
+    report = dict(complete=True, grid=args.grid, axes=axes, runs=runs, best_full_coverage=best,
+                  best_no_regression=safe, selected=selected, per_case=per_case,
+                  reference_metrics=reference['runs']['residual-stride']['metrics'],
+                  input_hashes={str(args.reference):digest(args.reference),str(args.baseline):digest(args.baseline)},
+                  source_hashes={str(p):digest(p) for p in [Path(__file__), *Path(__file__).parent.glob('*.py')]},
+                  note='Explicit in-sample tuning. These are replayed selections, not measured performance improvements or generalization evidence.')
+    args.output_dir.mkdir(parents=True,exist_ok=True)
+    (args.output_dir/'results.json').write_text(json.dumps(report,default=encode,indent=2)+'\n')
+    (args.output_dir/'parameters.json').write_text(json.dumps(profile,default=encode,indent=2)+'\n')
+    lines = ['# Memory coefficient search', '', report['note'], '',
+             f'{len(runs)} settings, {len(eligible)} without coverage loss, {len(conservative)} without coverage loss or per-case regression.', '',
+             '| Setting | N | Correct | Mean regret | P95 | Regressions |', '| --- | ---: | ---: | ---: | ---: | ---: |']
+    for name,run in [('reference',dict(metrics=report['reference_metrics'],regressions=[])), ('best full coverage',best),('selected without regression',safe)]:
+        if run:
+            m=run['metrics'];lines.append(f"| {name} | {m['n']} | {m['correct']} | {pct(m['mean'])} | {pct(m['p95'])} | {len(run['regressions'])} |")
+    for name,run in [('Selected',selected),('Best full coverage',best)]:
+        lines += ['', '## '+name, '', str({k:str(v) for k,v in run['parameters'].items()}), '',
+                  '| Benchmark | VF | Old regret | New regret |', '| --- | --- | ---: | ---: |']
+        for c in run['improvements']+run['regressions']:
+            lines.append(f"| {c['id']} | {c['old_vf']} → {c['new_vf']} | {pct(c['old_regret'])} | {pct(c['new_regret'])} |")
+    lines += ['', '## Reachability (coverage-preserving settings)', '',
+              '| Benchmark | Previous regret | Best reachable VF | Reachable VFs |', '| --- | ---: | --- | --- |']
+    for bid,r in per_case.items():
+        lines.append(f"| {bid} | {pct(r['previous_regret'])} | {r['best_reachable']} | {', '.join(r['coverage_preserving_reachable'])} |")
+    lines += ['', 'Full search: [results.json](results.json). Selected profile: [parameters.json](parameters.json).', '']
+    (args.output_dir/'report.md').write_text('\n'.join(lines))
+    print('selected', {k:str(v) for k,v in selected['parameters'].items()}, 'mean', pct(selected['metrics']['mean']))
+    print(args.output_dir/'report.md')
+
+
+if __name__=='__main__':
+    main()

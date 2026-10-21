@@ -1,0 +1,14 @@
+{
+  "parameters": {
+    "alpha": "1/2",
+    "threshold": 8,
+    "distance_scale": 8,
+    "locality_bytes": 8,
+    "line_bytes": 64,
+    "reverse_weight": "0",
+    "unknown_stride_weight": "1"
+  },
+  "mode": "residual",
+  "stage": "stride",
+  "provenance": "In-sample tuning on the existing 117-benchmark dataset: 4050 broad and 1750 refinement settings. Selected minimum common-cohort mean regret without coverage loss or per-case regression against the original residual-stride model. No held-out validation or new runtime measurements. Defaults remain the original control."
+}
