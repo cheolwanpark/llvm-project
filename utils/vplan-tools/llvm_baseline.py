@@ -1,13 +1,11 @@
 """Score LLVM's ordinary vectorizer choices, including final emission checks."""
 from types import SimpleNamespace
-import os
 import re
-import subprocess
 import sys
 import time
 
 import vplan_tools as vt
-from selection_evaluation import summarize_rows
+from evaluation import summarize_rows
 
 
 def report_sections(text):
@@ -115,7 +113,7 @@ def print_summary(rows, elapsed):
     print(f"  Coverage              {percentage(summary['coverage'])}")
     correct = sum(bool(r['top1_correct']) for r in rows)
     print(f"  Top-1 exact           {percentage(summary['top1']['exact'])} ({correct}/{summary['scored']})")
-    for label in ('mean', 'median', 'p95'):
+    for label in ('mean', 'median', 'p95', 'worst'):
         print(f"  Top-1 regret {label:<8} {percentage(summary['top1_regret'][label])}")
     for status, count in sorted(summary['statuses'].items()):
         if status != 'scored':
@@ -128,41 +126,37 @@ def print_summary(rows, elapsed):
     return summary
 
 
-def main(argv=None):
-    parser = vt.argument_parser('Evaluate actual LLVM middle-end VF selections on all benchmark IDs, including TSVC.')
-    parser.set_defaults(compiler_mode='direct')
-    parser.add_argument('--benchmark', help='diagnose one exact ID instead of the full CV population')
-    parser.add_argument('--skip-build', action='store_true', help='use existing compiler binaries without running CMake/Ninja')
-    args = parser.parse_args(argv)
-    if args.compiler_mode != 'direct':
-        parser.error('LLVM baseline requires --compiler-mode direct')
-    benchmarks, metadata = vt.load_database(args.db, benchmark_id=args.benchmark)
-    if not benchmarks:
-        raise vt.ToolError(f'unknown benchmark: {args.benchmark}' if args.benchmark else 'database contains no benchmarks')
-    if args.skip_build:
-        clang = (args.build_dir or args.llvm_path / 'build-vplan-tools') / 'bin/clang'
-        if not all(p.is_file() and os.access(p, os.X_OK) for p in (clang, clang.parent / 'llvm-extract')):
-            raise vt.ToolError('existing clang/llvm-extract binaries are missing or not executable')
-    else:
-        clang = vt.ensure_compiler(args.llvm_path, args.build_dir, args.jobs)
-    version = subprocess.run([str(clang), '--version'], capture_output=True, text=True, check=True).stdout
-    print(f'Database: {args.db}')
-    print(f'Compiler: {clang}')
-    print(version.splitlines()[0])
-    print(f"Measured target: {metadata['target']}")
-    print('Actual LLVM selections; compiler scalable VF set; extra DB VFs ignored.', flush=True)
-    started = time.perf_counter()
+def evaluate_population(benchmarks, clang, args):
     rows = []
     for index, benchmark in enumerate(benchmarks, 1):
-        print(f'[{index}/{len(benchmarks)}] {benchmark.id}', file=sys.stderr, flush=True)
+        print(f'[{index}/{len(benchmarks)}] LLVM baseline {benchmark.id}', file=sys.stderr, flush=True)
         try:
             result = vt.compile_report(clang, benchmark, False, args.timeout, compiler_mode='direct',
                 meta_script=args.llvm_path / 'utils/vplan-meta-compile')
         except (vt.ToolError, OSError) as exc:
             result = SimpleNamespace(returncode=1, stderr=str(exc))
-        row = selection_row(benchmark, result)
-        rows.append(row)
-        if not row['eligible']:
-            print(f"  {row['status']}: {row['reason']}", file=sys.stderr, flush=True)
+        rows.append(selection_row(benchmark, result))
+    return rows
+
+
+def main(argv=None):
+    parser = vt.argument_parser('Evaluate ordinary LLVM over the same database benchmark population.')
+    parser.set_defaults(compiler_mode='direct')
+    parser.add_argument('--benchmark')
+    parser.add_argument('--skip-build', action='store_true')
+    parser.add_argument('--output', type=vt.resolved_path, required=True)
+    args = parser.parse_args(argv)
+    if args.compiler_mode != 'direct': parser.error('baseline requires direct mode')
+    benchmarks, metadata = vt.load_database(args.db, args.benchmark)
+    if not benchmarks: raise vt.ToolError('no selected benchmarks')
+    from collection import validate_target, collector_identity
+    from evaluation import dataset_fingerprint
+    validate_target(metadata)
+    clang = vt.compiler_from_args(args)
+    started = time.perf_counter()
+    rows = evaluate_population(benchmarks, clang, args)
     summary = print_summary(rows, time.perf_counter() - started)
+    vt.write_json(args.output, dict(schema='mir-local-llvm-baseline-v1', rows=rows, metrics=summary,
+                  dataset_fingerprint=dataset_fingerprint(benchmarks, metadata),
+                  compiler_context=collector_identity(clang, args.llvm_path / 'utils/vplan-meta-compile')))
     return 0 if summary['scored'] and not summary['compile_failed'] else 1

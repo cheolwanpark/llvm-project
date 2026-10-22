@@ -1,10 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=movement:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-movement.json 0
-#
-# VLEN=128. TSFlags preserve fractional groups; all fractional slides issue
-# one chunk. M2/M4/M8 slide work is 2/4/8 chunks. Physical COPY keeps
-# whole-register grouping. No new copy instruction families are recognized.
-# Scalar broadcasts remain integer work. Setup and exit movements are excluded.
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
+# Preserve slide, copy and broadcast opcode/geometry facts across register groups.
 --- |
   define void @movement() #0 {
   entry:

@@ -70,7 +70,7 @@ void loadSelection(vfs::FileSystem &FS) {
   if (!Parsed)
     reportFatalUsageError(Twine(toString(Parsed.takeError())));
   auto *Root = Parsed->getAsObject();
-  if (!Root || Root->getInteger("version") != 3 ||
+  if (!Root || Root->getInteger("version") != 4 ||
       Root->getString("run_id") != StringRef(RunID))
     reportFatalUsageError("VPlan selection version/run mismatch");
   auto *Rows = Root->getArray("selections");
@@ -226,7 +226,7 @@ void llvm::finishVPlanRA(Module &M) {
         "unexpected/stale VPlan selection or candidate context changed");
   if (!Manifest.empty())
     writeVPlanRAJSON(Manifest,
-                     json::Object{{"version", 3},
+                     json::Object{{"version", 4},
                                   {"run_id", std::string(RunID)},
                                   {"triple", M.getTargetTriple().str()},
                                   {"loops", std::move(S.Loops)},

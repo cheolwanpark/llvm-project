@@ -17,9 +17,9 @@
 ; MANIFEST-DAG: "run_id":"test"
 ; MANIFEST-DAG: "scalar_cost":
 ; MANIFEST-DAG: "middle_end":
-; MANIFEST-DAG: "cost_scale":4
-; MANIFEST-DAG: "spill_units":
-; MANIFEST-DAG: "version":3
+; MANIFEST-DAG: "configuration_unit_quarters":
+; MANIFEST-DAG: "configuration_source":"TTI.getIntrinsicInstrCost(riscv_vsetvlimax)"
+; MANIFEST-DAG: "version":4
 ; MANIFEST-DAG: "selections":
 ; MANIFEST-NOT: "vf":"f1"
 ; BAD-RESUME: vplan resume requires a prepared checkpoint

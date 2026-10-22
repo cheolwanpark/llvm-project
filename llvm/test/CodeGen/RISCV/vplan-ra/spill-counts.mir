@@ -1,15 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=kernel:0:0:s4 -vplan-analytics-output=%t.raw.json %s -o %t.mir
-# RUN: %python %S/Inputs/project-spills.py %t.raw.json 16 > %t.json
-# RUN: FileCheck %s --implicit-check-not=resource_demand < %t.json
-# CHECK-DAG: "supported":true
-# CHECK-DAG: {"kind":"gpr","registers":1,"reloads":2,"spills":1}
-# CHECK-DAG: {"kind":"fpr","registers":1,"reloads":0,"spills":1}
-# CHECK-DAG: {"kind":"vector","registers":1,"reloads":1,"spills":1}
-# CHECK-DAG: {"kind":"vector","registers":2,"reloads":1,"spills":1}
-# CHECK-DAG: {"kind":"vector","registers":4,"reloads":0,"spills":1}
-# CHECK-DAG: {"kind":"vector","registers":8,"reloads":1,"spills":0}
-# CHECK-NOT: resource_demand
-# Ordinary stack traffic, preheader/exit spills, and DIV do not affect counts.
+# RUN: %python %S/Inputs/check-observation.py %t.raw.json
+# Observe ordinary and spill-slot memory transfers through the same instruction schema.
 --- |
   define void @kernel() #0 {
   entry:

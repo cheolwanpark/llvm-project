@@ -1,0 +1,96 @@
+{
+  "schema": "mir-local-fixed-validation-v1",
+  "date": "2026-10-22",
+  "evaluation": "one hardcoded machine model; no fitting or parameter search",
+  "identity": {
+    "model": "mir-local-fixed-v1",
+    "implementation_digest": "ce1da1d24623fe0736a2612ed5ee6b4eb193432c9b1e1593efa766c8469b271b",
+    "observation_schema": "mir-local-observation-v1",
+    "rule_version": "kunminghu-v2-minimal-decode-v1",
+    "rule_digest": "5dc652f2eff6701e3de00974f69d6fae8cc33cf352fde5cab03ce7e9729fafbc",
+    "rtl_revision": "e7bab53e66dfb3c4a1d11cf9519b0396f8576cae",
+    "stage": "post-ra-cleanup",
+    "machine_parameters": {
+      "cpu": "xiangshan-kunminghu",
+      "vlen": 128,
+      "forward_window": 4,
+      "backward_window": 4,
+      "coefficients": {
+        "basic_convert": 1.0,
+        "basic_divide": 1.0,
+        "basic_fp_alu": 1.0,
+        "basic_fp_multiply": 1.0,
+        "basic_integer": 1.0,
+        "basic_mask": 1.0,
+        "basic_memory": 1.0,
+        "basic_move": 1.0,
+        "basic_multiply": 1.0,
+        "basic_permute": 1.0,
+        "basic_scalar": 1.0,
+        "contention": 0.25,
+        "raw": 0.25,
+        "ilp": 0.125,
+        "middle_end_scale": 1.0
+      },
+      "pair_work": "min",
+      "accumulation": "sum",
+      "raw_contention": "add",
+      "configuration": true,
+      "scalar_tail": true,
+      "distance": "op-count",
+      "unknown_ilp": "exclude",
+      "configuration_ops": "excluded-from-body-and-windows"
+    }
+  },
+  "compiler_context": {
+    "schema": "mir-local-collection-v1",
+    "observation_schema": "mir-local-observation-v1",
+    "protocol": 4,
+    "compiler": "dbba61fe44413846f11c2c1fea5367884a2479a54e279011162a0fe1401440d7",
+    "extractor": "debfc826b423ef9d2e5343f6c6a17ace75206e287a6bc2f722eaa75e8bcac1ac",
+    "stage": "post-ra-cleanup",
+    "driver": "958399a0b91f91563b850add6eb092d2fcb0f22039dd40f08c95f9a196984152",
+    "collector": "94a311fb7d20a9045a82d73e916bff743d689d7bc63d98c3ed9413ab0c8874f1",
+    "tools": "b3c095417166fea00e633a1302c2ed0340c9ebd8d1cfd8e6624da919462d49f9",
+    "observations": "7bc1f3dcb1de546c0918ebbb2986dd9e7d5eb59cc5e4741932afe24b4ba864c1",
+    "headers": {
+      "cfloat": "23b12c5725e5ea5cfda996485e98084e87c1aeacf9279ea220be1f29d2f7f1af",
+      "cmath": "a7493ccdc00477ab40f5de313c7515446d1a2482bb8ad8057a735fcd2c517176",
+      "cstring": "64131275d872e9e903db7f5a8ba607d03326a21a8ab192a1ea52c4fa1f625d9d",
+      "math.h": "2d5fc3ecf58e80e9832664197309dc840ab6127df86322e58374e11d713df876",
+      "stdio.h": "764ebb73cbdd5c95fdcba64dd37a830ceea7228a10f2a7a2790f9bed07ac76a3",
+      "stdlib.h": "4cb5569a2b06bd63b57067841d6b41afd6c60f997555f312438cadb9367338f3",
+      "string.h": "27af7fcae8321fbe86d32803dc72fc57063f8d1fd13ef349fb69d86478840cc9"
+    }
+  },
+  "dataset_fingerprint": "543b8c22a15bc40c9f6aac74bbfa0c7d7682efcda41bd3b121c0c61ac2835634",
+  "database_sha256": "3d5e09ed2346be109a887192c36422073a4a6650b0f38cc29765d72ad063ff37",
+  "source_sha256": {
+    "utils/vplan-tools/cost_model.py": "0ff2a825e0ab4fc7a2c1b6e989773dc0e5eeb66d67e082e3022c318e149a0732",
+    "utils/vplan-tools/dependencies.py": "082ff8be9c3e78fd1c37e40e3bf68c247eaec154d4027de098e540964bffd90f",
+    "utils/vplan-tools/hardware.py": "5dc7659a521b20aa256f68a7351a8b2401ecde430cd911bc14625f311cee2871",
+    "utils/vplan-tools/rules/opcodes.json": "ca624e128c047874896f1d31b3af64c633824de44198329f1a958854a7f7840e",
+    "utils/vplan-tools/evaluation.py": "e172cd5d137180a88afc893ed2a89625ed988ff46642b0fe0b9b9e7cce96332c",
+    "utils/vplan-tools/collection.py": "94a311fb7d20a9045a82d73e916bff743d689d7bc63d98c3ed9413ab0c8874f1",
+    "utils/vplan-tools/selection.py": "3c86f9fefa8c53a401923d8ba2564a16d7f5238b265bad1be9d88cbeb76e57f8",
+    "utils/vplan-tools/vplan_tools.py": "b3c095417166fea00e633a1302c2ed0340c9ebd8d1cfd8e6624da919462d49f9",
+    "utils/vplan-tools/observations.py": "7bc1f3dcb1de546c0918ebbb2986dd9e7d5eb59cc5e4741932afe24b4ba864c1",
+    "utils/vplan-tools/workflow.py": "da65d21810fe5b3ce377a8413ab8e1bd895340c2859692772c21b82134281482",
+    "utils/vplan-meta-compile": "958399a0b91f91563b850add6eb092d2fcb0f22039dd40f08c95f9a196984152"
+  },
+  "commands": {
+    "evaluation": "uv run --project utils/vplan-tools python utils/vplan-tools/evaluate --build-dir build-local --skip-build --output-dir utils/vplan-tools/.cache/fixed-machine-2026-10-22",
+    "python_tests": "cd utils/vplan-tools && VPLAN_CLANG=/work/llvm-cost-model/build-local/bin/clang uv run python -B -m unittest discover -s tests -v",
+    "backend_tests": "uv run --project utils/vplan-tools python utils/vplan-tools/tests/run_backend.py --build-dir build-local"
+  },
+  "checks": {
+    "python_tests": 46,
+    "compiler_integration_passed": true,
+    "backend_regression_files": 35,
+    "replay_verified": 189,
+    "dependency_lock_checked": true,
+    "collection_and_measurement_free_scoring_candidates": 8
+  },
+  "raw_artifacts": "utils/vplan-tools/.cache/local-observations",
+  "reports_and_replay": "utils/vplan-tools/.cache/fixed-machine-2026-10-22"
+}

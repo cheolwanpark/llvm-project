@@ -1,8 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=kernel:0:0:s4 -vplan-analytics-output=%t.raw.json %s -o %t.mir
-# RUN: %python %S/Inputs/project-spills.py %t.raw.json 16 > %t.json
-# RUN: FileCheck %s --implicit-check-not=resource_demand < %t.json
-# CHECK-DAG: "supported":true
-# CHECK-DAG: {"kind":"vector","registers":1,"reloads":1,"spills":1}
+# RUN: %python %S/Inputs/check-observation.py %t.raw.json
+# Select the machine loop using the transported candidate identity.
 --- |
   define void @kernel() #0 {
   entry:

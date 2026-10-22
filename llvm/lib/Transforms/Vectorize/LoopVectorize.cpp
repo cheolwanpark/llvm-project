@@ -54,7 +54,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
-#include "llvm/Transforms/Vectorize/VPlanRA.h"
 #include "LoopVectorizationPlanner.h"
 #include "VPRecipeBuilder.h"
 #include "VPlan.h"
@@ -118,6 +117,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicsRISCV.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
@@ -146,6 +146,7 @@
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
+#include "llvm/Transforms/Vectorize/VPlanRA.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -6304,8 +6305,8 @@ LoopVectorizationPlanner::precomputeCosts(VPlan &Plan, ElementCount VF,
   return Cost;
 }
 
-// Transport exact quarter units, including saturated costs. Invalid costs are
-// facts about the middle-end model, not a reason to remove a probe candidate.
+// Transport the middle-end TTI configuration unit without rounding it.
+// An unavailable cost remains explicitly unknown in the candidate manifest.
 static json::Value quarterCost(InstructionCost Cost) {
   if (!Cost.isValid() || Cost < 0)
     return nullptr;
@@ -6314,41 +6315,18 @@ static json::Value quarterCost(InstructionCost Cost) {
 }
 
 InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
-                                              VPRegisterUsage *RU,
-                                              json::Object *Observation) const {
+                                               VPRegisterUsage *RU) const {
   VPCostContext CostCtx(CM.TTI, *CM.TLI, Plan, CM, Config.CostKind, PSE,
                         OrigLoop);
   CostCtx.Report = Config.CostReport;
   if (CostCtx.Report)
     CostCtx.Report->beginEvaluation(Plan, VF);
   InstructionCost Cost = precomputeCosts(Plan, VF, CostCtx);
-  if (Observation)
-    (*Observation)["precomputed"] = quarterCost(Cost);
   VP_COST_REPORT(CostCtx.Report,
                  OS << "      legacy_precomputed=" << Cost << '\n');
 
   // Now compute and add the VPlan-based cost.
   InstructionCost RegionCost = Plan.cost(VF, CostCtx);
-  if (Observation) {
-    (*Observation)["cost_scale"] = 4;
-    (*Observation)["vector_region"] = quarterCost(RegionCost);
-    (*Observation)["pressure"] =
-        bool(RU && Config.shouldConsiderRegPressureForVF(VF));
-    (*Observation)["estimated_spill"] = 0;
-    json::Array SpillUnits, ReloadUnits;
-    auto &Context = OrigLoop->getHeader()->getContext();
-    for (unsigned RC :
-         {CM.TTI.getRegisterClassForType(false, Type::getInt64Ty(Context)),
-          CM.TTI.getRegisterClassForType(false, Type::getFloatTy(Context)),
-          CM.TTI.getRegisterClassForType(true)}) {
-      SpillUnits.push_back(
-          quarterCost(CM.TTI.getRegisterClassSpillCost(RC, Config.CostKind)));
-      ReloadUnits.push_back(
-          quarterCost(CM.TTI.getRegisterClassReloadCost(RC, Config.CostKind)));
-    }
-    (*Observation)["spill_units"] = std::move(SpillUnits);
-    (*Observation)["reload_units"] = std::move(ReloadUnits);
-  }
   VP_COST_REPORT(CostCtx.Report,
                  OS << "      vector_region=" << RegionCost << '\n');
   Cost += RegionCost;
@@ -6357,8 +6335,6 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
   if (RU && Config.shouldConsiderRegPressureForVF(VF)) {
     InstructionCost SpillCost = RU->spillCost(
         CM.TTI, Config.CostKind, ForceTargetNumVectorRegs, CostCtx.Report);
-    if (Observation)
-      (*Observation)["estimated_spill"] = quarterCost(SpillCost);
     VP_COST_REPORT(CostCtx.Report,
                    OS << "      register_pressure=considered "
                          "policy=shouldConsiderRegPressureForVF spill_cost="
@@ -6399,8 +6375,6 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
     LLVM_DEBUG(dbgs() << "Invalid");
   LLVM_DEBUG(dbgs() << ")\n");
 #endif
-  if (Observation)
-    (*Observation)["original"] = quarterCost(Cost);
   return Cost;
 }
 
@@ -6410,18 +6384,28 @@ void LoopVectorizationPlanner::registerRACandidates() {
   for (const auto &P : VPlans) {
     Config.RA->registerPlan(*P);
     SmallVector<ElementCount> VFs(P->vectorFactors());
-    bool Pressure = any_of(VFs, [this](ElementCount VF) {
-      return Config.shouldConsiderRegPressureForVF(VF);
-    });
-    SmallVector<VPRegisterUsage, 8> RUs;
-    if (Pressure)
-      RUs = calculateRegisterUsageForPlan(*P, VFs, TTI, CM.ValuesToIgnore);
     for (unsigned I = 0; I < VFs.size(); ++I) {
       ElementCount VF = VFs[I];
       if (VF.isScalar())
         continue;
       json::Object MiddleEnd;
-      cost(*P, VF, Pressure ? &RUs[I] : nullptr, &MiddleEnd);
+      // Observe a real middle-end TTI query. Counts and placement of the
+      // eventual configurations belong to MIR; this is their shared TTI unit.
+      auto &Ctx = OrigLoop->getHeader()->getContext();
+      InstructionCost ConfigUnit = InstructionCost::getInvalid();
+      if (Config.CostKind == TargetTransformInfo::TCK_RecipThroughput &&
+          OrigLoop->getHeader()->getModule()->getTargetTriple().isRISCV()) {
+        Type *IntTy = Type::getInt64Ty(Ctx);
+        IntrinsicCostAttributes ICA(Intrinsic::riscv_vsetvlimax, IntTy,
+                                    {IntTy, IntTy});
+        ConfigUnit = CM.TTI.getIntrinsicInstrCost(ICA, Config.CostKind);
+      }
+      MiddleEnd = json::Object{
+          {"configuration_unit_quarters", quarterCost(ConfigUnit)},
+          {"configuration_source",
+           "TTI.getIntrinsicInstrCost(riscv_vsetvlimax)"},
+          {"configuration_scope", "per-observed-MIR-configuration"},
+          {"unit", "TTI-reciprocal-throughput-quarter"}};
       Config.RA->recordCandidate(
           *P, VF, estimateElementCount(VF, Config.getVScaleForTuning()),
           std::move(MiddleEnd));

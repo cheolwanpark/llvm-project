@@ -1,17 +1,15 @@
 # RUN: split-file %s %t
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-analytics-output=%t/population.out.json.analytics %t/population.mir -o %t/population.out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/population.out.json.analytics %S/Inputs/resource-mask-fallback.json 0
+# RUN: %python %S/Inputs/check-observation.py %t/population.out.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-analytics-output=%t/first.out.json.analytics %t/first.mir -o %t/first.out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/first.out.json.analytics %S/Inputs/resource-mask-fallback.json 1
+# RUN: %python %S/Inputs/check-observation.py %t/first.out.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-analytics-output=%t/prefix.out.json.analytics %t/prefix.mir -o %t/prefix.out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/prefix.out.json.analytics %S/Inputs/resource-mask-fallback.json 2
+# RUN: %python %S/Inputs/check-observation.py %t/prefix.out.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-analytics-output=%t/load.out.json.analytics %t/load.mir -o %t/load.out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/load.out.json.analytics %S/Inputs/resource-mask-fallback.json 3
+# RUN: %python %S/Inputs/check-observation.py %t/load.out.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_fallback:0:0:s4 -vplan-analytics-output=%t/store.out.json.analytics %t/store.mir -o %t/store.out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/store.out.json.analytics %S/Inputs/resource-mask-fallback.json 4
-# All fixtures satisfy the verifier, including mask SEW=0 and single VRs.
-# Accept the Boolean prefix, then retain unsupported fallback for each distinct
-# mask operation. Do not enable general VM families, mask memory or reductions.
+# RUN: %python %S/Inputs/check-observation.py %t/store.out.json.analytics
+# Observe diverse mask operations without assigning backend costs or fallback formulas.
 #--- population.mir
 --- |
   define void @mask_fallback() #0 {

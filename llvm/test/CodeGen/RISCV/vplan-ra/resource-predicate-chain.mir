@@ -1,8 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=chain:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-predicate-chain.json 0
-#
-# Carry proven identity along a unique forward edge, with repeated copies in
-# the successor. Ignore the backedge and any setup predicate provenance.
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
+# Observe masked operands across a forward CFG edge without assuming a circular multi-block path.
 --- |
   define void @chain() #0 {
   entry:

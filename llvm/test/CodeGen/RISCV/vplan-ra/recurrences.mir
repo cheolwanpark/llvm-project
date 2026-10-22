@@ -1,51 +1,45 @@
 # RUN: split-file %s %t
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/dependent.json.analytics %t/dependent.mir -o %t/dependent-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/dependent.json.analytics %S/Inputs/recurrences.json 0
+# RUN: %python %S/Inputs/check-observation.py %t/dependent.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/independent.json.analytics %t/independent.mir -o %t/independent-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/independent.json.analytics %S/Inputs/recurrences.json 1
+# RUN: %python %S/Inputs/check-observation.py %t/independent.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/tied-dependent.json.analytics %t/tied-dependent.mir -o %t/tied-dependent-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/tied-dependent.json.analytics %S/Inputs/recurrences.json 2
+# RUN: %python %S/Inputs/check-observation.py %t/tied-dependent.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/tied-independent.json.analytics %t/tied-independent.mir -o %t/tied-independent-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/tied-independent.json.analytics %S/Inputs/recurrences.json 3
+# RUN: %python %S/Inputs/check-observation.py %t/tied-independent.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/grouped.json.analytics %t/grouped.mir -o %t/grouped-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/grouped.json.analytics %S/Inputs/recurrences.json 4
+# RUN: %python %S/Inputs/check-observation.py %t/grouped.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/alias-overwrite.json.analytics %t/alias-overwrite.mir -o %t/alias-overwrite-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/alias-overwrite.json.analytics %S/Inputs/recurrences.json 5
+# RUN: %python %S/Inputs/check-observation.py %t/alias-overwrite.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/alias-reuse.json.analytics %t/alias-reuse.mir -o %t/alias-reuse-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/alias-reuse.json.analytics %S/Inputs/recurrences.json 6
+# RUN: %python %S/Inputs/check-observation.py %t/alias-reuse.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/overwrite.json.analytics %t/overwrite.mir -o %t/overwrite-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/overwrite.json.analytics %S/Inputs/recurrences.json 7
+# RUN: %python %S/Inputs/check-observation.py %t/overwrite.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/undef.json.analytics %t/undef.mir -o %t/undef-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/undef.json.analytics %S/Inputs/recurrences.json 8
+# RUN: %python %S/Inputs/check-observation.py %t/undef.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/passthrough.json.analytics %t/passthrough.mir -o %t/passthrough-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/passthrough.json.analytics %S/Inputs/recurrences.json 9
+# RUN: %python %S/Inputs/check-observation.py %t/passthrough.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/load-reuse.json.analytics %t/load-reuse.mir -o %t/load-reuse-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/load-reuse.json.analytics %S/Inputs/recurrences.json 10
+# RUN: %python %S/Inputs/check-observation.py %t/load-reuse.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/implicit-def.json.analytics %t/implicit-def.mir -o %t/implicit-def-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/implicit-def.json.analytics %S/Inputs/recurrences.json 11
+# RUN: %python %S/Inputs/check-observation.py %t/implicit-def.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/fractional.json.analytics %t/fractional.mir -o %t/fractional-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/fractional.json.analytics %S/Inputs/recurrences.json 12
+# RUN: %python %S/Inputs/check-observation.py %t/fractional.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/e64.json.analytics %t/e64.mir -o %t/e64-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/e64.json.analytics %S/Inputs/recurrences.json 13
+# RUN: %python %S/Inputs/check-observation.py %t/e64.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/masked.json.analytics %t/masked.mir -o %t/masked-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/masked.json.analytics %S/Inputs/recurrences.json 14
+# RUN: %python %S/Inputs/check-observation.py %t/masked.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/integer.json.analytics %t/integer.mir -o %t/integer-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/integer.json.analytics %S/Inputs/recurrences.json 15
+# RUN: %python %S/Inputs/check-observation.py %t/integer.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/branching.json.analytics %t/branching.mir -o %t/branching-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/branching.json.analytics %S/Inputs/recurrences.json 16
+# RUN: %python %S/Inputs/check-observation.py %t/branching.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/multiple-backedges.json.analytics %t/multiple-backedges.mir -o %t/multiple-backedges-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/multiple-backedges.json.analytics %S/Inputs/recurrences.json 17
+# RUN: %python %S/Inputs/check-observation.py %t/multiple-backedges.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/widening.json.analytics %t/widening.mir -o %t/widening-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/widening.json.analytics %S/Inputs/recurrences.json 18
+# RUN: %python %S/Inputs/check-observation.py %t/widening.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=recurrence:0:0:s4 -vplan-analytics-output=%t/reduction.json.analytics %t/reduction.mir -o %t/reduction-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/reduction.json.analytics %S/Inputs/recurrences.json 19
-#
-# Identical instruction totals can describe a two-step recurrence, independent
-# arithmetic, two serial tied FMAs, or two independent FMA accumulators. Only
-# true value dependencies cross the backedge. Partial alias writes, complete
-# overwrites, undef, implicit definitions, and tail passthrough break a chain.
-# LMUL aliases share physical register units: v9 overwrites part of v8m2.
-#
+# RUN: %python %S/Inputs/check-observation.py %t/reduction.json.analytics
+# Physical reaching-definition fixtures covering direct, transitive and loop-carried register values.
 
 #--- dependent.mir
 --- |

@@ -1,9 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+zvbb -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=integer:0:0:f1 -vplan-analytics-output=%t.analytics.json %s -o /dev/null
-# RUN: %python %S/Inputs/check-raw.py %t.analytics.json %S/Inputs/resource-integer-families.json 0
-# RUN: %python -c "import json; a=json.load(open('%t.analytics.json')); i=[i for i in a['Instructions'] if i['Category']=='integer']; assert len(i)==4; assert all(not x['Barrier'] for x in i); assert [x['Group8'] for x in i]==[8,8,16,16]"
-#
-# Preserve raw instruction categories and source/destination register groups.
-# Python model tests cover the corresponding integer service formula.
+# RUN: %python %S/Inputs/check-observation.py %t.analytics.json
+# Preserve exact integer base opcodes, operand positions and physical register groups.
 --- |
   define void @integer() #0 {
   entry:

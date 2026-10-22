@@ -1,10 +1,8 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=mask_provenance:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-mask-provenance.json 0
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=none -verify-machineinstrs %s -o %t.before.mir
 # RUN: diff %t.before.mir %t.mir
-# Boolean definitions invalidate old predicate identities; full copies retain
-# surviving values. Even repeated clear/set and self-XOR create new identities.
-# These are conservative value proofs, not Boolean algebra or mask density.
+# Observe mask definitions, full copies and grouped aliases as physical register facts.
 --- |
   define void @mask_provenance() #0 {
   entry:

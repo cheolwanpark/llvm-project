@@ -1,8 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=unsupported:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-movement-unsupported.json 0
-# A supported slide followed by an unsupported gather must retain fallback.
-# The partial observation proves the slide was accepted before the gather
-# stopped collection: no loop-control instructions after it were observed.
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
+# Observe the complete slide/gather sequence; hardware coverage belongs to Python.
 --- |
   define void @unsupported() #0 {
   entry:

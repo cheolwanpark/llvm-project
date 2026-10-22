@@ -9,10 +9,10 @@
 ; CHECK: %index.next = add nuw i64 %index, 2
 ; CHECK: "vplan.ra.iteration-mapping"="1"
 ; CHECK-SAME: "vplan.ra.width"="2"
-; ANALYTICS-DAG: "Error":""
-; ANALYTICS-DAG: "Width":2
-; ANALYTICS-DAG: "ScalableVF":true
-; ANALYTICS-DAG: "VF":1,
+; ANALYTICS-DAG: "error":""
+; ANALYTICS-DAG: "iteration_width":2
+; ANALYTICS-DAG: "scalable":true
+; ANALYTICS-DAG: "vf":1,
 
 define void @stream(ptr noalias %a, ptr noalias %b, ptr noalias %c) #0 {
 entry:

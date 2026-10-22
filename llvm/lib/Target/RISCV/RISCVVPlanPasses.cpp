@@ -1,5 +1,4 @@
-//===- RISCVVPlanPasses.cpp - Analytics and cost pass adapters
-//--------------===//
+//===- RISCVVPlanPasses.cpp - Passive MIR observation pass -----------------===//
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #include "RISCV.h"
@@ -8,7 +7,6 @@
 #include "llvm/IR/Function.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Transforms/Vectorize/VPlanRA.h"
 using namespace llvm;
 static cl::opt<std::string>
@@ -34,7 +32,7 @@ bool RISCVVPlanAnalytics::runOnMachineFunction(MachineFunction &MF) {
   Seen = true;
   auto Result = vplan::collectAnalytics(MF);
   if (!AnalyticsOutput.empty())
-    writeVPlanRAJSON(AnalyticsOutput, vplan::toJSON(Result));
+    writeVPlanRAJSON(AnalyticsOutput, json::Value(std::move(Result)));
   return false;
 }
 bool RISCVVPlanAnalytics::doFinalization(Module &) {

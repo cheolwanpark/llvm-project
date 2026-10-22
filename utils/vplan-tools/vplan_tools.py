@@ -7,7 +7,6 @@ import fcntl
 import hashlib
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field, replace
-from fractions import Fraction
 import json
 import math
 import os
@@ -22,7 +21,7 @@ import tempfile
 
 TOOLS = Path(__file__).resolve().parent
 DEFAULT_LLVM = TOOLS.parents[1]
-DEFAULT_DB = DEFAULT_LLVM / "dataset.sqlite"
+DEFAULT_DB = DEFAULT_LLVM / "search-dataset.sqlite"
 
 
 from model_errors import ToolError
@@ -93,6 +92,12 @@ def load_database(path: Path, benchmark_id: str | None = None) -> tuple[list[Ben
                 if row["vf"] in values:
                     raise ValueError("duplicate measurement VF")
                 values[row["vf"]] = row["cycles"]
+            if not benchmark_id and db.execute(
+                "SELECT 1 FROM measurements m LEFT JOIN benchmarks b ON b.id=m.benchmark_id "
+                "WHERE b.id IS NULL LIMIT 1").fetchone():
+                raise ValueError("measurement references an unknown benchmark")
+            if len({row["id"] for row in rows}) != len(rows):
+                raise ValueError("duplicate benchmark ID")
             benchmarks = []
             for row in rows:
                 args = json.loads(row["compile_args_json"])
@@ -101,7 +106,7 @@ def load_database(path: Path, benchmark_id: str | None = None) -> tuple[list[Ben
                         or not isinstance(workload, dict)
                         or not isinstance(row["id"], str) or not row["id"]
                         or not isinstance(row["source"], str) or not row["source"]
-                        or row["split"] not in ("tuning", "validation")):
+                        or not isinstance(row["split"], str)):
                     raise ValueError(f"invalid benchmark: {row['id']}")
                 benchmarks.append(Benchmark(row["id"], row["split"], row["source"], args,
                                             workload, measurements.get(row["id"], {})))
@@ -128,7 +133,7 @@ def argument_parser(description: str) -> argparse.ArgumentParser:
                         help="LLVM source checkout (default: the checkout containing these tools)")
     parser.add_argument("--db", type=resolved_path,
                         default=os.environ.get("VPLAN_DB") or str(DEFAULT_DB),
-                        help="dataset database (--db > VPLAN_DB > checkout/dataset.sqlite)")
+                        help="dataset database (--db > VPLAN_DB > checkout/search-dataset.sqlite)")
     parser.add_argument("--build-dir", type=resolved_path,
                         help="build directory (default: LLVM checkout/build-vplan-tools)")
     parser.add_argument("--jobs", type=positive_int, default=2,
@@ -284,8 +289,7 @@ def source_name(benchmark: Benchmark) -> str:
 def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int,
                    compiler_mode: str = "meta", meta_script: Path | None = None,
                    artifacts_dir: Path | None = None,
-                   *, stop_after_ra: bool = False, analytics_only: bool = False,
-                   weights: Path | None = None, spill_count_unit: str | None = None) -> subprocess.CompletedProcess:
+                   *, stop_after_ra: bool = False, analytics_only: bool = False) -> subprocess.CompletedProcess:
     flags = benchmark_flags(benchmark)
     with tempfile.TemporaryDirectory(prefix="vplan-tools-") as temporary:
         root = Path(temporary)
@@ -312,10 +316,6 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                 command += ["--stop-after-ra"]
             if analytics_only:
                 command += ["--analytics-only"]
-            if weights:
-                command += ["--weights", str(weights)]
-            if spill_count_unit:
-                command += ["--spill-count-unit", spill_count_unit]
             if detail:
                 command.append("--detail")
             command += ["--", *flags]
@@ -330,10 +330,6 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                         result.selection = json.loads((root / "backend/selection.json").read_text())
                     if not stop_after_ra:
                         result.final_manifest = json.loads((root / "backend/final.manifest.json").read_text())
-                    if detail:
-                        result.stderr += (root / "backend/discover.stderr").read_text()
-                        for log in sorted((root / "backend").glob("probe-*.stderr")):
-                            result.stderr += log.read_text()
                 return result
             except OSError as exc:
                 raise ToolError(f"cannot execute meta-compiler: {exc}") from exc
@@ -400,179 +396,74 @@ def spearman(predicted: list, measured: list) -> float | None:
     return max(-1.0, min(1.0, numerator / denominator)) if denominator else None
 
 
-@dataclass
-class Result:
-    benchmark: Benchmark
-    scores: dict[int, Fraction | float] = field(default_factory=dict)
-    reason: str | None = None
-    compile_failed: bool = False
-
-    @property
-    def eligible(self) -> bool:
-        return self.reason is None and len(self.benchmark.measured) >= 2
-
-    @property
-    def top1_regret(self) -> float | None:
-        if not self.eligible:
-            return None
-        measured = self.benchmark.measured
-        best_cycles = min(measured.values())
-        if best_cycles <= 0:
-            return None
-        winner = min(measured, key=lambda vf: (self.scores[vf], vf))
-        return measured[winner] / best_cycles - 1
-
-
-def score_benchmark(benchmark: Benchmark, scores: dict[int, Fraction | float]) -> Result:
-    measured = benchmark.measured
-    missing = sorted(measured.keys() - scores.keys())
-    if missing:
-        return Result(benchmark, scores, "missing predicted costs for measured VF(s): " +
-                      ", ".join(f"s{vf}" for vf in missing))
-    if len(measured) < 2:
-        return Result(benchmark, scores, f"insufficient successful measurements ({len(measured)})")
-    return Result(benchmark, {vf: scores[vf] for vf in measured})
-
-
-def percentile(values: list[float], probability: float) -> float:
+def percentile(values, probability):
     ordered = sorted(values)
     index = (len(ordered) - 1) * probability
-    lower = math.floor(index)
-    upper = math.ceil(index)
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * (index - lower)
+    low, high = math.floor(index), math.ceil(index)
+    return ordered[low] + (ordered[high] - ordered[low]) * (index - low)
 
 
-def aggregate(results: list[Result]) -> dict:
-    eligible = [r for r in results if r.eligible]
-    metrics = {"total": len(results),
-               "measured": sum(bool(r.benchmark.measured) for r in results),
-               "scored": len(eligible), "excluded": len(results) - len(eligible),
-               "compile_failed": sum(r.compile_failed for r in results), "topk": {}}
-    for k in (1, 2):
-        overlaps, exact = [], []
-        for result in eligible:
-            measured = result.benchmark.measured
-            if len(measured) <= k:
-                continue
-            predicted_top = set(sorted(measured, key=lambda vf: (result.scores[vf], vf))[:k])
-            measured_top = set(sorted(measured, key=lambda vf: (measured[vf], vf))[:k])
-            overlaps.append(len(predicted_top & measured_top) / k)
-            exact.append(predicted_top == measured_top)
-        metrics["topk"][k] = {"n": len(overlaps),
-                              "overlap": statistics.mean(overlaps) if overlaps else None,
-                              "exact": statistics.mean(exact) if exact else None}
-    correlations, regrets = [], []
-    predicted_ties = measured_ties = 0
-    for result in eligible:
-        measured = result.benchmark.measured
-        vfs = sorted(measured)
-        predicted_values = [result.scores[vf] for vf in vfs]
-        measured_values = [measured[vf] for vf in vfs]
-        predicted_ties += len(set(predicted_values)) < len(vfs)
-        measured_ties += len(set(measured_values)) < len(vfs)
-        correlation = spearman(predicted_values, measured_values)
-        if correlation is not None:
-            correlations.append(correlation)
-        regret = result.top1_regret
-        if regret is not None:
-            regrets.append(regret)
-    metrics.update(correlations=correlations, regrets=regrets,
-                   predicted_ties=predicted_ties, measured_ties=measured_ties)
-    return metrics
-
-
-def summary_json(results: list[Result]) -> dict:
-    """Summarize numerical rankings with benchmark-level denominators."""
-    metrics = aggregate(results)
-    correlations = metrics.pop("correlations")
-    regrets = metrics.pop("regrets")
-    metrics["spearman"] = {
-        "n": len(correlations),
-        "mean": statistics.mean(correlations) if correlations else None,
-        "median": statistics.median(correlations) if correlations else None,
-    }
-    metrics["top1_regret"] = {
-        "n": len(regrets),
-        "mean": statistics.mean(regrets) if regrets else None,
-        "median": statistics.median(regrets) if regrets else None,
-        "p95": percentile(regrets, .95) if regrets else None,
-    }
-    return metrics
-
-
-def result_json(result: Result) -> dict:
-    measured = result.benchmark.measured
-    winner = min(measured, key=lambda vf: (result.scores[vf], vf)) if result.eligible else None
-    return {
-        "id": result.benchmark.id, "split": result.benchmark.kind,
-        "eligible": result.eligible, "reason": result.reason,
-        "compile_failed": result.compile_failed,
-        "measured_cycles": {str(vf): cycles for vf, cycles in measured.items()},
-        "ignored_measured_cycles": {str(vf): cycles for vf, cycles in result.benchmark.ignored_measured.items()},
-        "scores": {str(vf): ({"numerator": cost.numerator, "denominator": cost.denominator}
-                            if isinstance(cost, Fraction) else {"value": float(cost)})
-                   for vf, cost in result.scores.items()},
-        "predicted_best": winner, "top1_regret": result.top1_regret,
-    }
-
-
-def write_json(path: Path, value: dict) -> None:
+def write_json(path, value):
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
+    temporary = path.with_name(f'.{path.name}.{os.getpid()}.tmp')
+    temporary.write_text(json.dumps(value, indent=2, allow_nan=False) + '\n')
     temporary.replace(path)
 
 
-def report_name(benchmark_id: str) -> str:
-    return (re.sub(r"[^A-Za-z0-9_.-]", "_", benchmark_id) + "-"
-            + hashlib.sha256(benchmark_id.encode()).hexdigest()[:8])
+def report_name(benchmark_id):
+    return re.sub(r'[^A-Za-z0-9_.-]', '_', benchmark_id) + '-' + hashlib.sha256(benchmark_id.encode()).hexdigest()[:8]
 
 
-def print_vplans_main(argv: list[str] | None = None) -> int:
-    parser = argument_parser("Print VPlan costs for a benchmark stored in a dataset database.")
-    parser.add_argument("--benchmark", required=True, help="exact benchmark ID")
-    parser.add_argument("--detail", action="store_true", help="include detailed cost calculations")
-    parser.add_argument("--weights", type=resolved_path)
-    parser.add_argument("--spill-count-unit", choices=("instruction", "register"))
+def compiler_from_args(args):
+    if not args.skip_build: return ensure_compiler(args.llvm_path, args.build_dir, args.jobs)
+    clang = (args.build_dir or args.llvm_path / 'build-vplan-tools') / 'bin/clang'
+    if not all(p.is_file() and os.access(p, os.X_OK) for p in (clang, clang.parent / 'llvm-extract')):
+        raise ToolError('missing compiler/extractor; build first or omit --skip-build')
+    return clang
+
+
+def print_report(value, detail=False):
+    print(f"{value['candidate']} vf={value['vf']} width={value['iteration_width']} score={value['score']:.8g} model-effect ({value['scope']})")
+    print(f"  basic={value['basic']:.8g} stall={value['stall']:.8g} ilp={value['ilp']:.8g} body={value['body_cost']:.8g} middle-end={value['middle_end_cost']:.8g}")
+    for op in value['ops']:
+        print(f"  op {op['id']:3} basic={op['basic']:.6g} stall={op['stall']:.6g} ilp={op['ilp']:.6g} net={op['net']:.6g} {op['mir'].strip()}")
+        if detail: print('    ' + json.dumps(op['hardware'], sort_keys=True))
+    if detail:
+        for pair in value['pairs']:
+            print(f"    pair {pair['anchor']} -> ({pair['other']}, iter {pair['iteration_offset']:+}) {pair['direction']} distance={pair['distance']} dependency={pair['dependency']} overlap={pair['overlap']} contributions={pair['contributions']}")
+    print('  coverage=' + json.dumps(value['coverage'], sort_keys=True))
+    print('  diagnostics=' + json.dumps(value['diagnostics'], sort_keys=True))
+
+
+def print_vplans_main(argv=None):
+    parser = argument_parser('Collect and report local MIR interaction costs.')
+    parser.add_argument('--benchmark', required=True)
+    parser.add_argument('--detail', action='store_true')
+    parser.add_argument('--skip-build', action='store_true')
+    parser.add_argument('--artifacts-dir', type=resolved_path, required=True, help='retain raw MIR, observations and the matching score reports')
+    parser.add_argument('--replay', action='store_true', help='compile and verify the selected candidates')
     args = parser.parse_args(argv)
-    from selection import load_policy
-    if args.compiler_mode == "direct" and (args.weights or args.spill_count_unit):
-        raise ToolError("direct compilation does not consume policy weights/options")
-    benchmarks, _ = load_database(args.db, benchmark_id=args.benchmark)
-    benchmark = next((b for b in benchmarks if b.id == args.benchmark), None)
-    if benchmark is None:
-        raise ToolError(f"unknown benchmark: {args.benchmark}")
-    if args.compiler_mode == "meta":
-        load_policy(args.llvm_path, args.weights, args.spill_count_unit)
-    clang = ensure_compiler(args.llvm_path, args.build_dir, args.jobs)
-    result = compile_report(clang, benchmark, args.detail, args.timeout,
-                            compiler_mode=args.compiler_mode,
-                            meta_script=args.llvm_path.resolve() / "utils/vplan-meta-compile",
-                            stop_after_ra=args.compiler_mode == "meta", weights=args.weights,
-                            spill_count_unit=args.spill_count_unit)
-    if args.compiler_mode == "meta" and result.returncode == 0:
-        for row in result.candidate_status["candidates"]:
-            print(f"{row['id']}: {row['status']} " + (f"score={row['score']:.12g}" if 'score' in row else row.get('reason', '')))
-            if args.detail and 'breakdown' in row:
-                print(json.dumps(row['breakdown'], sort_keys=True))
-        for choice in result.selection["selections"]:
-            print(f"{choice['function']} loop={choice['loop']}: " +
-                  ("scalar (" + choice['reason'] + ")" if choice['scalar'] else "selected=" + choice['id']) +
-                  " IC=1 epilogue=f0")
-    sys.stdout.write(result.stderr)
-    if result.returncode:
-        raise ToolError(f"compilation failed for {benchmark.id} (exit {result.returncode})")
-    if args.compiler_mode == "direct" and "VPlan report_version=" not in result.stderr:
-        print(f"{benchmark.id}: compilation succeeded but LLVM emitted no VPlan report", file=sys.stderr)
+    if args.compiler_mode != 'meta': parser.error('use evaluate-baseline for ordinary LLVM reports')
+    benchmarks, _ = load_database(args.db, args.benchmark)
+    if not benchmarks: raise ToolError(f'unknown benchmark {args.benchmark}')
+    clang = compiler_from_args(args)
+    result = compile_report(clang, benchmarks[0], False, args.timeout, artifacts_dir=args.artifacts_dir,
+                            meta_script=args.llvm_path / 'utils/vplan-meta-compile', stop_after_ra=not args.replay)
+    if result.returncode: raise ToolError(result.stderr)
+    for status in result.candidate_status['candidates']:
+        if status['status'] == 'scored': print_report(status['breakdown'], args.detail)
+        else: print(f"{status['id']}: {status['status']}: {status.get('reason', '')}")
+    print('Selections: ' + json.dumps(result.selection['selections']))
+    print(f'Artifacts: {result.artifact_root}')
     return 0
 
 
-def cli(main) -> None:
-    try:
-        raise SystemExit(main())
+def cli(main):
+    try: raise SystemExit(main())
     except (ToolError, OSError, subprocess.CalledProcessError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f'error: {exc}', file=sys.stderr)
         raise SystemExit(1)
     except KeyboardInterrupt:
-        print("interrupted", file=sys.stderr)
+        print('interrupted', file=sys.stderr)
         raise SystemExit(130)

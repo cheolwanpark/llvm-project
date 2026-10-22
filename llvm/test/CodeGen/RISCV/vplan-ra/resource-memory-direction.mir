@@ -1,16 +1,9 @@
 # RUN: split-file %s %t
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loads:0:0:s4 -vplan-analytics-output=%t.loads.json.analytics %t/loads.mir -o %t.loads.mir
-# RUN: %python %S/Inputs/check-raw.py %t.loads.json.analytics %S/Inputs/resource-memory-direction.json 0
+# RUN: %python %S/Inputs/check-observation.py %t.loads.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=stores:0:0:s4 -vplan-analytics-output=%t.stores.json.analytics %t/stores.mir -o %t.stores.mir
-# RUN: %python %S/Inputs/check-raw.py %t.stores.json.analytics %S/Inputs/resource-memory-direction.json 1
-#
-# No MachineMemOperands are supplied: load/store direction must come from
-# instruction descriptor metadata. Identical loads and stores preserve access
-# class, SEW, fractional/integral data grouping, index grouping, masking and
-# predicate provenance. Configuration and loop-control instructions are not
-# operation records. Mixed directions and spill exclusion are checked in
-# resource-demand.mir.
-#
+# RUN: %python %S/Inputs/check-observation.py %t.stores.json.analytics
+# Preserve descriptor load/store direction and operand geometry even without memory operands.
 
 #--- loads.mir
 --- |

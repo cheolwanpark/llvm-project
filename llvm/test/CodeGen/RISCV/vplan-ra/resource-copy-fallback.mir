@@ -1,13 +1,9 @@
 # RUN: split-file %s %t
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-analytics-output=%t.slide.json.analytics %t/slide.mir -o %t.slide.mir
-# RUN: %python %S/Inputs/check-raw.py %t.slide.json.analytics %S/Inputs/resource-copy-fallback.json 0
+# RUN: %python %S/Inputs/check-observation.py %t.slide.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-analytics-output=%t.gather.json.analytics %t/gather.mir -o %t.gather.mir
-# RUN: %python %S/Inputs/check-raw.py %t.gather.json.analytics %S/Inputs/resource-copy-fallback.json 1
-#
-# A physical copy and arithmetic precede a now-supported slide or a gather.
-# The gather still rejects the complete loop and retains original costs.
-# Its unsupported instruction and later loop control must not be accumulated.
-#
+# RUN: %python %S/Inputs/check-observation.py %t.gather.json.analytics
+# Observe copies, slides and gathers without truncating the raw instruction list.
 #--- slide.mir
 --- |
   define void @fallback() #0 {

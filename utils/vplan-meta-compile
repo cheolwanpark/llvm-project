@@ -13,7 +13,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent / "vplan-tools"))
 from model_errors import ToolError
 from observations import validate_manifest, bind_observation
-from selection import load_policy, select_loops
+from selection import Policy, select_loops
 
 class MetaCompileError(ToolError):
     pass
@@ -115,13 +115,10 @@ class Driver:
             raise MetaCompileError(f"invalid manifest {path}: {exc}") from exc
 
     def compile(self, output: Path | None, emit: str, stop_after_ra: bool,
-                detail: bool, analytics_only: bool = False, weights_path: Path | None = None,
-                spill_count_unit: str | None = None) -> dict:
+                detail: bool, analytics_only: bool = False) -> dict:
         if analytics_only and not stop_after_ra:
             raise MetaCompileError("--analytics-only requires --stop-after-ra")
-        if analytics_only and (weights_path or spill_count_unit):
-            raise MetaCompileError("raw analytics do not consume weights or spill count options")
-        policy = None if analytics_only else load_policy(weights_path=weights_path, spill_count_unit=spill_count_unit)
+        policy = None if analytics_only else Policy()
         validate_flags(self.flags)
         if self.work.exists() and any(self.work.iterdir()):
             raise MetaCompileError(f"work directory must be empty: {self.work}")
@@ -137,16 +134,15 @@ class Driver:
             checkpoint.rename(self.work / "module-pre-vectorize.bc")
             extracted.rename(checkpoint)
         identity = {"checkpoint": digest(checkpoint), "compiler": digest(self.clang),
-                    "flags": self.flags, "protocol": 3,
+                    "flags": self.flags, "protocol": 4,
                     "extract_function": self.extract_function}
         run_id = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         write_json(self.work / "identity.json", identity | {"run_id": run_id})
         common = [*resume_flags(self.flags), "-x", "ir", str(checkpoint),
                   *llvm_flag("vplan-pipeline", "resume"),
                   *llvm_flag("vplan-ra-run-id", run_id)]
-        report_flags = ["-mllvm", "-print-vplans", "-mllvm", "-print-detailed-vplans"] if detail else []
         manifest_path = self.work / "candidates.json"
-        self.run("discover", [*common, *report_flags, *llvm_flag("vplan-candidates-output", str(manifest_path)),
+        self.run("discover", [*common, *llvm_flag("vplan-candidates-output", str(manifest_path)),
                               "-S", "-emit-llvm", "-o", str(self.work / "discovery.ll")])
         manifest = self.manifest(manifest_path, run_id)
         statuses = []
@@ -163,7 +159,7 @@ class Driver:
             probe_manifest = self.work / f"{label}.manifest.json"
             mir = self.work / f"{label}.mir"
             try:
-                self.run(label, [*common, *report_flags,
+                self.run(label, [*common,
                     *llvm_flag("vplan-probe-candidate", row["id"]),
                     *llvm_flag("vplan-candidates-output", str(probe_manifest)),
                     *llvm_flag("vplan-analytics-output", str(analytics_path)),
@@ -196,21 +192,30 @@ class Driver:
                     raise ValueError("missing MIR")
             except (OSError, ValueError) as exc:
                 raise MetaCompileError(f"{label}: invalid backend result: {exc}") from exc
-            status.update(status="collected", analytics=str(analytics_path), vlen=observation["VLen"])
+            status.update(status="collected", analytics=str(analytics_path), vlen=observation["vlen"])
             if not analytics_only:
                 try:
                     status.update(policy.evaluate(row, observation))
                 except ToolError as exc:
                     status.update(status="unsupported", reason=str(exc))
+        if detail and not analytics_only:
+            from contextlib import redirect_stdout
+            from vplan_tools import print_report
+            with redirect_stdout(sys.stderr):
+                for status in statuses:
+                    if status['status'] == 'scored':
+                        print_report(status['breakdown'], detail=True)
+                    else:
+                        print(f"{status['id']}: {status['status']}: {status.get('reason', '')}")
         statuses_path = self.work / "candidate-status.json"
-        write_json(statuses_path, {"version": 3, "run_id": run_id, "candidates": statuses,
+        write_json(statuses_path, {"version": 4, "run_id": run_id, "candidates": statuses,
                                    "policy": policy.identity if policy else None})
         selection_path = self.work / "selection.json"
         if not analytics_only:
             selections = select_loops(policy, manifest, statuses)
-            write_json(selection_path, {"version": 3, "run_id": run_id,
+            write_json(selection_path, {"version": 4, "run_id": run_id,
                 "loops": manifest["loops"], "candidates": manifest["candidates"], "selections": selections})
-        result = {"version": 3, "run_id": run_id, "candidates": len(statuses),
+        result = {"version": 4, "run_id": run_id, "candidates": len(statuses),
                   "manifest": str(manifest_path), "candidate_status": str(statuses_path),
                   "stage": "post-ra-cleanup", "analytics_only": analytics_only}
         if not analytics_only:
@@ -225,7 +230,7 @@ class Driver:
             actions = {"llvm": ["-S", "-emit-llvm"], "asm": ["-S"], "obj": ["-c"]}
             final = self.run("final", [*common, *llvm_flag("vplan-selection-input", str(selection_path)),
                                       *llvm_flag("vplan-candidates-output", str(final_manifest)),
-                                      *report_flags, *actions[emit], "-o", str(output)])
+                                      *actions[emit], "-o", str(output)])
             replay = self.manifest(final_manifest, run_id)
             if replay["candidates"] != manifest["candidates"]:
                 raise MetaCompileError("final compilation regenerated a different candidate set")
@@ -249,9 +254,7 @@ def main(argv=None) -> int:
     parser.add_argument("--emit", choices=("llvm", "asm", "obj"), default="obj")
     parser.add_argument("--stop-after-ra", action="store_true")
     parser.add_argument("--analytics-only", action="store_true", help="collect raw facts without computing backend costs")
-    parser.add_argument("--weights", type=Path, help="protocol v3 fitted Python model weights")
-    parser.add_argument("--spill-count-unit", choices=("instruction", "register"))
-    parser.add_argument("--detail", action="store_true")
+    parser.add_argument("--detail", action="store_true", help="explain local op and pair costs on stderr")
     parser.add_argument("--extract-function", help="isolate a function at the pre-vectorizer checkpoint")
     parser.add_argument("--llvm-extract", type=Path, help="matching llvm-extract binary")
     parser.add_argument("--timeout", type=int, default=120, help="seconds per compiler invocation")
@@ -265,8 +268,7 @@ def main(argv=None) -> int:
     try:
         result = Driver(args.clang, args.input, args.work_dir, flags, args.timeout,
                         args.extract_function, args.llvm_extract).compile(
-            args.output, args.emit, args.stop_after_ra, args.detail, args.analytics_only, args.weights,
-            args.spill_count_unit)
+            args.output, args.emit, args.stop_after_ra, args.detail, args.analytics_only)
         print(json.dumps(result))
         return 0
     except (ToolError, OSError) as exc:

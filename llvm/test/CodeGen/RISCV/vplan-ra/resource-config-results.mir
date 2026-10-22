@@ -1,17 +1,11 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=config_results:0:0:s4 -vplan-analytics-output=%t.live.json.analytics %s -o %t.after.mir
-# RUN: %python %S/Inputs/check-raw.py %t.live.json.analytics %S/Inputs/resource-config-results.json 0
+# RUN: %python %S/Inputs/check-observation.py %t.live.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=none -verify-machineinstrs %s -o %t.before.mir
 # RUN: diff %t.before.mir %t.after.mir
 # RUN: %python -c "s=open('%s').read(); open('%t.unknown.mir','w').write(s.replace('tracksRegLiveness: true','tracksRegLiveness: false'))"
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=config_results:0:0:s4 -vplan-analytics-output=%t.unknown.json.analytics %t.unknown.mir -o %t.unknown.after.mir
-# RUN: %python %S/Inputs/check-raw.py %t.unknown.json.analytics %S/Inputs/resource-config-results.json 1
-#
-# A mixed recurring region includes register AVL, VLMAX, immediate AVL and
-# VL-preserving forms. Live AVL consumers keep the existing region selection.
-# X0 always discards rd; other dead destinations require tracked liveness.
-# Nondead results remain additive, including a result live into the exit.
-# Configurations still define vector state: unused rd is no independence proof.
-# Setup and exit configurations are excluded. No instruction/operand changes.
+# RUN: %python %S/Inputs/check-observation.py %t.unknown.json.analytics
+# Preserve configuration operands and vector-state definitions with and without tracked liveness.
 --- |
   define void @config_results() #0 {
   entry:

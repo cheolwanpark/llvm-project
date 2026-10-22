@@ -70,7 +70,7 @@ class VPlanCostReport {
   };
   SmallVector<std::unique_ptr<PlanRecord>> Plans;
   DenseMap<const VPlan *, unsigned> PlanIDs;
-  SmallVector<CandidateRecord> Candidates;
+  SmallVector<CandidateRecord, 0> Candidates;
   std::optional<InstructionCost> ScalarBaseline;
   std::optional<SelectionRecord> MainSelection, EpilogueSelection;
   std::optional<unsigned> InterleaveCount;

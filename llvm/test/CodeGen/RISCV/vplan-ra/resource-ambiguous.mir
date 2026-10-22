@@ -1,7 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=ambiguous:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-ambiguous.json 0
-#
-# Two plausible strip-mined loops must not be guessed or combined.
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
+# Observe multiple untagged loops without guessing the candidate loop identity.
 --- |
   define void @ambiguous() #0 {
   entry:

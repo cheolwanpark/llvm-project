@@ -5,9 +5,9 @@
 ; RUN: llc -mtriple=riscv64 -mattr=+v -vplan-ra-run-id=test -vplan-probe-candidate=kernel:0:0:s4 -vplan-analytics-output=%t.full.json %s -o %t.observed.s
 ; RUN: diff %t.direct.s %t.observed.s
 
-; FEATURES-DAG: "Stage":"post-ra-cleanup"
-; FEATURES-DAG: "Candidate":"kernel:0:0:s4"
-; FEATURES-DAG: "Instructions":[
+; FEATURES-DAG: "stage":"post-ra-cleanup"
+; FEATURES-DAG: "candidate":"kernel:0:0:s4"
+; FEATURES-DAG: "instructions":[
 ; MIR: body: |
 ; MIR-NOT: %{{[0-9]+}}
 ; MIR: $v

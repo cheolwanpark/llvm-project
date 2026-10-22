@@ -1,8 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=unsupported:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-fp-division-unsupported.json 0
-# A supported divide does not enable square root or other unsupported work.
-# The partial observation proves divide was accepted before square root
-# stopped collection. Arithmetic counters still exclude division service.
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
+# Preserve divide and square-root opcodes for the Python hardware-rule classifier.
 --- |
   define void @unsupported() #0 {
   entry:

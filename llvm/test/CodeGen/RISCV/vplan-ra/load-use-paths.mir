@@ -1,55 +1,51 @@
 # RUN: split-file %s %t
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/chain.json.analytics %t/chain.mir -o %t/chain-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/chain.json.analytics %S/Inputs/load-use-paths.json 0
+# RUN: %python %S/Inputs/check-observation.py %t/chain.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/independent-loads.json.analytics %t/independent-loads.mir -o %t/independent-loads-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/independent-loads.json.analytics %S/Inputs/load-use-paths.json 1
+# RUN: %python %S/Inputs/check-observation.py %t/independent-loads.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/fanout-join.json.analytics %t/fanout-join.mir -o %t/fanout-join-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/fanout-join.json.analytics %S/Inputs/load-use-paths.json 2
+# RUN: %python %S/Inputs/check-observation.py %t/fanout-join.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/two-loads.json.analytics %t/two-loads.mir -o %t/two-loads-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/two-loads.json.analytics %S/Inputs/load-use-paths.json 3
+# RUN: %python %S/Inputs/check-observation.py %t/two-loads.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/redefinition.json.analytics %t/redefinition.mir -o %t/redefinition-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/redefinition.json.analytics %S/Inputs/load-use-paths.json 4
+# RUN: %python %S/Inputs/check-observation.py %t/redefinition.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/unsupported-copy.json.analytics %t/unsupported-copy.mir -o %t/unsupported-copy-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/unsupported-copy.json.analytics %S/Inputs/load-use-paths.json 5
+# RUN: %python %S/Inputs/check-observation.py %t/unsupported-copy.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/partial-overwrite.json.analytics %t/partial-overwrite.mir -o %t/partial-overwrite-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/partial-overwrite.json.analytics %S/Inputs/load-use-paths.json 6
+# RUN: %python %S/Inputs/check-observation.py %t/partial-overwrite.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/partial-use.json.analytics %t/partial-use.mir -o %t/partial-use-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/partial-use.json.analytics %S/Inputs/load-use-paths.json 7
+# RUN: %python %S/Inputs/check-observation.py %t/partial-use.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/undef.json.analytics %t/undef.mir -o %t/undef-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/undef.json.analytics %S/Inputs/load-use-paths.json 8
+# RUN: %python %S/Inputs/check-observation.py %t/undef.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/tail-only.json.analytics %t/tail-only.mir -o %t/tail-only-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/tail-only.json.analytics %S/Inputs/load-use-paths.json 9
+# RUN: %python %S/Inputs/check-observation.py %t/tail-only.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/tied-fma.json.analytics %t/tied-fma.mir -o %t/tied-fma-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/tied-fma.json.analytics %S/Inputs/load-use-paths.json 10
+# RUN: %python %S/Inputs/check-observation.py %t/tied-fma.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/tied-fmadd.json.analytics %t/tied-fmadd.mir -o %t/tied-fmadd-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/tied-fmadd.json.analytics %S/Inputs/load-use-paths.json 11
+# RUN: %python %S/Inputs/check-observation.py %t/tied-fmadd.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/fractional.json.analytics %t/fractional.mir -o %t/fractional-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/fractional.json.analytics %S/Inputs/load-use-paths.json 12
+# RUN: %python %S/Inputs/check-observation.py %t/fractional.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/m8.json.analytics %t/m8.mir -o %t/m8-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/m8.json.analytics %S/Inputs/load-use-paths.json 13
+# RUN: %python %S/Inputs/check-observation.py %t/m8.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/e64.json.analytics %t/e64.mir -o %t/e64-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/e64.json.analytics %S/Inputs/load-use-paths.json 14
+# RUN: %python %S/Inputs/check-observation.py %t/e64.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/integer-multiply.json.analytics %t/integer-multiply.mir -o %t/integer-multiply-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/integer-multiply.json.analytics %S/Inputs/load-use-paths.json 15
+# RUN: %python %S/Inputs/check-observation.py %t/integer-multiply.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/shape-change.json.analytics %t/shape-change.mir -o %t/shape-change-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/shape-change.json.analytics %S/Inputs/load-use-paths.json 16
+# RUN: %python %S/Inputs/check-observation.py %t/shape-change.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/implicit-def.json.analytics %t/implicit-def.mir -o %t/implicit-def-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/implicit-def.json.analytics %S/Inputs/load-use-paths.json 17
+# RUN: %python %S/Inputs/check-observation.py %t/implicit-def.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/reload.json.analytics %t/reload.mir -o %t/reload-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/reload.json.analytics %S/Inputs/load-use-paths.json 18
+# RUN: %python %S/Inputs/check-observation.py %t/reload.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/masked-load.json.analytics %t/masked-load.mir -o %t/masked-load-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/masked-load.json.analytics %S/Inputs/load-use-paths.json 19
+# RUN: %python %S/Inputs/check-observation.py %t/masked-load.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/masked-arithmetic.json.analytics %t/masked-arithmetic.mir -o %t/masked-arithmetic-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/masked-arithmetic.json.analytics %S/Inputs/load-use-paths.json 20
+# RUN: %python %S/Inputs/check-observation.py %t/masked-arithmetic.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/unsupported-resource.json.analytics %t/unsupported-resource.mir -o %t/unsupported-resource-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/unsupported-resource.json.analytics %S/Inputs/load-use-paths.json 21
+# RUN: %python %S/Inputs/check-observation.py %t/unsupported-resource.json.analytics
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=loaduse:0:0:s4 -vplan-analytics-output=%t/no-backedge.json.analytics %t/no-backedge.mir -o %t/no-backedge-out.mir
-# RUN: %python %S/Inputs/check-raw.py %t/no-backedge.json.analytics %S/Inputs/load-use-paths.json 22
-#
-# Block-local, same-shaped physical reaching definitions. No backedge seed,
-# alias-derived memory edges, or propagation through unsupported operations.
-# Undef and ordinary tail passthrough are ignored; all FMA tied inputs count.
-# Fanout and repeated source uses retain one edge per reaching value.
+# RUN: %python %S/Inputs/check-observation.py %t/no-backedge.json.analytics
+# Register and memory dependency fixtures covering aliases, partial writes and loop-carried uses.
 
 #--- chain.mir
 --- |

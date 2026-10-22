@@ -1,7 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=kernel:0:0:s4 -vplan-analytics-output=%t.raw.json %s -o %t.mir
-# RUN: %python %S/Inputs/project-spills.py %t.raw.json 16 > %t.json
-# RUN: FileCheck %s --implicit-check-not=resource_demand < %t.json
-# CHECK: "reason":"unrecognized-spill-access","supported":false
+# RUN: %python %S/Inputs/check-observation.py %t.raw.json
+# Preserve segment-transfer instructions and stack facts without a separate spill penalty.
 --- |
   define void @kernel() #0 {
   entry:

@@ -1,0 +1,60 @@
+"""Run with VPLAN_CLANG=/absolute/build/bin/clang after building this checkout."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from cost_model import identity, score_observation
+from observations import bind_observation, validate_manifest
+
+CLANG = os.environ.get('VPLAN_CLANG')
+
+
+@unittest.skipUnless(CLANG, 'set VPLAN_CLANG to run compiler integration')
+class CompilerIntegration(unittest.TestCase):
+    def test_discovery_probe_fixed_model_and_verified_replay(self):
+        root = Path(__file__).resolve().parents[3]
+        clang = Path(CLANG).resolve()
+        driver = root / 'utils/vplan-meta-compile'
+        source = 'double a[1024], b[1024]; void selected_kernel(void) { for (int i=0;i<1024;i++) a[i] = b[i]+1.; }'
+        flags = ['--target=riscv64-unknown-elf', '-march=rv64gcv', '-mcpu=xiangshan-kunminghu',
+                 '-mrvv-vector-bits=128', '-O3', '-fno-unroll-loops', '-fno-slp-vectorize',
+                 '-mllvm', '-scalable-vectorization=always', '-mllvm', '-force-vector-interleave=1',
+                 '-mllvm', '-enable-epilogue-vectorization=false', '-mllvm', '-riscv-v-register-bit-width-lmul=8']
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td); src = p / 'kernel.c'; src.write_text(source)
+            def run(work, extra):
+                return subprocess.run([sys.executable, str(driver), '--clang', str(clang), '--input', str(src),
+                    '--work-dir', str(p / work), '--extract-function', 'selected_kernel', *extra, '--', *flags],
+                    capture_output=True, text=True, timeout=120)
+            result = run('raw', ['--analytics-only', '--stop-after-ra'])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = json.loads((p / 'raw/candidates.json').read_text())
+            validate_manifest(manifest, manifest['run_id'])
+            self.assertTrue(any(c['vf'] == 's1' for c in manifest['candidates']))
+            self.assertTrue(all(c['middle_end']['configuration_unit_quarters'] is not None for c in manifest['candidates']))
+            for i, c in enumerate(manifest['candidates']):
+                a = json.loads((p / f'raw/probe-{i:04d}.analytics.json').read_text())
+                a = bind_observation(a, c, manifest['loops'][0], manifest['run_id'])
+                self.assertEqual(a['error'], '')
+                self.assertTrue((p / f'raw/probe-{i:04d}.mir').stat().st_size)
+                self.assertTrue(all(a['instructions'][id_]['role'] == 'body' for id_ in a['body_order']))
+            result = run('replayed', ['--output', str(p / 'final.s'), '--emit', 'asm'])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            chosen = json.loads((p / 'replayed/selection.json').read_text())['selections']
+            final = json.loads((p / 'replayed/final.manifest.json').read_text())['selections']
+            self.assertEqual(chosen, final)
+            self.assertFalse(final[0]['scalar'])
+            self.assertGreater((p / 'final.s').stat().st_size, 0)
+            statuses = json.loads((p / 'replayed/candidate-status.json').read_text())
+            self.assertEqual(statuses['policy'], identity())
+            for status, c in zip(statuses['candidates'], manifest['candidates'], strict=True):
+                index = manifest['candidates'].index(c)
+                a = json.loads((p / f'raw/probe-{index:04d}.analytics.json').read_text())
+                a = bind_observation(a, c, manifest['loops'][0], manifest['run_id'])
+                expected = score_observation(a)
+                self.assertEqual(status['status'], 'scored')
+                self.assertEqual(status['score'], expected['score'])
+                self.assertEqual(status['breakdown']['coefficients'], expected['coefficients'])

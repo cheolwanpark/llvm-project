@@ -1,8 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=region:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-loop-region.json 0
-#
-# The two unconditional main-loop blocks dominate the exiting latch.
-# The scalar path's short immediate-VL vector loop must not be accumulated.
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
+# Retain multi-block CFG facts while reporting the circular execution order as unsupported.
 --- |
   define void @region() #0 {
   entry:

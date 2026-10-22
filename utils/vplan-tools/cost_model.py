@@ -1,364 +1,187 @@
-"""Shared differentiable VPlan body and trip-count model; no dataset access."""
-from __future__ import annotations
-
+"""Linear local interaction effects with a single shared op/pair calculation."""
+import hashlib
 import json
 import math
-import torch
+from pathlib import Path
 
+from dependencies import Dependencies
+from hardware import RULE_DIGEST, RULE_VERSION, REVISION, can_overlap, work_for_instruction
 from model_errors import ToolError
-from observations import needs_scalar_cost, validate_scalar_cost, iteration_factors
+from observations import SCHEMA, STAGE, iteration_factors, validate_observation
 
-MODEL_VERSION = "rvv-python-19-v3"
-PARAMETERS = (
-    "memory_unit", "memory_nonunit", "memory_mask", "strided_group", "masked_group",
-    "arithmetic_integer", "arithmetic_fp", "movement_copy", "movement_slide",
-    "divider", "spill", "configuration", "latency_load", "latency_fp",
-    "latency_fma", "latency_integer", "latency_multiply", "latency_chunk", "tail_scale",
-)
-P = len(PARAMETERS)
-DTYPE = torch.float64
-LOADS = {f"VLE{s}" for s in (8, 16, 32, 64)} | {
-    f"VL{g}RE{s}" for g in (1, 2, 4, 8) for s in (8, 16, 32, 64)}
-FP = {"VFADD", "VFSUB", "VFRSUB", "VFMUL"}
-FUSED = {"VFMACC", "VFNMACC", "VFMSAC", "VFNMSAC", "VFMADD", "VFNMADD", "VFMSUB", "VFNMSUB"}
-INTEGER = {"VADD", "VSUB", "VRSUB", "VAND", "VOR", "VXOR", "VSLL", "VSRL", "VSRA", "VMIN", "VMINU", "VMAX", "VMAXU"}
-MULTIPLY = {"VMUL", "VMULH", "VMULHU", "VMULHSU"}
+MODEL_VERSION = 'mir-local-fixed-v1'
 
-
-def plain_def(i):
-    defs = [o for o in i["Operands"] if o["Vector"] and o["Def"]]
-    return (len(defs) == 1 and not any(defs[0][k] for k in
-            ("Implicit", "Dead", "EarlyClobber", "SubReg")) and not i["Masked"]
-            and i["Group8"] > 0 and i["SEW"] >= 8 and not i["Barrier"])
-
-
-def recurrence_kind(i):
-    if not plain_def(i) or i["SEW"] not in (32, 64):
-        return 0
-    family = i["Base"].split("_")[0]
-    if family in {"VFADD", "VFSUB", "VFMUL"}:
-        return 1
-    return 2 if family in {"VFMACC", "VFNMACC", "VFMSAC", "VFNMSAC"} else 0
+# XiangShan MinimalConfig, VLEN 128. These are manually chosen machine-wide
+# effect scales, not measured latencies. Calibrate here by hand; never per VF or
+# benchmark. Decoder work and execution-resource evidence live in hardware.py.
+# With four neighbors, 1/4 gives one basic unit of stall for four unit pairs;
+# 1/8 gives half a basic unit of ILP credit for four independent unit pairs.
+FORWARD_WINDOW = 4
+BACKWARD_WINDOW = 4
+COEFFICIENTS = {
+    'basic_convert': 1.,
+    'basic_divide': 1.,
+    'basic_fp_alu': 1.,
+    'basic_fp_multiply': 1.,
+    'basic_integer': 1.,
+    'basic_mask': 1.,
+    'basic_memory': 1.,
+    'basic_move': 1.,
+    'basic_multiply': 1.,
+    'basic_permute': 1.,
+    'basic_scalar': 1.,  # Reference unit for manual calibration.
+    'contention': .25,
+    'raw': .25,
+    'ilp': .125,
+    'middle_end_scale': 1.,
+}
+PARAMETERS = tuple(COEFFICIENTS)
+IMPLEMENTATION_DIGEST = hashlib.sha256(Path(__file__).read_bytes() + Path(__file__).with_name('dependencies.py').read_bytes()).hexdigest()
 
 
-def load_kind(i):
-    if not plain_def(i):
-        return None
-    family = i["Base"].split("_")[0]
-    if family in LOADS:
-        return "load" if i["Load"] and not i["Store"] and not i["Stack"] else None
-    for names, kind in ((FP, "fp"), (FUSED, "fma"), (INTEGER, "integer"), (MULTIPLY, "multiply")):
-        if family in names:
-            return None if kind in ("fp", "fma") and i["SEW"] < 32 else kind
-    return None
+def digest_json(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
 
-def value_edge(a, e, fused):
-    use = a["Instructions"][e["Destination"]]["Operands"][e["OperandIndex"]]
-    return (e["WholeValue"] and use["Vector"] and not any(use[k] for k in
-            ("Implicit", "Undef", "SubReg")) and (fused or not use["Tied"]))
+def machine_parameters():
+    return dict(cpu='xiangshan-kunminghu', vlen=128, forward_window=FORWARD_WINDOW,
+                backward_window=BACKWARD_WINDOW, coefficients=dict(COEFFICIENTS),
+                pair_work='min', accumulation='sum', raw_contention='add',
+                configuration=True, scalar_tail=True, distance='op-count',
+                unknown_ilp='exclude', configuration_ops='excluded-from-body-and-windows')
 
 
-def same_context(a, b):
-    return (all(a[k] == b[k] for k in
-                ("RunID", "Function", "CPU", "VLen", "MaxTripCount", "ExactTripCount"))
-            and a["Candidate"].rsplit(":", 2)[0] == b["Candidate"].rsplit(":", 2)[0])
+def identity():
+    return dict(model=MODEL_VERSION, implementation_digest=IMPLEMENTATION_DIGEST, observation_schema=SCHEMA,
+                rule_version=RULE_VERSION, rule_digest=RULE_DIGEST, rtl_revision=REVISION, stage=STAGE,
+                machine_parameters=machine_parameters())
 
 
-def validate_analytics(a):
-    try:
-        if a["Version"] != 2 or a["Stage"] != "post-ra-cleanup" or a["Error"]:
-            raise ValueError("invalid analytics: " + str(a.get("Error", "")))
-        if (a["CPU"] != "xiangshan-kunminghu" or not 0 < a["VLen"] <= 65536
-                or not 0 < a["Width"] <= 2**32 - 1 or a["MaxTripCount"] < 0
-                or a["ExactTripCount"] < 0 or a["VF"] <= 0):
-            raise ValueError("unsupported target or loop configuration")
-        instructions = a["Instructions"]
-        for index, i in enumerate(instructions):
-            if i["ID"] != index or not 0 <= i["Group8"] <= 64 or i["Bytes"] < 0:
-                raise ValueError("malformed instruction analytics")
-        for e in a["Edges"]:
-            src, dst = e["Source"], e["Destination"]
-            if (not 0 <= src < len(instructions) or not 0 <= dst < len(instructions)
-                    or not 0 <= e["OperandIndex"] < len(instructions[dst]["Operands"])
-                    or e["Distance"] not in (0, 1) or (e["Distance"] == 0 and src >= dst)):
-                raise ValueError("malformed dependency analytics")
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ToolError(f"unsupported analytics: {exc}") from exc
+def zero(): return dict.fromkeys(PARAMETERS, 0.)
 
 
-class CostModel:
-    """Compile observations into batched linear resources and a max-plus DAG.
-
-    A row of multipliers is one independent optimizer start. Dependency edges are
-    evaluated in topological batches, so no graph is reconstructed during fitting.
-    """
-
-    def __init__(self, observations: list[dict]):
-        self.observations = observations
-        self.count = len(observations)
-        self.resources = []
-        self.scalar_fixed = []
-        self.graph = [[]]  # node zero is the constant zero
-        self.terminals = []
-        self.recurrences = []
-        self.active = set()
-        for ci, a in enumerate(observations):
-            validate_analytics(a)
-            scalar = a.get("ScalarCost")
-            validate_scalar_cost(a)
-            if a["MaxTripCount"] and a["ScalarTail"] and a["MaxTripCount"] % a["Width"] and scalar:
-                self.active.add(P - 1)
-            try:
-                self._compile_body(ci, a)
-            except (KeyError, TypeError, ValueError, IndexError) as exc:
-                raise ToolError(f"unsupported analytics for {a.get('Candidate')}: {exc}") from exc
-        self.resources = torch.tensor(self.resources, dtype=DTYPE).reshape(self.count, 10, P)
-        self.scalar_fixed = torch.tensor(self.scalar_fixed, dtype=DTYPE)
-        self._compile_graph()
-        self.rec_coeff = torch.tensor([v for _, v in self.recurrences], dtype=DTYPE).reshape(-1, P)
-        self.rec_owner = torch.tensor([c for c, _ in self.recurrences], dtype=torch.long)
-        self.terminal_owner = torch.tensor([c for c, _ in self.terminals], dtype=torch.long)
-        self.terminal_node = torch.tensor([self.node_map[n] for _, n in self.terminals], dtype=torch.long)
-        for tensor in (self.resources.reshape(-1, P), self.rec_coeff):
-            self.active.update(torch.nonzero(tensor.abs().sum(0), as_tuple=True)[0].tolist())
-        for _, coeff, _ in self.layers:
-            self.active.update(torch.nonzero(coeff.abs().sum((0, 1)), as_tuple=True)[0].tolist())
-
-    def _compile_body(self, ci, a):
-        body = {b["ID"] for b in a["Blocks"] if b["Role"] == "body"}
-        # memory total/load/store/extra, arithmetic, movement, scalar,
-        # divider, spill, additive configuration
-        r = [[0.0] * P for _ in range(10)]
-        scalar = extra_strided = residual = 0.0
-        shared = {}
-        seen = False
-        for i in a["Instructions"]:
-            if i["Block"] not in body or i["Meta"]:
-                continue
-            seen = True
-            k = i["Category"]
-            if i["Barrier"] or k == "unknown":
-                raise ValueError("unsupported instruction " + i["Opcode"])
-            if k == "scalar":
-                scalar += 8
-                continue
-            if k == "config":
-                r[6 if i["ConfigUnused"] else 9][11] += 16
-                continue
-            if k == "spill":
-                w = i["Bytes"] * a["VLen"] / 128 if i["ScalableBytes"] else i["Bytes"] / 2
-                r[8][10] += max(8, w)
-                continue
-            group = i["Group8"]
-            if group <= 0 or group & (group - 1):
-                raise ValueError("invalid LMUL/register group")
-            family = i["Base"].split("_")[0]
-            if k in ("integer", "fp", "fused") and family.startswith(("VW", "VFW", "VNSR", "VNCLIP", "VFNC")):
-                group *= 2
-            raw = group * a["VLen"] // 128
-            if k in ("strided", "indexed"):
-                if i["SEW"] not in (8, 16, 32, 64):
-                    raise ValueError("invalid memory SEW")
-                raw = group * a["VLen"] // i["SEW"]
-            if k == "mask_logical":
-                raw = group * a["VLen"] // (8 * 128)
-            w = max(8, raw)
-            if k == "copy":
-                r[5][7] += 0 if i["SameCopy"] else raw
-            elif k == "slide":
-                r[5][8] += 2 * w + 2 * max(i["Group8"] - 8, 0)
-            elif k == "fp_div":
-                if i["SEW"] not in (16, 32, 64):
-                    raise ValueError("invalid division SEW")
-                r[7][9] += w * 2 * {16: 29, 32: 25, 64: 37}[i["SEW"]]
-            elif k in ("integer", "mask_logical"):
-                r[4][5] += w * 2
-            elif k in ("fp", "fused"):
-                r[4][6] += w * 4
-            elif k in ("unit", "strided", "indexed"):
-                if i["Load"] == i["Store"]:
-                    raise ValueError("ambiguous memory direction")
-                p, amount = (0, w) if k == "unit" else (1, 2 * w)
-                direction = 1 if i["Load"] else 2
-                r[0][p] += amount
-                r[direction][p] += amount
-                if i["Masked"]:
-                    r[0][2] += w
-                    r[direction][2] += w
-                if i["Group8"] > 8:
-                    extra = w * (i["Group8"] - 8)
-                    if k == "strided":
-                        extra_strided += extra
-                    if i["Masked"]:
-                        if i["Predicate"]:
-                            share = extra / 4
-                            residual += extra - share
-                            shared[i["Predicate"]] = max(shared.get(i["Predicate"], 0), share)
-                        else:
-                            residual += extra
-            else:
-                raise ValueError("unknown operation category " + k)
-        if not seen:
-            raise ValueError("empty or missing candidate body")
-        r[3][3] = extra_strided / 32
-        r[3][4] = (residual + sum(shared.values())) / 64
-        self.resources.append(r)
-        self.scalar_fixed.append(scalar)
-        if a["DependencyCoverage"] == "single-block-distance-0-1":
-            self._dependencies(ci, a, body)
-
-    def _dependencies(self, ci, a, body):
-        ins = a["Instructions"]
-        rk = [recurrence_kind(i) for i in ins]
-        preds = [set() for _ in ins]
-        incoming = [[] for _ in ins]
-        for e in a["Edges"]:
-            s, d = e["Source"], e["Destination"]
-            incoming[d].append(e)
-            if ins[d]["Block"] in body and rk[s] and rk[d] and value_edge(a, e, rk[d] == 2):
-                preds[d].add(s)
-        chunks = lambda i: max(1, i["Group8"] * a["VLen"] // (8 * 128))
-        for e in a["Edges"]:
-            s, d = e["Source"], e["Destination"]
-            if e["Distance"] != 1 or s not in preds[d]:
-                continue
-            current = s
-            coeff = [0.0] * P
-            while True:
-                coeff[14 if rk[current] == 2 else 13] += 80 if rk[current] == 2 else 48
-                coeff[17] += (chunks(ins[current]) - 1) * 32
-                if current == d:
-                    self.recurrences.append((ci, coeff))
-                    break
-                previous = [p for p in preds[current] if p < current]
-                if len(previous) != 1 or previous[0] < d:
-                    break
-                current = previous[0]
-        ready = {}
-        for i in ins:
-            if i["Block"] not in body:
-                continue
-            kind = load_kind(i)
-            if kind is None:
-                continue
-            predecessors = []
-            for e in incoming[i["ID"]]:
-                s = e["Source"]
-                if (e["Distance"] == 0 and value_edge(a, e, kind == "fma") and s in ready
-                        and ins[s]["Group8"] == i["Group8"] and ins[s]["SEW"] == i["SEW"]):
-                    predecessors.append(ready[s])
-            if not predecessors and kind != "load":
-                continue
-            lat = [0.0] * P
-            p, value = {"load": (12, 4), "fp": (13, 3), "fma": (14, 5),
-                        "integer": (15, 1), "multiply": (16, 3)}[kind]
-            lat[p] = value * 16
-            first = len(self.graph)
-            self.graph.append([(p[0], lat) for p in predecessors] or [(0, lat)])
-            chunk = [0.0] * P
-            chunk[17] = (chunks(i) - 1) * 16
-            last = len(self.graph)
-            self.graph.append([(p[1], lat) for p in predecessors] + [(first, chunk)])
-            ready[i["ID"]] = first, last
-            if kind != "load":
-                self.terminals.append((ci, last))
-
-    def _compile_graph(self):
-        depth = [0]
-        groups = {}
-        for node, edges in enumerate(self.graph[1:], 1):
-            d = 1 + max(depth[parent] for parent, _ in edges)
-            depth.append(d)
-            groups.setdefault(d, []).append(node)
-        self.layers = []
-        self.node_map = {0: 0}
-        for d in sorted(groups):
-            nodes = groups[d]
-            width = max(len(self.graph[n]) for n in nodes)
-            parents, coeffs, masks = [], [], []
-            for n in nodes:
-                edges = self.graph[n]
-                parents.append([self.node_map[p] for p, _ in edges] + [0] * (width - len(edges)))
-                coeffs.append([c for _, c in edges] + [[0.0] * P] * (width - len(edges)))
-                masks.append([0.0] * len(edges) + [-math.inf] * (width - len(edges)))
-            for n in nodes:
-                self.node_map[n] = len(self.node_map)
-            self.layers.append((torch.tensor(parents), torch.tensor(coeffs, dtype=DTYPE),
-                                torch.tensor(masks, dtype=DTYPE)))
-
-    def body_breakdown(self, multipliers):
-        if multipliers.ndim == 1:
-            multipliers = multipliers.unsqueeze(0)
-        n = multipliers.shape[0]
-        r = torch.einsum("bp,crp->bcr", multipliers, self.resources)
-        memory = torch.minimum(r[:, :, 0], torch.stack(
-            (r[:, :, 1], r[:, :, 2], r[:, :, 0] * (7 / 8)), -1).amax(-1)) + r[:, :, 3]
-        recurrence = torch.zeros((n, self.count), dtype=DTYPE)
-        if len(self.recurrences):
-            recurrence = recurrence.scatter_reduce(1, self.rec_owner.expand(n, -1),
-                multipliers @ self.rec_coeff.T, reduce="amax", include_self=True)
-        values = torch.zeros((n, 1), dtype=DTYPE)
-        for parents, coeff, mask in self.layers:
-            next_values = (values[:, parents] + torch.einsum("bp,nep->bne", multipliers, coeff) + mask).amax(-1)
-            values = torch.cat((values, next_values), dim=1)
-        load_use = torch.zeros_like(recurrence)
-        if len(self.terminals):
-            load_use = load_use.scatter_reduce(1, self.terminal_owner.expand(n, -1),
-                values[:, self.terminal_node], reduce="amax", include_self=True)
-        bounds = torch.stack((memory, r[:, :, 4], r[:, :, 5],
-                              r[:, :, 6] + self.scalar_fixed, r[:, :, 7], recurrence, load_use), -1)
-        return {"resource_bound": bounds.amax(-1) / 16,
-                "memory": memory / 16, "arithmetic": r[:, :, 4] / 16,
-                "movement": r[:, :, 5] / 16,
-                "scalar_and_unused_configuration": (r[:, :, 6] + self.scalar_fixed) / 16,
-                "divider": r[:, :, 7] / 16, "recurrence": recurrence / 16,
-                "load_use": load_use / 16, "spill": r[:, :, 8] / 16,
-                "configuration": r[:, :, 9] / 16,
-                "body": (bounds.amax(-1) + r[:, :, 8] + r[:, :, 9]) / 16}
-
-    def bodies(self, multipliers):
-        return self.body_breakdown(multipliers)["body"]
-
-    def breakdown(self, multipliers):
-        if multipliers.ndim == 1:
-            multipliers = multipliers.unsqueeze(0)
-        result = self.body_breakdown(multipliers)
-        main, tail = [], []
-        for a in self.observations:
-            iterations, scalar_tail = iteration_factors(a)
-            main.append(iterations)
-            tail.append(scalar_tail)
-        result["body_iterations"] = torch.tensor(main, dtype=DTYPE).expand(multipliers.shape[0], -1)
-        result["tail"] = multipliers[:, -1:] * torch.tensor(tail, dtype=DTYPE)
-        result["score"] = result["body"] * result["body_iterations"] + result["tail"]
-        return result
-
-    def scores(self, multipliers):
-        return self.breakdown(multipliers)["score"]
+def dot(features): return sum(features[p] * COEFFICIENTS[p] for p in PARAMETERS)
 
 
-def load_weights(path):
-    try:
-        value = json.loads(path.read_text())
-        if value["schema_version"] != 2 or value["model_version"] != MODEL_VERSION:
-            raise ValueError("unsupported weights schema/model version; refit using protocol v3")
-        if set(value["multipliers"]) != set(PARAMETERS):
-            raise ValueError("wrong parameter set")
-        numbers = [value["multipliers"][p] for p in PARAMETERS]
-        if any(type(x) not in (int, float) or not math.isfinite(x) or x <= 0 for x in numbers):
-            raise ValueError("multipliers must be finite and positive")
-        return value, torch.tensor(numbers, dtype=DTYPE)
-    except (OSError, KeyError, TypeError, ValueError) as exc:
-        raise ToolError(f"invalid weights {path}: {exc}") from exc
+def features_for_observation(a):
+    validate_observation(a)
+    if a['error']: raise ToolError(a['error'])
+    if a['vlen'] != 128 or a['cpu'] != 'xiangshan-kunminghu':
+        raise ToolError('hardware rules require xiangshan-kunminghu with VLEN 128')
+    if not a['iteration_mapping']: raise ToolError('unproven scalar iteration mapping')
+    body_blocks = [b for b in a['blocks'] if b['role'] == 'body']
+    if len(body_blocks) != 1 or body_blocks[0]['id'] != a['header']:
+        raise ToolError('only a single-block circular body is supported')
+    ops = {o['id']: o for o in a['instructions']}
+    order = [i for i in a['body_order'] if not ops[i]['meta'] and not ops[i]['configuration']]
+    if not order: raise ToolError('empty executable body')
+    work, unsupported = {}, []
+    for id_ in order:
+        try: work[id_] = work_for_instruction(ops[id_])
+        except ToolError as exc: unsupported.append(f'op {id_} {ops[id_]["opcode"]}: {exc}')
+    if unsupported: raise ToolError('unsupported hardware coverage: ' + '; '.join(unsupported))
+    dep = Dependencies(a)
+    rows, pairs, features = [], [], zero()
+    coverage = dict(unknown_dependency=0, unknown_overlap=0, independent=0, dependent=0,
+                    configuration_policy='excluded-from-body-and-windows', register=a['register_coverage'],
+                    memory=a['memory_coverage'], unsupported=[])
+    for index, id_ in enumerate(order):
+        f = zero()
+        for part in work[id_]['components']: f['basic_' + part['cost_class']] += part['work']
+        row = dict(id=id_, mir=ops[id_]['mir'], opcode=ops[id_]['opcode'], hardware=work[id_], features=f)
+        rows.append(row)
+        # Anchors always belong to iteration 0. Neighbor identities retain
+        # iteration offsets even when a window traverses several full loops.
+        for direction, size in (('forward', FORWARD_WINDOW), ('backward', BACKWARD_WINDOW)):
+            for distance in range(1, size + 1):
+                offset, j = divmod(index + (distance if direction == 'forward' else -distance), len(order))
+                other = order[j]
+                relation = dep.relation((id_, 0), (other, offset))
+                overlap = can_overlap(work[id_], work[other])
+                shared = sorted({c['cost_class'] for c in work[id_]['components']} &
+                                {c['cost_class'] for c in work[other]['components']})
+                # Eligible effects intentionally coexist. Forward and backward
+                # effects use their own anchored dynamic pair identity.
+                contention = bool(shared) and direction == 'forward'
+                raw = relation['raw'] and direction == 'forward'
+                ilp = relation['independence'] == 'independent' and overlap is True and direction == 'backward'
+                pf = zero()
+                amount_a, amount_b = work[id_]['decode_uops'], work[other]['decode_uops']
+                amount = min(amount_a, amount_b)
+                if contention: pf['contention'] = amount
+                if raw: pf['raw'] = amount
+                if ilp: pf['ilp'] = -amount
+                for p in PARAMETERS: f[p] += pf[p]
+                coverage['unknown_dependency'] += relation['independence'] == 'unknown'
+                coverage['unknown_overlap'] += overlap is None
+                coverage['independent'] += relation['independence'] == 'independent'
+                coverage['dependent'] += relation['independence'] == 'dependent'
+                pairs.append(dict(anchor=id_, other=other, iteration_offset=offset, direction=direction,
+                                  distance=distance, dependency=relation, overlap=overlap,
+                                  shared_classes=shared, pair_work=amount, features=pf))
+        for p in PARAMETERS: features[p] += f[p]
+    main, remainder, scope = iteration_factors(a)
+    body_features = dict(features)
+    for p in PARAMETERS: features[p] *= main
+    config_ids = [i for i in a['body_order'] if ops[i]['configuration']]
+    setup_blocks = {b['id'] for b in a['blocks'] if b['role'] == 'setup'}
+    setup_ids = [o['id'] for o in a['instructions'] if o['block'] in setup_blocks and o['configuration']]
+    additions = dict(configuration=0., scalar_tail=0., setup_configuration=0.)
+    if config_ids or setup_ids:
+        unit = a['middle_end']['configuration_unit_quarters']
+        if unit is None: raise ToolError('missing middle-end configuration unit')
+        additions['configuration'] = main * len(config_ids) * unit / 4
+        # An unknown exact trip count yields a steady-state score; one-time
+        # work has no known amortization denominator and remains reported.
+        if a['exact_trip_count']: additions['setup_configuration'] = len(setup_ids) * unit / 4
+    if remainder:
+        scalar = a.get('scalar_cost')
+        if scalar is None: raise ToolError('missing middle-end scalar iteration cost for remainder')
+        additions['scalar_tail'] = scalar * remainder
+    features['middle_end_scale'] = sum(additions.values())
+    return dict(identity=identity(),
+                candidate=a['candidate'], vf=('s' if a['scalable'] else 'f') + str(a['vf']),
+                compiler=a['compiler'], cpu=a['cpu'], vlen=a['vlen'], stage=a['stage'],
+                run_id=a['run_id'], iteration_width=a['iteration_width'], scope=scope,
+                exact_trip_count=a['exact_trip_count'], max_trip_count=a['max_trip_count'],
+                body_iterations=main, scalar_remainder=remainder if a['exact_trip_count'] else None, features=features,
+                body_features=body_features, ops=rows, pairs=pairs, coverage=coverage,
+                middle_end=dict(source=a['middle_end'], scalar_source='CM.expectedCost(f1)',
+                                scalar_unit='TTI-reciprocal-throughput-per-original-iteration',
+                                configuration_ids=config_ids, setup_configuration_ids=setup_ids,
+                                unknown_setup_amortization=not a['exact_trip_count'] and bool(setup_ids),
+                                scalar_tail_scope='exact-remainder' if a['exact_trip_count'] else 'excluded-from-steady-state-score; runtime remainder unknown',
+                                unscaled_additions=additions))
 
 
-def score_observation(observation, weights=None):
-    if weights is None:
-        weights = torch.ones(P, dtype=DTYPE)
-    with torch.no_grad():
-        parts = CostModel([observation]).breakdown(weights)
-    result = {k: float(v[0, 0]) for k, v in parts.items()}
-    if any(not math.isfinite(v) or v < 0 for v in result.values()):
-        raise ToolError("nonfinite or negative model result")
-    return result
+def score_features(report):
+    # A new immutable calculation result for reporting, no stale cached scores.
+    value = json.loads(json.dumps(report))
+    value['coefficients'] = dict(COEFFICIENTS)
+    value['parameter_digest'] = digest_json(machine_parameters())
+    for row in value['ops']:
+        f = row['features']
+        row.update(basic=sum(f[p] * COEFFICIENTS[p] for p in PARAMETERS if p.startswith('basic_')),
+                   stall=f['contention'] * COEFFICIENTS['contention'] + f['raw'] * COEFFICIENTS['raw'],
+                   ilp=-f['ilp'] * COEFFICIENTS['ilp'], net=dot(f))
+    for pair in value['pairs']:
+        pair['contributions'] = {p: pair['features'][p] * COEFFICIENTS[p] for p in ('contention', 'raw', 'ilp')}
+        pair['net'] = sum(pair['contributions'].values())
+    value['basic'] = sum(op['basic'] for op in value['ops'])
+    value['stall'] = sum(op['stall'] for op in value['ops'])
+    value['ilp'] = sum(op['ilp'] for op in value['ops'])
+    value['body_cost'] = sum(op['net'] for op in value['ops'])
+    value['middle_end_cost'] = dot(value['features']) - value['body_iterations'] * value['body_cost']
+    value['score'] = dot(value['features'])
+    value['diagnostics'] = dict(negative_ops=[op['id'] for op in value['ops'] if op['net'] < 0],
+                               negative_body=value['body_cost'] < 0, negative_score=value['score'] < 0,
+                               ilp_fraction=value['ilp'] / (value['basic'] + value['stall']) if value['basic'] + value['stall'] else None,
+                               bounded=False, unit='model-effect; not CPU cycles')
+    if not math.isfinite(value['score']): raise ToolError('nonfinite model score')
+    if not math.isclose(value['body_cost'], value['basic'] + value['stall'] - value['ilp'], abs_tol=1e-8):
+        raise ToolError('op/body reconciliation failed')
+    return value
+
+
+def score_observation(a):
+    return score_features(features_for_observation(a))

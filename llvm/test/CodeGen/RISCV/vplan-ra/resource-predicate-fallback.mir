@@ -1,9 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=fallback:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-predicate-fallback.json 0
-#
-# Proven predicate reuse must not expand the resource model's support set.
-# VMV1R_V remains unsupported here, even though provenance recognizes its
-# full-register value transfer. The region retains its original cost.
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
+# Observe whole-register mask transfers without the removed predicate-reuse cost model.
 --- |
   define void @fallback() #0 {
   entry:

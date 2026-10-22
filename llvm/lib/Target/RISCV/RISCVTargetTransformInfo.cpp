@@ -1406,6 +1406,13 @@ RISCVTTIImpl::getIntrinsicInstrCost(const IntrinsicCostAttributes &ICA,
                                     TTI::TargetCostKind CostKind) const {
   auto *RetTy = ICA.getReturnType();
   switch (ICA.getID()) {
+  case Intrinsic::riscv_vsetvli:
+  case Intrinsic::riscv_vsetvlimax:
+    // A configuration is one instruction in this middle-end TTI model.
+    return ST->hasVInstructions()
+               ? getRISCVInstructionCost({RISCV::VSETVLI}, MVT::nxv1i64,
+                                         CostKind)
+               : InstructionCost::getInvalid();
   case Intrinsic::lrint:
   case Intrinsic::llrint:
   case Intrinsic::lround:

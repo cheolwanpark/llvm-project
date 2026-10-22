@@ -1,119 +1,124 @@
-"""Protocol v3 validation and binding of raw backend facts to loop context."""
-from model_errors import ToolError
+"""Strict observation contract. No weights or measurements enter this module."""
 import math
+import re
+from model_errors import ToolError
 
-PROTOCOL_VERSION = 3
-
-
-def needs_scalar_cost(a):
-    if not a['MaxTripCount'] or not a['ScalarTail']:
-        return False
-    return not (a['ExactTripCount'] > 0 and a['ExactTripCount'] % a['Width'] == 0
-                and a['MaxTripCount'] % a['Width'] == 0)
+PROTOCOL_VERSION = 4
+SCHEMA = 'mir-local-observation-v1'
+STAGE = 'post-ra-cleanup'
 
 
-def validate_scalar_cost(a):
-    scalar = a.get('ScalarCost')
-    if needs_scalar_cost(a) and scalar is None:
-        raise ToolError('missing middle-end scalar cost for scalar tail')
-    if scalar is not None and (type(scalar) not in (int, float) or not math.isfinite(scalar) or scalar < 0):
-        raise ToolError('invalid middle-end scalar cost')
-
-
-def iteration_factors(a):
-    """Body iterations and unscaled scalar tail in the common v3 score."""
-    t, w = a['MaxTripCount'], a['Width']
-    main = 1 / w if not t else t // w if a['ScalarTail'] else (t + w - 1) // w
-    tail = (t % w) * (a.get('ScalarCost') or 0) if t and a['ScalarTail'] else 0
-    return main, tail
-
-
-def validate_middle_end(value):
-    if value['cost_scale'] != 4 or type(value['pressure']) is not bool:
-        raise ValueError('invalid middle-end cost context')
-    units = value['spill_units'] + value['reload_units']
-    if len(value['spill_units']) != 3 or len(value['reload_units']) != 3:
-        raise ValueError('invalid TTI register banks')
-    for cost in [value[k] for k in ('precomputed', 'vector_region', 'estimated_spill', 'original')] + units:
-        if cost is not None and (type(cost) is not int or not 0 <= cost <= 2**63 - 1):
-            raise ValueError('invalid middle-end quarter cost')
+def nonnegative(value):
+    return type(value) is int and value >= 0
 
 
 def validate_manifest(value, run_id):
     try:
         if value['version'] != PROTOCOL_VERSION or value['run_id'] != run_id:
-            raise ValueError('version/run mismatch')
-        loops = value['loops']
-        keys = [(r['function'], r['loop']) for r in loops]
-        if len(set(keys)) != len(keys):
-            raise ValueError('duplicate loops')
-        for row in loops:
-            if (not isinstance(row['function'], str) or type(row['loop']) is not int
-                    or row['loop'] < 0 or type(row['max_trip_count']) is not int
-                    or type(row['exact_trip_count']) is not int
-                    or row['max_trip_count'] < 0 or row['exact_trip_count'] < 0):
-                raise ValueError('invalid loop context')
-        rows = value['candidates']
-        if len({r['id'] for r in rows}) != len(rows):
-            raise ValueError('duplicate candidates')
-        for row in rows:
-            validate_middle_end(row['middle_end'])
-            if (type(row['probeable']) is not bool or type(row['scalar_tail']) is not bool
+            raise ValueError('incompatible protocol or run identity; recollect')
+        keys = [(r['function'], r['loop']) for r in value['loops']]
+        if len(keys) != len(set(keys)): raise ValueError('duplicate loop')
+        for loop in value['loops']:
+            if not all(nonnegative(loop[k]) for k in ('loop', 'max_trip_count', 'exact_trip_count')):
+                raise ValueError('invalid trip count')
+            scalar = loop['scalar_cost']
+            if scalar is not None and (type(scalar) not in (int, float) or not math.isfinite(scalar) or scalar < 0):
+                raise ValueError('invalid middle-end scalar cost')
+            if loop['max_trip_count'] and loop['exact_trip_count'] > loop['max_trip_count']:
+                raise ValueError('exact trip count exceeds bound')
+        ids = [r['id'] for r in value['candidates']]
+        if len(ids) != len(set(ids)): raise ValueError('duplicate candidate')
+        for row in value['candidates']:
+            if (not re.fullmatch(r'[fs][1-9][0-9]*', row['vf']) or row['vf'] == 'f1'
                     or (row['function'], row['loop']) not in keys
-                    or row['vf'] == 'f1' or row['vf'][0] not in 'fs'
-                    or int(row['vf'][1:]) <= 0 or row['estimated_width'] <= 0):
-                raise ValueError('invalid vector candidate')
+                    or type(row['probeable']) is not bool or type(row['scalar_tail']) is not bool
+                    or type(row['estimated_width']) is not int or row['estimated_width'] < 1):
+                raise ValueError('invalid candidate context')
+            me = row['middle_end']
+            unit = me['configuration_unit_quarters']
+            if unit is not None and not nonnegative(unit): raise ValueError('invalid configuration TTI unit')
+            if (me['unit'] != 'TTI-reciprocal-throughput-quarter'
+                    or me['configuration_scope'] != 'per-observed-MIR-configuration'
+                    or me['configuration_source'] != 'TTI.getIntrinsicInstrCost(riscv_vsetvlimax)'):
+                raise ValueError('invalid configuration cost provenance')
         if not isinstance(value['selections'], list) or not isinstance(value['failures'], list):
-            raise ValueError('missing outcomes')
-    except (KeyError, TypeError, ValueError, IndexError) as exc:
-        raise ToolError(f'invalid manifest: {exc}') from exc
+            raise ValueError('invalid replay outcomes')
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ToolError(f'invalid candidate manifest: {exc}') from exc
     return value
 
 
-def bind_observation(a, candidate, loop, run_id):
-    """Identity/schema faults are fatal; unsupported facts are scored separately."""
+def validate_observation(a):
     try:
-        if (a['Version'] != 2 or a['RunID'] != run_id
-                or a['Candidate'] != candidate['id'] or a['Function'] != candidate['function']
-                or a['Stage'] != 'post-ra-cleanup'
-                or ('s' if a['ScalableVF'] else 'f') + str(a['VF']) != candidate['vf']
-                or a['ScalarTail'] != candidate['scalar_tail']
-                or a['MaxTripCount'] != loop['max_trip_count']
-                or a['ExactTripCount'] != loop['exact_trip_count']):
-            raise ValueError('analytics identity/context mismatch')
-        for key in ('Instructions', 'Blocks', 'Edges'):
-            if not isinstance(a[key], list):
-                raise ValueError('invalid analytics arrays')
-        for key in ('Error', 'CPU', 'DependencyCoverage'):
-            if not isinstance(a[key], str):
-                raise ValueError('invalid analytics strings')
-        for key in ('VLen', 'Width'):
-            if type(a[key]) is not int:
-                raise ValueError('invalid analytics geometry')
-        for i in a['Instructions']:
-            for key in ('ID', 'Block', 'Group8', 'SEW', 'Bytes', 'Predicate'):
-                if type(i[key]) is not int:
-                    raise ValueError('invalid instruction geometry')
-            for key in ('Meta', 'Barrier', 'ConfigUnused', 'ScalableBytes', 'SameCopy', 'Masked', 'Load', 'Store', 'Stack', 'Spill', 'SpillSlotAccess'):
-                if type(i[key]) is not bool:
-                    raise ValueError('invalid instruction flags')
-            for key in ('Opcode', 'Base', 'Category'):
-                if not isinstance(i[key], str):
-                    raise ValueError('invalid instruction identity')
-            for operand in i['Operands']:
-                if operand['Bank'] not in ('gpr', 'fpr', 'vector', 'unknown'):
-                    raise ValueError('invalid register bank')
-                for key in ('Vector', 'Def', 'Implicit', 'Dead', 'EarlyClobber', 'SubReg', 'Undef', 'Tied'):
-                    if type(operand[key]) is not bool:
-                        raise ValueError('invalid operand flags')
-        for edge in a['Edges']:
-            if any(type(edge[k]) is not int for k in ('Source', 'Destination', 'OperandIndex', 'Distance')):
-                raise ValueError('invalid dependency edge')
-            if (not 0 <= edge['Source'] < len(a['Instructions'])
-                    or not 0 <= edge['Destination'] < len(a['Instructions'])
-                    or not 0 <= edge['OperandIndex'] < len(a['Instructions'][edge['Destination']]['Operands'])
-                    or type(edge['WholeValue']) is not bool):
-                raise ValueError('invalid dependency indices')
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ToolError(f'invalid backend result: {exc}') from exc
-    return a | {'ScalarCost': loop['scalar_cost'], 'MiddleEnd': candidate['middle_end']}
+        if a['schema'] != SCHEMA or a['stage'] != STAGE:
+            raise ValueError('incompatible observation schema/stage; recollect')
+        for k in ('candidate', 'function', 'compiler', 'cpu', 'target_triple', 'features', 'error', 'run_id', 'register_coverage', 'memory_coverage'):
+            if not isinstance(a[k], str): raise ValueError(f'invalid {k}')
+        if not all(nonnegative(a[k]) for k in ('vlen', 'vf', 'iteration_width', 'max_trip_count', 'exact_trip_count')):
+            raise ValueError('invalid observation geometry')
+        for k in ('iteration_mapping', 'scalable', 'scalar_tail'):
+            if type(a[k]) is not bool: raise ValueError(f'invalid {k}')
+        block_ids = [b['id'] for b in a['blocks']]
+        if len(block_ids) != len(set(block_ids)): raise ValueError('duplicate blocks')
+        ids = [op['id'] for op in a['instructions']]
+        if any(type(i) is not int for i in ids) or ids != list(range(len(ids))): raise ValueError('instruction IDs must preserve MIR order')
+        order = a['body_order']
+        body = {b['id'] for b in a['blocks'] if b['role'] == 'body'}
+        if order != [op['id'] for op in a['instructions'] if op['role'] == 'body']:
+            raise ValueError('body execution order disagrees with single-block MIR order')
+        for op in a['instructions']:
+            if op['block'] not in block_ids: raise ValueError('instruction block missing')
+            if not isinstance(op['mir'], str) or not isinstance(op['base_opcode'], str): raise ValueError('invalid MIR')
+            for key in ('vector', 'meta', 'configuration', 'pseudo', 'registers_complete', 'load', 'store', 'masked'):
+                if type(op[key]) is not bool: raise ValueError(f'invalid op flag {key}')
+            for key in ('lmul8', 'sew', 'vl', 'index_emul8', 'index_eew'):
+                if op[key] is not None and not nonnegative(op[key]): raise ValueError('invalid known/unknown geometry')
+            for index, operand in enumerate(op['operands']):
+                if operand['index'] != index: raise ValueError('operand position lost')
+                if operand['kind'] == 'register':
+                    if not all(nonnegative(u) for u in operand['units']): raise ValueError('invalid register units')
+                    for k in ('def', 'use', 'undef', 'physical', 'implicit', 'dead', 'kill', 'early_clobber', 'tied', 'internal_read'):
+                        if type(operand[k]) is not bool: raise ValueError(f'invalid register flag {k}')
+                    if not nonnegative(operand['subregister']): raise ValueError('invalid subregister')
+            for m in op['memory']:
+                if type(m['offset']) is not int or not nonnegative(m['alignment']) or m['alignment'] < 1:
+                    raise ValueError('invalid memory location')
+                for k in ('load', 'store', 'volatile', 'atomic', 'scalable', 'alias_scope', 'noalias'):
+                    if type(m[k]) is not bool: raise ValueError('invalid memory metadata')
+                if m['bytes'] is not None and not nonnegative(m['bytes']): raise ValueError('invalid memory size')
+        for e in a['dependencies']:
+            if not all(nonnegative(e[k]) for k in ('source', 'destination', 'iteration_distance', 'operand_index', 'unit')):
+                raise ValueError('invalid dependency field types')
+            if (e['source'] not in order or e['destination'] not in order or e['iteration_distance'] not in (0, 1)
+                    or e['kind'] != 'register-raw'):
+                raise ValueError('invalid reaching-def edge')
+            op = a['instructions'][e['destination']]
+            operand = op['operands'][e['operand_index']]
+            if operand['kind'] != 'register' or not operand['use'] or e['unit'] not in operand['units']:
+                raise ValueError('dependency operand/unit mismatch')
+            if not e['iteration_distance'] and e['source'] >= e['destination']:
+                raise ValueError('non-forward reaching-def edge')
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        raise ToolError(f'invalid MIR observation: {exc}') from exc
+    return a
+
+
+def bind_observation(a, candidate, loop, run_id):
+    validate_observation(a)
+    if (a['run_id'] != run_id or a['candidate'] != candidate['id'] or a['function'] != candidate['function']
+            or ('s' if a['scalable'] else 'f') + str(a['vf']) != candidate['vf']
+            or a['scalar_tail'] != candidate['scalar_tail']
+            or any(a[k] != loop[k] for k in ('max_trip_count', 'exact_trip_count'))):
+        raise ToolError('MIR observation/candidate identity mismatch')
+    return a | {'middle_end': candidate['middle_end'], 'scalar_cost': loop['scalar_cost']}
+
+
+def iteration_factors(a):
+    """Only exact counts give a kernel total. A bound is never a runtime count."""
+    t, width = a['exact_trip_count'], a['iteration_width']
+    if width < 1: raise ToolError('unproven iteration width')
+    if not t:
+        return 1 / width, 0, 'steady-state-per-scalar-iteration'
+    if a['scalar_tail']:
+        return t // width, t % width, 'exact-trip-count'
+    return (t + width - 1) // width, 0, 'exact-trip-count-folded-tail'

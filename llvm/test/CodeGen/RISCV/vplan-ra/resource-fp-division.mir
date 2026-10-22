@@ -1,11 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+zvfh -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=division:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-fp-division.json 0
-#
-# VLEN=128. Divide forms are derived from base instruction metadata, with
-# SEW and fractional LMUL from each pseudo rather than the preceding vset.
-# Fractional operations issue one chunk; M2/M4/M8 issue 2/4/8 chunks.
-# Division uses neither ordinary FP arithmetic nor memory mask service.
-# Setup and exit division instructions must not be collected.
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
+# Observe divide pseudo metadata across SEW and fractional/integer register groups.
 --- |
   define void @division() #0 {
   entry:

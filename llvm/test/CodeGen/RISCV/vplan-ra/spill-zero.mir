@@ -1,8 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=kernel:0:0:s4 -vplan-analytics-output=%t.raw.json %s -o %t.mir
-# RUN: %python %S/Inputs/project-spills.py %t.raw.json 16 > %t.json
-# RUN: FileCheck %s --implicit-check-not=resource_demand < %t.json
-# CHECK-COUNT-6: "reloads":0,"spills":0
-# CHECK: "supported":true
+# RUN: %python %S/Inputs/check-observation.py %t.raw.json
+# Observe a loop with no spill traffic using the ordinary instruction schema.
 --- |
   define void @kernel() #0 {
   entry:

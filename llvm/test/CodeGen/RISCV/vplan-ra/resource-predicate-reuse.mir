@@ -1,13 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=reuse:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-predicate-reuse.json 0
-#
-# Masked loads (with explicit defs), stores, and repeated full copies share
-# identity across differing
-# groupings. Source clobbers leave earlier copies intact. Definitions through
-# grouped aliases invalidate both a saved source and the mask destination.
-# Restoring a surviving copy restores identity; a VL-dependent elementwise
-# move is conservatively a new value. An undef predicate has no reuse proof.
-# Neither IMPLICIT_DEF nor a copy with an undef source proves an identity.
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
+# Observe masked loads/stores, copies, clobbers and grouped-register aliases.
 --- |
   define void @reuse() #0 {
   entry:

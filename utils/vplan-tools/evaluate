@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fit and evaluate independent models in five benchmark-ID folds."""
-from cross_validation import main
+"""Evaluate the single hardcoded machine model against measured VF choices."""
+from evaluation import main
 from vplan_tools import cli
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     cli(main)

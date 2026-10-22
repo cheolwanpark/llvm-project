@@ -1,17 +1,9 @@
 [project]
 name = "vplan-tools"
-version = "0.1.0"
-description = "Dataset-backed VPlan evaluation and analytical cost calibration"
+version = "1.0.0"
+description = "Fixed machine MIR interaction model and verified VF regret evaluation"
 requires-python = ">=3.12"
-dependencies = ["torch>=2.6,<3", "numpy>=2,<3"]
+dependencies = []
 
 [tool.uv]
 package = false
-
-[tool.uv.sources]
-torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true

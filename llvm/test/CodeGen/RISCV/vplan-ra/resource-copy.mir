@@ -1,10 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=copy:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-copy.json 0
-#
-# Nominal VLEN=128. COPY uses whole physical groups even after mf2 vset.
-# Each group has a non-self and a self copy; v0 mask copies use one register.
-# Supported memory, arithmetic and spills coexist without double counting.
-# Copies in setup and exit are excluded; scalar COPY retains scalar overhead.
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
+# Observe whole-register copies and physical groups alongside memory and arithmetic.
 --- |
   define void @copy() #0 {
   entry:

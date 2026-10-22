@@ -1,17 +1,6 @@
 # RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -run-pass=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=resource:0:0:s4 -vplan-analytics-output=%t.json.analytics %s -o %t.mir
-# RUN: %python %S/Inputs/check-raw.py %t.json.analytics %S/Inputs/resource-demand.json 0
-#
-# Keep standalone fields and whole operation objects in separate invocations.
-# FileCheck DAG matches in one invocation must not reuse any input characters.
-# No overlapping DAG matches are allowed or needed.
-#
-#
-#
-# Nominal VLEN=128. Fractional grouping retains group8=4 with an issue floor
-# of work8=8. Indexed e64 M2 indices serve e32 M1 data. Widening uses M2 work.
-# Real spills: two M2 vector transfers and two scalar transfers => spill8=48.
-# Ordinary stack transfers and loop control are scalar overhead (five ops).
-# Setup arithmetic and the exit horizontal reduction must not enter the totals.
+# RUN: %python %S/Inputs/check-observation.py %t.json.analytics
+# Observe fractional groups, indexed memory geometry, wide operands and stack transfers.
 --- |
   define void @resource() #0 {
   entry:
