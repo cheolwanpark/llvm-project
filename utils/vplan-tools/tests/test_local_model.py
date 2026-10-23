@@ -1,7 +1,7 @@
 from fractions import Fraction
 import unittest
 
-from cost_model import COEFFICIENTS, FORWARD_WINDOW, BACKWARD_WINDOW, identity, machine_parameters, score_observation
+from cost_model import COEFFICIENTS, identity, machine_parameters, score_observation
 from unittest.mock import patch
 from dependencies import Dependencies, memory_relation
 from hardware import BASIC_CLASSES, MAP, can_overlap, split_work, work_for_instruction
@@ -136,6 +136,69 @@ class DynamicDependencies(unittest.TestCase):
 
 
 class LocalModel(unittest.TestCase):
+    def test_calibrated_defaults_and_identity(self):
+        model = identity()
+        self.assertEqual(model['model'], 'mir-basic-calibrated-v1')
+        params = model['machine_parameters']
+        self.assertEqual((params['forward_window'], params['backward_window']), (0, 0))
+        expected = {'basic_' + cls: 1. for cls in BASIC_CLASSES}
+        expected.update(basic_memory=3., basic_move=2., contention=.25, raw=.25,
+                        ilp=.125, middle_end_scale=1.)
+        self.assertEqual(params['coefficients'], expected)
+        for window in ('FORWARD_WINDOW', 'BACKWARD_WINDOW'):
+            with patch('cost_model.' + window, 4):
+                self.assertNotEqual(identity(), model)
+                self.assertTrue(score_observation(observation())['pairs'])
+
+    def test_zero_windows_skip_analysis_but_keep_validation_and_coverage(self):
+        a = observation()
+        a['instructions'][0]['registers_complete'] = False
+        with patch('cost_model.Dependencies', side_effect=AssertionError('dependency analysis')), \
+             patch('cost_model.can_overlap', side_effect=AssertionError('overlap analysis')):
+            r = score_observation(a)
+            self.assertEqual(r['pairs'], [])
+            self.assertEqual(r['body_cost'], r['basic'])
+            self.assertEqual((r['stall'], r['ilp']), (0, 0))
+            for features in [r['features'], r['body_features'], *(o['features'] for o in r['ops'])]:
+                self.assertEqual([features[k] for k in ('contention', 'raw', 'ilp')], [0, 0, 0])
+            for key in ('unknown_dependency', 'unknown_overlap', 'independent', 'dependent'):
+                self.assertEqual(r['coverage'][key], 0)
+            self.assertEqual(r['coverage']['register'], a['register_coverage'])
+            self.assertEqual(r['coverage']['memory'], a['memory_coverage'])
+            a['schema'] = 'old'
+            with self.assertRaises(ToolError): score_observation(a)
+
+    def test_component_weights_geometry_and_iteration_additions(self):
+        # Strided memory at EMUL 1: memory1+move2 => 7;
+        # unit memory at EMUL 8: memory8+move1 => 26;
+        # FP scalar multiply at LMUL 2: fp_multiply2+move1 => 4.
+        ops = [instruction(0, 'VLSE32_V', load=True),
+               instruction(1, 'VLE32_V', load=True, lmul8=64, sew=64),
+               instruction(2, 'VFMUL_VF', lmul8=16),
+               instruction(3, 'VSETVLI', configuration=True),
+               instruction(4, 'VSETVLI', configuration=True, block=1, role='setup')]
+        a = observation(ops, exact_trip_count=18, max_trip_count=18,
+                        body_order=[0, 1, 2, 3],
+                        blocks=[dict(id=0, role='body', successors=[0]),
+                                dict(id=1, role='setup', successors=[0])])
+        r = score_observation(a)
+        self.assertEqual([o['basic'] for o in r['ops']], [7, 26, 4])
+        self.assertEqual(r['body_features']['basic_memory'], 9)
+        self.assertEqual(r['body_features']['basic_move'], 4)
+        self.assertEqual(r['body_features']['basic_fp_multiply'], 2)
+        self.assertEqual(r['body_cost'], 37)
+        self.assertEqual(r['middle_end']['unscaled_additions'],
+                         dict(configuration=4., scalar_tail=6., setup_configuration=1.))
+        self.assertEqual(r['score'], 4 * 37 + 11)
+        # VF has no separate multiplier: verified width controls iterations.
+        self.assertEqual(score_observation(a | {'vf': 16})['score'], r['score'])
+        folded = score_observation(a | {'scalar_tail': False})
+        self.assertEqual(folded['body_iterations'], 5)
+        self.assertEqual(folded['score'], 5 * 37 + 6)
+        steady = score_observation(a | {'exact_trip_count': 0})
+        self.assertEqual(steady['score'], (37 + 1) / 4)
+        self.assertTrue(steady['middle_end']['unknown_setup_amortization'])
+
     def test_op_pair_body_and_final_reconcile(self):
         r = score_observation(observation())
         self.assertAlmostEqual(r['body_cost'], r['basic'] + r['stall'] - r['ilp'])
@@ -143,11 +206,69 @@ class LocalModel(unittest.TestCase):
         self.assertAlmostEqual(r['score'], r['body_cost'] * r['body_iterations'] + r['middle_end_cost'])
         self.assertEqual(r['coefficients'], COEFFICIENTS)
 
+    def test_configuration_and_tail_added_once(self):
+        a = observation([instruction(0), instruction(1, 'VSETVLI', configuration=True)],
+                        exact_trip_count=18, max_trip_count=18)
+        r = score_observation(a)
+        self.assertEqual(r['body_iterations'], 4)
+        self.assertEqual(r['scalar_remainder'], 2)
+        self.assertEqual(r['middle_end']['unscaled_additions'],
+                         dict(configuration=4., scalar_tail=6., setup_configuration=0.))
+        self.assertEqual(r['middle_end_cost'], 10. * COEFFICIENTS['middle_end_scale'])
+
+    def test_upper_bound_not_used_as_exact(self):
+        a = observation(exact_trip_count=0, max_trip_count=19)
+        self.assertEqual(iteration_factors(a), (.25, 0, 'steady-state-per-scalar-iteration'))
+        r = score_observation(a)
+        self.assertEqual(r['score'], r['body_cost'] / 4)
+        self.assertEqual(r['middle_end_cost'], 0)
+        self.assertIsNone(r['scalar_remainder'])
+
+    def test_missing_middle_end_cost(self):
+        a = observation(exact_trip_count=17, max_trip_count=17, scalar_cost=None)
+        with self.assertRaises(ToolError): score_observation(a)
+        a = observation([instruction(0), instruction(1, 'VSETVLI', configuration=True)])
+        a['middle_end']['configuration_unit_quarters'] = None
+        with self.assertRaises(ToolError): score_observation(a)
+
+    def test_spill_not_additive(self):
+        r = score_observation(observation([instruction(0, 'LD', load=True, memory=[memory()])]))
+        self.assertEqual(r['ops'][0]['hardware']['components'][0]['cost_class'], 'memory')
+        self.assertNotIn('spill', r['features'])
+        self.assertEqual(r['body_cost'], 3.)
+
+    def test_schema_and_operand_positions(self):
+        a = observation(); a['schema'] = 'old'
+        with self.assertRaises(ToolError): validate_observation(a)
+        a = observation([instruction(0, operands=[reg(1, 1)])])
+        with self.assertRaises(ToolError): validate_observation(a)
+
+    def test_multi_block_rejected(self):
+        a = observation(); a['blocks'].append(dict(id=1, role='body', successors=[0]))
+        with self.assertRaises(ToolError): score_observation(a)
+
+    def test_manual_calibration_changes_report_identity(self):
+        before = identity()
+        with patch.dict(COEFFICIENTS, raw=COEFFICIENTS['raw'] + .1):
+            self.assertNotEqual(identity(), before)
+        self.assertEqual(identity(), before)
+        snapshot = machine_parameters(); snapshot['coefficients']['raw'] = 99
+        self.assertNotEqual(COEFFICIENTS['raw'], 99)
+
+
+class PairModel(unittest.TestCase):
+    """Compatibility semantics require explicit nonzero windows in every test."""
+    def setUp(self):
+        for name in ('FORWARD_WINDOW', 'BACKWARD_WINDOW'):
+            context = patch('cost_model.' + name, 4)
+            context.start()
+            self.addCleanup(context.stop)
+
     def test_multilap_dynamic_identity(self):
         r = score_observation(observation([instruction(0)]))
         self.assertEqual([(p['other'], p['iteration_offset']) for p in r['pairs']],
-                         [(0, i) for i in range(1, FORWARD_WINDOW + 1)] +
-                         [(0, -i) for i in range(1, BACKWARD_WINDOW + 1)])
+                         [(0, i) for i in range(1, 5)] +
+                         [(0, -i) for i in range(1, 5)])
         self.assertEqual(len(r['ops']), 1)
         self.assertEqual(r['basic'], 1)
 
@@ -241,52 +362,5 @@ class LocalModel(unittest.TestCase):
         self.assertTrue(all(p['anchor'] != 1 and p['other'] != 1 for p in r['pairs']))
         self.assertEqual(r['middle_end']['unscaled_additions']['configuration'], 4.)
 
-    def test_configuration_and_tail_added_once(self):
-        a = observation([instruction(0), instruction(1, 'VSETVLI', configuration=True)],
-                        exact_trip_count=18, max_trip_count=18)
-        r = score_observation(a)
-        self.assertEqual(r['body_iterations'], 4)
-        self.assertEqual(r['scalar_remainder'], 2)
-        self.assertEqual(r['middle_end']['unscaled_additions'],
-                         dict(configuration=4., scalar_tail=6., setup_configuration=0.))
-        self.assertEqual(r['middle_end_cost'], 10. * COEFFICIENTS['middle_end_scale'])
-
-    def test_upper_bound_not_used_as_exact(self):
-        a = observation(exact_trip_count=0, max_trip_count=19)
-        self.assertEqual(iteration_factors(a), (.25, 0, 'steady-state-per-scalar-iteration'))
-        r = score_observation(a)
-        self.assertEqual(r['score'], r['body_cost'] / 4)
-        self.assertEqual(r['middle_end_cost'], 0)
-        self.assertIsNone(r['scalar_remainder'])
-
-    def test_missing_middle_end_cost(self):
-        a = observation(exact_trip_count=17, max_trip_count=17, scalar_cost=None)
-        with self.assertRaises(ToolError): score_observation(a)
-        a = observation([instruction(0), instruction(1, 'VSETVLI', configuration=True)])
-        a['middle_end']['configuration_unit_quarters'] = None
-        with self.assertRaises(ToolError): score_observation(a)
-
-    def test_spill_not_additive(self):
-        r = score_observation(observation([instruction(0, 'LD', load=True, memory=[memory()])]))
-        self.assertEqual(r['ops'][0]['hardware']['components'][0]['cost_class'], 'memory')
-        self.assertNotIn('spill', r['features'])
-
-    def test_schema_and_operand_positions(self):
-        a = observation(); a['schema'] = 'old'
-        with self.assertRaises(ToolError): validate_observation(a)
-        a = observation([instruction(0, operands=[reg(1, 1)])])
-        with self.assertRaises(ToolError): validate_observation(a)
-
-    def test_multi_block_rejected(self):
-        a = observation(); a['blocks'].append(dict(id=1, role='body', successors=[0]))
-        with self.assertRaises(ToolError): score_observation(a)
-
-    def test_manual_calibration_changes_report_identity(self):
-        before = identity()
-        with patch.dict(COEFFICIENTS, raw=COEFFICIENTS['raw'] + .1):
-            self.assertNotEqual(identity(), before)
-        self.assertEqual(identity(), before)
-        snapshot = machine_parameters(); snapshot['coefficients']['raw'] = 99
-        self.assertNotEqual(COEFFICIENTS['raw'], 99)
 
 if __name__ == '__main__': unittest.main()

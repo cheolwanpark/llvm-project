@@ -1,0 +1,7066 @@
+{
+  "rows": [
+    {
+      "id": "hpcc/stream-add",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 9015,
+        "2": 7554,
+        "4": 7339,
+        "8": 6346
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "hpcc/stream-copy",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 6230,
+        "2": 5053,
+        "4": 4960,
+        "8": 5007
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.009475806451612945
+    },
+    {
+      "id": "hpcc/stream-scale",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 6734,
+        "2": 5343,
+        "4": 5003,
+        "8": 4912
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "hpcc/stream-triad",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 9324,
+        "2": 8967,
+        "4": 7395,
+        "8": 6750
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "lcals/energy-calc-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 4032,
+        "2": 3034,
+        "4": 2952,
+        "8": 2993
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.01388888888888884
+    },
+    {
+      "id": "lcals/energy-calc-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 11457,
+        "2": 7843,
+        "4": 7420,
+        "8": 7959
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0726415094339623
+    },
+    {
+      "id": "lcals/energy-calc-l02",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s4",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 4,
+      "measured_cycles": {
+        "1": 4961,
+        "2": 3682,
+        "4": 3275,
+        "8": 3388
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "lcals/energy-calc-l03",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 3069,
+        "2": 1699,
+        "4": 1409,
+        "8": 1647
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.1689141234918381
+    },
+    {
+      "id": "lcals/energy-calc-l04",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s4",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 4,
+      "measured_cycles": {
+        "1": 19357,
+        "2": 12157,
+        "4": 9051,
+        "8": 12813
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "lcals/energy-calc-l05",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 15598,
+        "2": 10268,
+        "4": 7052,
+        "8": 7373
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.04551900170164491
+    },
+    {
+      "id": "lcals/eos",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s4",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 4,
+      "measured_cycles": {
+        "1": 6410,
+        "2": 4713,
+        "4": 3942,
+        "8": 6985
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "lcals/fir-inner",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 311,
+        "2": 298,
+        "4": 306,
+        "8": 329,
+        "16": 259
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.2702702702702702
+    },
+    {
+      "id": "lcals/fir-outer",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 15427,
+        "2": 12048,
+        "4": 11647,
+        "8": 8258,
+        "16": 7798
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.05898948448320085
+    },
+    {
+      "id": "lcals/first-diff",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 2518,
+        "2": 1432,
+        "4": 1322,
+        "8": 1606
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.21482602118003036
+    },
+    {
+      "id": "lcals/hydro-1d",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 3213,
+        "2": 1857,
+        "4": 1740,
+        "8": 1679
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "lcals/if-quad",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s4",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 4,
+      "measured_cycles": {
+        "1": 6736,
+        "2": 3864,
+        "4": 3428,
+        "8": 4862
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "lcals/init3",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 2850,
+        "2": 2714,
+        "4": 2747,
+        "8": 2784
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.025792188651436954
+    },
+    {
+      "id": "lcals/muladdsub",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 2815,
+        "2": 2708,
+        "4": 2763,
+        "8": 2767
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.021787296898079678
+    },
+    {
+      "id": "lcals/pressure-calc-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 2489,
+        "2": 1333,
+        "4": 1050,
+        "8": 975
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "lcals/pressure-calc-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 3742,
+        "2": 2610,
+        "4": 2680,
+        "8": 2993
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.14674329501915717
+    },
+    {
+      "id": "polybench/p32-adi-full",
+      "split": "validation",
+      "eligible": false,
+      "compile_failed": false,
+      "status": "ambiguous-loops",
+      "reason": "expected one selected_kernel report, found 5",
+      "actual_selection": null,
+      "selected_vf": null,
+      "measured_cycles": {
+        "1": 146180,
+        "2": 122356,
+        "4": 120253,
+        "8": 133787
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [],
+      "top1_correct": null,
+      "top1_regret": null
+    },
+    {
+      "id": "polybench/p32-atax-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 12626,
+        "2": 14631,
+        "4": 12984,
+        "8": 14462
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.14541422461587206
+    },
+    {
+      "id": "polybench/p32-atax-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 32992,
+        "2": 26856,
+        "4": 24243,
+        "8": 23451
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/p32-atax-l02",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 28416,
+        "2": 19813,
+        "4": 24256,
+        "8": 23984
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.21051834654015034
+    },
+    {
+      "id": "polybench/p32-bicg-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 12626,
+        "2": 14631,
+        "4": 12984,
+        "8": 14462
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.14541422461587206
+    },
+    {
+      "id": "polybench/p32-bicg-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 51570,
+        "2": 38688,
+        "4": 32675,
+        "8": 33214
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.016495791889824085
+    },
+    {
+      "id": "polybench/p32-fdtd-2d-full",
+      "split": "validation",
+      "eligible": false,
+      "compile_failed": false,
+      "status": "ambiguous-loops",
+      "reason": "expected one selected_kernel report, found 4",
+      "actual_selection": null,
+      "selected_vf": null,
+      "measured_cycles": {
+        "1": 79451,
+        "2": 48415,
+        "4": 45500,
+        "8": 47553
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [],
+      "top1_correct": null,
+      "top1_regret": null
+    },
+    {
+      "id": "polybench/p32-floyd-warshall-full",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 178625,
+        "2": 178625,
+        "4": 178625,
+        "8": 178139
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/p32-gemm-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 67473,
+        "2": 67394,
+        "4": 70472,
+        "8": 69281
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.027999525180283147
+    },
+    {
+      "id": "polybench/p32-gemver-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 53874,
+        "2": 38163,
+        "4": 32691,
+        "8": 33249
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.017068918050839654
+    },
+    {
+      "id": "polybench/p32-gemver-l02",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 28293,
+        "2": 25113,
+        "4": 25138,
+        "8": 24355
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/p32-gemver-l03",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 40176,
+        "2": 35309,
+        "4": 21846,
+        "8": 22288
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.020232536848850957
+    },
+    {
+      "id": "polybench/p32-gesummv-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 50007,
+        "2": 37684,
+        "4": 32694,
+        "8": 40023
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.22416957239860524
+    },
+    {
+      "id": "polybench/p32-jacobi-1d-imper-full",
+      "split": "validation",
+      "eligible": false,
+      "compile_failed": false,
+      "status": "ambiguous-loops",
+      "reason": "expected one selected_kernel report, found 2",
+      "actual_selection": null,
+      "selected_vf": null,
+      "measured_cycles": {
+        "1": 20025,
+        "2": 11459,
+        "4": 9833,
+        "8": 13132
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [],
+      "top1_correct": null,
+      "top1_regret": null
+    },
+    {
+      "id": "polybench/p32-jacobi-1d-imper-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 205187,
+        "2": 108715,
+        "4": 99498,
+        "8": 134361
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.3503889525417596
+    },
+    {
+      "id": "polybench/p32-jacobi-1d-imper-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 64630,
+        "2": 52798,
+        "4": 52199,
+        "8": 53732
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.029368378704572873
+    },
+    {
+      "id": "polybench/p32-jacobi-2d-imper-full",
+      "split": "validation",
+      "eligible": false,
+      "compile_failed": false,
+      "status": "ambiguous-loops",
+      "reason": "expected one selected_kernel report, found 2",
+      "actual_selection": null,
+      "selected_vf": null,
+      "measured_cycles": {
+        "1": 45368,
+        "2": 28001,
+        "4": 22026,
+        "8": 27768
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [],
+      "top1_correct": null,
+      "top1_regret": null
+    },
+    {
+      "id": "polybench/p32-mvt-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 34878,
+        "2": 20246,
+        "4": 24176,
+        "8": 23787
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.17489874543119632
+    },
+    {
+      "id": "polybench/p32-syrk-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 6963,
+        "2": 4697,
+        "4": 4554,
+        "8": 3885
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/p32-syrk-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 6961,
+        "2": 4434,
+        "4": 3836,
+        "8": 3419
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/p421-atax-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 15793,
+        "2": 14031,
+        "4": 10599,
+        "8": 12476
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.17709217850740644
+    },
+    {
+      "id": "polybench/p421-fdtd-2d-full",
+      "split": "validation",
+      "eligible": false,
+      "compile_failed": false,
+      "status": "ambiguous-loops",
+      "reason": "expected one selected_kernel report, found 4",
+      "actual_selection": null,
+      "selected_vf": null,
+      "measured_cycles": {
+        "1": 397425,
+        "2": 253570,
+        "4": 225858,
+        "8": 259195
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [],
+      "top1_correct": null,
+      "top1_regret": null
+    },
+    {
+      "id": "polybench/p421-floyd-warshall-full",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 847706,
+        "2": 847706,
+        "4": 847706,
+        "8": 847655,
+        "16": 847706
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 6.016598734159828e-05
+    },
+    {
+      "id": "polybench/p421-gemm-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 7318,
+        "2": 5049,
+        "4": 4956,
+        "8": 4196
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/p421-gemm-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 9525,
+        "2": 7484,
+        "4": 7100,
+        "8": 7189
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.012535211267605595
+    },
+    {
+      "id": "polybench/p421-heat-3d-full",
+      "split": "validation",
+      "eligible": false,
+      "compile_failed": false,
+      "status": "ambiguous-loops",
+      "reason": "expected one selected_kernel report, found 2",
+      "actual_selection": null,
+      "selected_vf": null,
+      "measured_cycles": {
+        "1": 630375,
+        "2": 382348,
+        "4": 320248,
+        "8": 766683
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [],
+      "top1_correct": null,
+      "top1_regret": null
+    },
+    {
+      "id": "polybench/p421-jacobi-1d-full",
+      "split": "validation",
+      "eligible": false,
+      "compile_failed": false,
+      "status": "ambiguous-loops",
+      "reason": "expected one selected_kernel report, found 2",
+      "actual_selection": null,
+      "selected_vf": null,
+      "measured_cycles": {
+        "1": 16174,
+        "2": 9254,
+        "4": 9333,
+        "8": 12765
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [],
+      "top1_correct": null,
+      "top1_regret": null
+    },
+    {
+      "id": "polybench/p421-jacobi-1d-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 41186,
+        "2": 20336,
+        "4": 20902,
+        "8": 25498
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.25383556254917394
+    },
+    {
+      "id": "polybench/p421-jacobi-1d-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 41142,
+        "2": 20626,
+        "4": 18891,
+        "8": 25107
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.3290455772590122
+    },
+    {
+      "id": "polybench/p421-jacobi-1d-outer",
+      "split": "validation",
+      "eligible": false,
+      "compile_failed": false,
+      "status": "ambiguous-loops",
+      "reason": "expected one selected_kernel report, found 2",
+      "actual_selection": null,
+      "selected_vf": null,
+      "measured_cycles": {
+        "1": 40970168,
+        "2": 14929445,
+        "4": 13765127,
+        "8": 19072783
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [],
+      "top1_correct": null,
+      "top1_regret": null
+    },
+    {
+      "id": "polybench/p421-jacobi-2d-full",
+      "split": "validation",
+      "eligible": false,
+      "compile_failed": false,
+      "status": "ambiguous-loops",
+      "reason": "expected one selected_kernel report, found 2",
+      "actual_selection": null,
+      "selected_vf": null,
+      "measured_cycles": {
+        "1": 583831,
+        "2": 322367,
+        "4": 313374,
+        "8": 443664
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [],
+      "top1_correct": null,
+      "top1_regret": null
+    },
+    {
+      "id": "polybench/polybench-2mm-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 67402,
+        "2": 67440,
+        "4": 70633,
+        "8": 69316
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.028396783478235044
+    },
+    {
+      "id": "polybench/polybench-2mm-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 67332,
+        "2": 67371,
+        "4": 70703,
+        "8": 69002
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.024802471336066167
+    },
+    {
+      "id": "polybench/polybench-3mm-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 67392,
+        "2": 67430,
+        "4": 70763,
+        "8": 69206
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.02691714150047475
+    },
+    {
+      "id": "polybench/polybench-3mm-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 67392,
+        "2": 67430,
+        "4": 70763,
+        "8": 69206
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.02691714150047475
+    },
+    {
+      "id": "polybench/polybench-3mm-l02",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 67332,
+        "2": 67371,
+        "4": 70703,
+        "8": 69002
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.024802471336066167
+    },
+    {
+      "id": "polybench/polybench-adi-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 174093,
+        "2": 184490,
+        "4": 196876,
+        "8": 211014
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.21207630404439004
+    },
+    {
+      "id": "polybench/polybench-adi-l02",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 26268,
+        "2": 19559,
+        "4": 15559,
+        "8": 12219
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-adi-l03",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 33025,
+        "2": 28388,
+        "4": 20096,
+        "8": 21538
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.07175557324840764
+    },
+    {
+      "id": "polybench/polybench-adi-l04",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 11744,
+        "2": 8164,
+        "4": 8331,
+        "8": 8350
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.022782949534541963
+    },
+    {
+      "id": "polybench/polybench-adi-l05",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 26877,
+        "2": 23158,
+        "4": 15233,
+        "8": 14218
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-correlation-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 14027,
+        "2": 13895,
+        "4": 13767,
+        "8": 13773
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0004358247984310726
+    },
+    {
+      "id": "polybench/polybench-correlation-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 14693,
+        "2": 13813,
+        "4": 13743,
+        "8": 13852
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.007931310485338017
+    },
+    {
+      "id": "polybench/polybench-correlation-l02",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 16687,
+        "2": 10369,
+        "4": 9967,
+        "8": 11011
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.10474566068024482
+    },
+    {
+      "id": "polybench/polybench-correlation-l03",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 16986,
+        "2": 16996,
+        "4": 17729,
+        "8": 18122
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.06687860591075001
+    },
+    {
+      "id": "polybench/polybench-covariance-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 14027,
+        "2": 13895,
+        "4": 13767,
+        "8": 13773
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0004358247984310726
+    },
+    {
+      "id": "polybench/polybench-covariance-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 6772,
+        "2": 6301,
+        "4": 6311,
+        "8": 6197
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-covariance-l02",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 14338,
+        "2": 13933,
+        "4": 13734,
+        "8": 13753
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0013834279889326506
+    },
+    {
+      "id": "polybench/polybench-doitgen-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 2698,
+        "2": 2706,
+        "4": 3090,
+        "8": 2756
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.021497405485544796
+    },
+    {
+      "id": "polybench/polybench-doitgen-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 967,
+        "2": 795,
+        "4": 814,
+        "8": 769
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-durbin-l02",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 100133,
+        "2": 100995,
+        "4": 101664,
+        "8": 100501
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.003675112100905764
+    },
+    {
+      "id": "polybench/polybench-dynprog-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 323,
+        "2": 335,
+        "4": 310,
+        "8": 258,
+        "16": 238
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-fdtd-2d-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 3633,
+        "2": 3499,
+        "4": 3536,
+        "8": 3512
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0037153472420692335
+    },
+    {
+      "id": "polybench/polybench-fdtd-2d-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 13865,
+        "2": 9965,
+        "4": 9875,
+        "8": 9770
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-fdtd-2d-l02",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 14569,
+        "2": 9090,
+        "4": 8457,
+        "8": 8443
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-fdtd-2d-l03",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s4",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 4,
+      "measured_cycles": {
+        "1": 23237,
+        "2": 14694,
+        "4": 18861,
+        "8": 16776
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.28358513679052666
+    },
+    {
+      "id": "polybench/polybench-gemver-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 108564,
+        "2": 108850,
+        "4": 123323,
+        "8": 113510
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.04555838031023174
+    },
+    {
+      "id": "polybench/polybench-gramschmidt-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 20187,
+        "2": 20705,
+        "4": 19876,
+        "8": 20877
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.05036224592473326
+    },
+    {
+      "id": "polybench/polybench-gramschmidt-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 49770,
+        "2": 50536,
+        "4": 50878,
+        "8": 48661
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-gramschmidt-l02",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 41905,
+        "2": 41504,
+        "4": 42485,
+        "8": 41509
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.00012047031611417403
+    },
+    {
+      "id": "polybench/polybench-gramschmidt-l03",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 50257,
+        "2": 51101,
+        "4": 51875,
+        "8": 53685
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.06820940366516104
+    },
+    {
+      "id": "polybench/polybench-jacobi-2d-imper-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 27172,
+        "2": 14644,
+        "4": 12411,
+        "8": 15596
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.2566271855611957
+    },
+    {
+      "id": "polybench/polybench-jacobi-2d-imper-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 6246,
+        "2": 4807,
+        "4": 4481,
+        "8": 4308
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-lu-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 7265,
+        "2": 4776,
+        "4": 4646,
+        "8": 3981
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-lu-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 15839,
+        "2": 8508,
+        "4": 6807,
+        "8": 6409
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-mvt-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 108235,
+        "2": 108881,
+        "4": 123501,
+        "8": 113179
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0456783849956115
+    },
+    {
+      "id": "polybench/polybench-reg_detect-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 373,
+        "2": 337,
+        "4": 297,
+        "8": 290,
+        "16": 287
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-reg_detect-l02",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s4",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 4,
+      "measured_cycles": {
+        "1": 228,
+        "2": 228,
+        "4": 237,
+        "8": 237,
+        "16": 229
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.03947368421052633
+    },
+    {
+      "id": "polybench/polybench-symm-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s4",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 4,
+      "measured_cycles": {
+        "1": 177811,
+        "2": 183103,
+        "4": 213053,
+        "8": 237388
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.19819921152234676
+    },
+    {
+      "id": "polybench/polybench-syr2k-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 6686,
+        "2": 4777,
+        "4": 4746,
+        "8": 3940
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "polybench/polybench-trmm-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 16063,
+        "2": 8299,
+        "4": 7615,
+        "8": 6502
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "rajaperf/add",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 7814,
+        "2": 7516,
+        "4": 7418,
+        "8": 7469
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.006875168509032026
+    },
+    {
+      "id": "rajaperf/copy",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 7917,
+        "2": 5826,
+        "4": 5581,
+        "8": 5380
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "rajaperf/copy8",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 90820,
+        "2": 78198,
+        "4": 64329,
+        "8": 49993
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "rajaperf/daxpy",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 7451,
+        "2": 6498,
+        "4": 6442,
+        "8": 6327
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "rajaperf/diff-predict",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 76671,
+        "2": 63365,
+        "4": 52427,
+        "8": 38924
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "rajaperf/dot",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 6613,
+        "2": 5232,
+        "4": 6333,
+        "8": 6324
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.20871559633027514
+    },
+    {
+      "id": "rajaperf/eos",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s4",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 4,
+      "measured_cycles": {
+        "1": 32945,
+        "2": 24325,
+        "4": 24716,
+        "8": 41898
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.016073997944501484
+    },
+    {
+      "id": "rajaperf/first-diff",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 14638,
+        "2": 9214,
+        "4": 9019,
+        "8": 9510
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.054440625346490634
+    },
+    {
+      "id": "rajaperf/first-sum",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 11606,
+        "2": 6041,
+        "4": 5545,
+        "8": 5609
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.011541929666366135
+    },
+    {
+      "id": "rajaperf/gen-lin-recur-forward",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 23145,
+        "2": 14310,
+        "4": 12425,
+        "8": 13744
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.1061569416498993
+    },
+    {
+      "id": "rajaperf/gen-lin-recur-reverse",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 23222,
+        "2": 14337,
+        "4": 12650,
+        "8": 14459
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.14300395256916998
+    },
+    {
+      "id": "rajaperf/hydro-1d",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 15363,
+        "2": 10219,
+        "4": 9163,
+        "8": 8384
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "rajaperf/if-quad",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s4",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 4,
+      "measured_cycles": {
+        "1": 28576,
+        "2": 24582,
+        "4": 17801,
+        "8": 31503
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "rajaperf/init-view1d",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 13948,
+        "2": 8594,
+        "4": 4405,
+        "8": 4082
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "rajaperf/init3",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 20272,
+        "2": 17990,
+        "4": 14424,
+        "8": 17207
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.19294231835829168
+    },
+    {
+      "id": "rajaperf/int-predict",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 71315,
+        "2": 56131,
+        "4": 42851,
+        "8": 32184
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "rajaperf/mul",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 6775,
+        "2": 5278,
+        "4": 4893,
+        "8": 4858
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "rajaperf/muladdsub",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 18936,
+        "2": 18020,
+        "4": 14689,
+        "8": 15641
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0648104023418885
+    },
+    {
+      "id": "rajaperf/pi-reduce",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 27287,
+        "2": 13990,
+        "4": 7368,
+        "8": 8374
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.1365363735070575
+    },
+    {
+      "id": "rajaperf/reduce-sum",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 5684,
+        "2": 3293,
+        "4": 3057,
+        "8": 3257
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.06542361792607121
+    },
+    {
+      "id": "rajaperf/reduce3-int",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 5773,
+        "2": 3039,
+        "4": 1922,
+        "8": 1851,
+        "16": 1827
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "rajaperf/trap-int",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 37061,
+        "2": 21450,
+        "4": 15143,
+        "8": 15158
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0009905566928614107
+    },
+    {
+      "id": "rajaperf/triad",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 7600,
+        "2": 7161,
+        "4": 6646,
+        "8": 6735
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.01339151369244651
+    },
+    {
+      "id": "rajaperf/tridiag-elim",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 15045,
+        "2": 10251,
+        "4": 10581,
+        "8": 9264
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s000-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 237679,
+        "2": 119575,
+        "4": 93418,
+        "8": 90383,
+        "16": 89170
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s111-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "3",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 250230,
+        "2": 248153,
+        "4": 368333,
+        "8": 373527,
+        "16": 384795
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.5052286291118786
+    },
+    {
+      "id": "tsvc/tsvc-s1111-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 255255,
+        "2": 247800,
+        "4": 216449,
+        "8": 233463,
+        "16": 194036
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.20319425261291713
+    },
+    {
+      "id": "tsvc/tsvc-s1112-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 236341,
+        "2": 119515,
+        "4": 94835,
+        "8": 98435,
+        "16": 90670
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s1115-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 6126,
+        "2": 7165,
+        "4": 6534,
+        "8": 6463,
+        "16": 6104
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s1119-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 1953,
+        "2": 1122,
+        "4": 1025,
+        "8": 1026,
+        "16": 1106
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.07902439024390251
+    },
+    {
+      "id": "tsvc/tsvc-s112-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 346331,
+        "2": 235932,
+        "4": 123292,
+        "8": 121156,
+        "16": 117078
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s113-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 351920,
+        "2": 243039,
+        "4": 122744,
+        "8": 95817,
+        "16": 92680
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s114-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 6038,
+        "2": 5416,
+        "4": 6340,
+        "8": 6207,
+        "16": 5728
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.057607090103397374
+    },
+    {
+      "id": "tsvc/tsvc-s115-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 3114,
+        "2": 2169,
+        "4": 1248,
+        "8": 1028,
+        "16": 955
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s118-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 6069,
+        "2": 7310,
+        "4": 6709,
+        "8": 6082,
+        "16": 6139
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.011534025374855927
+    },
+    {
+      "id": "tsvc/tsvc-s119-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 2338,
+        "2": 1613,
+        "4": 1005,
+        "8": 960,
+        "16": 1068
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.11250000000000004
+    },
+    {
+      "id": "tsvc/tsvc-s121-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 349720,
+        "2": 231533,
+        "4": 129526,
+        "8": 115682,
+        "16": 114761
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s122-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 262883,
+        "2": 134022,
+        "4": 132603,
+        "8": 128730,
+        "16": 117416
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s1221-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s2",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 2,
+      "measured_cycles": {
+        "1": 440415,
+        "2": 424566
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s1232-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 19142,
+        "2": 19152,
+        "4": 20415,
+        "8": 19284,
+        "16": 18581
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.03783434691351384
+    },
+    {
+      "id": "tsvc/tsvc-s124-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 461248,
+        "2": 376077,
+        "4": 293887,
+        "8": 260248,
+        "16": 303655
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.1667909071347331
+    },
+    {
+      "id": "tsvc/tsvc-s125-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 3909,
+        "2": 2895,
+        "4": 2009,
+        "8": 1627,
+        "16": 1443
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s1251-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 528543,
+        "2": 404421,
+        "4": 356847,
+        "8": 313966,
+        "16": 380187
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.21091774268551378
+    },
+    {
+      "id": "tsvc/tsvc-s127-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 931595,
+        "2": 656069,
+        "4": 527294,
+        "8": 378206,
+        "16": 312810
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.2090598126658354
+    },
+    {
+      "id": "tsvc/tsvc-s1279-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 510689,
+        "2": 416199,
+        "4": 347066,
+        "8": 292923,
+        "16": 376311
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.28467549492528743
+    },
+    {
+      "id": "tsvc/tsvc-s128-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "3",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 389222,
+        "2": 283639,
+        "4": 371056,
+        "8": 388255,
+        "16": 409344
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.36883503326411393
+    },
+    {
+      "id": "tsvc/tsvc-s1281-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 589725,
+        "2": 421962,
+        "4": 360617,
+        "8": 313722,
+        "16": 393157
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.2532018793709081
+    },
+    {
+      "id": "tsvc/tsvc-s131-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 349720,
+        "2": 231533,
+        "4": 129526,
+        "8": 115682,
+        "16": 114761
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s132-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 2574,
+        "2": 1648,
+        "4": 1065,
+        "8": 979,
+        "16": 943
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s1351-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 270725,
+        "2": 145586,
+        "4": 133183,
+        "8": 127480,
+        "16": 132676
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0407593347976154
+    },
+    {
+      "id": "tsvc/tsvc-s1421-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 124566,
+        "2": 72263,
+        "4": 59768,
+        "8": 57269,
+        "16": 57945
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.011803942796277278
+    },
+    {
+      "id": "tsvc/tsvc-s151-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 349707,
+        "2": 231352,
+        "4": 118494,
+        "8": 104679,
+        "16": 115304
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.10150077857067807
+    },
+    {
+      "id": "tsvc/tsvc-s152-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 481033,
+        "2": 360651,
+        "4": 311730,
+        "8": 255070,
+        "16": 333909
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.30908770141529773
+    },
+    {
+      "id": "tsvc/tsvc-s162-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 391209,
+        "2": 267047,
+        "4": 199192,
+        "8": 172446,
+        "16": 168060
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s171-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 250662,
+        "2": 126222,
+        "4": 100680,
+        "8": 113205,
+        "16": 112967
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.12204012713547874
+    },
+    {
+      "id": "tsvc/tsvc-s172-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 250662,
+        "2": 126222,
+        "4": 100680,
+        "8": 113205,
+        "16": 112967
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.12204012713547874
+    },
+    {
+      "id": "tsvc/tsvc-s173-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 121816,
+        "2": 62533,
+        "4": 57554,
+        "8": 57761,
+        "16": 59268
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.029780727664454165
+    },
+    {
+      "id": "tsvc/tsvc-s174-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 121816,
+        "2": 62533,
+        "4": 57554,
+        "8": 57761,
+        "16": 59268
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.029780727664454165
+    },
+    {
+      "id": "tsvc/tsvc-s175-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 349720,
+        "2": 231533,
+        "4": 129526,
+        "8": 115682,
+        "16": 114761
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s176-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 115383,
+        "2": 57935,
+        "4": 42984,
+        "8": 46786,
+        "16": 49181
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.14416992369253667
+    },
+    {
+      "id": "tsvc/tsvc-s2101-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 13110,
+        "2": 10683,
+        "4": 13599,
+        "8": 13293,
+        "16": 14523
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.24431339511373218
+    },
+    {
+      "id": "tsvc/tsvc-s2102-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 5517,
+        "2": 5580,
+        "4": 5580,
+        "8": 5580,
+        "16": 5580
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.011419249592169667
+    },
+    {
+      "id": "tsvc/tsvc-s2233-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 2578,
+        "2": 1772,
+        "4": 1074,
+        "8": 968,
+        "16": 989
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.02169421487603307
+    },
+    {
+      "id": "tsvc/tsvc-s2244-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 397936,
+        "2": 309083,
+        "4": 228290,
+        "8": 182149,
+        "16": 254429
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.39681798966779946
+    },
+    {
+      "id": "tsvc/tsvc-s2275-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 22559,
+        "2": 20664,
+        "4": 23261,
+        "8": 22291,
+        "16": 21755
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.07873596593108778
+    },
+    {
+      "id": "tsvc/tsvc-s233-l01",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 12690,
+        "2": 11906,
+        "4": 15362,
+        "8": 14572,
+        "16": 14016
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.22392071224592636
+    },
+    {
+      "id": "tsvc/tsvc-s243-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 647105,
+        "2": 485543,
+        "4": 368905,
+        "8": 308784,
+        "16": 432259
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.3998749935229804
+    },
+    {
+      "id": "tsvc/tsvc-s251-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 466389,
+        "2": 339624,
+        "4": 219377,
+        "8": 194978,
+        "16": 194988
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 5.1287837602220776e-05
+    },
+    {
+      "id": "tsvc/tsvc-s252-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 503956,
+        "2": 299884,
+        "4": 159922,
+        "8": 164923,
+        "16": 212418
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.3282600267630469
+    },
+    {
+      "id": "tsvc/tsvc-s253-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 465356,
+        "2": 334477,
+        "4": 289954,
+        "8": 245036,
+        "16": 410278
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.6743580535105045
+    },
+    {
+      "id": "tsvc/tsvc-s254-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 562783,
+        "2": 292311,
+        "4": 182734,
+        "8": 170991,
+        "16": 154749
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s255-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "3",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 810907,
+        "2": 406475,
+        "4": 284153,
+        "8": 208980,
+        "16": 268225
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.28349602832806964
+    },
+    {
+      "id": "tsvc/tsvc-s257-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 12884,
+        "2": 12194,
+        "4": 15143,
+        "8": 14633,
+        "16": 14144
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.20001640150893873
+    },
+    {
+      "id": "tsvc/tsvc-s271-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 426795,
+        "2": 292077,
+        "4": 182716,
+        "8": 165991,
+        "16": 169175
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.01918176286666151
+    },
+    {
+      "id": "tsvc/tsvc-s2710-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 1189047,
+        "2": 684565,
+        "4": 486692,
+        "8": 447505,
+        "16": 706679
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.5791533055496587
+    },
+    {
+      "id": "tsvc/tsvc-s2711-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 432662,
+        "2": 293404,
+        "4": 181168,
+        "8": 165815,
+        "16": 168586
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.016711395229623394
+    },
+    {
+      "id": "tsvc/tsvc-s2712-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 422728,
+        "2": 302619,
+        "4": 187468,
+        "8": 167562,
+        "16": 170319
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.016453611200630158
+    },
+    {
+      "id": "tsvc/tsvc-s272-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 534863,
+        "2": 400075,
+        "4": 363758,
+        "8": 313896,
+        "16": 431322
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.37409205596758155
+    },
+    {
+      "id": "tsvc/tsvc-s273-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 645802,
+        "2": 471117,
+        "4": 395308,
+        "8": 438463,
+        "16": 431872
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.09249496595060047
+    },
+    {
+      "id": "tsvc/tsvc-s274-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 520830,
+        "2": 377291,
+        "4": 347016,
+        "8": 395195,
+        "16": 353893
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.019817530027433916
+    },
+    {
+      "id": "tsvc/tsvc-s276-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 576990,
+        "2": 456738,
+        "4": 372737,
+        "8": 536926,
+        "16": 712899
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.44049557731054345
+    },
+    {
+      "id": "tsvc/tsvc-s278-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 837006,
+        "2": 545235,
+        "4": 450753,
+        "8": 446123,
+        "16": 464361
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s279-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 1613807,
+        "2": 1013138,
+        "4": 623156,
+        "8": 550832,
+        "16": 804959
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s291-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 563229,
+        "2": 292952,
+        "4": 182584,
+        "8": 170989,
+        "16": 154779
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s293-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 72565,
+        "2": 58027,
+        "4": 55573,
+        "8": 47911,
+        "16": 57167
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.19319154265200056
+    },
+    {
+      "id": "tsvc/tsvc-s311-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 169356,
+        "2": 85046,
+        "4": 49404,
+        "8": 48737,
+        "16": 48015
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s31111-l00",
+      "split": "validation",
+      "eligible": false,
+      "compile_failed": false,
+      "status": "not-vectorized",
+      "reason": "no-plan",
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "not-evaluated",
+        "plan": "none",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "no-plan",
+        "emitted": false
+      },
+      "selected_vf": null,
+      "measured_cycles": {},
+      "ignored_measured_cycles": {
+        "1": 259,
+        "2": 244
+      },
+      "evaluated_vfs": [],
+      "top1_correct": null,
+      "top1_regret": null
+    },
+    {
+      "id": "tsvc/tsvc-s313-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 233948,
+        "2": 117769,
+        "4": 111856,
+        "8": 111026,
+        "16": 109494
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s315-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 197480,
+        "2": 100502,
+        "4": 70219,
+        "8": 59651,
+        "16": 51491
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s3251-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 654556,
+        "2": 434134,
+        "4": 375486,
+        "8": 358654,
+        "16": 414743
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.1563874932386089
+    },
+    {
+      "id": "tsvc/tsvc-s331-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 181398,
+        "2": 90909,
+        "4": 57554,
+        "8": 52949,
+        "16": 64160
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.21173204404238044
+    },
+    {
+      "id": "tsvc/tsvc-s332-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 199496,
+        "2": 100411,
+        "4": 62398,
+        "8": 62936,
+        "16": 69138
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.10801628257315943
+    },
+    {
+      "id": "tsvc/tsvc-s351-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s2",
+        "plan": "3",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 2,
+      "measured_cycles": {
+        "1": 1265794,
+        "2": 1094247,
+        "4": 409430,
+        "8": 429563,
+        "16": 440573
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 1.6726107026842194
+    },
+    {
+      "id": "tsvc/tsvc-s353-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s2",
+        "plan": "3",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 2,
+      "measured_cycles": {
+        "1": 1658914,
+        "2": 1548929,
+        "4": 846561,
+        "8": 828399,
+        "16": 817807
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.8940031083128415
+    },
+    {
+      "id": "tsvc/tsvc-s4112-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 616770,
+        "2": 676011,
+        "4": 515667,
+        "8": 502259,
+        "16": 502233
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s4113-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 1023601,
+        "2": 1128295,
+        "4": 1180099,
+        "8": 1121721,
+        "16": 1050125
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.025912440491949518
+    },
+    {
+      "id": "tsvc/tsvc-s4114-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 1042378,
+        "2": 928090,
+        "4": 639919,
+        "8": 644673,
+        "16": 627562
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s4115-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 605047,
+        "2": 660603,
+        "4": 504393,
+        "8": 491223,
+        "16": 522823
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0643292353981797
+    },
+    {
+      "id": "tsvc/tsvc-s4116-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 3445,
+        "2": 3560,
+        "4": 2838,
+        "8": 2431,
+        "16": 2443
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.00493624023035788
+    },
+    {
+      "id": "tsvc/tsvc-s4117-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "3",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 497035,
+        "2": 386923,
+        "4": 401560,
+        "8": 279966,
+        "16": 404876
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s4121-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 313064,
+        "2": 236499,
+        "4": 179662,
+        "8": 165945,
+        "16": 169209
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.01966916749525449
+    },
+    {
+      "id": "tsvc/tsvc-s421-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 443448,
+        "2": 323693,
+        "4": 165920,
+        "8": 133314,
+        "16": 116548
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s422-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 298733,
+        "2": 161987,
+        "4": 143595,
+        "8": 140150,
+        "16": 112341
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s423-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 298860,
+        "2": 201789,
+        "4": 118378,
+        "8": 107055,
+        "16": 111099
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0377749754798935
+    },
+    {
+      "id": "tsvc/tsvc-s424-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "1",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 301819,
+        "2": 227524,
+        "4": 119906,
+        "8": 120312,
+        "16": 120235
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0027438159891914893
+    },
+    {
+      "id": "tsvc/tsvc-s431-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 249356,
+        "2": 126276,
+        "4": 114164,
+        "8": 114289,
+        "16": 113134
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s441-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 1019180,
+        "2": 602286,
+        "4": 401147,
+        "8": 370376,
+        "16": 398516
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.0759768451519538
+    },
+    {
+      "id": "tsvc/tsvc-s442-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 913963,
+        "2": 640885,
+        "4": 468605,
+        "8": 460343,
+        "16": 596328
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s443-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 449262,
+        "2": 320291,
+        "4": 246805,
+        "8": 227775,
+        "16": 229501
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.007577653386017014
+    },
+    {
+      "id": "tsvc/tsvc-s452-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s8",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 8,
+      "measured_cycles": {
+        "1": 416422,
+        "2": 290701,
+        "4": 153325,
+        "8": 136063,
+        "16": 178922
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": true,
+      "top1_regret": 0.0
+    },
+    {
+      "id": "tsvc/tsvc-s471-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 474209,
+        "2": 364548,
+        "4": 357808,
+        "8": 263212,
+        "16": 349458
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.3276674315760679
+    },
+    {
+      "id": "tsvc/tsvc-s491-l00",
+      "split": "validation",
+      "eligible": true,
+      "compile_failed": false,
+      "status": "scored",
+      "reason": null,
+      "actual_selection": {
+        "function": "selected_kernel",
+        "loop": 0,
+        "main_vf": "s16",
+        "plan": "2",
+        "ic": 1,
+        "epilogue_vf": "not-evaluated",
+        "outcome": "vectorization-emitted",
+        "emitted": true
+      },
+      "selected_vf": 16,
+      "measured_cycles": {
+        "1": 654437,
+        "2": 642557,
+        "4": 629679,
+        "8": 672317,
+        "16": 633661
+      },
+      "ignored_measured_cycles": {},
+      "evaluated_vfs": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "top1_correct": false,
+      "top1_regret": 0.006323857076383277
+    }
+  ],
+  "metrics": {
+    "total": 203,
+    "scored": 193,
+    "excluded": 10,
+    "coverage": 0.9507389162561576,
+    "compile_failed": 0,
+    "statuses": {
+      "scored": 193,
+      "ambiguous-loops": 9,
+      "not-vectorized": 1
+    },
+    "top1": {
+      "exact": 0.35751295336787564,
+      "correct": 69,
+      "total": 193
+    },
+    "top1_regret": {
+      "mean": 0.09058461453998343,
+      "median": 0.017068918050839654,
+      "p95": 0.3577673848307009,
+      "worst": 1.6726107026842194
+    },
+    "spearman": {
+      "n": 0,
+      "mean": null
+    },
+    "replay_verified": 0,
+    "worst_cases": [
+      {
+        "id": "tsvc/tsvc-s351-l00",
+        "selected_vf": 2,
+        "oracle_vf": 4,
+        "regret": 1.6726107026842194
+      },
+      {
+        "id": "tsvc/tsvc-s353-l00",
+        "selected_vf": 2,
+        "oracle_vf": 16,
+        "regret": 0.8940031083128415
+      },
+      {
+        "id": "tsvc/tsvc-s253-l00",
+        "selected_vf": 16,
+        "oracle_vf": 8,
+        "regret": 0.6743580535105045
+      },
+      {
+        "id": "tsvc/tsvc-s2710-l00",
+        "selected_vf": 16,
+        "oracle_vf": 8,
+        "regret": 0.5791533055496587
+      },
+      {
+        "id": "tsvc/tsvc-s111-l00",
+        "selected_vf": 8,
+        "oracle_vf": 2,
+        "regret": 0.5052286291118786
+      },
+      {
+        "id": "tsvc/tsvc-s276-l00",
+        "selected_vf": 8,
+        "oracle_vf": 4,
+        "regret": 0.44049557731054345
+      },
+      {
+        "id": "tsvc/tsvc-s243-l00",
+        "selected_vf": 16,
+        "oracle_vf": 8,
+        "regret": 0.3998749935229804
+      },
+      {
+        "id": "tsvc/tsvc-s2244-l00",
+        "selected_vf": 16,
+        "oracle_vf": 8,
+        "regret": 0.39681798966779946
+      },
+      {
+        "id": "tsvc/tsvc-s272-l00",
+        "selected_vf": 16,
+        "oracle_vf": 8,
+        "regret": 0.37409205596758155
+      },
+      {
+        "id": "tsvc/tsvc-s128-l00",
+        "selected_vf": 8,
+        "oracle_vf": 2,
+        "regret": 0.36883503326411393
+      }
+    ]
+  },
+  "compiler_context": {
+    "schema": "mir-local-collection-v1",
+    "observation_schema": "mir-local-observation-v1",
+    "protocol": 4,
+    "compiler": "f00f4e25da1ba181984dbca8df25c2cdcd56496b181d3f91edcb7fc7e60075dc",
+    "extractor": "bec42c8c387bcf5b735feae33545e28897df48babfc9ee5ff75e65d43979a9d4",
+    "stage": "post-ra-cleanup",
+    "driver": "958399a0b91f91563b850add6eb092d2fcb0f22039dd40f08c95f9a196984152",
+    "collector": "94a311fb7d20a9045a82d73e916bff743d689d7bc63d98c3ed9413ab0c8874f1",
+    "tools": "b3c095417166fea00e633a1302c2ed0340c9ebd8d1cfd8e6624da919462d49f9",
+    "observations": "7bc1f3dcb1de546c0918ebbb2986dd9e7d5eb59cc5e4741932afe24b4ba864c1",
+    "headers": {
+      "cfloat": "23b12c5725e5ea5cfda996485e98084e87c1aeacf9279ea220be1f29d2f7f1af",
+      "cmath": "a7493ccdc00477ab40f5de313c7515446d1a2482bb8ad8057a735fcd2c517176",
+      "cstring": "64131275d872e9e903db7f5a8ba607d03326a21a8ab192a1ea52c4fa1f625d9d",
+      "math.h": "2d5fc3ecf58e80e9832664197309dc840ab6127df86322e58374e11d713df876",
+      "stdio.h": "764ebb73cbdd5c95fdcba64dd37a830ceea7228a10f2a7a2790f9bed07ac76a3",
+      "stdlib.h": "4cb5569a2b06bd63b57067841d6b41afd6c60f997555f312438cadb9367338f3",
+      "string.h": "27af7fcae8321fbe86d32803dc72fc57063f8d1fd13ef349fb69d86478840cc9"
+    }
+  }
+}

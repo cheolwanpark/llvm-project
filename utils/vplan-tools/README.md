@@ -2,7 +2,7 @@
 
 Python 3.12's standard library implements one fixed machine cost calculation for
 reports, selection and regret evaluation. LLVM observes facts and materializes
-explicit replay choices. The model is `mir-local-fixed-v1`, with protocol 4 and
+explicit replay choices. The model is `mir-basic-calibrated-v1`, with protocol 4 and
 `mir-local-observation-v1` observations.
 
 ## Build and input
@@ -58,63 +58,57 @@ IR and checks the compiler's final manifest. The lower-level
 [`vplan-meta-compile`](../vplan-meta-compile) accepts source/flags directly and
 supports object, assembly or IR output without a measurement database.
 
-## Fixed machine model and manual calibration freedom
+## Calibrated decoder work model
 
-Edit the constants at the top of [cost_model.py](cost_model.py) to calibrate the
-machine by hand. All benchmarks and VFs use these same constants. There is no
-parameter-file loader, fitting command, optimizer, training split or automatic
-parameter search. Changing the model's formulas later is also a source change.
+The default `mir-basic-calibrated-v1` uses the `memory_triple_move_double`
+window 0 configuration previously selected on `search-dataset.sqlite`. Constants
+live in [cost_model.py](cost_model.py); all benchmarks and VFs use the same values.
+There is no runtime parameter loader, optimizer or automatic fitting.
 
-| Constant | Current value | Manual calibration freedom |
-| --- | --- | --- |
-| Ten vector `basic_*` classes | 1 each | Relative effect per unit of decoder work for convert, divide, FP ALU, FP multiply, integer, mask, memory, move, multiply and permute |
-| `basic_scalar` | 1 | Reference unit; keep fixed while changing relative scales |
-| `contention` | 0.25 | Forward shared-class penalty per shared component-work unit |
-| `raw` | 0.25 | Forward dependency penalty per pair-work unit |
-| `ilp` | 0.125 | Backward independent-overlap credit per pair-work unit |
-| `middle_end_scale` | 1 | Conversion from middle-end TTI costs to model effects |
-| `FORWARD_WINDOW`, `BACKWARD_WINDOW` | 4, 4 ops | Machine's local interaction horizons |
+| Constant | Default |
+| --- | ---: |
+| `FORWARD_WINDOW`, `BACKWARD_WINDOW` | 0, 0 ops |
+| `basic_memory` | 3 |
+| `basic_move` | 2 |
+| All other `basic_*`, including `basic_scalar` | 1 |
+| `middle_end_scale` | 1 |
+| `contention`, `raw`, `ilp` | 0.25, 0.25, 0.125 (inactive) |
 
-There are fourteen relative coefficient choices with scalar scale anchored at 1,
-plus the two window lengths. The current coefficients are explicit manual starting
-assumptions, not measured machine latencies or values selected using benchmark
-cycles. Four unit pairs contribute one unit of contention or RAW stall, or half a
-unit of ILP credit. Hardware decoder split rules and supported execution-resource
-assignments come from the pinned XiangShan MinimalConfig RTL in
-[hardware.py](hardware.py) and [the rule guide](rules/README.md). Decoder work is
-not a cycle prediction. Calibrating scales does not change the RTL split facts.
+These are calibrated model weights, not hardware latency or cycle predictions.
+Hardware decoder splits and execution-resource facts remain in
+[hardware.py](hardware.py) and [the rule guide](rules/README.md). An instruction
+with memory and move components applies 3 and 2 separately. Spill/reload uses
+that ordinary memory path without another spill charge.
 
-RAW and ILP use `min(total_decode_work_a, total_decode_work_b)`. Forward contention
-uses `sum(c in shared_classes, min(class_work_a[c], class_work_b[c]))`, where
-`class_work` sums all resource-component work in that cost class. For example,
-`memory8+move2` and `fp_multiply8+move1` share one unit of move work, so contention
-uses 1 while RAW/ILP pair work remains 9. This attribution is a modeling assumption,
-not an RTL latency or throughput claim. The model sums pairs without distance decay
-and adds contention and RAW effects when both apply. Configuration and scalar
-remainder additions are enabled. These are hardcoded model decisions that can be
-revised along with the model. Reports snapshot constants and source/rule digests
-for reproduction; those snapshots are output data and cannot configure scoring.
-
-## Local effects and iteration mapping
+## Work and iteration mapping
 
 ```text
-op cost = basic + forward-window stall - backward-window ILP
-body cost = sum(op cost)
-score = body_iterations * body_cost + middle_end_cost
+op_cost = sum(component_work[class] * basic_coefficient[class])
+body_cost = sum(op_cost)
+score = body_iterations * body_cost + middle_end_scale * middle_end_additions
 ```
 
-Meta and configuration ops stay outside body work and window distance.
-Configuration definitions still participate in dependency paths. Wrapping keeps
-`(instruction ID, iteration offset)`, including windows spanning several loops.
-Only anchors in iteration zero contribute to one body's total.
+Work uses actual post-RA MIR LMUL/SEW/EMUL and opcode-specific decoder splits.
+VF is not multiplied into the score: generated MIR, verified scalar iteration
+width and iteration count account for its effect. Meta and configuration ops stay
+outside body work. Existing setup/body configuration and scalar-tail additions
+are unchanged.
 
-Contention charges only component work in shared cost classes. RAW includes
-direct/transitive physical register-unit paths and proven stack-memory RAW. ILP requires proven independence
-and a constructive assignment to distinct execution units. A class difference is
-insufficient. Same-class contention and ILP can both contribute. Unknown relations
-receive no ILP credit. Signed costs and cancellation remain visible; no hidden
-ILP cap, global resource max or recurrence bound is applied. Spill/reload ops use
-the ordinary memory-instruction path.
+With both windows zero, dependency construction, pair class-work aggregation,
+overlap checks and pair traversal are skipped. Reports retain `pairs=[]`, zero
+contention/RAW/ILP features, `stall=ilp=0` and `body_cost=basic`. Zero pair coverage
+counters mean analysis was not performed; they do not prove independence or full
+coverage. Observed register and memory coverage remain available. Validation and
+hardware coverage checks still run.
+
+Nonzero source windows retain the existing compatibility calculation:
+`op_cost = basic + forward stall - backward ILP`. RAW and ILP use the minimum
+of total decode work; contention uses the sum of classwise component-work minima
+over shared classes. Contention and RAW add; backward ILP requires proven
+independence and distinct execution-unit assignment. Unknown relations get no
+ILP credit. Circular pairs preserve `(instruction ID, iteration offset)` across
+multiple laps; meta/configuration ops do not count toward distance. Signed costs
+remain visible without a cap. Pair tests explicitly enable both windows.
 
 Supported CFGs are innermost single-block loops. Exit jumps after a taken backedge
 stay outside circular body order. Multi-block paths, uncertain iteration mapping,
@@ -185,15 +179,18 @@ cmake --build ../../build-local --target llc opt FileCheck split-file not --para
 uv run python tests/run_backend.py --build-dir ../../build-local
 ```
 
-Tests cover fixed hardware splits, multi-lap windows, carried/transitive
-register and memory dependencies, unknown cases, additive effects, signed scores,
+Tests cover the zero-window fast path, calibrated mixed-component sums, geometry,
+iteration/configuration/tail costs, identity, and the nonzero-window compatibility
+path: multi-lap windows, carried/transitive register and memory dependencies, unknown cases, additive effects, signed scores,
 configuration/tails, reconciliation, read-only DB/default paths, coverage, regret
 metrics and compiler selection/replay using the same hardcoded model.
 
-## Recorded fixed-model evaluation
+## Historical fixed-model evaluation
 
-The [2026-10-22 results](results/fixed-2026-10-22/summary.json) use the constants
-above unchanged for the whole run. All 203 IDs were attempted; 189 were eligible
+The [2026-10-22 results](results/fixed-2026-10-22/summary.json) record the earlier
+`mir-local-fixed-v1` model:
+both windows 4, all basic weights 1, and pair scales 0.25/0.25/0.125. They do not
+describe the current default. All 203 IDs were attempted; 189 were eligible
 and all 189 selections replayed successfully. Fourteen exclusions retain their
 loop/mapping/measurement reasons. On the 189 matching benchmark/VF populations:
 
@@ -208,3 +205,53 @@ numbers compare choices against the stored measurements. The
 compiler identities, reproduction commands, 46 passing Python tests (including
 compiler integration) and 35 passing backend/transport regression files. Full
 MIR facts, op/pair reports and replay outputs remain under the recorded cache paths.
+
+## Calibrated search reevaluation (2026-10-23)
+
+The [summary](results/basic-calibrated-2026-10-23/summary.json) and
+[verification record](results/basic-calibrated-2026-10-23/verification.json) record
+203 attempted benchmarks, 189 evaluated, 14 exclusions and 843 evaluated
+candidates. All 189 selections passed compiler replay. Every candidate matched
+the independent reference (the restored scorer with only constants temporarily
+changed) in features, score and selected VF. Pair lists are empty, pair features
+are exactly zero, scores are finite and positive, and body costs are nonnegative.
+The read-only database checksum is unchanged.
+
+| Model | Mean regret | Exact VF accuracy | Worst regret |
+| --- | ---: | ---: | ---: |
+| Calibrated window 0 | 4.670978485962896% | 47.61904761904761% (90/189) | 55.06360995031292% |
+| Restored window 4 | 6.914% | 43.915% (83/189) | 167.261% |
+| Ordinary LLVM (matched population) | 8.998% | 36.508% (69/189) | 167.261% |
+
+The worst calibrated case is `tsvc/tsvc-s111-l00` (selected s16, best s2).
+Relative to the restored window 4 model, seven selections improve and one
+worsens. `polybench/polybench-fdtd-2d-l03` slows down by 12.428% relative to the
+previous selection; the verification record includes every changed choice.
+These choices are evaluated using stored cycles. Compiler replay verifies the
+chosen transformation and does not remeasure hardware runtime.
+
+The weights were selected on Search, which includes calibration cases; these
+numbers do not measure independent generalization. Deleted validation data was
+not regenerated, reused or included in these artifacts. No new coefficient
+search or window sweep was performed.
+
+Reproduce from the repository root with a new/empty output directory:
+
+```sh
+PYTHONPATH="$PWD/utils/vplan-tools" VPLAN_CLANG="$PWD/build-vplan-tools/bin/clang" \
+  uv run --project utils/vplan-tools python -B -m unittest discover \
+  -s utils/vplan-tools/tests -v
+uv run --project utils/vplan-tools python -B utils/vplan-tools/evaluate \
+  --db "$PWD/search-dataset.sqlite" --build-dir "$PWD/build-vplan-tools" \
+  --skip-build --output-dir /tmp/vplan-window0-calibrated-evaluation
+```
+
+`PYTHONPATH` is required for root-level unittest discovery. Raw observations are
+reused, while scores and reports are recomputed under the new model identity.
+On CPython 3.12.15, three alternating passes of `score_observation` over the
+same 843 in-memory observations gave median times of 2.591811 s for the restored
+4/4 model and 0.557252 s for the calibrated 0/0 implementation. Timings include
+validation and report construction, with cyclic GC enabled; they exclude DB/cache
+reads, compilation, collection, artifact I/O, replay and hardware execution.
+Individual samples are in the verification record; [candidate features and scores](results/basic-calibrated-2026-10-23/candidate-features.json)
+retain the checked population. These Python timings make no llvm-mca comparison.

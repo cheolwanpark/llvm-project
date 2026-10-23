@@ -1,4 +1,4 @@
-"""Linear local interaction effects with a single shared op/pair calculation."""
+"""Calibrated decoder work with a single shared reporting/selection calculation."""
 import hashlib
 import json
 import math
@@ -9,15 +9,14 @@ from hardware import RULE_DIGEST, RULE_VERSION, REVISION, can_overlap, work_for_
 from model_errors import ToolError
 from observations import SCHEMA, STAGE, iteration_factors, validate_observation
 
-MODEL_VERSION = 'mir-local-fixed-v1'
+MODEL_VERSION = 'mir-basic-calibrated-v1'
 
-# XiangShan MinimalConfig, VLEN 128. These are manually chosen machine-wide
-# effect scales, not measured latencies. Calibrate here by hand; never per VF or
-# benchmark. Decoder work and execution-resource evidence live in hardware.py.
-# With four neighbors, 1/4 gives one basic unit of stall for four unit pairs;
-# 1/8 gives half a basic unit of ILP credit for four independent unit pairs.
-FORWARD_WINDOW = 4
-BACKWARD_WINDOW = 4
+# XiangShan MinimalConfig, VLEN 128. The memory/move scales were selected on
+# search-dataset.sqlite (memory_triple_move_double, window 0). These are shared
+# model weights, not hardware latencies or cycle predictions. Decoder facts
+# remain in hardware.py. Pair coefficients are retained for nonzero windows.
+FORWARD_WINDOW = 0
+BACKWARD_WINDOW = 0
 COEFFICIENTS = {
     'basic_convert': 1.,
     'basic_divide': 1.,
@@ -25,11 +24,11 @@ COEFFICIENTS = {
     'basic_fp_multiply': 1.,
     'basic_integer': 1.,
     'basic_mask': 1.,
-    'basic_memory': 1.,
-    'basic_move': 1.,
+    'basic_memory': 3.,
+    'basic_move': 2.,
     'basic_multiply': 1.,
     'basic_permute': 1.,
-    'basic_scalar': 1.,  # Reference unit for manual calibration.
+    'basic_scalar': 1.,  # Reference unit.
     'contention': .25,
     'raw': .25,
     'ilp': .125,
@@ -81,14 +80,20 @@ def features_for_observation(a):
         try: work[id_] = work_for_instruction(ops[id_])
         except ToolError as exc: unsupported.append(f'op {id_} {ops[id_]["opcode"]}: {exc}')
     if unsupported: raise ToolError('unsupported hardware coverage: ' + '; '.join(unsupported))
+    pair_windows = [(direction, size) for direction, size in
+                    (('forward', FORWARD_WINDOW), ('backward', BACKWARD_WINDOW)) if size]
+    # Window 0 uses decoder work alone. Avoid building dependency graphs and
+    # pair-only class aggregates as well as overlap checks and pair traversal.
     class_work = {}
-    for id_, item in work.items():
-        class_work[id_] = {}
-        for part in item['components']:
-            cls = part['cost_class']
-            class_work[id_][cls] = class_work[id_].get(cls, 0) + part['work']
-    dep = Dependencies(a)
+    if pair_windows:
+        for id_, item in work.items():
+            class_work[id_] = {}
+            for part in item['components']:
+                cls = part['cost_class']
+                class_work[id_][cls] = class_work[id_].get(cls, 0) + part['work']
+        dep = Dependencies(a)
     rows, pairs, features = [], [], zero()
+    # With no pair analysis these counters mean unexamined, not independent.
     coverage = dict(unknown_dependency=0, unknown_overlap=0, independent=0, dependent=0,
                     configuration_policy='excluded-from-body-and-windows', register=a['register_coverage'],
                     memory=a['memory_coverage'], unsupported=[])
@@ -99,7 +104,7 @@ def features_for_observation(a):
         rows.append(row)
         # Anchors always belong to iteration 0. Neighbor identities retain
         # iteration offsets even when a window traverses several full loops.
-        for direction, size in (('forward', FORWARD_WINDOW), ('backward', BACKWARD_WINDOW)):
+        for direction, size in pair_windows:
             for distance in range(1, size + 1):
                 offset, j = divmod(index + (distance if direction == 'forward' else -distance), len(order))
                 other = order[j]

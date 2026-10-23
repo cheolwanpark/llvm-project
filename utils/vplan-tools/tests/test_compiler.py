@@ -58,3 +58,7 @@ class CompilerIntegration(unittest.TestCase):
                 self.assertEqual(status['status'], 'scored')
                 self.assertEqual(status['score'], expected['score'])
                 self.assertEqual(status['breakdown']['coefficients'], expected['coefficients'])
+                self.assertEqual(status['breakdown']['identity'], identity())
+                self.assertEqual(status['breakdown']['pairs'], [])
+                self.assertEqual(status['breakdown']['body_cost'], expected['basic'])
+                self.assertEqual((expected['stall'], expected['ilp']), (0, 0))
