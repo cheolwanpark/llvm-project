@@ -28,7 +28,11 @@ Spill/reload instructions have the same memory cost path as other memory ops.
 Pair rows identify the anchor and `(other instruction, iteration offset)`, forward
 or backward direction, distance, dependency/independence evidence, possible
 execution overlap, shared classes, coefficient features and actual contributions.
-Forward contention and RAW can add; backward independent overlap subtracts ILP.
+Structured pair rows expose `pair_work` (the minimum total decode work, used for
+RAW and ILP) and `contention_work` (the sum of classwise minimum component work
+over shared classes). `contention_work` describes shared work in either direction;
+only forward pairs apply it as a contention feature. Forward contention and RAW can
+add; backward independent overlap subtracts ILP.
 Multiple dynamic instances of one static instruction remain distinct. Neither a
 different class nor a missing register RAW edge proves eligibility for ILP.
 

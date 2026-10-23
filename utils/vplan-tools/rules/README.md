@@ -115,8 +115,10 @@ Whole-register moves/transfers use encoded counts and physical-group verificatio
 Ports describe overlap **feasibility**, not throughput. Python constructs a pair
 of distinct units before awarding ILP; class differences alone do not establish
 that. Extra move and primary vector work remain distinct components even where
-coefficients are shared. Sharing basic classes, the minimum/geometric pair work
-and additive/union effects are explicit initial modeling choices, not RTL claims.
+coefficients are shared. Contention sums the minimum component work in each shared
+basic class; RAW and ILP use the minimum total decode work. Components in the same class are summed
+before taking its minimum. These attribution rules and additive effects are
+modeling choices, not RTL claims or port-throughput weighting.
 
 Ordinary scalar instructions anchor one decode effect; scalar execution overlap
 is unknown. Scalar memory follows the ordinary memory work/class path. Scalar

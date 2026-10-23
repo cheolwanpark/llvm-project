@@ -159,6 +159,69 @@ class LocalModel(unittest.TestCase):
         self.assertEqual(pair['contributions']['raw'], COEFFICIENTS['raw'])
         self.assertEqual(pair['contributions']['ilp'], 0)
 
+    def test_mixed_class_contention_uses_only_shared_moves_and_preserves_raw(self):
+        a = observation([instruction(0, 'VLSE32_V', load=True, lmul8=64,
+                                     operands=[reg(0, 1, define=True)]),
+                         instruction(1, 'VFMUL_VF', lmul8=64,
+                                     operands=[reg(0, 1, use=True)])], [edge(0, 1)])
+        pair = score_observation(a)['pairs'][0]
+        self.assertEqual(pair['shared_classes'], ['move'])
+        self.assertEqual(pair['pair_work'], 9)
+        self.assertEqual(pair['contention_work'], 1)
+        self.assertEqual(pair['features']['contention'], 1)
+        self.assertEqual(pair['features']['raw'], 9)
+        self.assertEqual(pair['contributions']['contention'], COEFFICIENTS['contention'])
+        self.assertEqual(pair['contributions']['raw'], 9 * COEFFICIENTS['raw'])
+
+    def test_classwise_minima_are_symmetric_and_do_not_pool_unmatched_work(self):
+        a = observation([instruction(0, 'VLSE32_V', load=True),
+                         instruction(1, 'VLE32_V', load=True, lmul8=64)])
+        r = score_observation(a)
+        # memory1+move2 versus memory8+move1: 1+1, not min(3,9).
+        pairs = [p for p in r['pairs'] if p['direction'] == 'forward' and p['distance'] == 1]
+        self.assertEqual(len(pairs), 2)
+        for pair in pairs:
+            self.assertEqual(pair['shared_classes'], ['memory', 'move'])
+            self.assertEqual(pair['pair_work'], 3)
+            self.assertEqual(pair['contention_work'], 2)
+            self.assertEqual(pair['features']['contention'], 2)
+
+    def test_contention_is_invariant_to_same_class_component_partition(self):
+        a = observation([instruction(0, 'VLSE32_V', load=True, lmul8=64),
+                         instruction(1, 'VLE32_V', load=True, lmul8=64)])
+        expected = score_observation(a)
+        work = {op['id']: work_for_instruction(op) for op in a['instructions']}
+        for item in work.values():
+            primary, move = item['components']
+            item['components'] = [primary | {'work': 3}, primary | {'work': 5}, move]
+        with patch('cost_model.work_for_instruction', side_effect=lambda op: work[op['id']]):
+            actual = score_observation(a)
+        self.assertEqual(actual['features'], expected['features'])
+        self.assertEqual(actual['pairs'], expected['pairs'])
+        self.assertEqual(actual['score'], expected['score'])
+
+    def test_shared_component_contention_preserves_full_op_backward_ilp(self):
+        a = observation([instruction(0, 'VLSE32_V', load=True, lmul8=64),
+                         instruction(1, 'VFMUL_VF', lmul8=64)])
+        r = score_observation(a)
+        pair = next(p for p in r['pairs'] if p['anchor'] == 0 and
+                    p['direction'] == 'backward' and p['distance'] == 1)
+        self.assertEqual(pair['dependency']['independence'], 'independent')
+        self.assertTrue(pair['overlap'])
+        self.assertEqual(pair['pair_work'], 9)
+        self.assertEqual(pair['contention_work'], 1)
+        self.assertEqual(pair['features']['contention'], 0)
+        self.assertEqual(pair['features']['ilp'], -9)
+        self.assertEqual(pair['contributions']['ilp'], -9 * COEFFICIENTS['ilp'])
+
+    def test_disjoint_classes_have_zero_contention_work(self):
+        r = score_observation(observation())
+        pair = r['pairs'][0]
+        self.assertEqual(pair['shared_classes'], [])
+        self.assertEqual(pair['contention_work'], 0)
+        self.assertEqual(pair['features']['contention'], 0)
+        self.assertEqual(pair['pair_work'], 1)
+
     def test_class_difference_alone_not_ilp(self):
         a = observation(); a['instructions'][1]['registers_complete'] = False
         r = score_observation(a)

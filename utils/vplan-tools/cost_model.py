@@ -46,7 +46,8 @@ def digest_json(value):
 def machine_parameters():
     return dict(cpu='xiangshan-kunminghu', vlen=128, forward_window=FORWARD_WINDOW,
                 backward_window=BACKWARD_WINDOW, coefficients=dict(COEFFICIENTS),
-                pair_work='min', accumulation='sum', raw_contention='add',
+                pair_work='min', contention_work='sum-shared-class-min-component-work',
+                accumulation='sum', raw_contention='add',
                 configuration=True, scalar_tail=True, distance='op-count',
                 unknown_ilp='exclude', configuration_ops='excluded-from-body-and-windows')
 
@@ -80,6 +81,12 @@ def features_for_observation(a):
         try: work[id_] = work_for_instruction(ops[id_])
         except ToolError as exc: unsupported.append(f'op {id_} {ops[id_]["opcode"]}: {exc}')
     if unsupported: raise ToolError('unsupported hardware coverage: ' + '; '.join(unsupported))
+    class_work = {}
+    for id_, item in work.items():
+        class_work[id_] = {}
+        for part in item['components']:
+            cls = part['cost_class']
+            class_work[id_][cls] = class_work[id_].get(cls, 0) + part['work']
     dep = Dependencies(a)
     rows, pairs, features = [], [], zero()
     coverage = dict(unknown_dependency=0, unknown_overlap=0, independent=0, dependent=0,
@@ -98,8 +105,10 @@ def features_for_observation(a):
                 other = order[j]
                 relation = dep.relation((id_, 0), (other, offset))
                 overlap = can_overlap(work[id_], work[other])
-                shared = sorted({c['cost_class'] for c in work[id_]['components']} &
-                                {c['cost_class'] for c in work[other]['components']})
+                shared = sorted(class_work[id_].keys() & class_work[other].keys())
+                # Attribute contention to shared class work only; RAW and ILP
+                # retain the full-op minimum. This is a modeling assumption.
+                contention_amount = sum(min(class_work[id_][cls], class_work[other][cls]) for cls in shared)
                 # Eligible effects intentionally coexist. Forward and backward
                 # effects use their own anchored dynamic pair identity.
                 contention = bool(shared) and direction == 'forward'
@@ -108,7 +117,7 @@ def features_for_observation(a):
                 pf = zero()
                 amount_a, amount_b = work[id_]['decode_uops'], work[other]['decode_uops']
                 amount = min(amount_a, amount_b)
-                if contention: pf['contention'] = amount
+                if contention: pf['contention'] = contention_amount
                 if raw: pf['raw'] = amount
                 if ilp: pf['ilp'] = -amount
                 for p in PARAMETERS: f[p] += pf[p]
@@ -118,7 +127,8 @@ def features_for_observation(a):
                 coverage['dependent'] += relation['independence'] == 'dependent'
                 pairs.append(dict(anchor=id_, other=other, iteration_offset=offset, direction=direction,
                                   distance=distance, dependency=relation, overlap=overlap,
-                                  shared_classes=shared, pair_work=amount, features=pf))
+                                  shared_classes=shared, pair_work=amount,
+                                  contention_work=contention_amount, features=pf))
         for p in PARAMETERS: features[p] += f[p]
     main, remainder, scope = iteration_factors(a)
     body_features = dict(features)

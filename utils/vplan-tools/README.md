@@ -69,7 +69,7 @@ parameter search. Changing the model's formulas later is also a source change.
 | --- | --- | --- |
 | Ten vector `basic_*` classes | 1 each | Relative effect per unit of decoder work for convert, divide, FP ALU, FP multiply, integer, mask, memory, move, multiply and permute |
 | `basic_scalar` | 1 | Reference unit; keep fixed while changing relative scales |
-| `contention` | 0.25 | Forward shared-class penalty per pair-work unit |
+| `contention` | 0.25 | Forward shared-class penalty per shared component-work unit |
 | `raw` | 0.25 | Forward dependency penalty per pair-work unit |
 | `ilp` | 0.125 | Backward independent-overlap credit per pair-work unit |
 | `middle_end_scale` | 1 | Conversion from middle-end TTI costs to model effects |
@@ -84,7 +84,12 @@ assignments come from the pinned XiangShan MinimalConfig RTL in
 [hardware.py](hardware.py) and [the rule guide](rules/README.md). Decoder work is
 not a cycle prediction. Calibrating scales does not change the RTL split facts.
 
-The current formula uses `min(work_a, work_b)`, sums pairs without distance decay,
+RAW and ILP use `min(total_decode_work_a, total_decode_work_b)`. Forward contention
+uses `sum(c in shared_classes, min(class_work_a[c], class_work_b[c]))`, where
+`class_work` sums all resource-component work in that cost class. For example,
+`memory8+move2` and `fp_multiply8+move1` share one unit of move work, so contention
+uses 1 while RAW/ILP pair work remains 9. This attribution is a modeling assumption,
+not an RTL latency or throughput claim. The model sums pairs without distance decay
 and adds contention and RAW effects when both apply. Configuration and scalar
 remainder additions are enabled. These are hardcoded model decisions that can be
 revised along with the model. Reports snapshot constants and source/rule digests
@@ -103,8 +108,8 @@ Configuration definitions still participate in dependency paths. Wrapping keeps
 `(instruction ID, iteration offset)`, including windows spanning several loops.
 Only anchors in iteration zero contribute to one body's total.
 
-Contention requires a shared cost class. RAW includes direct/transitive physical
-register-unit paths and proven stack-memory RAW. ILP requires proven independence
+Contention charges only component work in shared cost classes. RAW includes
+direct/transitive physical register-unit paths and proven stack-memory RAW. ILP requires proven independence
 and a constructive assignment to distinct execution units. A class difference is
 insufficient. Same-class contention and ILP can both contribute. Unknown relations
 receive no ILP credit. Signed costs and cancellation remain visible; no hidden
