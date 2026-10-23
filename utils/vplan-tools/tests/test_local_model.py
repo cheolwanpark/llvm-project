@@ -3,8 +3,7 @@ import unittest
 
 from cost_model import COEFFICIENTS, identity, machine_parameters, score_observation
 from unittest.mock import patch
-from dependencies import Dependencies, memory_relation
-from hardware import BASIC_CLASSES, MAP, can_overlap, split_work, work_for_instruction
+from hardware import BASIC_CLASSES, MAP, split_work, work_for_instruction
 from model_errors import ToolError
 from observations import validate_observation, iteration_factors
 from fixtures import edge, instruction, memory, observation, reg
@@ -67,106 +66,36 @@ class HardwareRules(unittest.TestCase):
         with self.assertRaises(ToolError): split_work('VEC_VVV', Fraction(1, 8), 64)
         with self.assertRaises(ToolError): split_work('VEC_VVV', 3, 32)
 
-    def test_resource_overlap(self):
-        intwork = work_for_instruction(instruction(0))
-        fpwork = work_for_instruction(instruction(1, 'VFADD_VV'))
-        self.assertTrue(can_overlap(intwork, fpwork))
-        # Same class can run on distinct units. Singleton resources cannot.
-        self.assertTrue(can_overlap(intwork, intwork))
-        mul = work_for_instruction(instruction(0, 'VMUL_VV'))
-        self.assertFalse(can_overlap(mul, mul))
-        scalar = work_for_instruction(instruction(0, 'ADDI'))
-        self.assertIsNone(can_overlap(intwork, scalar))
-
-
-class DynamicDependencies(unittest.TestCase):
-    def chain(self):
-        ops = [instruction(0, operands=[reg(0, 1, define=True)]),
-               instruction(1, operands=[reg(0, 1, use=True), reg(1, 2, define=True)]),
-               instruction(2, operands=[reg(0, 2, use=True)])]
-        return observation(ops, [edge(0, 1), edge(1, 2, unit=2)])
-
-    def test_transitive(self):
-        d = Dependencies(self.chain())
-        self.assertTrue(d.relation((0, 0), (2, 0))['raw'])
-        self.assertEqual(d.relation((0, 0), (2, 1))['independence'], 'independent')
-
-    def test_loop_carried_multiple_iterations(self):
-        a = self.chain()
-        a['instructions'][0]['operands'].append(reg(1, 2, use=True))
-        a['dependencies'].append(edge(1, 0, unit=2, distance=1, operand=1))
-        d = Dependencies(a)
-        self.assertTrue(d.relation((0, 0), (0, 4))['raw'])
-        self.assertTrue(d.relation((2, -3), (0, 0))['raw'] is False)
-
-    def test_unknown_registers(self):
-        a = observation(); a['instructions'][0]['registers_complete'] = False
-        self.assertEqual(Dependencies(a).relation((0, 0), (1, 0))['independence'], 'unknown')
-
-    def test_memory_alias(self):
-        store = instruction(0, 'SD', store=True, memory=[memory(store=True)])
-        load = instruction(1, 'LD', load=True, memory=[memory()])
-        self.assertEqual(memory_relation(store, load), 'dependent')
-        load['memory'][0]['stack_slot'] = 1
-        self.assertEqual(memory_relation(store, load), 'independent')
-        load['memory'][0]['stack_slot'] = None
-        self.assertEqual(memory_relation(store, load), 'unknown')
-
-    def test_memory_unknown_propagates_through_registers(self):
-        ops = [instruction(0, 'SD', store=True, memory=[memory(None, store=True)]),
-               instruction(1, 'LD', load=True, memory=[memory(None)], operands=[reg(0, 1, define=True)]),
-               instruction(2, operands=[reg(0, 1, use=True)])]
-        self.assertEqual(Dependencies(observation(ops, [edge(1, 2)])).relation((0, 0), (2, 0))['independence'], 'unknown')
-
-    def test_stack_waw_is_not_raw(self):
-        ops = [instruction(0, 'SD', store=True, memory=[memory(store=True)]),
-               instruction(1, 'SD', store=True, memory=[memory(store=True)])]
-        relation = Dependencies(observation(ops)).relation((0, 0), (1, 0))
-        self.assertFalse(relation['raw'])
-        self.assertEqual(relation['independence'], 'dependent')
-
-    def test_stack_raw(self):
-        ops = [instruction(0, 'SD', store=True, memory=[memory(store=True)]),
-               instruction(1, 'LD', load=True, memory=[memory()])]
-        self.assertTrue(Dependencies(observation(ops)).relation((0, 0), (1, 0))['raw'])
-
-    def test_war_waw_never_prove_independence(self):
-        a = observation([instruction(0, operands=[reg(0, 1, define=True)]), instruction(1, operands=[reg(0, 1, define=True)])])
-        self.assertEqual(Dependencies(a).relation((0, 0), (1, 0))['independence'], 'unknown')
+    def test_resource_facts_preserved(self):
+        integer = work_for_instruction(instruction(0))['components'][0]
+        self.assertEqual(integer['resource'], 'vialuF')
+        self.assertEqual(integer['ports'], ['VFEX0', 'VFEX2'])
+        scalar = work_for_instruction(instruction(0, 'ADDI'))['components'][0]
+        self.assertEqual(scalar['ports'], [])
 
 
 class LocalModel(unittest.TestCase):
     def test_calibrated_defaults_and_identity(self):
         model = identity()
-        self.assertEqual(model['model'], 'mir-basic-calibrated-v1')
+        self.assertEqual(model['model'], 'mir-basic-calibrated-v2')
         params = model['machine_parameters']
-        self.assertEqual((params['forward_window'], params['backward_window']), (0, 0))
         expected = {'basic_' + cls: 1. for cls in BASIC_CLASSES}
-        expected.update(basic_memory=3., basic_move=2., contention=.25, raw=.25,
-                        ilp=.125, middle_end_scale=1.)
-        self.assertEqual(params['coefficients'], expected)
-        for window in ('FORWARD_WINDOW', 'BACKWARD_WINDOW'):
-            with patch('cost_model.' + window, 4):
-                self.assertNotEqual(identity(), model)
-                self.assertTrue(score_observation(observation())['pairs'])
+        expected.update(basic_memory=3., basic_move=2., middle_end_scale=1.)
+        self.assertEqual(params, dict(cpu='xiangshan-kunminghu', vlen=128, coefficients=expected,
+                                     accumulation='sum', configuration=True, scalar_tail=True,
+                                     configuration_ops='excluded-from-body'))
 
-    def test_zero_windows_skip_analysis_but_keep_validation_and_coverage(self):
+    def test_basic_model_keeps_observation_validation_and_coverage(self):
         a = observation()
         a['instructions'][0]['registers_complete'] = False
-        with patch('cost_model.Dependencies', side_effect=AssertionError('dependency analysis')), \
-             patch('cost_model.can_overlap', side_effect=AssertionError('overlap analysis')):
-            r = score_observation(a)
-            self.assertEqual(r['pairs'], [])
-            self.assertEqual(r['body_cost'], r['basic'])
-            self.assertEqual((r['stall'], r['ilp']), (0, 0))
-            for features in [r['features'], r['body_features'], *(o['features'] for o in r['ops'])]:
-                self.assertEqual([features[k] for k in ('contention', 'raw', 'ilp')], [0, 0, 0])
-            for key in ('unknown_dependency', 'unknown_overlap', 'independent', 'dependent'):
-                self.assertEqual(r['coverage'][key], 0)
-            self.assertEqual(r['coverage']['register'], a['register_coverage'])
-            self.assertEqual(r['coverage']['memory'], a['memory_coverage'])
-            a['schema'] = 'old'
-            with self.assertRaises(ToolError): score_observation(a)
+        r = score_observation(a)
+        self.assertEqual(r['body_cost'], r['basic'])
+        for features in [r['features'], r['body_features'], *(o['features'] for o in r['ops'])]:
+            self.assertEqual(set(features), set(COEFFICIENTS))
+        self.assertEqual(r['coverage'], dict(configuration_policy='excluded-from-body',
+                         register=a['register_coverage'], memory=a['memory_coverage'], unsupported=[]))
+        a['schema'] = 'old'
+        with self.assertRaises(ToolError): score_observation(a)
 
     def test_component_weights_geometry_and_iteration_additions(self):
         # Strided memory at EMUL 1: memory1+move2 => 7;
@@ -199,10 +128,10 @@ class LocalModel(unittest.TestCase):
         self.assertEqual(steady['score'], (37 + 1) / 4)
         self.assertTrue(steady['middle_end']['unknown_setup_amortization'])
 
-    def test_op_pair_body_and_final_reconcile(self):
+    def test_op_body_and_final_reconcile(self):
         r = score_observation(observation())
-        self.assertAlmostEqual(r['body_cost'], r['basic'] + r['stall'] - r['ilp'])
-        self.assertAlmostEqual(sum(p['net'] for p in r['pairs']), r['stall'] - r['ilp'])
+        self.assertEqual(r['body_cost'], r['basic'])
+        self.assertEqual(r['body_cost'], sum(o['basic'] for o in r['ops']))
         self.assertAlmostEqual(r['score'], r['body_cost'] * r['body_iterations'] + r['middle_end_cost'])
         self.assertEqual(r['coefficients'], COEFFICIENTS)
 
@@ -243,123 +172,30 @@ class LocalModel(unittest.TestCase):
         a = observation([instruction(0, operands=[reg(1, 1)])])
         with self.assertRaises(ToolError): validate_observation(a)
 
+    def test_register_edges_remain_validated(self):
+        ops = [instruction(0, operands=[reg(0, 1, define=True)]),
+               instruction(1, operands=[reg(0, 1, use=True)])]
+        a = observation(ops, [edge(0, 1)])
+        self.assertEqual(validate_observation(a)['dependencies'], [edge(0, 1)])
+        a['dependencies'][0]['unit'] = 2
+        with self.assertRaises(ToolError): score_observation(a)
+
     def test_multi_block_rejected(self):
         a = observation(); a['blocks'].append(dict(id=1, role='body', successors=[0]))
         with self.assertRaises(ToolError): score_observation(a)
 
     def test_manual_calibration_changes_report_identity(self):
         before = identity()
-        with patch.dict(COEFFICIENTS, raw=COEFFICIENTS['raw'] + .1):
+        with patch.dict(COEFFICIENTS, basic_memory=COEFFICIENTS['basic_memory'] + .1):
             self.assertNotEqual(identity(), before)
         self.assertEqual(identity(), before)
-        snapshot = machine_parameters(); snapshot['coefficients']['raw'] = 99
-        self.assertNotEqual(COEFFICIENTS['raw'], 99)
+        snapshot = machine_parameters(); snapshot['coefficients']['basic_memory'] = 99
+        self.assertNotEqual(COEFFICIENTS['basic_memory'], 99)
 
-
-class PairModel(unittest.TestCase):
-    """Compatibility semantics require explicit nonzero windows in every test."""
-    def setUp(self):
-        for name in ('FORWARD_WINDOW', 'BACKWARD_WINDOW'):
-            context = patch('cost_model.' + name, 4)
-            context.start()
-            self.addCleanup(context.stop)
-
-    def test_multilap_dynamic_identity(self):
-        r = score_observation(observation([instruction(0)]))
-        self.assertEqual([(p['other'], p['iteration_offset']) for p in r['pairs']],
-                         [(0, i) for i in range(1, 5)] +
-                         [(0, -i) for i in range(1, 5)])
-        self.assertEqual(len(r['ops']), 1)
-        self.assertEqual(r['basic'], 1)
-
-    def test_same_class_and_raw_add(self):
-        a = observation([instruction(0, operands=[reg(0, 1, define=True)]),
-                         instruction(1, operands=[reg(0, 1, use=True)])], [edge(0, 1)])
-        pair = score_observation(a)['pairs'][0]
-        self.assertEqual(pair['contributions']['contention'], COEFFICIENTS['contention'])
-        self.assertEqual(pair['contributions']['raw'], COEFFICIENTS['raw'])
-        self.assertEqual(pair['contributions']['ilp'], 0)
-
-    def test_mixed_class_contention_uses_only_shared_moves_and_preserves_raw(self):
-        a = observation([instruction(0, 'VLSE32_V', load=True, lmul8=64,
-                                     operands=[reg(0, 1, define=True)]),
-                         instruction(1, 'VFMUL_VF', lmul8=64,
-                                     operands=[reg(0, 1, use=True)])], [edge(0, 1)])
-        pair = score_observation(a)['pairs'][0]
-        self.assertEqual(pair['shared_classes'], ['move'])
-        self.assertEqual(pair['pair_work'], 9)
-        self.assertEqual(pair['contention_work'], 1)
-        self.assertEqual(pair['features']['contention'], 1)
-        self.assertEqual(pair['features']['raw'], 9)
-        self.assertEqual(pair['contributions']['contention'], COEFFICIENTS['contention'])
-        self.assertEqual(pair['contributions']['raw'], 9 * COEFFICIENTS['raw'])
-
-    def test_classwise_minima_are_symmetric_and_do_not_pool_unmatched_work(self):
-        a = observation([instruction(0, 'VLSE32_V', load=True),
-                         instruction(1, 'VLE32_V', load=True, lmul8=64)])
-        r = score_observation(a)
-        # memory1+move2 versus memory8+move1: 1+1, not min(3,9).
-        pairs = [p for p in r['pairs'] if p['direction'] == 'forward' and p['distance'] == 1]
-        self.assertEqual(len(pairs), 2)
-        for pair in pairs:
-            self.assertEqual(pair['shared_classes'], ['memory', 'move'])
-            self.assertEqual(pair['pair_work'], 3)
-            self.assertEqual(pair['contention_work'], 2)
-            self.assertEqual(pair['features']['contention'], 2)
-
-    def test_contention_is_invariant_to_same_class_component_partition(self):
-        a = observation([instruction(0, 'VLSE32_V', load=True, lmul8=64),
-                         instruction(1, 'VLE32_V', load=True, lmul8=64)])
-        expected = score_observation(a)
-        work = {op['id']: work_for_instruction(op) for op in a['instructions']}
-        for item in work.values():
-            primary, move = item['components']
-            item['components'] = [primary | {'work': 3}, primary | {'work': 5}, move]
-        with patch('cost_model.work_for_instruction', side_effect=lambda op: work[op['id']]):
-            actual = score_observation(a)
-        self.assertEqual(actual['features'], expected['features'])
-        self.assertEqual(actual['pairs'], expected['pairs'])
-        self.assertEqual(actual['score'], expected['score'])
-
-    def test_shared_component_contention_preserves_full_op_backward_ilp(self):
-        a = observation([instruction(0, 'VLSE32_V', load=True, lmul8=64),
-                         instruction(1, 'VFMUL_VF', lmul8=64)])
-        r = score_observation(a)
-        pair = next(p for p in r['pairs'] if p['anchor'] == 0 and
-                    p['direction'] == 'backward' and p['distance'] == 1)
-        self.assertEqual(pair['dependency']['independence'], 'independent')
-        self.assertTrue(pair['overlap'])
-        self.assertEqual(pair['pair_work'], 9)
-        self.assertEqual(pair['contention_work'], 1)
-        self.assertEqual(pair['features']['contention'], 0)
-        self.assertEqual(pair['features']['ilp'], -9)
-        self.assertEqual(pair['contributions']['ilp'], -9 * COEFFICIENTS['ilp'])
-
-    def test_disjoint_classes_have_zero_contention_work(self):
-        r = score_observation(observation())
-        pair = r['pairs'][0]
-        self.assertEqual(pair['shared_classes'], [])
-        self.assertEqual(pair['contention_work'], 0)
-        self.assertEqual(pair['features']['contention'], 0)
-        self.assertEqual(pair['pair_work'], 1)
-
-    def test_class_difference_alone_not_ilp(self):
-        a = observation(); a['instructions'][1]['registers_complete'] = False
-        r = score_observation(a)
-        self.assertEqual(r['ilp'], 0)
-        self.assertGreater(r['coverage']['unknown_dependency'], 0)
-
-    def test_signed_score_remains_visible_after_manual_model_change(self):
-        with patch.dict(COEFFICIENTS, ilp=20.):
-            r = score_observation(observation())
-        self.assertTrue(r['diagnostics']['negative_body'])
-        self.assertFalse(r['diagnostics']['bounded'])
-
-    def test_config_excluded_from_body_and_windows(self):
+    def test_config_excluded_from_body(self):
         a = observation([instruction(0), instruction(1, 'VSETVLI', configuration=True), instruction(2)])
         r = score_observation(a)
         self.assertEqual([o['id'] for o in r['ops']], [0, 2])
-        self.assertTrue(all(p['anchor'] != 1 and p['other'] != 1 for p in r['pairs']))
         self.assertEqual(r['middle_end']['unscaled_additions']['configuration'], 4.)
 
 

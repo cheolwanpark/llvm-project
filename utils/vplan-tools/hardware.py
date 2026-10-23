@@ -174,14 +174,3 @@ def work_for_instruction(op):
 
 def component(fu, amount):
     return dict(resource=fu, ports=list(PORTS[fu]), cost_class=CLASSES[fu], work=amount)
-
-
-def can_overlap(a, b):
-    """A constructive pair assignment to distinct inherited execution units.
-
-    Unknown resource mapping never earns ILP. This is feasibility, not a claim
-    about issue width, scheduling, or a cycle throughput.
-    """
-    if any(not p['ports'] for p in a['components'] + b['components']): return None
-    return any(x != y for p in a['components'] for q in b['components']
-               for x in p['ports'] for y in q['ports'])

@@ -1,7 +1,7 @@
 [project]
 name = "vplan-tools"
 version = "1.0.0"
-description = "Fixed machine MIR interaction model and verified VF regret evaluation"
+description = "Calibrated MIR decoder work model and verified VF regret evaluation"
 requires-python = ">=3.12"
 dependencies = []
 

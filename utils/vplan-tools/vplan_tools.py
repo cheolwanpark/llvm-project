@@ -425,19 +425,16 @@ def compiler_from_args(args):
 
 def print_report(value, detail=False):
     print(f"{value['candidate']} vf={value['vf']} width={value['iteration_width']} score={value['score']:.8g} model-effect ({value['scope']})")
-    print(f"  basic={value['basic']:.8g} stall={value['stall']:.8g} ilp={value['ilp']:.8g} body={value['body_cost']:.8g} middle-end={value['middle_end_cost']:.8g}")
+    print(f"  basic={value['basic']:.8g} body={value['body_cost']:.8g} middle-end={value['middle_end_cost']:.8g}")
     for op in value['ops']:
-        print(f"  op {op['id']:3} basic={op['basic']:.6g} stall={op['stall']:.6g} ilp={op['ilp']:.6g} net={op['net']:.6g} {op['mir'].strip()}")
+        print(f"  op {op['id']:3} basic={op['basic']:.6g} {op['mir'].strip()}")
         if detail: print('    ' + json.dumps(op['hardware'], sort_keys=True))
-    if detail:
-        for pair in value['pairs']:
-            print(f"    pair {pair['anchor']} -> ({pair['other']}, iter {pair['iteration_offset']:+}) {pair['direction']} distance={pair['distance']} dependency={pair['dependency']} overlap={pair['overlap']} contributions={pair['contributions']}")
     print('  coverage=' + json.dumps(value['coverage'], sort_keys=True))
     print('  diagnostics=' + json.dumps(value['diagnostics'], sort_keys=True))
 
 
 def print_vplans_main(argv=None):
-    parser = argument_parser('Collect and report local MIR interaction costs.')
+    parser = argument_parser('Collect and report calibrated MIR decoder work costs.')
     parser.add_argument('--benchmark', required=True)
     parser.add_argument('--detail', action='store_true')
     parser.add_argument('--skip-build', action='store_true')

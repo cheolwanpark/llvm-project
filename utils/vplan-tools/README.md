@@ -2,7 +2,7 @@
 
 Python 3.12's standard library implements one fixed machine cost calculation for
 reports, selection and regret evaluation. LLVM observes facts and materializes
-explicit replay choices. The model is `mir-basic-calibrated-v1`, with protocol 4 and
+explicit replay choices. The model is `mir-basic-calibrated-v2`, with protocol 4 and
 `mir-local-observation-v1` observations.
 
 ## Build and input
@@ -60,19 +60,17 @@ supports object, assembly or IR output without a measurement database.
 
 ## Calibrated decoder work model
 
-The default `mir-basic-calibrated-v1` uses the `memory_triple_move_double`
-window 0 configuration previously selected on `search-dataset.sqlite`. Constants
+The default `mir-basic-calibrated-v2` uses the `memory_triple_move_double`
+weights previously selected on `search-dataset.sqlite`. Constants
 live in [cost_model.py](cost_model.py); all benchmarks and VFs use the same values.
 There is no runtime parameter loader, optimizer or automatic fitting.
 
 | Constant | Default |
 | --- | ---: |
-| `FORWARD_WINDOW`, `BACKWARD_WINDOW` | 0, 0 ops |
 | `basic_memory` | 3 |
 | `basic_move` | 2 |
 | All other `basic_*`, including `basic_scalar` | 1 |
 | `middle_end_scale` | 1 |
-| `contention`, `raw`, `ilp` | 0.25, 0.25, 0.125 (inactive) |
 
 These are calibrated model weights, not hardware latency or cycle predictions.
 Hardware decoder splits and execution-resource facts remain in
@@ -94,27 +92,25 @@ width and iteration count account for its effect. Meta and configuration ops sta
 outside body work. Existing setup/body configuration and scalar-tail additions
 are unchanged.
 
-With both windows zero, dependency construction, pair class-work aggregation,
-overlap checks and pair traversal are skipped. Reports retain `pairs=[]`, zero
-contention/RAW/ILP features, `stall=ilp=0` and `body_cost=basic`. Zero pair coverage
-counters mean analysis was not performed; they do not prove independence or full
-coverage. Observed register and memory coverage remain available. Validation and
-hardware coverage checks still run.
+Reports expose per-op `basic`, aggregate `basic`/`body_cost`, `middle_end_cost`
+and the final `score`. Features contain only `basic_*` and `middle_end_scale`.
+Observed register and memory coverage, RAW edges, operands and resource mappings
+remain available as facts; scoring does not infer instruction interactions from
+them. Observation validation and hardware coverage checks still run.
 
-Nonzero source windows retain the existing compatibility calculation:
-`op_cost = basic + forward stall - backward ILP`. RAW and ILP use the minimum
-of total decode work; contention uses the sum of classwise component-work minima
-over shared classes. Contention and RAW add; backward ILP requires proven
-independence and distinct execution-unit assignment. Unknown relations get no
-ILP credit. Circular pairs preserve `(instruction ID, iteration offset)` across
-multiple laps; meta/configuration ops do not count toward distance. Signed costs
-remain visible without a cap. Pair tests explicitly enable both windows.
+Version 2 removes the former window analysis and its report fields (`pairs`,
+`stall`, `ilp`, op `net`, pair counters and ILP diagnostics). It preserves the
+calibrated version 1 numerical scores. Consumers must use the new model identity;
+there are no compatibility placeholders for the removed fields. The raw observation
+schema and compiler protocol are unchanged. Existing bundles can still be scored
+with `score-mir`; collection cache keys may change with the reporting tool digest.
 
 Supported CFGs are innermost single-block loops. Exit jumps after a taken backedge
 stay outside circular body order. Multi-block paths, uncertain iteration mapping,
 missing hardware rules and unsupported geometry are explicit exclusions. Partial
-registers, regmasks and opaque effects make independence unknown. Ordinary
-non-stack stores may alias. Register and memory coverage are reported separately.
+registers, regmasks and opaque effects remain observation coverage limitations.
+Register and memory coverage are reported separately; scoring does not perform
+alias or independence analysis.
 
 The manifest captures scalar iteration cost from `CM.expectedCost(f1)` and a
 configuration unit from `TTI.getIntrinsicInstrCost(riscv_vsetvlimax)`, with explicit
@@ -179,11 +175,10 @@ cmake --build ../../build-local --target llc opt FileCheck split-file not --para
 uv run python tests/run_backend.py --build-dir ../../build-local
 ```
 
-Tests cover the zero-window fast path, calibrated mixed-component sums, geometry,
-iteration/configuration/tail costs, identity, and the nonzero-window compatibility
-path: multi-lap windows, carried/transitive register and memory dependencies, unknown cases, additive effects, signed scores,
-configuration/tails, reconciliation, read-only DB/default paths, coverage, regret
-metrics and compiler selection/replay using the same hardcoded model.
+Tests cover calibrated mixed-component sums, geometry, iteration/configuration/tail
+costs, identity, preserved resource and observation facts, reconciliation,
+read-only DB/default paths, coverage, regret metrics and compiler selection/replay
+using the same hardcoded model.
 
 ## Historical fixed-model evaluation
 
@@ -207,6 +202,9 @@ compiler integration) and 35 passing backend/transport regression files. Full
 MIR facts, op/pair reports and replay outputs remain under the recorded cache paths.
 
 ## Calibrated search reevaluation (2026-10-23)
+
+This historical record describes `mir-basic-calibrated-v1`. Version 2 keeps its
+numerical model while removing the inactive window implementation and report fields.
 
 The [summary](results/basic-calibrated-2026-10-23/summary.json) and
 [verification record](results/basic-calibrated-2026-10-23/verification.json) record
@@ -235,7 +233,8 @@ numbers do not measure independent generalization. Deleted validation data was
 not regenerated, reused or included in these artifacts. No new coefficient
 search or window sweep was performed.
 
-Reproduce from the repository root with a new/empty output directory:
+Evaluate the current implementation from the repository root with a new/empty
+output directory (version 2 emits the reduced report format):
 
 ```sh
 PYTHONPATH="$PWD/utils/vplan-tools" VPLAN_CLANG="$PWD/build-vplan-tools/bin/clang" \
@@ -247,7 +246,8 @@ uv run --project utils/vplan-tools python -B utils/vplan-tools/evaluate \
 ```
 
 `PYTHONPATH` is required for root-level unittest discovery. Raw observations are
-reused, while scores and reports are recomputed under the new model identity.
+reused when the collector identity matches; otherwise collection creates new
+cache entries. Scores and reports are recomputed under the current model identity.
 On CPython 3.12.15, three alternating passes of `score_observation` over the
 same 843 in-memory observations gave median times of 2.591811 s for the restored
 4/4 model and 0.557252 s for the calibrated 0/0 implementation. Timings include

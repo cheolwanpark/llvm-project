@@ -112,16 +112,13 @@ Whole-register moves/transfers use encoded counts and physical-group verificatio
 | F2V | FEX0 | move |
 | vector load/store | VLSU0, VLSU1 | memory |
 
-Ports describe overlap **feasibility**, not throughput. Python constructs a pair
-of distinct units before awarding ILP; class differences alone do not establish
-that. Extra move and primary vector work remain distinct components even where
-coefficients are shared. Contention sums the minimum component work in each shared
-basic class; RAW and ILP use the minimum total decode work. Components in the same class are summed
-before taking its minimum. These attribution rules and additive effects are
-modeling choices, not RTL claims or port-throughput weighting.
+Ports identify execution-resource membership; they are not throughput estimates.
+The model retains them as hardware facts and scores each component using its
+basic class and decoder work. Extra move and primary vector work remain distinct
+components even where coefficients are shared.
 
-Ordinary scalar instructions anchor one decode effect; scalar execution overlap
-is unknown. Scalar memory follows the ordinary memory work/class path. Scalar
+Ordinary scalar instructions contribute one decode effect; scalar execution-resource
+mapping is unknown. Scalar memory follows the ordinary memory work/class path. Scalar
 pseudos with unverified expansion are rejected. Scalar register COPY and the
 one-instruction branch/return pseudos have explicit support.
 

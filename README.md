@@ -11,10 +11,10 @@ score = body_iterations * body_cost + middle_end_scale * middle_end_additions
 
 Scores are effects in model units. Decoder work comes from XiangShan Kunminghu v2
 **MinimalConfig**, pinned to revision `e7bab53e66dfb3c4a1d11cf9519b0396f8576cae`.
-The default `mir-basic-calibrated-v1` model uses both windows = 0, memory weight 3,
+The default `mir-basic-calibrated-v2` model uses memory weight 3,
 move weight 2, all other basic weights (including scalar) 1, and middle-end scale 1.
-Pair analysis is skipped; contention, RAW and ILP features are zero. These weights
-were selected using the search dataset and apply to every benchmark and VF.
+These weights were selected using the search dataset and apply to every benchmark
+and VF. Scoring sums weighted decoder work and middle-end additions.
 Actual MIR LMUL/SEW/EMUL and opcode splits determine work; VF has no separate
 multiplier and enters through generated MIR and verified iteration width.
 Source constants and later formula changes live in
