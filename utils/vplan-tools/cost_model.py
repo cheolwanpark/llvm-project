@@ -12,7 +12,8 @@ from dependencies import longest_path, prepare_dependencies
 from model_errors import ToolError
 from observations import SCHEMA, STAGE, iteration_factors, validate_observation
 
-MODEL_VERSION = 'mir-port-window-v3'
+MODEL_VERSION = 'mir-service-window-v4'
+DEMAND_SCHEMA = 'class-service-demand-v1'
 IMPLEMENTATION_DIGEST = hashlib.sha256(Path(__file__).read_bytes() +
     Path(__file__).with_name('hardware_model.py').read_bytes() +
     Path(__file__).with_name('dependencies.py').read_bytes()).hexdigest()
@@ -73,6 +74,13 @@ def ranking_score(report): return Q(report['score_exact'])
 
 
 def rescore(report, settings=Settings()):
+    if report.get('demand_schema') != DEMAND_SCHEMA:
+        raise ToolError('service model requires fresh class demands; rescore raw MIR observations')
+    if 'identity' in report:
+        expected = identity(settings)
+        if any(report['identity'].get(k) != expected[k]
+               for k in ('model', 'implementation_digest', 'datasheet_digest')):
+            raise ToolError('incompatible saved service model; rescore raw MIR observations')
     value = dict(report)
     value['identity'] = identity(settings)
     value['coefficients'] = dict(body_scale=settings.body_scale, fixed_additions=1)
@@ -117,13 +125,14 @@ def score_observation(a, settings=Settings()):
         rows.append(dict(id=id_, mir=op['mir'], opcode=op['opcode'], hardware=work,
                          timing=timing_for_instruction(op, work),
                          spill_slot=any(m.get('spill_slot', False) for m in op['memory'])))
-        for name, amount in work['class_demands'].items(): classes[name] = classes.get(name, 0) + amount
+        for name, amount in work['class_demands'].items(): classes[name] = classes.get(name, Q(0)) + Q(amount)
     raw, normalized = MACHINE.distribute(classes)
     maximum = max(normalized.values())
-    report = dict(candidate=a['candidate'], vf=('s' if a['scalable'] else 'f') + str(a['vf']),
+    report = dict(demand_schema=DEMAND_SCHEMA, candidate=a['candidate'], vf=('s' if a['scalable'] else 'f') + str(a['vf']),
         compiler=a['compiler'], run_id=a['run_id'], cpu=a['cpu'], vlen=a['vlen'], stage=a['stage'],
         iteration_width=a['iteration_width'], exact_trip_count=a['exact_trip_count'], max_trip_count=a['max_trip_count'],
-        class_demands=classes, port_demands={p: str(v) for p, v in raw.items()},
+        class_demands={k: int(v) if v.denominator == 1 else str(v) for k, v in classes.items()},
+        port_demands={p: str(v) for p, v in raw.items()},
         normalized_port_demands={p: str(v) for p, v in normalized.items()},
         bottleneck_ports=[p for p, v in normalized.items() if maximum and v == maximum], ops=rows,
         body_entries=sum(not ops[i]['meta'] for i in a['body_order']), dependency_graph=graph,
@@ -135,7 +144,9 @@ def score_observation(a, settings=Settings()):
                          for r in rows if r['hardware']['assumptions']],
             configuration_policy='counted-in-ROB-footprint; charged-in-middle-end-additions'),
         diagnostics=dict(unit='demand/window cycle proxy; not predicted CPU cycles',
-                         memory_requests='excluded', scheduling='equal shares; no dynamic scheduling'))
+                         memory_requests='nominal aligned/full-active flows; no cache misses or replay',
+                         service_policy='fixed RTL-derived nominal II; no fitted class weights',
+                         scheduling='equal shares; no dynamic scheduling'))
     # Iteration/configuration/tail accounting is unchanged from v4.
     main, remainder, scope = iteration_factors(a)
     config_ids = [i for i in a['body_order'] if ops[i]['configuration']]

@@ -178,3 +178,12 @@ It checks source hashes, scalar/vector opcode records, fixed FU latency literals
 and MinimalConfig ROB capacity. Source URLs and revisions are recorded in the
 datasheet. It does not download RTL or generate runtime rules, and scoring does
 not invoke it.
+
+The current `mir-service-window-v4` datasheet uses service classes with fixed
+work units and demand per unit, normalized to ALU II=1. Pipelined work, iterative
+division/sqrt, 128-bit memory flows and element memory flows have separate rules.
+There are no fitted class weights. Reports expose `service_class`, `work_units`,
+`demand_per_unit` and `demand`; decoded-uop counts are not a cost input.
+Old model reports must be recomputed from raw observations using `score-mir`;
+`rescore-evaluation` only changes the body multiplier within a matching model.
+See [MODEL.md](MODEL.md) for the fixed fast-path assumptions and exclusions.

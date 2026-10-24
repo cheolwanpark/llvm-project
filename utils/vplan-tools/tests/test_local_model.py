@@ -3,7 +3,7 @@ from fractions import Fraction as Q
 import unittest
 
 from cost_model import Settings, demand_cost, identity, rescore, score_observation, score_value
-from hardware_model import Demand, Evidence, InstructionRule, Machine, Port, ResolvedInstruction, UopClass
+from hardware_model import Demand, Evidence, InstructionRule, Machine, Port, ResolvedInstruction, ServiceClass
 from kunminghu_v2 import MACHINE, SOURCE_HASHES, VECTOR_OPCODES, work_for_instruction
 from model_errors import ToolError
 from observations import validate_observation
@@ -25,37 +25,37 @@ class HardwareRules(unittest.TestCase):
         for opcode, expected in [('VSLIDEUP_VX', [2, 4, 11, 37]),
                                  ('VRGATHER_VV', [1, 4, 16, 64]),
                                  ('VCOMPRESS_VM', [1, 4, 13, 43])]:
-            self.assertEqual([work(opcode, lmul8=l * 8)['decode_uops'] for l in (1, 2, 4, 8)], expected)
+            self.assertEqual([sum(work(opcode, lmul8=l * 8)['class_demands'].values()) for l in (1, 2, 4, 8)], expected)
         self.assertEqual(work('VFWMUL_VV', lmul8=32)['class_demands'], {'vfma': 8})
-        self.assertEqual(work('VFWMUL_VV', lmul8=4)['decode_uops'], 1)
-        self.assertEqual(work('VFREDUSUM_VS')['decode_uops'], 3)
-        self.assertEqual(work('VFREDOSUM_VS', lmul8=32)['decode_uops'], 16)
-        self.assertEqual(work('VRGATHEREI16_VV', lmul8=32, sew=8)['decode_uops'], 32)
+        self.assertEqual(work('VFWMUL_VV', lmul8=4)['class_demands']['vfma'], 1)
+        self.assertEqual(sum(work('VFREDUSUM_VS')['class_demands'].values()), 3)
+        self.assertEqual(sum(work('VFREDOSUM_VS', lmul8=32)['class_demands'].values()), 16)
+        self.assertEqual(sum(work('VRGATHEREI16_VV', lmul8=32, sew=8)['class_demands'].values()), 32)
 
     def test_scalar_resources_and_store_required_tasks(self):
         for opcode, cls, expected in [('ADDI', 'alu', ['ALU0', 'ALU1', 'ALU2', 'ALU3']),
                                      ('MUL', 'mul', ['ALU0', 'ALU1']),
                                      ('BNE', 'brh', ['BJU0', 'BJU1', 'BJU2']),
                                      ('FADD_D', 'falu', ['FEX0', 'FEX2', 'FEX4']),
-                                     ('FDIV_D', 'fDivSqrt', ['FEX1', 'FEX3']),
                                      ('FMV_D_X', 'i2v', ['BJU2'])]:
             r = work(opcode)
             self.assertEqual(r['class_demands'], {cls: 1})
             self.assertEqual(r['components'][0]['possible_ports'], expected)
         r = work('SD', store=True)
         self.assertEqual(r['class_demands'], {'sta': 1, 'std': 1})
-        self.assertEqual((r['decode_uops'], r['issued_demands']), (1, 2))
+        self.assertNotIn('decode_uops', r)
+        self.assertNotIn('issued_demands', r)
         self.assertEqual(work('LD', load=True)['components'][0]['possible_ports'], ['LDU0', 'LDU1', 'LDU2'])
 
-    def test_memory_decode_segment_and_index_geometry(self):
+    def test_memory_service_work_and_index_geometry(self):
         r = work('VLE32_V', load=True, lmul8=64, vl=1)
-        self.assertEqual(r['class_demands'], {'vldu': 8, 'i2v': 1})
+        self.assertEqual(r['class_demands'], {'vload128': 8, 'i2v': 1})
         self.assertEqual(r, work('VLE32_V', load=True, lmul8=64, vl=0, masked=True, stride=128))
         r = work('VLSEG2E32_V', load=True, lmul8=16)
-        self.assertEqual(r['class_demands'], {'vsegldu': 4, 'i2v': 1})
+        self.assertEqual(r['class_demands'], {'vsegload': 128, 'i2v': 1})
         self.assertEqual(r['components'][0]['possible_ports'], ['VLSU0'])
-        self.assertEqual(work('VLSE32_V', load=True)['class_demands'], {'vldu': 1, 'i2v': 2})
-        self.assertEqual(work('VLUXEI64_V', load=True, index_emul8=16, index_eew=64)['class_demands'], {'vldu': 2, 'i2v': 1})
+        self.assertEqual(work('VLSE32_V', load=True)['class_demands'], {'vload_element': 4, 'i2v': 2})
+        self.assertEqual(work('VLUXEI64_V', load=True, index_emul8=16, index_eew=64)['class_demands'], {'vload_element': 4, 'i2v': 1})
         with self.assertRaises(ToolError): work('VLUXEI64_V', load=True, index_emul8=32, index_eew=64)
 
     def test_llvm_predicate_geometry_is_not_illegal_vtype(self):
@@ -66,7 +66,7 @@ class HardwareRules(unittest.TestCase):
     def test_whole_transfers_and_spills(self):
         operand = reg(0, 1, define=True) | {'group8': 32}
         r = work('VL4RE64_V', operands=[operand], load=True, memory=[memory(scalable=True)])
-        self.assertEqual(r['class_demands'], {'vldu': 4, 'i2v': 1})
+        self.assertEqual(r['class_demands'], {'vload128': 4, 'i2v': 1})
         self.assertEqual(work('VMV4R_V', operands=[operand])['class_demands'], {'vppu': 4})
         r = score_observation(observation([instruction(0, 'LD', load=True, memory=[memory()])]))
         self.assertTrue(r['ops'][0]['spill_slot'])
@@ -87,7 +87,7 @@ class HardwareRules(unittest.TestCase):
     def test_equal_shares_shared_ports_and_capacity(self):
         e = Evidence('test')
         m = Machine('test', 'r', 128, 64, (Port('p', Q(2), e), Port('q', Q(1), e)),
-                    (UopClass('a', ('p', 'q'), e), UopClass('b', ('p',), e)))
+                    (ServiceClass('a', ('p', 'q'), e), ServiceClass('b', ('p',), e)))
         raw, normalized = m.distribute({'a': 6, 'b': 4})
         self.assertEqual(raw, {'p': 7, 'q': 3})
         self.assertEqual(normalized, {'p': Q(7, 2), 'q': 3})
@@ -99,9 +99,66 @@ class HardwareRules(unittest.TestCase):
     def test_datasheet_identity_and_assumptions(self):
         self.assertGreater(len(VECTOR_OPCODES), 300)
         self.assertIn('Scheduler.scala', SOURCE_HASHES)
-        self.assertEqual(identity()['model'], 'mir-port-window-v3')
+        self.assertEqual(identity()['model'], 'mir-service-window-v4')
         self.assertNotEqual(identity(), identity(Settings(body_scale='2')))
         self.assertTrue(all(p.evidence.assumed and p.capacity == 1 for p in MACHINE.ports))
+
+    def test_service_demand_preserves_fractions_and_validates_rates(self):
+        e = Evidence('test')
+        m = Machine('test', 'r', 128, 64, (Port('p', Q(1), e),),
+                    (ServiceClass('a', ('p',), e, demand_per_unit=Q(3, 2)),))
+        rule = ResolvedInstruction(InstructionRule('test', (Demand('a', 3),), e))
+        r = m.expand(rule)
+        self.assertEqual(r['class_demands'], {'a': '9/2'})
+        self.assertEqual(r['port_demands'], {'p': '9/2'})
+        self.assertEqual(m.distribute(r['class_demands'])[1], {'p': Q(9, 2)})
+        for rate in (0, -1):
+            with self.assertRaises(ToolError):
+                replace(m, classes=(replace(m.classes[0], demand_per_unit=rate),)).expand(rule)
+
+    def test_pipeline_depth_does_not_inflate_demand(self):
+        # Integer add and FP multiply have different result latencies, but II=1.
+        for name, cls in [('VADD_VV', 'vialuF'), ('VFMUL_VV', 'vfma')]:
+            self.assertEqual(work(name, lmul8=8)['class_demands'], {cls: 1})
+            self.assertEqual(work(name, lmul8=32)['class_demands'], {cls: 4})
+        for name in ('VMV_V_X', 'VMV_V_I'):
+            self.assertEqual(work(name, lmul8=16)['class_demands'], {'vialuF': 2, 'i2v': 1})
+
+    def test_iterative_service_and_dependency_timing_are_distinct(self):
+        r = score_observation(observation([instruction(i, 'VFDIV_VV', sew=64) for i in range(2)]))
+        self.assertEqual(r['class_demands'], {'vfdiv': 30})
+        self.assertEqual(r['demand_cost'], 30)
+        self.assertEqual(r['dependency_path']['cost'], 14)  # independent instructions
+        self.assertEqual(work('VFDIV_VV', sew=64, lmul8=16)['class_demands'], {'vfdiv': 30})
+        self.assertEqual(work('FDIV_D')['class_demands'], {'fdiv': 14})
+        self.assertEqual(work('VFSQRT_V', sew=64)['class_demands'], {'vfsqrt': 17})
+        self.assertEqual(work('DIVW')['class_demands'], {'div': 15})
+
+    def test_memory_element_work_does_not_double_count_register_groups(self):
+        for m, elements in [(Q(1, 2), 2), (1, 4), (2, 8), (4, 16)]:
+            kw = dict(lmul8=int(m * 8), sew=32)
+            self.assertEqual(work('VLSE32_V', load=True, **kw)['class_demands'],
+                             {'vload_element': elements, 'i2v': 2})
+            self.assertEqual(work('VSSE32_V', store=True, **kw)['class_demands'],
+                             {'vstore_element': elements, 'i2v': 2})
+            self.assertEqual(work('VSE32_V', store=True, **kw)['class_demands'],
+                             {'vstore128': max(1, m), 'i2v': 1})
+        # Increasing index EEW adds index registers, not extra data accesses.
+        for width, emul8 in [(16, 4), (32, 8), (64, 16)]:
+            self.assertEqual(work(f'VLUXEI{width}_V', load=True, index_eew=width, index_emul8=emul8)['class_demands'],
+                             {'vload_element': 4, 'i2v': 1})
+        ordered = work('VLOXEI32_V', load=True, index_emul8=8, index_eew=32)
+        self.assertEqual(ordered['class_demands'], {'vload_ordered': 16, 'i2v': 1})
+
+    def test_stale_count_reports_cannot_be_relabelled_as_service_reports(self):
+        current = score_observation(observation())
+        old = dict(current)
+        del old['demand_schema']
+        with self.assertRaisesRegex(ToolError, 'raw MIR'):
+            rescore(old)
+        old = dict(current, identity=dict(current['identity'], datasheet_digest='old'))
+        with self.assertRaisesRegex(ToolError, 'raw MIR'):
+            rescore(old)
 
 
 class DemandTests(unittest.TestCase):

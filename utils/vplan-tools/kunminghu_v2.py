@@ -4,12 +4,12 @@ All target-specific tables, expansion expressions and MIR geometry conventions
 live here. UNKNOWN is an explicit approximation, not a hidden generic ALU.
 """
 from fractions import Fraction as Q
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import hashlib
 from pathlib import Path
 import re
 
-from hardware_model import Demand, Evidence, InstructionRule, Machine, Port, ResolvedInstruction, Timing, UopClass, expr as E
+from hardware_model import Demand, Evidence, InstructionRule, Machine, Port, ResolvedInstruction, Timing, ServiceClass, expr as E
 from model_errors import ToolError
 
 REVISION = 'e7bab53e66dfb3c4a1d11cf9519b0396f8576cae'
@@ -23,14 +23,14 @@ DISPATCH = ROOT + 'backend/issue/Scheduler.scala#L372'
 
 # Physical execution units, not independent functional units or writeback ports.
 # One input per EXU is a peak admission limit, NOT a measured sustainable rate.
-# Keep all capacities explicitly assumed until a service-rate model is available.
+# Class demand carries nominal service intervals; capacity is the normalized unit.
 PORT_NAMES = ('ALU0', 'ALU1', 'ALU2', 'ALU3', 'BJU0', 'BJU1', 'BJU2', 'BJU3',
               'FEX0', 'FEX1', 'FEX2', 'FEX3', 'FEX4',
               'VFEX0', 'VFEX1', 'VFEX2', 'VFEX3', 'VFEX4',
               'STA0', 'STA1', 'LDU0', 'LDU1', 'LDU2', 'VLSU0', 'VLSU1', 'STD0', 'STD1', 'UNKNOWN')
 PORTS = tuple(Port(name, Q(1), Evidence(PARAMETERS + '#L396',
-    'Default capacity 1 uop/cycle; FU-dependent initiation intervals, backpressure and shared writeback are unmodeled.'
-    if name != 'UNKNOWN' else 'Virtual fallback port, capacity 1 uop/cycle.', True)) for name in PORT_NAMES)
+    'One normalized service cycle per cycle; class demand includes nominal initiation intervals. Backpressure and shared writeback are unmodeled.'
+    if name != 'UNKNOWN' else 'Virtual fallback port, capacity 1 normalized service cycle/cycle.', True)) for name in PORT_NAMES)
 
 # (possible EXUs, Parameters.scala line); different classes can compete on one EXU.
 CLASS_PORTS = {
@@ -50,10 +50,6 @@ CLASS_PORTS = {
     'vldu': (('VLSU0', 'VLSU1'), 488), 'vstu': (('VLSU0', 'VLSU1'), 488),
     'vsegldu': (('VLSU0',), 488), 'vsegstu': (('VLSU0',), 488),
 }
-CLASSES = tuple(UopClass(name, ports, Evidence(PARAMETERS + '#L' + str(line)))
-                for name, (ports, line) in CLASS_PORTS.items()) + (
-    UopClass('unknown', ('UNKNOWN',), Evidence('', 'Unverified class/port uses UNKNOWN.', True)),)
-MACHINE = Machine('xiangshan-kunminghu', REVISION, 128, 64, PORTS, CLASSES)
 ROB_ENTRIES = 48
 ROB_EVIDENCE = Evidence(
     f'https://github.com/OpenXiangShan/XiangShan/blob/{REVISION}/src/main/scala/top/Configs.scala#L91',
@@ -62,8 +58,9 @@ ROB_EVIDENCE = Evidence(
 
 # LLVM RVV scalable type sizes are expressed at vscale=1 (64 bits).
 # This is a target convention, not a generic dependency-analysis constant.
-LLVM_VSCALE = MACHINE.vlen // 64
-MAX_STACK_ACCESS_BYTES = 8 * MACHINE.vlen // 8
+VLEN = 128
+LLVM_VSCALE = VLEN // 64
+MAX_STACK_ACCESS_BYTES = 8 * VLEN // 8
 
 FU_CONFIG = ROOT + 'backend/fu/FuConfig.scala'
 EXU_PARAMS = ROOT + 'backend/exu/ExeUnitParams.scala'
@@ -116,18 +113,91 @@ VECTOR_DIV_LATENCIES = {8: 10, 16: 12, 32: 16, 64: 24}
 # FP sqrt countdowns 2/5/12 inclusive, up to 2 initialization cycles.
 FP_DIV_LATENCIES = {16: 6, 32: 8, 64: 13}
 FP_SQRT_LATENCIES = {16: 5, 32: 8, 64: 15}
-for _name, _config in (('div', 'DivCfg'), ('vidiv', 'VidivCfg'),
-                       ('fDivSqrt', 'FdivCfg'), ('vfdiv', 'VfdivCfg')):
-    # Per-op precision/opcode refinements replace this widest-type descriptor.
-    TIMINGS[_name] = Timing(24, 25, False,
-        Evidence(FU_CONFIG, 'UncertainLatency: replaced by opcode/precision FSM estimate.', True),
-        configuration=_config)
 for _name, _config in (('csr', 'CsrCfg'), ('fence', 'FenceCfg'), ('unknown', '')):
     TIMINGS[_name] = Timing(1, 1, None,
         Evidence(FU_CONFIG if _config else '',
                  'No finite static timing established; explicit one-cycle fallback, not an RTL latency.', True),
         configuration=_config)
-assert set(TIMINGS) == {c.name for c in CLASSES}
+
+# Service classes describe executable work, not the number of decoded uops.
+# Demand and latency use the same fixed RTL-derived timing descriptor for
+# iterative units. No benchmark-fitted coefficients or runtime class overrides.
+ITERATIVE_TIMINGS = {}
+for _name, _vector, _widths, _config, _source in (
+    ('div', False, INTEGER_DIV_LATENCIES, 'DivCfg', ROOT + 'backend/fu/SRT16Divider.scala'),
+    ('vidiv', True, VECTOR_DIV_LATENCIES, 'VidivCfg', YUNSUAN_ROOT + 'vector/VectorIdiv/VectorIdiv.scala'),
+    ('fdiv', False, FP_DIV_LATENCIES, 'FdivCfg', YUNSUAN_ROOT + 'fpu/FloatDivider.scala'),
+    ('fsqrt', False, FP_SQRT_LATENCIES, 'FdivCfg', YUNSUAN_ROOT + 'fpu/fqrt/fpsqrt_r16.scala'),
+    ('vfdiv', True, FP_DIV_LATENCIES, 'VfdivCfg', YUNSUAN_ROOT + 'vector/VectorFloatDivider.scala'),
+    ('vfsqrt', True, FP_SQRT_LATENCIES, 'VfdivCfg', YUNSUAN_ROOT + 'vector/vfsqrt/fpsqrt_vector_r16.scala')):
+    _extra = int(_vector and _name != 'vidiv')  # integer vector estimates already include wrapper/OG2
+    ITERATIVE_TIMINGS[_name] = {
+        width: Timing(latency + _extra, latency + _extra + 1, False,
+            Evidence(_source,
+                'Fixed conservative FSM envelope, not measured II: early exits ignored; '
+                'one restart cycle; vector wrapper/OG2 conservatively included; no external backpressure.', True),
+            configuration=_config)
+        for width, latency in _widths.items()}
+
+MEMORY_CLASSES = {
+    'vload128': ('vldu', 1, '128-bit aligned load flow'),
+    'vstore128': ('vstu', 1, '128-bit aligned store flow'),
+    'vload_element': ('vldu', 1, 'element load flow'),
+    'vstore_element': ('vstu', 1, 'element store flow'),
+    # Load pipeline fast-path latency plus one registered stop->send transition.
+    'vload_ordered': ('vldu', TIMINGS['ldu'].latency + 1, 'ordered element load flow'),
+    # Per-element FSM path: tlb_req/wait/pm + cache req/resp/merge, or send_data.
+    # Assume a one-cycle TLB response, L1 hit and a ready store buffer. Startup
+    # drain, finish/writeback, misalignment, masks and retries are excluded.
+    'vsegload': ('vsegldu', TIMINGS['ldu'].latency + 5, 'segment field-element load'),
+    'vsegstore': ('vsegstu', 4, 'segment field-element store'),
+}
+SERVICE_FUS = {name: name for name in CLASS_PORTS
+               if name not in ('fDivSqrt', 'vldu', 'vstu', 'vsegldu', 'vsegstu')}
+SERVICE_FUS.update(fdiv='fDivSqrt', fsqrt='fDivSqrt', vfsqrt='vfdiv', unknown='unknown')
+SERVICE_FUS.update({name: row[0] for name, row in MEMORY_CLASSES.items()})
+SERVICE_EVIDENCE = {}
+for _name, (_fu, _ii, _unit) in MEMORY_CLASSES.items():
+    _segment = _name.startswith('vseg')
+    _source = ROOT + ('mem/vector/VSegmentUnit.scala#L243' if _segment else 'mem/vector/VSplit.scala#L34')
+    _note = ('Full-active field/element traversal; fixed no-stall FSM proxy; startup drain and finish excluded.'
+             if _segment else
+             'Full-active, naturally aligned, L1-hit/no-replay proxy; one request per element flow.'
+             if 'element' in _name else
+             'Full-active L1-hit/no-replay proxy; stop-and-wait plus one registered restart.'
+             if _name == 'vload_ordered' else
+             '16-byte aligned, L1-hit/no-replay proxy; one 128-bit request per chunk. '
+             'Load reads two banks in parallel; store transfers 128-bit data to SQ. '
+             'Bank conflicts and store-buffer drain are excluded; no arbitrary width penalty.')
+    SERVICE_EVIDENCE[_name] = Evidence(_source, _note, True)
+    TIMINGS[_name] = replace(TIMINGS[_fu], initiation_interval=_ii,
+        latency=_ii if _segment else TIMINGS[_fu].latency,
+        evidence=SERVICE_EVIDENCE[_name])
+
+
+def _service_class(name, fu):
+    ports, line = CLASS_PORTS.get(fu, (('UNKNOWN',), 0))
+    unit = '128-bit datapath work' if name.startswith('v') else 'scalar operation'
+    if name in ('i2v', 'f2v'): unit = 'scalar-to-vector temporary transfer'
+    if name in ITERATIVE_TIMINGS:
+        timings = ITERATIVE_TIMINGS[name]
+        rate = E('lookup', 'precision', tuple((w, t.initiation_interval) for w, t in timings.items()))
+        evidence = next(iter(timings.values())).evidence
+    elif name in MEMORY_CLASSES:
+        _, rate, unit = MEMORY_CLASSES[name]
+        evidence = SERVICE_EVIDENCE[name]
+    else:
+        rate = 1
+        evidence = Evidence(PARAMETERS + '#L' + str(line),
+            'Nominal II=1 per work unit; pipeline fill is latency, not resource demand. '
+            'No backpressure or shared writeback.' if name in FIXED_TIMING_ROWS else
+            'Explicit one-cycle fallback/fast-path assumption; no established sustainable service rate.', True)
+    return ServiceClass(name, ports, evidence, unit, rate)
+
+
+CLASSES = tuple(_service_class(name, fu) for name, fu in SERVICE_FUS.items())
+MACHINE = Machine('xiangshan-kunminghu', REVISION, VLEN, 64, PORTS, CLASSES)
+
 
 # These split families contain dependent temporary/reduction work in
 # DecodeUnitComp. Serializing every primary uop is a conservative approximation
@@ -143,36 +213,23 @@ def timing_for_instruction(op, work):
 All target-specific precision, expansion and component-ordering decisions live
 here. The graph scorer only consumes the resulting instruction latency.
 """
-    base = op['base_opcode']
     split = work['rule'].partition(':')[2]
     serial = split in SERIAL_TIMING_SPLITS
     rows = []
     for component in work['components']:
-        name, count = component['uop_class'], component['count']
-        timing = TIMINGS[name]
-        if name in ('div', 'vidiv'):
-            width = op['sew'] if name == 'vidiv' else 32 if base.endswith('W') else 64
-            latency = (VECTOR_DIV_LATENCIES if name == 'vidiv' else INTEGER_DIV_LATENCIES)[width]
-            source = (YUNSUAN_ROOT + 'vector/VectorIdiv/VectorIdiv.scala' if name == 'vidiv'
-                      else ROOT + 'backend/fu/SRT16Divider.scala')
-            timing = Timing(latency, latency + 1, False, Evidence(source,
-                'Conservative width-based FSM estimate; early exits ignored; one restart cycle; '
-                'vector wrapper/OG2 included; no external backpressure.', True), configuration=timing.configuration)
-        elif name in ('fDivSqrt', 'vfdiv'):
-            width = op['sew'] if name == 'vfdiv' else {'H': 16, 'S': 32, 'D': 64}[base.rsplit('_', 1)[-1]]
-            sqrt = 'SQRT' in base
-            latency = (FP_SQRT_LATENCIES if sqrt else FP_DIV_LATENCIES)[width] + int(name == 'vfdiv')
-            source = ('vector/vfsqrt/fpsqrt_vector_r16.scala' if name == 'vfdiv' else 'fpu/fqrt/fpsqrt_r16.scala') if sqrt else (
-                'vector/VectorFloatDivider.scala' if name == 'vfdiv' else 'fpu/FloatDivider.scala')
-            timing = Timing(latency, latency + 1, False, Evidence(YUNSUAN_ROOT + source,
-                'Inclusive precision-dependent countdown plus initialization/post stages; '
-                'one restart cycle; no external backpressure; vector OG2 included.', True), configuration=timing.configuration)
+        name = component['service_class']
+        units = Q(component['work_units'])
+        if units.denominator != 1:
+            raise ToolError('instruction latency requires integral physical work units')
+        count = int(units)
+        timing = (ITERATIVE_TIMINGS[name][int(work['geometry']['precision'])]
+                  if name in ITERATIVE_TIMINGS else TIMINGS[name])
         is_primary = name not in ('i2v', 'f2v')
         span = timing.span(count, serial=serial and is_primary)
-        rows.append(dict(uop_class=name, count=count, **asdict(timing), completion_cycles=span,
+        rows.append(dict(service_class=name, work_units=count, **asdict(timing), completion_cycles=span,
                          expansion='serial-upper-estimate' if serial and is_primary else 'pipeline-span'))
-    transfers = sum(r['completion_cycles'] for r in rows if r['uop_class'] in ('i2v', 'f2v'))
-    primary = max((r['completion_cycles'] for r in rows if r['uop_class'] not in ('i2v', 'f2v')), default=0)
+    transfers = sum(r['completion_cycles'] for r in rows if r['service_class'] in ('i2v', 'f2v'))
+    primary = max((r['completion_cycles'] for r in rows if r['service_class'] not in ('i2v', 'f2v')), default=0)
     # Scalar store address and data issue tasks run in parallel; vector scalar
     # transfers precede the primary work (a conservative whole-op barrier).
     return dict(latency=transfers + primary, components=rows,
@@ -180,15 +237,17 @@ here. The graph scorer only consumes the resulting instruction latency.
                 assumptions=['Whole-instruction readiness; no lane streaming or multi-EXU uop striping.',
                     'No bypass-specific operand latencies; not a measured CPU cycle prediction.'] +
                     (['Dependent split uops conservatively serialized; exact internal DAG is not collected.'] if serial else []),
-                fallback=any(r['uop_class'] in ('unknown', 'csr', 'fence') for r in rows))
+                fallback=any(r['service_class'] in ('unknown', 'csr', 'fence') for r in rows))
 
 L = E('max', 1, 'lmul')
 WIDE = E('if', E('ge', 'lmul', 1), E('mul', 2, 'lmul'), 1)
 GATHER = E('mul', L, L)
 FOLD = E('mod', E('add', E('min', 'log_lmul', 0), E('lookup', 'sew', ((16, 3), (32, 2), (64, 1)))), 8)
 
-# Split -> (primary count, additional I2V/F2V count). These are decode work.
-SPLIT_COUNTS = {
+# Work shape -> (128-bit datapath work, scalar temporary transfers).
+# The RTL split topology supplies arithmetic/permutation work geometry only.
+# Memory uses flow-based service rules below, not these decode shapes.
+WORK_SHAPES = {
     **dict.fromkeys(('dummy', 'SCA_SIM'), (1, 0)),
     **dict.fromkeys(('VEC_VVV', 'VEC_VVM', 'VEC_EXT2', 'VEC_EXT4', 'VEC_EXT8', 'VEC_VRED', 'VEC_M0X'), (L, 0)),
     **dict.fromkeys(('VEC_VXV', 'VEC_VFV', 'VEC_VXM', 'VEC_VFM', 'VEC_SLIDE1UP', 'VEC_FSLIDE1UP'), (L, 1)),
@@ -204,10 +263,6 @@ SPLIT_COUNTS = {
     'VEC_MVNR': (E('mul', 1, 'whole'), 0),
     'VEC_VFRED': (E('max', 1, E('add', L, FOLD)), 0),
     'VEC_VFREDOSUM': (E('max', 1, E('mul', E('div', 128, 'sew'), 'lmul')), 0),
-    'VEC_US_LDST': (E('mul', E('max', 1, 'data_emul'), 'fields'), 1),
-    'VEC_S_LDST': (E('mul', E('max', 1, 'data_emul'), 'fields'), 2),
-    'VEC_I_LDST': (E('max', E('mul', L, 'fields'), E('max', 1, 'index_emul')), 1),
-    'WHOLE_MEMORY': (E('mul', 1, 'whole'), 1),
 }
 FP_MOVES = ('VEC_VFV', 'VEC_VFM', 'VEC_VFW', 'VEC_WFW', 'VEC_FSLIDE1UP', 'VEC_FSLIDE1DOWN')
 WIDE_SPLITS = ('VEC_VWW', 'VEC_VVW', 'VEC_WVW', 'VEC_WVV', 'VEC_VXW', 'VEC_WXW', 'VEC_WXV', 'VEC_VFW', 'VEC_WFW')
@@ -216,7 +271,7 @@ LMULS = tuple(map(Q, ('1/8', '1/4', '1/2', '1', '2', '4', '8')))
 
 def fallback(base, note):
     return ResolvedInstruction(InstructionRule(base + ':unknown', (Demand('unknown', 1),),
-                               Evidence('', note + '; default one uop on UNKNOWN.', True)))
+                               Evidence('', note + '; default unit demand on UNKNOWN.', True)))
 
 
 def resolve(op):
@@ -235,9 +290,13 @@ def resolve(op):
         source = (VECTOR_DECODE if base in SCALAR_VECTOR_DECODER else SCALAR_DECODE) + '#L' + str(line)
         if fu == 'stu':
             return ResolvedInstruction(InstructionRule(base, (Demand('sta', 1), Demand('std', 1)),
-                Evidence(DISPATCH, 'One decoded store is copied to address and data issue queues.'), decode_count=1))
+                Evidence(DISPATCH, 'One decoded store is copied to address and data issue queues.')))
         if fu not in CLASS_PORTS: return fallback(base, f'Unverified scalar FU {fu}')
-        return ResolvedInstruction(InstructionRule(base, (Demand(fu, 1),), Evidence(source)))
+        service = ('fsqrt' if 'SQRT' in base else 'fdiv') if fu == 'fDivSqrt' else fu
+        geometry = {}
+        if service in ITERATIVE_TIMINGS:
+            geometry['precision'] = (32 if base.endswith('W') else 64) if service == 'div' else {'H': 16, 'S': 32, 'D': 64}[base.rsplit('_', 1)[-1]]
+        return ResolvedInstruction(InstructionRule(base, (Demand(service, 1),), Evidence(source)), geometry)
 
     whole = re.fullmatch(r'(?:VL([1248])RE(8|16|32|64)|VS([1248])R)_V', base)
     copy = re.fullmatch(r'VMV([1248])R_V', base)
@@ -283,17 +342,36 @@ def resolve(op):
             if base not in VECTOR_OPCODES: return fallback(base, 'No reviewed vector opcode mapping')
             fu, split, _ = VECTOR_OPCODES[base]
             # LLVM represents predicate elements with SEW=1; this is not a
-            # VTYPE e1. Mask-only dummy/M0X decode counts don't use data SEW.
+            # VTYPE e1. Mask-only dummy/M0X work shapes don't use data SEW.
             mask_geometry = sew == 1 and split in ('dummy', 'VEC_M0X')
             if (not mask_geometry and sew not in (8, 16, 32, 64)) or lmul * 128 < sew:
                 raise ToolError('illegal LMUL/SEW')
             if split in WIDE_SPLITS and lmul > 4: raise ToolError('wide operand EMUL exceeds 8')
             if split in ('VEC_VFRED', 'VEC_VFREDOSUM') and sew not in (16, 32, 64): raise ToolError('invalid FP reduction SEW')
-    if split not in SPLIT_COUNTS: return fallback(base, 'Unverified split ' + split)
-    primary, moves = SPLIT_COUNTS[split]
-    parts = [Demand(fu if fu in CLASS_PORTS else 'unknown', primary)]
+    if op['load'] or op['store']:
+        if whole:
+            service, primary, moves = ('vload128' if op['load'] else 'vstore128'), E('mul', 1, 'whole'), 1
+        elif geometry['fields'] > 1:
+            service = 'vsegload' if op['load'] else 'vsegstore'
+            primary = E('mul', E('div', E('mul', VLEN, 'data_emul'), 'eew'), 'fields')
+            moves = 2 if split == 'VEC_S_LDST' else 1
+        elif split == 'VEC_US_LDST':
+            service = 'vload128' if op['load'] else 'vstore128'
+            primary, moves = E('max', 1, 'data_emul'), 1
+        else:
+            service = ('vload_ordered' if base.startswith('VLOXEI') else 'vload_element') if op['load'] else 'vstore_element'
+            primary = E('div', E('mul', VLEN, 'data_emul'), 'eew')
+            moves = 2 if split == 'VEC_S_LDST' else 1
+        evidence = SERVICE_EVIDENCE[service]
+    else:
+        if split not in WORK_SHAPES: return fallback(base, 'Unverified work shape ' + split)
+        primary, moves = WORK_SHAPES[split]
+        service = 'vfsqrt' if fu == 'vfdiv' and 'SQRT' in base else fu
+        if service in ITERATIVE_TIMINGS: geometry['precision'] = op['sew']
+        evidence = Evidence(SPLITS, 'Datapath work topology, not a decoded-uop demand count.')
+    parts = [Demand(service if service in SERVICE_FUS else 'unknown', primary)]
     if moves: parts.append(Demand('f2v' if split in FP_MOVES or base == 'VFMV_S_F' else 'i2v', moves))
-    return ResolvedInstruction(InstructionRule(base + ':' + split, tuple(parts), Evidence(SPLITS)), geometry, assumptions)
+    return ResolvedInstruction(InstructionRule(base + ':' + split, tuple(parts), evidence), geometry, assumptions)
 
 
 def work_for_instruction(op): return MACHINE.expand(resolve(op))
@@ -1003,5 +1081,24 @@ SOURCE_HASHES.update({
     'YunsuanVectorIdiv.scala': '241912b89767f623944365736b760866b8c8f277940bde2c3e3307e8e7b93f6b',
     'YunsuanSRT16Divint.scala': 'b52fe4a7f56fdeb21c9ff118312f35041cae3920cc27ec2b178d32d770856f49',
     'YunsuanI8DivNr4.scala': '9c16ecc2720e9c58ede21744d636fb9a309b9955248d3cb3983c52f54b0d9a45',
+})
+# Pinned primary sources for flow/service rules (offline verification only).
+SERVICE_SOURCE_PATHS = {
+    'VSplit.scala': ROOT + 'mem/vector/VSplit.scala',
+    'VSegmentUnit.scala': ROOT + 'mem/vector/VSegmentUnit.scala',
+    'IntFPToVec.scala': ROOT + 'backend/fu/fpu/IntFPToVec.scala',
+    'LoadPipe.scala': ROOT + 'cache/dcache/loadpipe/LoadPipe.scala',
+    'BankedDataArray.scala': ROOT + 'cache/dcache/data/BankedDataArray.scala',
+    'StoreQueueData.scala': ROOT + 'mem/lsqueue/StoreQueueData.scala',
+    'Sbuffer.scala': ROOT + 'mem/sbuffer/Sbuffer.scala',
+}
+SOURCE_HASHES.update({
+    'VSplit.scala': '417ccd9e62eceabf96e72592028e04d99569dd9cd61d9b7b2f02e00041cc44d6',
+    'VSegmentUnit.scala': '3ccfc6522fde5b06ca41ecc0ed821e72d02adbf1de06bc872de36967effba03a',
+    'IntFPToVec.scala': '113be751fcbff240d41ac68a96c020dbeb231b5a6d0200d7f47194d097675fb4',
+    'LoadPipe.scala': '2c82e2f931726af6ce4ef0ade62a035035ac02863130e699b45fab93d307b0e5',
+    'BankedDataArray.scala': '1e1da93e1cf118338bd17422e3c951607fd05e46d8d9abff77f892626c6e6bd9',
+    'StoreQueueData.scala': 'bf3efbbd9009adc1c3dda6669f1749a8095f7f6eb3d91432364484c47e23d278',
+    'Sbuffer.scala': '9fa1260542b00b54de510035645b2ebfd8c2f7dbf2cbc8025967aac9a03c14cc',
 })
 DATASHEET_DIGEST = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()

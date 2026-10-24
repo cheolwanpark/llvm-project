@@ -1,5 +1,5 @@
 """Machine-independent descriptions of instruction expansion and execution demand."""
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from fractions import Fraction as Q
 import operator
 
@@ -21,10 +21,12 @@ class Port:
 
 
 @dataclass(frozen=True)
-class UopClass:
+class ServiceClass:
     name: str
     ports: tuple[str, ...]
     evidence: Evidence
+    unit: str = 'operation'
+    demand_per_unit: 'int | Q | Expr' = 1
 
 
 @dataclass(frozen=True)
@@ -84,8 +86,8 @@ def expr(op, *args): return Expr(op, args)
 
 @dataclass(frozen=True)
 class Demand:
-    uop_class: str
-    count: int | Q | Expr
+    service_class: str
+    work: int | Q | Expr
 
 
 @dataclass(frozen=True)
@@ -93,8 +95,6 @@ class InstructionRule:
     name: str
     components: tuple[Demand, ...]
     evidence: Evidence
-    # Decode uops and issued tasks need not agree (e.g. scalar store address/data).
-    decode_count: int | Q | Expr | None = None
 
 
 @dataclass(frozen=True)
@@ -111,7 +111,7 @@ class Machine:
     vlen: int
     elen: int
     ports: tuple[Port, ...]
-    classes: tuple[UopClass, ...]
+    classes: tuple[ServiceClass, ...]
 
     def __post_init__(self):
         ports = {p.name for p in self.ports}
@@ -134,24 +134,26 @@ class Machine:
                 return x.evaluate(geometry) if isinstance(x, Expr) else Q(x)
             except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
                 raise ToolError(f'{rule.name}: invalid/missing geometry: {exc}') from exc
+        def number(x):
+            return int(x) if x.denominator == 1 else str(x)
         for component in rule.components:
-            amount = evaluate(component.count)
-            if amount < 0 or amount.denominator != 1:
-                raise ToolError(f'{rule.name}: invalid uop count {amount}')
-            c = classes[component.uop_class]
+            work = evaluate(component.work)
+            c = classes[component.service_class]
+            rate = evaluate(c.demand_per_unit)
+            if work < 0 or rate <= 0:
+                raise ToolError(f'{rule.name}: invalid service work/rate {work}/{rate}')
+            amount = work * rate
             if c.evidence.assumed: assumptions.append(c.evidence.note)
             amounts[c.name] = amounts.get(c.name, Q(0)) + amount
             share = amount / len(c.ports)
             for p in c.ports: ports[p] = ports.get(p, Q(0)) + share
-            components.append(dict(uop_class=c.name, count=int(amount), possible_ports=list(c.ports),
-                                   per_port=str(share), source=c.evidence.source))
-        issued = sum(amounts.values())
-        decoded = evaluate(rule.decode_count) if rule.decode_count is not None else issued
-        if decoded < 0 or decoded.denominator != 1:
-            raise ToolError('invalid decode count')
+            components.append(dict(service_class=c.name, work_units=number(work), work_unit=c.unit,
+                                   demand_per_unit=number(rate), demand=number(amount),
+                                   possible_ports=list(c.ports), per_port=str(share),
+                                   evidence=asdict(c.evidence)))
         return dict(rule=rule.name, source=rule.evidence.source, geometry={k: str(v) for k, v in geometry.items()},
-                    decode_uops=int(decoded), issued_demands=int(issued), components=components,
-                    class_demands={k: int(v) for k, v in amounts.items()},
+                    demand_unit='normalized service cycles (ALU II=1)', components=components,
+                    class_demands={k: number(v) for k, v in amounts.items()},
                     port_demands={k: str(v) for k, v in ports.items()},
                     assumptions=sorted(set(assumptions)))
 
