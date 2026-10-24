@@ -427,8 +427,9 @@ def print_report(value, detail=False):
     print(f"{value['candidate']} vf={value['vf']} width={value['iteration_width']} score={value['score']:.8g} model-effect ({value['scope']})")
     print(f"  basic={value['basic']:.8g} body={value['body_cost']:.8g} middle-end={value['middle_end_cost']:.8g}")
     for op in value['ops']:
-        print(f"  op {op['id']:3} basic={op['basic']:.6g} {op['mir'].strip()}")
-        if detail: print('    ' + json.dumps(op['hardware'], sort_keys=True))
+        print(f"  op {op['id']:3} basic={op['basic']:.6g} cost={op['cost']:.6g} {op['mir'].strip()}")
+        if detail: print('    ' + json.dumps(dict(hardware=op['hardware'], memory=op['memory']), sort_keys=True))
+    print('  body_breakdown=' + json.dumps(value['body_breakdown'], sort_keys=True))
     print('  coverage=' + json.dumps(value['coverage'], sort_keys=True))
     print('  diagnostics=' + json.dumps(value['diagnostics'], sort_keys=True))
 

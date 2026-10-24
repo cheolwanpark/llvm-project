@@ -14,6 +14,27 @@ CLANG = os.environ.get('VPLAN_CLANG')
 
 @unittest.skipUnless(CLANG, 'set VPLAN_CLANG to run compiler integration')
 class CompilerIntegration(unittest.TestCase):
+    def test_machine_value_proof_limits(self):
+        root = Path(__file__).resolve().parents[3]
+        fixture = (root / 'llvm/test/CodeGen/RISCV/vplan-ra/memory-facts.mir').read_text()
+        llc = Path(CLANG).resolve().parent / 'llc'
+        opaque = fixture.replace('    $x13 = IMPLICIT_DEF', '    INLINEASM &"nop", 1\n    $x13 = IMPLICIT_DEF')
+        middle = fixture.replace('    $x0 = PseudoVSETIVLI 3, 208', '    $x0 = PseudoVSETIVLI 5, 208')
+        cases = [(fixture, [3, 3, 3, 4, None, 2]),
+                 (fixture.replace('tracksRegLiveness: true', 'tracksRegLiveness: false'), [None] * 6),
+                 (opaque, [None] * 6), (middle, [None, None, None, 4, None, 2])]
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td)
+            for text, expected in cases:
+                (p / 'input.mir').write_text(text)
+                result = subprocess.run([str(llc), '-mtriple=riscv64', '-mcpu=xiangshan-kunminghu',
+                    '-run-pass=riscv-vplan-analytics', '-verify-machineinstrs', '-vplan-ra-run-id=test',
+                    '-vplan-probe-candidate=facts:0:0:s2', '-vplan-analytics-output=' + str(p / 'facts.json'),
+                    str(p / 'input.mir'), '-o', str(p / 'out.mir')], capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                ops = json.loads((p / 'facts.json').read_text())['instructions']
+                self.assertEqual([o['vl'] for o in ops if o['load']], expected)
+
     def test_discovery_probe_fixed_model_and_verified_replay(self):
         root = Path(__file__).resolve().parents[3]
         clang = Path(CLANG).resolve()
@@ -59,5 +80,5 @@ class CompilerIntegration(unittest.TestCase):
                 self.assertEqual(status['score'], expected['score'])
                 self.assertEqual(status['breakdown']['coefficients'], expected['coefficients'])
                 self.assertEqual(status['breakdown']['identity'], identity())
-                self.assertEqual(status['breakdown']['body_cost'], expected['basic'])
+                self.assertEqual(status['breakdown']['body_cost'], expected['body_cost'])
                 self.assertEqual(status['breakdown']['features'], expected['features'])

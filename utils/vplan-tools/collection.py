@@ -23,7 +23,7 @@ def collector_identity(clang, meta_script):
     directory = Path(meta_script).parent / 'vplan-tools'
     return dict(schema=CACHE_SCHEMA, observation_schema=SCHEMA, protocol=PROTOCOL_VERSION,
                 compiler=digest_file(clang), extractor=digest_file(Path(clang).parent / 'llvm-extract'),
-                stage='post-ra-cleanup', driver=digest_file(meta_script),
+                stage='post-frame-lowering', driver=digest_file(meta_script),
                 collector=digest_file(directory / 'collection.py'),
                 tools=digest_file(directory / 'vplan_tools.py'),
                 observations=digest_file(directory / 'observations.py'),

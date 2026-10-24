@@ -575,6 +575,10 @@ void RISCVPassConfig::addPreSched2() {
   addPass(createKCFIPass());
   if (TM->getOptLevel() != CodeGenOptLevel::None)
     addPass(createRISCVLoadStoreOptPass());
+  // Observe frame-address materialization and segment spill/copy lowering,
+  // while RVV pseudos still retain their geometry.
+  if (vplanAnalyticsEnabled())
+    addPass(createRISCVVPlanAnalyticsPass());
 }
 
 void RISCVPassConfig::addPreEmitPass() {
@@ -668,8 +672,6 @@ void RISCVPassConfig::addPostRegAlloc() {
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
       EnableRedundantCopyElimination)
     addPass(createRISCVRedundantCopyEliminationPass());
-  if (vplanAnalyticsEnabled())
-    addPass(createRISCVVPlanAnalyticsPass());
 }
 
 bool RISCVPassConfig::addILPOpts() {

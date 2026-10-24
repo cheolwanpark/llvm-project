@@ -29,7 +29,10 @@ All links below refer to that exact revision:
   `s0_emul`, whole-register/mask overrides, segment field count and dynamic
   splitting distinguish decode work from memory execution splitting.
 
-`hardware.py` owns the fixed work/resource calculations. C++ only observes
+`hardware.py` owns the fixed decode work/resource calculations.
+`memory_work.py` separately computes bounded request work from LLVM-observed
+values. These are demand proxies, not execution cycles. Unit requests use the
+128-bit access width in `VSplit.scala`. C++ only observes
 pseudo-table encodings, register units and MIR operand facts. `opcodes.json`
 contains 405 literal decoder records with original line numbers, source revision
 and SHA-256. It includes scalar FP records for traceability; unverified scalar

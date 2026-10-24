@@ -8,7 +8,7 @@
 #include "llvm/Support/JSON.h"
 namespace llvm {
 namespace vplan {
-json::Object collectAnalytics(const MachineFunction &MF);
+json::Object collectAnalytics(MachineFunction &MF);
 }
 class RISCVVPlanAnalytics : public MachineFunctionPass {
   bool Seen = false;

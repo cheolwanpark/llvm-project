@@ -4,8 +4,8 @@ import re
 from model_errors import ToolError
 
 PROTOCOL_VERSION = 4
-SCHEMA = 'mir-local-observation-v1'
-STAGE = 'post-ra-cleanup'
+SCHEMA = 'mir-local-observation-v2'
+STAGE = 'post-frame-lowering'
 
 
 def nonnegative(value):
@@ -73,6 +73,8 @@ def validate_observation(a):
                 if type(op[key]) is not bool: raise ValueError(f'invalid op flag {key}')
             for key in ('lmul8', 'sew', 'vl', 'index_emul8', 'index_eew'):
                 if op[key] is not None and not nonnegative(op[key]): raise ValueError('invalid known/unknown geometry')
+            if op['stride'] is not None and (type(op['stride']) is not int or not -(1 << 63) <= op['stride'] < (1 << 63)):
+                raise ValueError('invalid signed byte stride')
             for index, operand in enumerate(op['operands']):
                 if operand['index'] != index: raise ValueError('operand position lost')
                 if operand['kind'] == 'register':
@@ -81,7 +83,8 @@ def validate_observation(a):
                         if type(operand[k]) is not bool: raise ValueError(f'invalid register flag {k}')
                     if not nonnegative(operand['subregister']): raise ValueError('invalid subregister')
             for m in op['memory']:
-                if type(m['offset']) is not int or not nonnegative(m['alignment']) or m['alignment'] < 1:
+                if (type(m['offset']) is not int or not nonnegative(m['alignment']) or m['alignment'] < 1
+                        or m['alignment'] & (m['alignment'] - 1)):
                     raise ValueError('invalid memory location')
                 for k in ('load', 'store', 'volatile', 'atomic', 'scalable', 'alias_scope', 'noalias'):
                     if type(m[k]) is not bool: raise ValueError('invalid memory metadata')

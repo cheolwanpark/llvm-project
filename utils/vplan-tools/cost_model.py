@@ -1,4 +1,4 @@
-"""Calibrated decoder work with a single shared reporting/selection calculation."""
+"""Decoder and memory-request work with shared reporting/selection calculation."""
 import hashlib
 import json
 import math
@@ -7,11 +7,12 @@ from pathlib import Path
 from hardware import RULE_DIGEST, RULE_VERSION, REVISION, work_for_instruction
 from model_errors import ToolError
 from observations import SCHEMA, STAGE, iteration_factors, validate_observation
+from memory_work import memory_work, category
 
-MODEL_VERSION = 'mir-basic-calibrated-v2'
+MODEL_VERSION = 'mir-memory-requests-v4'
 
-# XiangShan MinimalConfig, VLEN 128. The memory/move scales were selected on
-# search-dataset.sqlite (memory_triple_move_double). These are shared
+# XiangShan MinimalConfig, VLEN 128. Request scale selected on the full
+# search-dataset.sqlite; non-memory weights retained from the decoder model. These are shared
 # model weights, not hardware latencies or cycle predictions. Decoder facts
 # remain in hardware.py.
 COEFFICIENTS = {
@@ -21,15 +22,16 @@ COEFFICIENTS = {
     'basic_fp_multiply': 1.,
     'basic_integer': 1.,
     'basic_mask': 1.,
-    'basic_memory': 3.,
     'basic_move': 2.,
     'basic_multiply': 1.,
     'basic_permute': 1.,
     'basic_scalar': 1.,  # Reference unit.
+    'memory_requests': 2.,
     'middle_end_scale': 1.,
 }
 PARAMETERS = tuple(COEFFICIENTS)
-IMPLEMENTATION_DIGEST = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+IMPLEMENTATION_DIGEST = hashlib.sha256(Path(__file__).read_bytes() +
+                                     Path(__file__).with_name('memory_work.py').read_bytes()).hexdigest()
 
 
 def digest_json(value):
@@ -66,9 +68,11 @@ def features_for_observation(a):
     ops = {o['id']: o for o in a['instructions']}
     order = [i for i in a['body_order'] if not ops[i]['meta'] and not ops[i]['configuration']]
     if not order: raise ToolError('empty executable body')
-    work, unsupported = {}, []
+    work, memory, unsupported = {}, {}, []
     for id_ in order:
-        try: work[id_] = work_for_instruction(ops[id_])
+        try:
+            work[id_] = work_for_instruction(ops[id_])
+            memory[id_] = memory_work(ops[id_], work[id_], a['vlen'])
         except ToolError as exc: unsupported.append(f'op {id_} {ops[id_]["opcode"]}: {exc}')
     if unsupported: raise ToolError('unsupported hardware coverage: ' + '; '.join(unsupported))
     rows, features = [], zero()
@@ -76,8 +80,13 @@ def features_for_observation(a):
                     memory=a['memory_coverage'], unsupported=[])
     for id_ in order:
         f = zero()
-        for part in work[id_]['components']: f['basic_' + part['cost_class']] += part['work']
-        row = dict(id=id_, mir=ops[id_]['mir'], opcode=ops[id_]['opcode'], hardware=work[id_], features=f)
+        for part in work[id_]['components']:
+            if part['cost_class'] != 'memory': f['basic_' + part['cost_class']] += part['work']
+        m = memory[id_]
+        if m:
+            f['memory_requests'] = m['requests']
+        row = dict(id=id_, mir=ops[id_]['mir'], opcode=ops[id_]['opcode'], hardware=work[id_], features=f,
+                   memory=m, category=category(ops[id_], m))
         rows.append(row)
         for p in PARAMETERS: features[p] += f[p]
     main, remainder, scope = iteration_factors(a)
@@ -122,8 +131,18 @@ def score_features(report):
     for row in value['ops']:
         f = row['features']
         row['basic'] = sum(f[p] * COEFFICIENTS[p] for p in PARAMETERS if p.startswith('basic_'))
+        row['cost'] = dot(f)
     value['basic'] = sum(op['basic'] for op in value['ops'])
-    value['body_cost'] = value['basic']
+    value['body_cost'] = sum(op['cost'] for op in value['ops'])
+    groups = {}
+    for op in value['ops']:
+        group = groups.setdefault(op['category'], dict(instructions=0, cost=0., bytes=0, upper_bound_bytes=False))
+        group['instructions'] += 1
+        group['cost'] += op['cost']
+        if op['memory']:
+            group['bytes'] += op['memory']['bytes']
+            group['upper_bound_bytes'] |= op['memory']['bytes_kind'] != 'exact'
+    value['body_breakdown'] = groups
     value['middle_end_cost'] = dot(value['features']) - value['body_iterations'] * value['body_cost']
     value['score'] = dot(value['features'])
     value['diagnostics'] = dict(negative_ops=[op['id'] for op in value['ops'] if op['basic'] < 0],

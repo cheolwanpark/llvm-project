@@ -17,7 +17,7 @@ def example(id_='a'):
     b = vt.Benchmark(id_, 'validation', 'source', ['-O3'], {}, {1: 20, 2: 10})
     a, c = zero(), zero()
     a['basic_scalar'], c['basic_scalar'] = 2., 1.
-    a['basic_memory'], c['basic_memory'] = 1., 3.
+    a['memory_requests'], c['memory_requests'] = 1., 3.
     return dict(benchmark=b, candidates={1: [dict(features=a, candidate='a')], 2: [dict(features=c, candidate='b')]}, coverage=[], reason=None)
 
 

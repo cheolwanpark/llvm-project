@@ -11,7 +11,7 @@ from fixtures import edge, instruction, memory, observation, reg
 
 class HardwareRules(unittest.TestCase):
     def test_hardcoded_scales_cover_all_machine_cost_classes(self):
-        self.assertEqual({p[6:] for p in COEFFICIENTS if p.startswith('basic_')}, set(BASIC_CLASSES))
+        self.assertEqual({p[6:] for p in COEFFICIENTS if p.startswith('basic_')}, set(BASIC_CLASSES) - {'memory'})
         self.assertTrue(all(value >= 0 for value in COEFFICIENTS.values()))
 
     def test_pinned_opcode_map(self):
@@ -77,10 +77,10 @@ class HardwareRules(unittest.TestCase):
 class LocalModel(unittest.TestCase):
     def test_calibrated_defaults_and_identity(self):
         model = identity()
-        self.assertEqual(model['model'], 'mir-basic-calibrated-v2')
+        self.assertEqual(model['model'], 'mir-memory-requests-v4')
         params = model['machine_parameters']
-        expected = {'basic_' + cls: 1. for cls in BASIC_CLASSES}
-        expected.update(basic_memory=3., basic_move=2., middle_end_scale=1.)
+        expected = {'basic_' + cls: 1. for cls in BASIC_CLASSES if cls != 'memory'}
+        expected.update(basic_move=2., middle_end_scale=1., memory_requests=2.)
         self.assertEqual(params, dict(cpu='xiangshan-kunminghu', vlen=128, coefficients=expected,
                                      accumulation='sum', configuration=True, scalar_tail=True,
                                      configuration_ops='excluded-from-body'))
@@ -98,8 +98,8 @@ class LocalModel(unittest.TestCase):
         with self.assertRaises(ToolError): score_observation(a)
 
     def test_component_weights_geometry_and_iteration_additions(self):
-        # Strided memory at EMUL 1: memory1+move2 => 7;
-        # unit memory at EMUL 8: memory8+move1 => 26;
+        # Unknown stride/alignment: requests8*2+move2*2 => 20;
+        # unit memory at EMUL 8, unknown alignment: requests16*2+move1*2 => 34;
         # FP scalar multiply at LMUL 2: fp_multiply2+move1 => 4.
         ops = [instruction(0, 'VLSE32_V', load=True),
                instruction(1, 'VLE32_V', load=True, lmul8=64, sew=64),
@@ -111,21 +111,22 @@ class LocalModel(unittest.TestCase):
                         blocks=[dict(id=0, role='body', successors=[0]),
                                 dict(id=1, role='setup', successors=[0])])
         r = score_observation(a)
-        self.assertEqual([o['basic'] for o in r['ops']], [7, 26, 4])
-        self.assertEqual(r['body_features']['basic_memory'], 9)
+        self.assertEqual([o['basic'] for o in r['ops']], [4, 2, 4])
+        self.assertEqual([o['cost'] for o in r['ops']], [20, 34, 4])
+        self.assertEqual(r['body_features']['memory_requests'], 24)
         self.assertEqual(r['body_features']['basic_move'], 4)
         self.assertEqual(r['body_features']['basic_fp_multiply'], 2)
-        self.assertEqual(r['body_cost'], 37)
+        self.assertEqual(r['body_cost'], 58)
         self.assertEqual(r['middle_end']['unscaled_additions'],
                          dict(configuration=4., scalar_tail=6., setup_configuration=1.))
-        self.assertEqual(r['score'], 4 * 37 + 11)
+        self.assertEqual(r['score'], 4 * 58 + 11)
         # VF has no separate multiplier: verified width controls iterations.
         self.assertEqual(score_observation(a | {'vf': 16})['score'], r['score'])
         folded = score_observation(a | {'scalar_tail': False})
         self.assertEqual(folded['body_iterations'], 5)
-        self.assertEqual(folded['score'], 5 * 37 + 6)
+        self.assertEqual(folded['score'], 5 * 58 + 6)
         steady = score_observation(a | {'exact_trip_count': 0})
-        self.assertEqual(steady['score'], (37 + 1) / 4)
+        self.assertEqual(steady['score'], (58 + 1) / 4)
         self.assertTrue(steady['middle_end']['unknown_setup_amortization'])
 
     def test_op_body_and_final_reconcile(self):
@@ -164,7 +165,7 @@ class LocalModel(unittest.TestCase):
         r = score_observation(observation([instruction(0, 'LD', load=True, memory=[memory()])]))
         self.assertEqual(r['ops'][0]['hardware']['components'][0]['cost_class'], 'memory')
         self.assertNotIn('spill', r['features'])
-        self.assertEqual(r['body_cost'], 3.)
+        self.assertEqual(r['body_cost'], 2.)
 
     def test_schema_and_operand_positions(self):
         a = observation(); a['schema'] = 'old'
@@ -186,11 +187,11 @@ class LocalModel(unittest.TestCase):
 
     def test_manual_calibration_changes_report_identity(self):
         before = identity()
-        with patch.dict(COEFFICIENTS, basic_memory=COEFFICIENTS['basic_memory'] + .1):
+        with patch.dict(COEFFICIENTS, memory_requests=COEFFICIENTS['memory_requests'] + .1):
             self.assertNotEqual(identity(), before)
         self.assertEqual(identity(), before)
-        snapshot = machine_parameters(); snapshot['coefficients']['basic_memory'] = 99
-        self.assertNotEqual(COEFFICIENTS['basic_memory'], 99)
+        snapshot = machine_parameters(); snapshot['coefficients']['memory_requests'] = 99
+        self.assertNotEqual(COEFFICIENTS['memory_requests'], 99)
 
     def test_config_excluded_from_body(self):
         a = observation([instruction(0), instruction(1, 'VSETVLI', configuration=True), instruction(2)])

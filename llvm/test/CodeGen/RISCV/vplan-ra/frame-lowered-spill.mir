@@ -1,0 +1,36 @@
+# RUN: llc -mtriple=riscv64 -mcpu=xiangshan-kunminghu -start-before=prolog-epilog -stop-after=riscv-vplan-analytics -verify-machineinstrs -vplan-ra-run-id=test -vplan-probe-candidate=segment:0:0:s2 -vplan-analytics-output=%t.json %s -o %t.mir
+# RUN: %python %S/Inputs/check-frame-lowered-spill.py %t.json
+--- |
+  define void @segment() #0 {
+  entry:
+    br label %loop
+  loop:
+    br i1 true, label %loop, label %exit, !llvm.loop !0
+  exit:
+    ret void
+  }
+  attributes #0 = { vscale_range(2,2) "vplan.ra.iteration-mapping"="1" "vplan.ra.width"="4" "vplan.ra.vf"="2" "vplan.ra.scalable"="1" "vplan.ra.candidate"="segment:0:0:s2" }
+  !0 = distinct !{!0, !1}
+  !1 = !{!"llvm.loop.vplan.candidate", !"segment:0:0:s2"}
+...
+---
+name: segment
+tracksRegLiveness: true
+stack:
+  - { id: 0, type: spill-slot, size: 56, alignment: 8, stack-id: scalable-vector }
+body: |
+  bb.0.entry:
+    successors: %bb.1
+    $x10 = ADDI $x0, 1
+    PseudoBR %bb.1
+  bb.1.loop:
+    successors: %bb.1, %bb.2
+    liveins: $x10
+    $v0_v1_v2_v3_v4_v5_v6 = IMPLICIT_DEF
+    PseudoVSPILL7_M1 killed $v0_v1_v2_v3_v4_v5_v6, %stack.0 :: (store (<vscale x 7 x s64>) into %stack.0, align 8)
+    dead $v7_v8_v9_v10_v11_v12_v13 = PseudoVRELOAD7_M1 %stack.0 :: (load (<vscale x 7 x s64>) from %stack.0, align 8)
+    BNE $x10, $x0, %bb.1
+    PseudoBR %bb.2
+  bb.2.exit:
+    PseudoRET
+...

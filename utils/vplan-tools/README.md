@@ -2,8 +2,8 @@
 
 Python 3.12's standard library implements one fixed machine cost calculation for
 reports, selection and regret evaluation. LLVM observes facts and materializes
-explicit replay choices. The model is `mir-basic-calibrated-v2`, with protocol 4 and
-`mir-local-observation-v1` observations.
+explicit replay choices. The model is `mir-memory-requests-v4`, with protocol 4 and
+`mir-local-observation-v2` observations at `post-frame-lowering`.
 
 ## Build and input
 
@@ -58,52 +58,54 @@ IR and checks the compiler's final manifest. The lower-level
 [`vplan-meta-compile`](../vplan-meta-compile) accepts source/flags directly and
 supports object, assembly or IR output without a measurement database.
 
-## Calibrated decoder work model
+## Decoder and memory-request work model
 
-The default `mir-basic-calibrated-v2` uses the `memory_triple_move_double`
-weights previously selected on `search-dataset.sqlite`. Constants
+Memory request demand replaces the old memory decoder charge. Non-memory decode
+weights are unchanged from the previous model. Constants
 live in [cost_model.py](cost_model.py); all benchmarks and VFs use the same values.
-There is no runtime parameter loader, optimizer or automatic fitting.
+There is no runtime parameter loader or automatic fitting during selection.
 
 | Constant | Default |
 | --- | ---: |
-| `basic_memory` | 3 |
 | `basic_move` | 2 |
 | All other `basic_*`, including `basic_scalar` | 1 |
 | `middle_end_scale` | 1 |
+| `memory_requests` | 2 |
 
 These are calibrated model weights, not hardware latency or cycle predictions.
 Hardware decoder splits and execution-resource facts remain in
 [hardware.py](hardware.py) and [the rule guide](rules/README.md). An instruction
-with memory and move components applies 3 and 2 separately. Spill/reload uses
-that ordinary memory path without another spill charge.
+with memory and move components applies 2 to requests and 2 to decode move work.
+Spill/reload uses that ordinary memory path without another spill charge.
 
 ## Work and iteration mapping
 
 ```text
-op_cost = sum(component_work[class] * basic_coefficient[class])
-body_cost = sum(op_cost)
+op_cost = sum(non_memory_component_work[class] * basic_coefficient[class])
+body_cost = sum(op_cost + 2 * requests)
 score = body_iterations * body_cost + middle_end_scale * middle_end_additions
 ```
 
-Work uses actual post-RA MIR LMUL/SEW/EMUL and opcode-specific decoder splits.
+Decode work uses post-frame-lowering MIR LMUL/SEW/EMUL and opcode-specific splits.
+LLVM has already expanded segment spill/reloads and materialized stack addresses.
 VF is not multiplied into the score: generated MIR, verified scalar iteration
 width and iteration count account for its effect. Meta and configuration ops stay
 outside body work. Existing setup/body configuration and scalar-tail additions
 are unchanged.
 
-Reports expose per-op `basic`, aggregate `basic`/`body_cost`, `middle_end_cost`
-and the final `score`. Features contain only `basic_*` and `middle_end_scale`.
+Reports expose per-op decode `basic` and total `cost`, aggregate `basic`,
+`body_cost`, `body_breakdown`, `middle_end_cost` and final `score`. Features include
+non-memory `basic_*`, `memory_requests` and `middle_end_scale`.
+Memory decoder demand D remains in hardware observations, but the score uses
+2R instead of 3D; there is no residual subtraction, D floor or line-footprint term.
 Observed register and memory coverage, RAW edges, operands and resource mappings
 remain available as facts; scoring does not infer instruction interactions from
 them. Observation validation and hardware coverage checks still run.
 
-Version 2 removes the former window analysis and its report fields (`pairs`,
-`stall`, `ilp`, op `net`, pair counters and ILP diagnostics). It preserves the
-calibrated version 1 numerical scores. Consumers must use the new model identity;
-there are no compatibility placeholders for the removed fields. The raw observation
-schema and compiler protocol are unchanged. Existing bundles can still be scored
-with `score-mir`; collection cache keys may change with the reporting tool digest.
+Version 2 removed window analysis and its report fields (`pairs`, `stall`, `ilp`,
+op `net`, pair counters and ILP diagnostics) while retaining version 1 scores.
+The current observation schema/stage requires recollecting old post-RA bundles.
+Protocol 4 is unchanged. There is no legacy scorer or observation conversion path.
 
 Supported CFGs are innermost single-block loops. Exit jumps after a taken backedge
 stay outside circular body order. Multi-block paths, uncertain iteration mapping,
@@ -123,6 +125,50 @@ With an exact scalar count T and verified width W, scalar-tail bodies execute
 `ceil(T/W)`. An upper bound never substitutes for T: unknown exact counts use
 steady-state `body/W`, plus per-iteration configuration/W, and report unknown setup
 amortization. Missing required TTI costs exclude the candidate.
+
+## Bounded body memory demand
+
+`memory_work.py` derives per-body logical bytes, distinct element addresses and
+16-byte request work. Scalar and whole-register spill
+sizes come from the opcode and fixed VLEN, not the scalable MMO minimum. For
+regular memory, LLVM-proven VL is used when available; otherwise data geometry
+supplies VLMAX. Unknown masks use an all-active upper bound. Unit/whole transfers
+use 16-byte chunks; segment/strided/indexed requests use element accesses, without
+assuming coalescing. Known strides preserve duplicate and reverse addresses.
+Allowed base residues are enumerated from alignment. Unknown indices/strides use
+disjoint, boundary-crossing bounds. Address arithmetic wraps at RV64 width.
+
+These are conservative demand features, **not cache misses or cycle estimates**.
+There is no cache simulation, cross-instruction reuse, scheduling interaction,
+or extra spill penalty. `bytes_kind`, `distinct_kind` and `reasons` distinguish
+proofs from bounds. Report categories describe observed operations, not the
+provenance of scalarization. Body iteration/configuration/scalar-tail accounting
+is unchanged. Setup/final reduction work outside the body remains excluded.
+
+## Coefficient boundary analysis
+
+`analyze-boundaries` intersects affine cost inequalities instead of sampling a
+coefficient grid. Use `--term NAME` for any linear feature in the saved evaluation;
+repeat it to analyze independent axes. Other coefficients default to that
+evaluation's saved weights, not the current model's constants. Use
+`--set NAME=VALUE` to override a non-varied coefficient (fractions are accepted).
+The baseline always remains the saved evaluation's selections, so an override
+does not silently change what "preserve" and "improve" mean. Neither observations
+nor production model weights are changed.
+
+```sh
+python analyze-boundaries --evaluation /tmp/fixed-evaluation \
+  --term basic_move --term basic_fp_multiply --output-dir /tmp/instruction-boundaries
+
+python analyze-boundaries --evaluation /tmp/fixed-evaluation \
+  --term basic_move --set memory_requests=3/2 --output-dir /tmp/move-boundaries
+```
+
+The tool reads feature names and coefficients from the saved reports and validates
+their identity and candidate coverage. A new term needs to be exported as a
+linear feature with its coefficient in the evaluation; the analyzer needs no code
+change. Nonlinear interactions and joint multidimensional regions are outside its
+scope. Each varied coefficient covers [0, infinity), with exact rational ties.
 
 ## Regret evaluation
 

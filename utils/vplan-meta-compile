@@ -217,7 +217,7 @@ class Driver:
                 "loops": manifest["loops"], "candidates": manifest["candidates"], "selections": selections})
         result = {"version": 4, "run_id": run_id, "candidates": len(statuses),
                   "manifest": str(manifest_path), "candidate_status": str(statuses_path),
-                  "stage": "post-ra-cleanup", "analytics_only": analytics_only}
+                  "stage": "post-frame-lowering", "analytics_only": analytics_only}
         if not analytics_only:
             result["selection"] = str(selection_path)
             result["policy"] = policy.identity

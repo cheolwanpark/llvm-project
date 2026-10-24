@@ -9,6 +9,7 @@
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
+#include "llvm/CodeGen/ReachingDefAnalysis.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Metadata.h"
@@ -49,6 +50,179 @@ unsigned physicalGroup8(Register R) {
     return 64;
   return 0;
 }
+
+// Query LLVM's physical reaching definitions, not a second dataflow engine.
+// Empty cached results break cycles. Regmasks are not modeled by
+// ReachingDefInfo; disable value proofs in opaque functions rather than
+// crossing a clobber.
+class ObservedValues {
+  ReachingDefInfo RDI;
+  const RISCVSubtarget &ST;
+  const MachineDominatorTree &DT;
+  bool Safe = true;
+  DenseMap<std::pair<MachineInstr *, unsigned>, std::optional<uint64_t>> Cache;
+
+  // Non-allocatable CSRs are absent from successor live-ins, so RDI cannot
+  // follow them across blocks. Walk only backwards to the nearest VL writes;
+  // all reaching writes must agree. This is not a general value dataflow pass.
+  std::optional<uint64_t> vlValue(MachineInstr &At) {
+    SmallVector<std::pair<MachineBasicBlock *, MachineBasicBlock::iterator>>
+        Work;
+    SmallPtrSet<MachineBasicBlock *, 8> Visited;
+    SmallPtrSet<MachineInstr *, 8> Defs;
+    Work.emplace_back(At.getParent(), At.getIterator());
+    while (!Work.empty()) {
+      auto [BB, End] = Work.pop_back_val();
+      bool Found = false;
+      while (End != BB->begin()) {
+        auto &MI = *--End;
+        // The legal x0,x0 form preserves VL and only changes VTYPE policies.
+        if (MI.getOpcode() == RISCV::PseudoVSETVLIX0X0)
+          continue;
+        if (MI.modifiesRegister(RISCV::VL, ST.getRegisterInfo())) {
+          Defs.insert(&MI);
+          Found = true;
+          break;
+        }
+      }
+      if (Found)
+        continue;
+      if (BB->pred_empty())
+        return std::nullopt;
+      for (auto *Pred : BB->predecessors())
+        if (Visited.insert(Pred).second)
+          Work.emplace_back(Pred, Pred->end());
+    }
+    std::optional<uint64_t> Result;
+    for (auto *Def : Defs) {
+      auto V = evaluate(*Def, RISCV::VL);
+      if (!V || (Result && Result != V))
+        return std::nullopt;
+      Result = V;
+    }
+    return Result;
+  }
+
+  std::optional<uint64_t> operandValue(MachineInstr &MI, unsigned I) {
+    if (I >= MI.getNumOperands())
+      return std::nullopt;
+    const auto &MO = MI.getOperand(I);
+    if (MO.isImm())
+      return uint64_t(MO.getImm());
+    if (MO.isReg() && !MO.isUndef() && !MO.getSubReg())
+      return value(MI, MO.getReg());
+    return std::nullopt;
+  }
+
+  std::optional<uint64_t> evaluate(MachineInstr &MI, Register R) {
+    if (RISCVInstrInfo::isVectorConfigInstr(MI)) {
+      unsigned Op = MI.getOpcode();
+      if (Op != RISCV::PseudoVSETVLI && Op != RISCV::PseudoVSETIVLI &&
+          Op != RISCV::PseudoVSETVLIX0 && Op != RISCV::PseudoVSETVLIX0X0)
+        return std::nullopt;
+      uint64_t VType = MI.getOperand(2).getImm();
+      if (R == RISCV::VTYPE)
+        return VType;
+      auto VLen = ST.getRealVLen();
+      unsigned Group = group8(unsigned(RISCVVType::getVLMUL(VType)));
+      if (!VLen || !Group)
+        return std::nullopt;
+      uint64_t Max = uint64_t(*VLen) * Group / 8 / RISCVVType::getSEW(VType);
+      if (!Max)
+        return std::nullopt;
+      if (Op == RISCV::PseudoVSETVLIX0)
+        return Max;
+      auto AVL = Op == RISCV::PseudoVSETVLIX0X0 ? value(MI, RISCV::VL)
+                                                : operandValue(MI, 1);
+      if (!AVL)
+        return std::nullopt;
+      if (Op == RISCV::PseudoVSETVLIX0X0)
+        return *AVL <= Max ? AVL : std::nullopt;
+      // The ISA permits implementation-dependent VL in the middle interval.
+      if (*AVL <= Max)
+        return AVL;
+      return *AVL >= 2 * Max ? std::optional<uint64_t>(Max) : std::nullopt;
+    }
+    auto A = operandValue(MI, 1);
+    if (!A)
+      return std::nullopt;
+    switch (MI.getOpcode()) {
+    case RISCV::LUI:
+      return uint64_t(SignExtend64<32>(*A << 12));
+    case TargetOpcode::COPY:
+      return A;
+    default:
+      break;
+    }
+    auto B = operandValue(MI, 2);
+    if (!B)
+      return std::nullopt;
+    switch (MI.getOpcode()) {
+    case RISCV::ADD:
+    case RISCV::ADDI:
+      return *A + *B;
+    case RISCV::ADDW:
+    case RISCV::ADDIW:
+      return uint64_t(SignExtend64<32>(*A + *B));
+    case RISCV::SUB:
+      return *A - *B;
+    case RISCV::MUL:
+      return *A * *B;
+    case RISCV::SLLI:
+      return *A << (*B & 63);
+    case RISCV::SRLI:
+      return *A >> (*B & 63);
+    case RISCV::ANDI:
+      return *A & *B;
+    case RISCV::ORI:
+      return *A | *B;
+    default:
+      return std::nullopt;
+    }
+  }
+
+public:
+  ObservedValues(MachineFunction &MF, const MachineDominatorTree &DT)
+      : ST(MF.getSubtarget<RISCVSubtarget>()), DT(DT) {
+    Safe = MF.getProperties().hasTracksLiveness() && ST.is64Bit();
+    for (const auto &BB : MF)
+      for (const auto &MI : BB) {
+        Safe &= !MI.isCall() && !MI.isInlineAsm();
+        for (const auto &MO : MI.operands())
+          Safe &=
+              !MO.isRegMask() &&
+              (!MO.isReg() || (!MO.getSubReg() && !MO.getReg().isVirtual()));
+      }
+    if (Safe)
+      RDI.run(MF);
+  }
+
+  std::optional<uint64_t> value(MachineInstr &MI, Register R) {
+    if (R == RISCV::X0)
+      return 0;
+    if (!Safe || !R.isPhysical() || !R)
+      return std::nullopt;
+    auto Key = std::make_pair(&MI, unsigned(R));
+    auto [It, Inserted] = Cache.try_emplace(Key, std::nullopt);
+    if (!Inserted)
+      return It->second;
+    auto *Def = R == RISCV::VL ? nullptr : RDI.getUniqueReachingMIDef(&MI, R);
+    // A live-in path without a definition must not be mistaken for the only
+    // constant-producing predecessor returned by RDI.
+    if (Def && !DT.dominates(Def, &MI))
+      Def = nullptr;
+    auto Result = R == RISCV::VL ? vlValue(MI)
+                  : Def          ? evaluate(*Def, R)
+                                 : std::nullopt;
+    Cache[Key] = Result;
+    return Result;
+  }
+
+  json::Value jsonValue(MachineInstr &MI, Register R) {
+    auto V = value(MI, R);
+    return V ? json::Value(int64_t(*V)) : json::Value(nullptr);
+  }
+};
 // Recover the index group from the generated pseudo table rather than from
 // physical register allocation or a pseudo-name suffix.
 const RISCV::VLX_VSXPseudo *indexedInfo(unsigned Opcode, unsigned DataLMUL) {
@@ -140,8 +314,8 @@ json::Object operand(const MachineOperand &MO, unsigned Index,
   }
   return O;
 }
-json::Object instruction(const MachineInstr &MI, unsigned ID,
-                         const RISCVSubtarget &ST) {
+json::Object instruction(MachineInstr &MI, unsigned ID,
+                         const RISCVSubtarget &ST, ObservedValues &Values) {
   const auto &TII = *ST.getInstrInfo();
   const auto &TRI = *ST.getRegisterInfo();
   std::string Text;
@@ -189,7 +363,7 @@ json::Object instruction(const MachineInstr &MI, unsigned ID,
   uint64_t Flags = MI.getDesc().TSFlags;
   auto *P = RISCVVPseudosTable::getPseudoInfo(MI.getOpcode());
   unsigned Group = P ? group8(RISCVII::getLMul(Flags)) : 0;
-  json::Value SEW = nullptr, VL = nullptr;
+  json::Value SEW = nullptr, VL = nullptr, Stride = nullptr;
   json::Value IndexGroup = nullptr, IndexEEW = nullptr;
   if (P && (MI.mayLoad() || MI.mayStore()))
     if (auto *Index = indexedInfo(MI.getOpcode(), P->VLMul)) {
@@ -201,10 +375,12 @@ json::Object instruction(const MachineInstr &MI, unsigned ID,
     if (O.isImm() && O.getImm() >= 0 && O.getImm() <= 6)
       SEW = O.getImm() == 0 ? 1 : int64_t(1) << O.getImm();
   }
-  if (P && RISCVII::hasVLOp(Flags)) {
-    const auto &O = MI.getOperand(RISCVII::getVLOpNum(MI.getDesc()));
-    if (O.isImm() && O.getImm() >= 0)
-      VL = O.getImm();
+  if (P && RISCVII::hasVLOp(Flags))
+    VL = Values.jsonValue(MI, RISCV::VL);
+  if (P && (MI.mayLoad() || MI.mayStore())) {
+    int Idx = RISCV::getNamedOperandIdx(MI.getOpcode(), RISCV::OpName::rs2);
+    if (Idx >= 0 && MI.getOperand(Idx).isReg())
+      Stride = Values.jsonValue(MI, MI.getOperand(Idx).getReg());
   }
   return json::Object{
       {"id", ID},
@@ -223,6 +399,7 @@ json::Object instruction(const MachineInstr &MI, unsigned ID,
       {"lmul8", Group ? json::Value(Group) : json::Value(nullptr)},
       {"sew", std::move(SEW)},
       {"vl", std::move(VL)},
+      {"stride", std::move(Stride)},
       {"index_emul8", std::move(IndexGroup)},
       {"index_eew", std::move(IndexEEW)},
       {"masked", RISCV::getMaskedPseudoInfo(MI.getOpcode()) != nullptr},
@@ -280,12 +457,13 @@ json::Array dependencies(const json::Array &Instructions) {
   return Edges;
 }
 }
-json::Object llvm::vplan::collectAnalytics(const MachineFunction &MF) {
+json::Object llvm::vplan::collectAnalytics(MachineFunction &MF) {
   const auto &F = MF.getFunction();
   const auto &ST = MF.getSubtarget<RISCVSubtarget>();
   StringRef ID = F.getFnAttribute("vplan.ra.candidate").getValueAsString();
-  MachineDominatorTree DT(const_cast<MachineFunction &>(MF));
+  MachineDominatorTree DT(MF);
   MachineLoopInfo LI(DT);
+  ObservedValues Values(MF, DT);
   MachineLoop *Loop = nullptr;
   std::string Error;
   for (auto *L : LI.getLoopsInPreorder())
@@ -304,7 +482,7 @@ json::Object llvm::vplan::collectAnalytics(const MachineFunction &MF) {
     Error = "original scalar iteration mapping is unproven";
   int64_t Header = Loop ? Loop->getHeader()->getNumber() : -1;
   json::Array Blocks, Instructions, Order;
-  for (const auto &BB : MF) {
+  for (auto &BB : MF) {
     StringRef Role = "outside";
     if (Loop && Loop->contains(&BB))
       Role = "body";
@@ -321,10 +499,10 @@ json::Object llvm::vplan::collectAnalytics(const MachineFunction &MF) {
                                   {"role", Role},
                                   {"successors", std::move(Successors)}});
     bool BackedgeSeen = false;
-    for (const auto &MI : BB) {
+    for (auto &MI : BB) {
       if (MI.isDebugInstr())
         continue;
-      auto I = instruction(MI, Instructions.size(), ST);
+      auto I = instruction(MI, Instructions.size(), ST, Values);
       // Instructions following a taken backedge (typically the explicit exit
       // jump) are not executed on the repeated body path.
       StringRef InstructionRole = BackedgeSeen ? "exit" : Role;
@@ -340,11 +518,11 @@ json::Object llvm::vplan::collectAnalytics(const MachineFunction &MF) {
   }
   auto Edges = dependencies(Instructions);
   return json::Object{
-      {"schema", "mir-local-observation-v1"},
+      {"schema", "mir-local-observation-v2"},
       {"run_id", getVPlanRARunID()},
       {"candidate", ID},
       {"function", F.getName()},
-      {"stage", "post-ra-cleanup"},
+      {"stage", "post-frame-lowering"},
       {"compiler", LLVM_VERSION_STRING},
       {"target_triple", F.getParent()->getTargetTriple().str()},
       {"cpu", ST.getTuneCPU()},
