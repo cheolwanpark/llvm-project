@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "vplan-tools"))
 from model_errors import ToolError
 from observations import validate_manifest, bind_observation
 from selection import Policy, select_loops
+from cost_model import Settings, add_arguments
 
 class MetaCompileError(ToolError):
     pass
@@ -73,7 +74,8 @@ def validate_flags(flags: list[str]) -> None:
 class Driver:
     def __init__(self, clang: Path, source: Path, work: Path, flags: list[str],
                  timeout: int = 120, extract_function: str | None = None,
-                 llvm_extract: Path | None = None):
+                 llvm_extract: Path | None = None, settings=Settings()):
+        self.settings = settings
         self.clang = clang.resolve()
         self.source = source.resolve()
         self.work = work.resolve()
@@ -118,7 +120,7 @@ class Driver:
                 detail: bool, analytics_only: bool = False) -> dict:
         if analytics_only and not stop_after_ra:
             raise MetaCompileError("--analytics-only requires --stop-after-ra")
-        policy = None if analytics_only else Policy()
+        policy = None if analytics_only else Policy(self.settings)
         validate_flags(self.flags)
         if self.work.exists() and any(self.work.iterdir()):
             raise MetaCompileError(f"work directory must be empty: {self.work}")
@@ -254,10 +256,11 @@ def main(argv=None) -> int:
     parser.add_argument("--emit", choices=("llvm", "asm", "obj"), default="obj")
     parser.add_argument("--stop-after-ra", action="store_true")
     parser.add_argument("--analytics-only", action="store_true", help="collect raw facts without computing backend costs")
-    parser.add_argument("--detail", action="store_true", help="explain local op and pair costs on stderr")
+    parser.add_argument("--detail", action="store_true", help="explain instruction and port demands on stderr")
     parser.add_argument("--extract-function", help="isolate a function at the pre-vectorizer checkpoint")
     parser.add_argument("--llvm-extract", type=Path, help="matching llvm-extract binary")
     parser.add_argument("--timeout", type=int, default=120, help="seconds per compiler invocation")
+    add_arguments(parser)
     parser.add_argument("flags", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     flags = args.flags[1:] if args.flags[:1] == ["--"] else args.flags
@@ -267,7 +270,7 @@ def main(argv=None) -> int:
         parser.error("--output is required unless --stop-after-ra is used")
     try:
         result = Driver(args.clang, args.input, args.work_dir, flags, args.timeout,
-                        args.extract_function, args.llvm_extract).compile(
+                        args.extract_function, args.llvm_extract, Settings.from_args(args)).compile(
             args.output, args.emit, args.stop_after_ra, args.detail, args.analytics_only)
         print(json.dumps(result))
         return 0

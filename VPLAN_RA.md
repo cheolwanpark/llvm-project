@@ -3,7 +3,7 @@
 The compiler implements **protocol 4**. The local Python cost model owns all
 hardware rules and score calculations. C++ observes MIR, exposes middle-end TTI
 costs and materializes explicitly selected VPlans. There is no backend scoring
-formula or coefficient table in LLVM. Python uses one hardcoded machine model.
+formula or coefficient table in LLVM. Python uses one shared port-demand model with a hardcoded machine datasheet.
 
 `-vplan-pipeline=prepare` stops O2/O3 immediately before loop vectorization and
 marks a checkpoint. `resume` validates that checkpoint and optimization level.
@@ -74,4 +74,4 @@ utils/vplan-meta-compile --clang build-local/bin/clang \
 `--analytics-only --stop-after-ra` collects facts without scoring.
 `--emit obj|asm|llvm` selects the final artifact. Driver inputs and scoring/replay
 need no database or measured cycles. See the [tools guide](utils/vplan-tools/README.md)
-for manual machine calibration freedom and fixed-model regret evaluation.
+for port-demand analysis, selection intervals and regret evaluation.

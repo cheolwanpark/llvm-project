@@ -142,6 +142,8 @@ def argument_parser(description: str) -> argparse.ArgumentParser:
                         help="timeout per compiler invocation in seconds (default: 120)")
     parser.add_argument("--compiler-mode", choices=("meta", "direct"), default="meta",
                         help="Python selection pipeline (default) or ordinary LLVM compilation")
+    from cost_model import add_arguments
+    add_arguments(parser)
     return parser
 
 
@@ -289,7 +291,7 @@ def source_name(benchmark: Benchmark) -> str:
 def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int,
                    compiler_mode: str = "meta", meta_script: Path | None = None,
                    artifacts_dir: Path | None = None,
-                   *, stop_after_ra: bool = False, analytics_only: bool = False) -> subprocess.CompletedProcess:
+                   *, stop_after_ra: bool = False, analytics_only: bool = False, settings=None) -> subprocess.CompletedProcess:
     flags = benchmark_flags(benchmark)
     with tempfile.TemporaryDirectory(prefix="vplan-tools-") as temporary:
         root = Path(temporary)
@@ -312,6 +314,9 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                        "--extract-function", "selected_kernel",
                        "--llvm-extract", str(clang.parent / "llvm-extract"),
                        "--timeout", str(timeout)]
+            if settings is not None:
+                from cost_model import settings_flags
+                command += settings_flags(settings)
             if stop_after_ra:
                 command += ["--stop-after-ra"]
             if analytics_only:
@@ -424,14 +429,15 @@ def compiler_from_args(args):
 
 
 def print_report(value, detail=False):
-    print(f"{value['candidate']} vf={value['vf']} width={value['iteration_width']} score={value['score']:.8g} model-effect ({value['scope']})")
-    print(f"  basic={value['basic']:.8g} body={value['body_cost']:.8g} middle-end={value['middle_end_cost']:.8g}")
-    for op in value['ops']:
-        print(f"  op {op['id']:3} basic={op['basic']:.6g} cost={op['cost']:.6g} {op['mir'].strip()}")
-        if detail: print('    ' + json.dumps(dict(hardware=op['hardware'], memory=op['memory']), sort_keys=True))
-    print('  body_breakdown=' + json.dumps(value['body_breakdown'], sort_keys=True))
+    print(f"{value['candidate']} vf={value['vf']} width={value['iteration_width']} score={value['score']:.8g} ({value['scope']})")
+    print(f"  body={value['body_cost']:.8g} middle-end={value['middle_end_cost']:.8g} bottleneck={value['bottleneck_ports']}")
+    print('  class_demands=' + json.dumps(value['class_demands'], sort_keys=True))
+    print('  normalized_ports=' + json.dumps(value['normalized_port_demands'], sort_keys=True))
+    if detail:
+        for op in value['ops']:
+            print(f"  op {op['id']:3} {op['mir'].strip()}")
+            print('    ' + json.dumps(op['hardware'], sort_keys=True))
     print('  coverage=' + json.dumps(value['coverage'], sort_keys=True))
-    print('  diagnostics=' + json.dumps(value['diagnostics'], sort_keys=True))
 
 
 def print_vplans_main(argv=None):
@@ -443,11 +449,13 @@ def print_vplans_main(argv=None):
     parser.add_argument('--replay', action='store_true', help='compile and verify the selected candidates')
     args = parser.parse_args(argv)
     if args.compiler_mode != 'meta': parser.error('use evaluate-baseline for ordinary LLVM reports')
+    from cost_model import Settings
+    settings = Settings.from_args(args)
     benchmarks, _ = load_database(args.db, args.benchmark)
     if not benchmarks: raise ToolError(f'unknown benchmark {args.benchmark}')
     clang = compiler_from_args(args)
     result = compile_report(clang, benchmarks[0], False, args.timeout, artifacts_dir=args.artifacts_dir,
-                            meta_script=args.llvm_path / 'utils/vplan-meta-compile', stop_after_ra=not args.replay)
+                            meta_script=args.llvm_path / 'utils/vplan-meta-compile', stop_after_ra=not args.replay, settings=settings)
     if result.returncode: raise ToolError(result.stderr)
     for status in result.candidate_status['candidates']:
         if status['status'] == 'scored': print_report(status['breakdown'], args.detail)

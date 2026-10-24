@@ -1,203 +1,174 @@
-from fractions import Fraction
+from dataclasses import replace
+from fractions import Fraction as Q
 import unittest
 
-from cost_model import COEFFICIENTS, identity, machine_parameters, score_observation
-from unittest.mock import patch
-from hardware import BASIC_CLASSES, MAP, split_work, work_for_instruction
+from cost_model import AGGREGATIONS, Settings, aggregate, identity, rescore, score_observation, score_value
+from hardware_model import Demand, Evidence, InstructionRule, Machine, Port, ResolvedInstruction, UopClass
+from kunminghu_v2 import MACHINE, SOURCE_HASHES, VECTOR_OPCODES, work_for_instruction
 from model_errors import ToolError
-from observations import validate_observation, iteration_factors
+from observations import validate_observation
 from fixtures import edge, instruction, memory, observation, reg
 
 
+def work(base, **kwargs): return work_for_instruction(instruction(0, base, **kwargs))
+
+
 class HardwareRules(unittest.TestCase):
-    def test_hardcoded_scales_cover_all_machine_cost_classes(self):
-        self.assertEqual({p[6:] for p in COEFFICIENTS if p.startswith('basic_')}, set(BASIC_CLASSES) - {'memory'})
-        self.assertTrue(all(value >= 0 for value in COEFFICIENTS.values()))
+    def test_vector_split_and_scalar_operand_transfer(self):
+        for lmul, count in [(Q(1, 8), 1), (Q(1, 4), 1), (Q(1, 2), 1), (1, 1), (2, 2), (4, 4), (8, 8)]:
+            self.assertEqual(work('VADD_VV', lmul8=int(lmul * 8), sew=8)['class_demands'], {'vialuF': count})
+            self.assertEqual(work('VADD_VX', lmul8=int(lmul * 8), sew=8)['class_demands'], {'vialuF': count, 'i2v': 1})
+        self.assertEqual(work('VFMUL_VF', lmul8=16)['class_demands'], {'vfma': 2, 'f2v': 1})
+        self.assertEqual(work('VADD_VI')['class_demands'], {'vialuF': 1, 'i2v': 1})
 
-    def test_pinned_opcode_map(self):
-        self.assertGreater(len(MAP['opcodes']), 350)
-        self.assertEqual(MAP['opcodes']['VADD_VV']['split'], 'VEC_VVV')
-        self.assertEqual(MAP['opcodes']['VADD_VI']['split'], 'VEC_VXV')
-        self.assertEqual(MAP['opcodes']['VFWMUL_VV']['split'], 'VEC_VVW')
+    def test_nonlinear_splits_and_reductions(self):
+        for opcode, expected in [('VSLIDEUP_VX', [2, 4, 11, 37]),
+                                 ('VRGATHER_VV', [1, 4, 16, 64]),
+                                 ('VCOMPRESS_VM', [1, 4, 13, 43])]:
+            self.assertEqual([work(opcode, lmul8=l * 8)['decode_uops'] for l in (1, 2, 4, 8)], expected)
+        self.assertEqual(work('VFWMUL_VV', lmul8=32)['class_demands'], {'vfma': 8})
+        self.assertEqual(work('VFWMUL_VV', lmul8=4)['decode_uops'], 1)
+        self.assertEqual(work('VFREDUSUM_VS')['decode_uops'], 3)
+        self.assertEqual(work('VFREDOSUM_VS', lmul8=32)['decode_uops'], 16)
+        self.assertEqual(work('VRGATHEREI16_VV', lmul8=32, sew=8)['decode_uops'], 32)
 
-    def test_fractional_and_integer_groups(self):
-        for lmul, expected in [(Fraction(1, 8), 1), (Fraction(1, 4), 1), (Fraction(1, 2), 1), (1, 1), (2, 2), (4, 4), (8, 8)]:
-            self.assertEqual(split_work('VEC_VVV', lmul, 8), (expected, 0))
-            self.assertEqual(split_work('VEC_VXV', lmul, 8), (expected + 1, 1))
+    def test_scalar_resources_and_store_required_tasks(self):
+        for opcode, cls, expected in [('ADDI', 'alu', ['ALU0', 'ALU1', 'ALU2', 'ALU3']),
+                                     ('MUL', 'mul', ['ALU0', 'ALU1']),
+                                     ('BNE', 'brh', ['BJU0', 'BJU1', 'BJU2']),
+                                     ('FADD_D', 'falu', ['FEX0', 'FEX2', 'FEX4']),
+                                     ('FDIV_D', 'fDivSqrt', ['FEX1', 'FEX3']),
+                                     ('FMV_D_X', 'i2v', ['BJU2'])]:
+            r = work(opcode)
+            self.assertEqual(r['class_demands'], {cls: 1})
+            self.assertEqual(r['components'][0]['possible_ports'], expected)
+        r = work('SD', store=True)
+        self.assertEqual(r['class_demands'], {'sta': 1, 'std': 1})
+        self.assertEqual((r['decode_uops'], r['issued_demands']), (1, 2))
+        self.assertEqual(work('LD', load=True)['components'][0]['possible_ports'], ['LDU0', 'LDU1', 'LDU2'])
 
-    def test_special_work(self):
-        self.assertEqual([split_work('VEC_SLIDEUP', l, 32)[0] for l in (1, 2, 4, 8)], [2, 4, 11, 37])
-        self.assertEqual([split_work('VEC_RGATHER', l, 32)[0] for l in (1, 2, 4, 8)], [1, 4, 16, 64])
-        self.assertEqual(split_work('VEC_RGATHEREI16', 4, 8), (32, 0))
-        self.assertEqual(split_work('VEC_RGATHEREI16', 8, 8), (64, 0))
-        self.assertEqual([split_work('VEC_COMPRESS', l, 32)[0] for l in (1, 2, 4, 8)], [1, 4, 13, 43])
+    def test_memory_decode_segment_and_index_geometry(self):
+        r = work('VLE32_V', load=True, lmul8=64, vl=1)
+        self.assertEqual(r['class_demands'], {'vldu': 8, 'i2v': 1})
+        self.assertEqual(r, work('VLE32_V', load=True, lmul8=64, vl=0, masked=True, stride=128))
+        r = work('VLSEG2E32_V', load=True, lmul8=16)
+        self.assertEqual(r['class_demands'], {'vsegldu': 4, 'i2v': 1})
+        self.assertEqual(r['components'][0]['possible_ports'], ['VLSU0'])
+        self.assertEqual(work('VLSE32_V', load=True)['class_demands'], {'vldu': 1, 'i2v': 2})
+        self.assertEqual(work('VLUXEI64_V', load=True, index_emul8=16, index_eew=64)['class_demands'], {'vldu': 2, 'i2v': 1})
+        with self.assertRaises(ToolError): work('VLUXEI64_V', load=True, index_emul8=32, index_eew=64)
 
-    def test_widening_and_narrowing(self):
-        self.assertEqual(split_work('VEC_VXW', 4, 32), (9, 1))
-        self.assertEqual(split_work('VEC_WVV', Fraction(1, 2), 32), (1, 0))
-        self.assertEqual(split_work('VEC_VWW', Fraction(1, 2), 32), (2, 0))
-        with self.assertRaises(ToolError): split_work('VEC_VVW', 8, 32)
+    def test_llvm_predicate_geometry_is_not_illegal_vtype(self):
+        for opcode in ('VMAND_MM', 'VMANDN_MM', 'VMOR_MM'):
+            self.assertEqual(work(opcode, lmul8=1, sew=1)['class_demands'], {'vialuF': 1})
+        with self.assertRaises(ToolError): work('VADD_VV', lmul8=1, sew=1)
 
-    def test_reduction(self):
-        self.assertEqual(split_work('VEC_VFRED', 1, 32), (3, 0))
-        self.assertEqual(split_work('VEC_VFRED', 4, 64), (5, 0))
-        self.assertEqual(split_work('VEC_VFREDOSUM', 4, 32), (16, 0))
-        self.assertEqual(split_work('VEC_VFREDOSUM', Fraction(1, 2), 64), (1, 0))
+    def test_whole_transfers_and_spills(self):
+        operand = reg(0, 1, define=True) | {'group8': 32}
+        r = work('VL4RE64_V', operands=[operand], load=True, memory=[memory(scalable=True)])
+        self.assertEqual(r['class_demands'], {'vldu': 4, 'i2v': 1})
+        self.assertEqual(work('VMV4R_V', operands=[operand])['class_demands'], {'vppu': 4})
+        r = score_observation(observation([instruction(0, 'LD', load=True, memory=[memory()])]))
+        self.assertTrue(r['ops'][0]['spill_slot'])
+        self.assertEqual(r['body_cost'], 1 / 3)
+        self.assertEqual(set(r['features']), {'body_scale', 'fixed_additions'})
 
-    def test_memory_forms(self):
-        self.assertEqual(split_work('VEC_US_LDST', 2, 32, eew=64, fields=2), (9, 1))
-        self.assertEqual(split_work('VEC_S_LDST', 1, 32, eew=32), (3, 2))
-        self.assertEqual(split_work('VEC_I_LDST', 2, 32, eew=32, fields=2, index_emul=8), (9, 1))
-        with self.assertRaises(ToolError): split_work('VEC_US_LDST', 4, 32, eew=64, fields=2)
-        with self.assertRaises(ToolError): split_work('VEC_I_LDST', 1, 32, eew=32)
+    def test_unknown_explicit_but_illegal_geometry_rejected(self):
+        r = work('UNREVIEWED')
+        self.assertEqual(r['class_demands'], {'unknown': 1})
+        self.assertEqual(r['port_demands'], {'UNKNOWN': '1'})
+        self.assertTrue(r['assumptions'])
+        for kwargs in [dict(lmul8=1, sew=64), dict(lmul8=24), dict(lmul8=None)]:
+            with self.assertRaises(ToolError): work('VADD_VV', **kwargs)
+        with self.assertRaises(ToolError): work('VFWMUL_VV', lmul8=64)
+        with self.assertRaises(ToolError): work('VLSEG2E32_V', lmul8=64, load=True)
 
-    def test_indexed_observed_geometry(self):
-        op = instruction(0, 'VLUXEI64_V', load=True, index_emul8=16, index_eew=64)
-        work = work_for_instruction(op)
-        self.assertEqual(work['decode_uops'], 3)
-        self.assertEqual(work['geometry']['index_emul'], '2')
-        with self.assertRaises(ToolError): work_for_instruction(op | {'index_emul8': 32})
+    def test_equal_shares_shared_ports_and_capacity(self):
+        e = Evidence('test')
+        m = Machine('test', 'r', 128, 64, (Port('p', Q(2), e), Port('q', Q(1), e)),
+                    (UopClass('a', ('p', 'q'), e), UopClass('b', ('p',), e)))
+        raw, normalized = m.distribute({'a': 6, 'b': 4})
+        self.assertEqual(raw, {'p': 7, 'q': 3})
+        self.assertEqual(normalized, {'p': Q(7, 2), 'q': 3})
+        self.assertEqual(sum(raw.values()), 10)
+        r = m.expand(ResolvedInstruction(InstructionRule('test', (Demand('a', 3), Demand('b', 1)), e)))
+        self.assertEqual(r['port_demands'], {'p': '5/2', 'q': '3/2'})
+        with self.assertRaises(ToolError): replace(m, ports=(Port('p', Q(0), e),))
 
-    def test_unknown_is_not_linear_fallback(self):
-        for base in ['VUNKNOWN_VV', 'VLUXEI32_V']:
-            with self.assertRaises(ToolError): work_for_instruction(instruction(0, base, load=base.startswith('VL')))
+    def test_datasheet_identity_and_assumptions(self):
+        self.assertGreater(len(VECTOR_OPCODES), 300)
+        self.assertIn('Scheduler.scala', SOURCE_HASHES)
+        self.assertEqual(identity()['model'], 'mir-port-aware-v1')
+        self.assertNotEqual(identity(), identity(Settings('sum')))
+        self.assertTrue(all(p.evidence.assumed and p.capacity == 1 for p in MACHINE.ports))
 
-    def test_illegal_geometry(self):
-        with self.assertRaises(ToolError): split_work('VEC_VVV', Fraction(1, 8), 64)
-        with self.assertRaises(ToolError): split_work('VEC_VVV', 3, 32)
 
-    def test_resource_facts_preserved(self):
-        integer = work_for_instruction(instruction(0))['components'][0]
-        self.assertEqual(integer['resource'], 'vialuF')
-        self.assertEqual(integer['ports'], ['VFEX0', 'VFEX2'])
-        scalar = work_for_instruction(instruction(0, 'ADDI'))['components'][0]
-        self.assertEqual(scalar['ports'], [])
+class AggregationTests(unittest.TestCase):
+    def test_zero_and_positive_homogeneity(self):
+        for kind in AGGREGATIONS:
+            settings = Settings(kind)
+            self.assertEqual(aggregate(dict(a=0, b=0), settings), 0)
+            v = aggregate(dict(a=1, b=3, c=0), settings)
+            for k in (Q(1, 8), 2, 1000000):
+                self.assertAlmostEqual(aggregate(dict(a=k, b=3*k, c=0), settings) / float(k), v)
+        self.assertEqual(aggregate(dict(a=3, b=4), Settings('max')), 4)
+        self.assertEqual(aggregate(dict(a=3, b=4), Settings('sum')), 7)
+
+    def test_invalid_settings_and_demands(self):
+        for kwargs in [dict(aggregation='unsupported'), dict(body_scale='-1'), dict(body_scale='nan')]:
+            with self.assertRaises(ToolError): Settings(**kwargs)
+        for kind in AGGREGATIONS:
+            for value in (-1, float('nan'), float('inf')):
+                with self.assertRaises((ToolError, ValueError, OverflowError)):
+                    aggregate(dict(a=value), Settings(kind))
 
 
 class LocalModel(unittest.TestCase):
-    def test_calibrated_defaults_and_identity(self):
-        model = identity()
-        self.assertEqual(model['model'], 'mir-memory-requests-v4')
-        params = model['machine_parameters']
-        expected = {'basic_' + cls: 1. for cls in BASIC_CLASSES if cls != 'memory'}
-        expected.update(basic_move=2., middle_end_scale=1., memory_requests=2.)
-        self.assertEqual(params, dict(cpu='xiangshan-kunminghu', vlen=128, coefficients=expected,
-                                     accumulation='sum', configuration=True, scalar_tail=True,
-                                     configuration_ops='excluded-from-body'))
-
-    def test_basic_model_keeps_observation_validation_and_coverage(self):
-        a = observation()
-        a['instructions'][0]['registers_complete'] = False
-        r = score_observation(a)
-        self.assertEqual(r['body_cost'], r['basic'])
-        for features in [r['features'], r['body_features'], *(o['features'] for o in r['ops'])]:
-            self.assertEqual(set(features), set(COEFFICIENTS))
-        self.assertEqual(r['coverage'], dict(configuration_policy='excluded-from-body',
-                         register=a['register_coverage'], memory=a['memory_coverage'], unsupported=[]))
-        a['schema'] = 'old'
-        with self.assertRaises(ToolError): score_observation(a)
-
-    def test_component_weights_geometry_and_iteration_additions(self):
-        # Unknown stride/alignment: requests8*2+move2*2 => 20;
-        # unit memory at EMUL 8, unknown alignment: requests16*2+move1*2 => 34;
-        # FP scalar multiply at LMUL 2: fp_multiply2+move1 => 4.
-        ops = [instruction(0, 'VLSE32_V', load=True),
-               instruction(1, 'VLE32_V', load=True, lmul8=64, sew=64),
-               instruction(2, 'VFMUL_VF', lmul8=16),
-               instruction(3, 'VSETVLI', configuration=True),
-               instruction(4, 'VSETVLI', configuration=True, block=1, role='setup')]
-        a = observation(ops, exact_trip_count=18, max_trip_count=18,
-                        body_order=[0, 1, 2, 3],
-                        blocks=[dict(id=0, role='body', successors=[0]),
-                                dict(id=1, role='setup', successors=[0])])
-        r = score_observation(a)
-        self.assertEqual([o['basic'] for o in r['ops']], [4, 2, 4])
-        self.assertEqual([o['cost'] for o in r['ops']], [20, 34, 4])
-        self.assertEqual(r['body_features']['memory_requests'], 24)
-        self.assertEqual(r['body_features']['basic_move'], 4)
-        self.assertEqual(r['body_features']['basic_fp_multiply'], 2)
-        self.assertEqual(r['body_cost'], 58)
-        self.assertEqual(r['middle_end']['unscaled_additions'],
-                         dict(configuration=4., scalar_tail=6., setup_configuration=1.))
-        self.assertEqual(r['score'], 4 * 58 + 11)
-        # VF has no separate multiplier: verified width controls iterations.
-        self.assertEqual(score_observation(a | {'vf': 16})['score'], r['score'])
+    def test_unchanged_iteration_configuration_tail(self):
+        ops = [instruction(0), instruction(1, 'VSETVLI', configuration=True),
+               instruction(2, 'VSETVLI', configuration=True, block=1, role='setup')]
+        a = observation(ops, exact_trip_count=18, max_trip_count=18, body_order=[0, 1],
+                        blocks=[dict(id=0, role='body', successors=[0]), dict(id=1, role='setup', successors=[0])])
+        for kind in AGGREGATIONS:
+            r = score_observation(a, Settings(kind))
+            self.assertEqual(r['middle_end']['unscaled_additions'], dict(configuration=4., scalar_tail=6., setup_configuration=1.))
+            self.assertEqual(r['body_iterations'], 4)
+            self.assertEqual(r['scalar_remainder'], 2)
+            self.assertEqual(r['middle_end_cost'], 11)
+            self.assertAlmostEqual(r['score'], 4 * r['body_cost'] + 11)
+            other = rescore(r, Settings(kind, body_scale='7/3'))
+            self.assertEqual(other['middle_end'], r['middle_end'])
+            self.assertEqual(Q(other['score_exact']), score_value(other['features'], Settings(kind, body_scale='7/3')))
         folded = score_observation(a | {'scalar_tail': False})
         self.assertEqual(folded['body_iterations'], 5)
-        self.assertEqual(folded['score'], 5 * 58 + 6)
+        self.assertEqual(folded['middle_end_cost'], 6)
         steady = score_observation(a | {'exact_trip_count': 0})
-        self.assertEqual(steady['score'], (58 + 1) / 4)
+        self.assertEqual(steady['score'], (steady['body_cost'] + 1) / 4)
         self.assertTrue(steady['middle_end']['unknown_setup_amortization'])
+        self.assertIsNone(steady['scalar_remainder'])
 
-    def test_op_body_and_final_reconcile(self):
+    def test_vf_no_extra_multiplier_and_upper_bound_not_trip_count(self):
         r = score_observation(observation())
-        self.assertEqual(r['body_cost'], r['basic'])
-        self.assertEqual(r['body_cost'], sum(o['basic'] for o in r['ops']))
-        self.assertAlmostEqual(r['score'], r['body_cost'] * r['body_iterations'] + r['middle_end_cost'])
-        self.assertEqual(r['coefficients'], COEFFICIENTS)
-
-    def test_configuration_and_tail_added_once(self):
-        a = observation([instruction(0), instruction(1, 'VSETVLI', configuration=True)],
-                        exact_trip_count=18, max_trip_count=18)
-        r = score_observation(a)
-        self.assertEqual(r['body_iterations'], 4)
-        self.assertEqual(r['scalar_remainder'], 2)
-        self.assertEqual(r['middle_end']['unscaled_additions'],
-                         dict(configuration=4., scalar_tail=6., setup_configuration=0.))
-        self.assertEqual(r['middle_end_cost'], 10. * COEFFICIENTS['middle_end_scale'])
-
-    def test_upper_bound_not_used_as_exact(self):
-        a = observation(exact_trip_count=0, max_trip_count=19)
-        self.assertEqual(iteration_factors(a), (.25, 0, 'steady-state-per-scalar-iteration'))
-        r = score_observation(a)
-        self.assertEqual(r['score'], r['body_cost'] / 4)
-        self.assertEqual(r['middle_end_cost'], 0)
-        self.assertIsNone(r['scalar_remainder'])
-
-    def test_missing_middle_end_cost(self):
-        a = observation(exact_trip_count=17, max_trip_count=17, scalar_cost=None)
-        with self.assertRaises(ToolError): score_observation(a)
+        self.assertEqual(score_observation(observation(vf=16))['score'], r['score'])
+        steady = score_observation(observation(exact_trip_count=0, max_trip_count=19))
+        self.assertEqual(steady['score'], steady['body_cost'] / 4)
+        with self.assertRaises(ToolError): score_observation(observation(exact_trip_count=17, max_trip_count=17, scalar_cost=None))
         a = observation([instruction(0), instruction(1, 'VSETVLI', configuration=True)])
         a['middle_end']['configuration_unit_quarters'] = None
         with self.assertRaises(ToolError): score_observation(a)
 
-    def test_spill_not_additive(self):
-        r = score_observation(observation([instruction(0, 'LD', load=True, memory=[memory()])]))
-        self.assertEqual(r['ops'][0]['hardware']['components'][0]['cost_class'], 'memory')
-        self.assertNotIn('spill', r['features'])
-        self.assertEqual(r['body_cost'], 2.)
-
-    def test_schema_and_operand_positions(self):
-        a = observation(); a['schema'] = 'old'
-        with self.assertRaises(ToolError): validate_observation(a)
-        a = observation([instruction(0, operands=[reg(1, 1)])])
-        with self.assertRaises(ToolError): validate_observation(a)
-
-    def test_register_edges_remain_validated(self):
-        ops = [instruction(0, operands=[reg(0, 1, define=True)]),
-               instruction(1, operands=[reg(0, 1, use=True)])]
-        a = observation(ops, [edge(0, 1)])
+    def test_observation_validation_and_coverage(self):
+        a = observation([instruction(0, operands=[reg(0, 1, define=True)]),
+                         instruction(1, operands=[reg(0, 1, use=True)])], [edge(0, 1)])
         self.assertEqual(validate_observation(a)['dependencies'], [edge(0, 1)])
         a['dependencies'][0]['unit'] = 2
         with self.assertRaises(ToolError): score_observation(a)
-
-    def test_multi_block_rejected(self):
         a = observation(); a['blocks'].append(dict(id=1, role='body', successors=[0]))
         with self.assertRaises(ToolError): score_observation(a)
-
-    def test_manual_calibration_changes_report_identity(self):
-        before = identity()
-        with patch.dict(COEFFICIENTS, memory_requests=COEFFICIENTS['memory_requests'] + .1):
-            self.assertNotEqual(identity(), before)
-        self.assertEqual(identity(), before)
-        snapshot = machine_parameters(); snapshot['coefficients']['memory_requests'] = 99
-        self.assertNotEqual(COEFFICIENTS['memory_requests'], 99)
-
-    def test_config_excluded_from_body(self):
-        a = observation([instruction(0), instruction(1, 'VSETVLI', configuration=True), instruction(2)])
-        r = score_observation(a)
-        self.assertEqual([o['id'] for o in r['ops']], [0, 2])
-        self.assertEqual(r['middle_end']['unscaled_additions']['configuration'], 4.)
+        a = observation(); a['iteration_mapping'] = False
+        with self.assertRaises(ToolError): score_observation(a)
+        r = score_observation(observation([instruction(0, 'UNKNOWN')]))
+        self.assertEqual(r['coverage']['unknown_ops'], [0])
 
 
 if __name__ == '__main__': unittest.main()

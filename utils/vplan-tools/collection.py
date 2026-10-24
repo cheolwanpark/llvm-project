@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 
-from cost_model import digest_json, features_for_observation
+from cost_model import digest_json, score_observation, Settings
 from model_errors import ToolError
 from observations import PROTOCOL_VERSION, SCHEMA, bind_observation, validate_manifest
 import vplan_tools as vt
@@ -31,7 +31,7 @@ def collector_identity(clang, meta_script):
 
 
 def validate_target(metadata):
-    from hardware import REVISION
+    from kunminghu_v2 import REVISION
     protocol = metadata['measurement_protocol']
     if (metadata['target'] != 'xiangshan-v2/MinimalConfig@' + REVISION
             or protocol.get('rtl_revision') != REVISION
@@ -99,7 +99,7 @@ def collect(benchmark, clang, args, context):
     return bundle
 
 
-def prepare(benchmark, bundle):
+def prepare(benchmark, bundle, settings=Settings()):
     loops = [l for l in bundle['manifest']['loops'] if l['function'] == 'selected_kernel']
     if len(loops) != 1: raise ToolError(f'expected one selected_kernel loop, found {len(loops)}')
     candidates = [r for r in bundle['rows'] if r['candidate']['function'] == 'selected_kernel'
@@ -115,7 +115,7 @@ def prepare(benchmark, bundle):
         try:
             if a is None: raise ToolError(row['reason'] or row['status'])
             contexts.add(tuple(a[k] for k in ('run_id', 'function', 'cpu', 'features', 'vlen', 'exact_trip_count', 'max_trip_count')))
-            report = features_for_observation(a)
+            report = score_observation(a, settings)
             prepared.setdefault(vf, []).append(report)
             coverage.append(dict(id=candidate['id'], vf=vf, status='supported', coverage=report['coverage']))
         except ToolError as exc:

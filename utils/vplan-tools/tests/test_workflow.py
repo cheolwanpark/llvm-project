@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
-from cost_model import zero
+from cost_model import Settings
 from evaluation import dataset_fingerprint
 from evaluation import compare, evaluate, summarize_rows
 from model_errors import ToolError
@@ -15,9 +15,8 @@ import vplan_tools as vt
 
 def example(id_='a'):
     b = vt.Benchmark(id_, 'validation', 'source', ['-O3'], {}, {1: 20, 2: 10})
-    a, c = zero(), zero()
-    a['basic_scalar'], c['basic_scalar'] = 2., 1.
-    a['memory_requests'], c['memory_requests'] = 1., 3.
+    a = dict(body_scale=2., fixed_additions=1.)
+    c = dict(body_scale=1., fixed_additions=4.)
     return dict(benchmark=b, candidates={1: [dict(features=a, candidate='a')], 2: [dict(features=c, candidate='b')]}, coverage=[], reason=None)
 
 
@@ -48,7 +47,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertNotEqual(before['top1_regret'], after['top1_regret'])
 
     def test_multi_plan_minimum(self):
-        e = example(); best = zero(); best['basic_scalar'] = .1
+        e = example(); best = dict(body_scale=.1, fixed_additions=0.)
         e['candidates'][2].append(dict(features=best, candidate='better'))
         self.assertEqual(evaluate(e)['selected_vf'], 2)
 
@@ -66,8 +65,8 @@ class EvaluationTests(unittest.TestCase):
 
     def test_selection_scalable_only_and_status_identity(self):
         p = object.__new__(Policy)
-        rows = [(dict(id='fixed', vf='f8'), dict(status='scored', score=-10)),
-                (dict(id='scalable', vf='s1'), dict(status='scored', score=2))]
+        rows = [(dict(id='fixed', vf='f8'), dict(status='scored', score=-10, score_exact='-10')),
+                (dict(id='scalable', vf='s1'), dict(status='scored', score=2, score_exact='2'))]
         self.assertEqual(p.choose(rows)['id'], 'scalable')
         with self.assertRaises(ToolError): select_loops(p, dict(candidates=[dict(id='a')], loops=[]), [dict(id='b')])
 

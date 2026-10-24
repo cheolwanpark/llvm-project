@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from cost_model import identity, score_observation
+from cost_model import Settings, identity, score_observation
 from observations import bind_observation, validate_manifest
 
 CLANG = os.environ.get('VPLAN_CLANG')
@@ -82,3 +82,16 @@ class CompilerIntegration(unittest.TestCase):
                 self.assertEqual(status['breakdown']['identity'], identity())
                 self.assertEqual(status['breakdown']['body_cost'], expected['body_cost'])
                 self.assertEqual(status['breakdown']['features'], expected['features'])
+            settings = Settings('sum', body_scale='3/2')
+            result = run('alternate', ['--output', str(p / 'alternate.s'), '--emit', 'asm',
+                                      '--aggregation', 'sum', '--body-scale', '3/2'])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            statuses = json.loads((p / 'alternate/candidate-status.json').read_text())
+            self.assertEqual(statuses['policy'], identity(settings))
+            for status, c in zip(statuses['candidates'], manifest['candidates'], strict=True):
+                index = manifest['candidates'].index(c)
+                a = json.loads((p / f'raw/probe-{index:04d}.analytics.json').read_text())
+                a = bind_observation(a, c, manifest['loops'][0], manifest['run_id'])
+                self.assertEqual(status['score_exact'], score_observation(a, settings)['score_exact'])
+            self.assertEqual(json.loads((p / 'alternate/selection.json').read_text())['selections'],
+                             json.loads((p / 'alternate/final.manifest.json').read_text())['selections'])

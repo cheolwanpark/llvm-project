@@ -58,6 +58,28 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(changed['best'][0]['lower'], 0)
         self.assertFalse(changed['best'][0]['lower_closed'])
 
+    def test_per_case_15pp_is_not_relative_runtime_or_mean_threshold(self):
+        cases = [dict(id='test', baseline_vf=2, baseline_cycles=120,
+                      oracle_vf=4, oracle_cycles=100, cycles={2: 120, 4: 100, 8: 136}, candidates=[
+                          dict(vf=2, candidate='a', features=dict(body_scale=1, fixed_additions=2)),
+                          dict(vf=4, candidate='b', features=dict(body_scale=2, fixed_additions=0)),
+                          dict(vf=8, candidate='c', features=dict(body_scale=0, fixed_additions=5))])]
+        result = ns['analyze'](cases, 'body_scale', dict(body_scale=1, fixed_additions=1))
+        bad = next(s for s in result['cases'][0]['segments'] if s['vf'] == 8)
+        # 136/120-1 is only 13.33%, but regret increases by 16 percentage points.
+        self.assertEqual(bad['regret_delta'], Q(16, 100))
+        self.assertFalse(bad['within_15pp'])
+        self.assertTrue(result['within_15pp_all'])
+        self.assertEqual(result['global_regions'][-1]['metrics']['within_15pp'], 0)
+        self.assertEqual(result['global_regions'][-1]['mean_contributions'][0]['regret'], Q(36, 100))
+
+    def test_interval_width_zero_infinite_and_isolated(self):
+        f = ns['interval_width']
+        self.assertEqual(f(dict(lower=Q(1), upper=Q(4)))['octaves'], 2)
+        self.assertEqual(f(dict(lower=Q(1), upper=Q(1)))['kind'], 'isolated-point')
+        self.assertEqual(f(dict(lower=Q(0), upper=Q(4)))['kind'], 'touches-zero')
+        self.assertEqual(f(dict(lower=Q(1), upper=None))['kind'], 'unbounded-above')
+
     def test_cli_uses_saved_terms_and_validates_overrides(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -4,6 +4,7 @@ import argparse
 import csv
 from fractions import Fraction as Q
 import json
+import math
 from pathlib import Path
 
 import vplan_tools as vt
@@ -80,15 +81,19 @@ def analyze(cases, key, coefficients):
             if r['upper'] is not None:
                 points.add(r['upper'])
             cycles = case['cycles'][line[0]]
+            regret = Q(cycles) / Q(case['oracle_cycles']) - 1
+            delta = (Q(cycles) - Q(case['baseline_cycles'])) / Q(case['oracle_cycles'])
             segments.append(r | dict(vf=line[0], candidate=line[1], cycles=cycles,
-                                     cycle_change=Q(cycles) / Q(case['baseline_cycles']) - 1))
+                                     cycle_change=Q(cycles) / Q(case['baseline_cycles']) - 1,
+                                     regret=regret, regret_delta=delta, within_15pp=delta <= Q(15, 100)))
         segments.sort(key=lambda r: (r['lower'], not r['lower_closed'], r['vf']))
         result.append(dict(id=case['id'], baseline_vf=case['baseline_vf'], oracle_vf=case['oracle_vf'],
                            baseline_regret=Q(case['baseline_cycles']) / Q(case['oracle_cycles']) - 1,
                            segments=segments,
                            keep=[s for s in segments if s['vf'] == case['baseline_vf']],
                            oracle=[s for s in segments if s['vf'] == case['oracle_vf']],
-                           improve=[s for s in segments if s['cycle_change'] < 0]))
+                           improve=[s for s in segments if s['cycle_change'] < 0],
+                           within_15pp=[s for s in segments if s['within_15pp']]))
     global_regions = []
     for r, x in atoms(points):
         selected = [next(s for s in case['segments'] if contains(s, x)) for case in result]
@@ -102,18 +107,39 @@ def analyze(cases, key, coefficients):
                                       for s, c in zip(selected, cases)) / len(cases),
                        correct=sum(s['vf'] == c['oracle_vf'] for s, c in zip(selected, cases)),
                        improvements=sum(s['cycle_change'] < 0 for s in selected),
-                       regressions=sum(s['cycle_change'] > 0 for s in selected))
+                       regressions=sum(s['cycle_change'] > 0 for s in selected),
+                       unchanged=sum(s['vf'] == c['baseline_vf'] for s, c in zip(selected, cases)),
+                       within_15pp=sum(s['within_15pp'] for s in selected),
+                       total=len(cases), worst_regret=max(s['regret'] for s in selected),
+                       median_regret=vt.percentile([float(s['regret']) for s in selected], .5),
+                       p95_regret=vt.percentile([float(s['regret']) for s in selected], .95))
         changes = [dict(id=c['id'], before=c['baseline_vf'], after=s['vf'],
-                        cycle_change=s['cycle_change']) for c, s in zip(cases, selected)
+                        cycle_change=s['cycle_change'], regret=s['regret'], regret_delta=s['regret_delta'],
+                        within_15pp=s['within_15pp']) for c, s in zip(cases, selected)
                    if c['baseline_vf'] != s['vf']]
-        global_regions.append(r | dict(metrics=metrics, changes=changes, selected_vfs=signature))
+        contributions = sorted([dict(id=c['id'], vf=s['vf'], regret=s['regret'],
+                                     mean_contribution=s['regret'] / len(cases))
+                                for c, s in zip(cases, selected)], key=lambda r: (-r['regret'], r['id']))
+        global_regions.append(r | dict(metrics=metrics, changes=changes, selected_vfs=signature,
+                                      mean_contributions=contributions))
     for r in global_regions:
         del r['selected_vfs']
+        r['contains_reference'] = contains(r, Q(coefficients[key]))
+        r['width'] = interval_width(r)
     best = min(r['metrics']['mean_regret'] for r in global_regions)
     return dict(key=key, fixed={k: v for k, v in coefficients.items() if k != key}, cases=result,
                 global_regions=global_regions,
                 preserve_all=[r for r in global_regions if not r['changes']],
+                within_15pp_all=[r for r in global_regions if r['metrics']['within_15pp'] == len(cases)],
                 best=[r for r in global_regions if r['metrics']['mean_regret'] == best])
+
+
+def interval_width(r):
+    lo, hi = r['lower'], r['upper']
+    if hi == lo: return dict(kind='isolated-point', additive=Q(0), fold=Q(1), octaves=0.)
+    if hi is None: return dict(kind='unbounded-above', additive=None, fold=None, octaves=None)
+    if lo == 0: return dict(kind='touches-zero', additive=hi, fold=None, octaves=None)
+    return dict(kind='finite', additive=hi - lo, fold=hi / lo, octaves=math.log2(float(hi / lo)))
 
 
 def main():
@@ -130,6 +156,9 @@ def main():
     if not summary['complete'] or not summary['successful']:
         raise vt.ToolError('requires a complete successful evaluation')
     coefficients = dict(summary['identity']['machine_parameters']['coefficients'])
+    if summary['identity']['model'] == 'mir-port-aware-v1':
+        if args.term != ['body_scale'] or args.set:
+            parser.error('port-aware analysis varies only body_scale; configuration and scalar tail remain fixed')
     for key in args.term:
         if key not in coefficients:
             parser.error(f'unknown term {key!r}; available: {", ".join(coefficients)}')
@@ -161,23 +190,25 @@ def main():
     axes = [analyze(cases, key, coefficients) for key in dict.fromkeys(args.term)]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     output = dict(method='exact rational intersection of affine argmin inequalities; nonnegative unbounded coefficients',
-                  scope='existing measured dataset; not independent validation or new timings',
+                  scope='exact affine boundaries of persisted numeric features; smoothing/norm features are rounded constants; existing measurements, no new timings',
                   source_evaluation=str(args.evaluation), identity=summary['identity'],
                   baseline='saved evaluation selections; unchanged by coefficient overrides',
+                  stability='per benchmark regret(new) <= regret(saved selection) + 0.15; diagnostic only, no acceptance threshold',
                   analysis_coefficients=coefficients,
                   dataset_fingerprint=summary['dataset_fingerprint'], candidates=cases, axes=axes)
     (args.output_dir / 'boundaries.json').write_text(json.dumps(output, indent=2, default=str) + '\n')
     with (args.output_dir / 'cases.csv').open('w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['axis', 'benchmark', 'baseline_vf', 'oracle_vf', 'baseline_regret',
-                         'keep_ranges', 'oracle_ranges', 'improvement_ranges'])
+                         'keep_ranges', 'oracle_ranges', 'improvement_ranges', 'within_15pp_ranges'])
         for axis in axes:
             for c in axis['cases']:
                 writer.writerow([axis['key'], c['id'], c['baseline_vf'], c['oracle_vf'], float(c['baseline_regret']),
                                  '; '.join(interval_text(s) for s in c['keep']),
                                  '; '.join(interval_text(s) for s in c['oracle']) or 'none',
                                  '; '.join(f"{interval_text(s)} -> s{s['vf']} ({float(s['cycle_change']):+.6%})"
-                                           for s in c['improve']) or 'none'])
+                                           for s in c['improve']) or 'none',
+                                 '; '.join(interval_text(s) for s in c['within_15pp']) or 'none'])
     for axis in axes:
         print(axis['key'], 'preserve:', [interval_text(r) for r in axis['preserve_all']],
               'best:', [(interval_text(r), float(r['metrics']['mean_regret'])) for r in axis['best']])
