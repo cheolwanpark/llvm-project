@@ -48,14 +48,14 @@ def main():
     result.update(complete=True, successful=any(r['eligible'] for r in rows), identity=expected,
                   rows=rows, metrics=summarize_rows(rows), source_evaluation=str(args.evaluation.resolve()),
                   replay_required=False, baseline_required=source['baseline_required'],
-                  validation='ranking-only; no replay for this aggregation/settings')
+                  validation='ranking-only; no replay for these settings')
     baseline_path = args.evaluation / 'baseline.json'
     if baseline_path.exists():
         baseline = json.loads(baseline_path.read_text())
         result['comparison'] = compare(rows, baseline['rows'])
         shutil.copyfile(baseline_path, args.output_dir / 'baseline.json')
     vt.write_json(args.output_dir / 'summary.json', result)
-    print_metrics(settings.aggregation, result['metrics'])
+    print_metrics(expected['model'], result['metrics'])
     return 0
 
 

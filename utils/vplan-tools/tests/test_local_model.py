@@ -2,7 +2,7 @@ from dataclasses import replace
 from fractions import Fraction as Q
 import unittest
 
-from cost_model import AGGREGATIONS, Settings, aggregate, identity, rescore, score_observation, score_value
+from cost_model import Settings, demand_cost, identity, rescore, score_observation, score_value
 from hardware_model import Demand, Evidence, InstructionRule, Machine, Port, ResolvedInstruction, UopClass
 from kunminghu_v2 import MACHINE, SOURCE_HASHES, VECTOR_OPCODES, work_for_instruction
 from model_errors import ToolError
@@ -70,6 +70,7 @@ class HardwareRules(unittest.TestCase):
         self.assertEqual(work('VMV4R_V', operands=[operand])['class_demands'], {'vppu': 4})
         r = score_observation(observation([instruction(0, 'LD', load=True, memory=[memory()])]))
         self.assertTrue(r['ops'][0]['spill_slot'])
+        self.assertEqual(r['demand_cost'], 1 / 3)
         self.assertEqual(r['body_cost'], 1 / 3)
         self.assertEqual(set(r['features']), {'body_scale', 'fixed_additions'})
 
@@ -98,29 +99,25 @@ class HardwareRules(unittest.TestCase):
     def test_datasheet_identity_and_assumptions(self):
         self.assertGreater(len(VECTOR_OPCODES), 300)
         self.assertIn('Scheduler.scala', SOURCE_HASHES)
-        self.assertEqual(identity()['model'], 'mir-port-aware-v1')
-        self.assertNotEqual(identity(), identity(Settings('sum')))
+        self.assertEqual(identity()['model'], 'mir-port-window-v3')
+        self.assertNotEqual(identity(), identity(Settings(body_scale='2')))
         self.assertTrue(all(p.evidence.assumed and p.capacity == 1 for p in MACHINE.ports))
 
 
-class AggregationTests(unittest.TestCase):
+class DemandTests(unittest.TestCase):
     def test_zero_and_positive_homogeneity(self):
-        for kind in AGGREGATIONS:
-            settings = Settings(kind)
-            self.assertEqual(aggregate(dict(a=0, b=0), settings), 0)
-            v = aggregate(dict(a=1, b=3, c=0), settings)
-            for k in (Q(1, 8), 2, 1000000):
-                self.assertAlmostEqual(aggregate(dict(a=k, b=3*k, c=0), settings) / float(k), v)
-        self.assertEqual(aggregate(dict(a=3, b=4), Settings('max')), 4)
-        self.assertEqual(aggregate(dict(a=3, b=4), Settings('sum')), 7)
+        self.assertEqual(demand_cost(dict(a=0, b=0)), 0)
+        v = demand_cost(dict(a=1, b=3, c=0))
+        for k in (Q(1, 8), 2, 1000000):
+            self.assertAlmostEqual(demand_cost(dict(a=k, b=3*k, c=0)) / float(k), v)
+        self.assertEqual(demand_cost(dict(a=3, b=4)), 4)
 
     def test_invalid_settings_and_demands(self):
-        for kwargs in [dict(aggregation='unsupported'), dict(body_scale='-1'), dict(body_scale='nan')]:
-            with self.assertRaises(ToolError): Settings(**kwargs)
-        for kind in AGGREGATIONS:
-            for value in (-1, float('nan'), float('inf')):
-                with self.assertRaises((ToolError, ValueError, OverflowError)):
-                    aggregate(dict(a=value), Settings(kind))
+        for scale in ('-1', 'nan'):
+            with self.assertRaises(ToolError): Settings(body_scale=scale)
+        for value in (-1, float('nan'), float('inf')):
+            with self.assertRaises((ToolError, ValueError, OverflowError)):
+                demand_cost(dict(a=value))
 
 
 class LocalModel(unittest.TestCase):
@@ -129,16 +126,15 @@ class LocalModel(unittest.TestCase):
                instruction(2, 'VSETVLI', configuration=True, block=1, role='setup')]
         a = observation(ops, exact_trip_count=18, max_trip_count=18, body_order=[0, 1],
                         blocks=[dict(id=0, role='body', successors=[0]), dict(id=1, role='setup', successors=[0])])
-        for kind in AGGREGATIONS:
-            r = score_observation(a, Settings(kind))
-            self.assertEqual(r['middle_end']['unscaled_additions'], dict(configuration=4., scalar_tail=6., setup_configuration=1.))
-            self.assertEqual(r['body_iterations'], 4)
-            self.assertEqual(r['scalar_remainder'], 2)
-            self.assertEqual(r['middle_end_cost'], 11)
-            self.assertAlmostEqual(r['score'], 4 * r['body_cost'] + 11)
-            other = rescore(r, Settings(kind, body_scale='7/3'))
-            self.assertEqual(other['middle_end'], r['middle_end'])
-            self.assertEqual(Q(other['score_exact']), score_value(other['features'], Settings(kind, body_scale='7/3')))
+        r = score_observation(a, Settings())
+        self.assertEqual(r['middle_end']['unscaled_additions'], dict(configuration=4., scalar_tail=6., setup_configuration=1.))
+        self.assertEqual(r['body_iterations'], 4)
+        self.assertEqual(r['scalar_remainder'], 2)
+        self.assertEqual(r['middle_end_cost'], 11)
+        self.assertAlmostEqual(r['score'], 4 * r['body_cost'] + 11)
+        other = rescore(r, Settings(body_scale='7/3'))
+        self.assertEqual(other['middle_end'], r['middle_end'])
+        self.assertEqual(Q(other['score_exact']), score_value(other['features'], Settings(body_scale='7/3')))
         folded = score_observation(a | {'scalar_tail': False})
         self.assertEqual(folded['body_iterations'], 5)
         self.assertEqual(folded['middle_end_cost'], 6)

@@ -82,9 +82,9 @@ class CompilerIntegration(unittest.TestCase):
                 self.assertEqual(status['breakdown']['identity'], identity())
                 self.assertEqual(status['breakdown']['body_cost'], expected['body_cost'])
                 self.assertEqual(status['breakdown']['features'], expected['features'])
-            settings = Settings('sum', body_scale='3/2')
+            settings = Settings(body_scale='3/2')
             result = run('alternate', ['--output', str(p / 'alternate.s'), '--emit', 'asm',
-                                      '--aggregation', 'sum', '--body-scale', '3/2'])
+                                      '--body-scale', '3/2'])
             self.assertEqual(result.returncode, 0, result.stderr)
             statuses = json.loads((p / 'alternate/candidate-status.json').read_text())
             self.assertEqual(statuses['policy'], identity(settings))

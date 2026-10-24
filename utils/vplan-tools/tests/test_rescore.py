@@ -27,14 +27,14 @@ class RescoreTests(unittest.TestCase):
             vt.write_json(original / 'baseline.json', dict(rows=[row]))
             vt.write_json(original / 'reports' / (vt.report_name('test') + '.json'), reports)
             command = [sys.executable, '-B', str(vt.TOOLS / 'rescore-evaluation'), '--evaluation', str(original),
-                       '--output-dir', str(target), '--aggregation', 'sum']
+                       '--output-dir', str(target), '--body-scale', '3/2']
             result = subprocess.run(command, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             saved = json.loads((target / 'summary.json').read_text())
-            self.assertEqual(saved['identity'], identity(Settings('sum')))
+            self.assertEqual(saved['identity'], identity(Settings(body_scale='3/2')))
             self.assertEqual(saved['rows'][0]['evaluated_vfs'], [1, 2])
             self.assertFalse(saved['rows'][0]['replay_verified'])
-            expected = [rescore(r, Settings('sum')) for r in reports]
+            expected = [rescore(r, Settings(body_scale='3/2')) for r in reports]
             self.assertEqual(saved['rows'][0]['exact_scores'],
                              {str(v): r['score_exact'] for v, r in zip((1, 2), expected)})
             command = [sys.executable, '-B', str(vt.TOOLS / 'analyze-boundaries'), '--evaluation', str(target),

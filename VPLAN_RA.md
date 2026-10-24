@@ -3,7 +3,7 @@
 The compiler implements **protocol 4**. The local Python cost model owns all
 hardware rules and score calculations. C++ observes MIR, exposes middle-end TTI
 costs and materializes explicitly selected VPlans. There is no backend scoring
-formula or coefficient table in LLVM. Python uses one shared port-demand model with a hardcoded machine datasheet.
+formula or coefficient table in LLVM. The model is documented in [MODEL.md](MODEL.md).
 
 `-vplan-pipeline=prepare` stops O2/O3 immediately before loop vectorization and
 marks a checkpoint. `resume` validates that checkpoint and optimization level.
@@ -45,14 +45,13 @@ Later scheduling and final RVV pseudo expansion remain outside this stage.
   fixed stack-slot identity, spill-slot metadata, volatility/atomicity and alias
   metadata availability. Missing memory facts remain unknown.
 - Register-unit reaching definitions at distances zero and one, including carried
-  values. These are diagnostic facts; the scorer does not model scheduling.
+  values. These are compiler facts consumed by Python.
   Missing liveness, calls, subregisters and regmasks disable constant proofs.
-  Unknown VL/masks/addresses receive explicit upper bounds in Python.
 
 The observer returns `false`, preserves all analyses and performs no MIR rewrite.
 Analysis-enabled assembly is checked against ordinary assembly. Multi-block layout
 order never supplies a supported circular path. Raw dependencies do not claim
-complete memory independence. Python does not perform alias analysis.
+complete memory independence. Dependency preprocessing is documented in [MODEL.md](MODEL.md).
 
 For final compilation the driver writes `-vplan-selection-input=FILE`, containing
 protocol/run identity, the complete original loop/candidate context and one explicit
@@ -73,5 +72,5 @@ utils/vplan-meta-compile --clang build-local/bin/clang \
 
 `--analytics-only --stop-after-ra` collects facts without scoring.
 `--emit obj|asm|llvm` selects the final artifact. Driver inputs and scoring/replay
-need no database or measured cycles. See the [tools guide](utils/vplan-tools/README.md)
-for port-demand analysis, selection intervals and regret evaluation.
+need no database or measured cycles. See [README.md](README.md)
+for evaluation and replay commands.

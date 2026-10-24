@@ -4,11 +4,12 @@ All target-specific tables, expansion expressions and MIR geometry conventions
 live here. UNKNOWN is an explicit approximation, not a hidden generic ALU.
 """
 from fractions import Fraction as Q
+from dataclasses import asdict
 import hashlib
 from pathlib import Path
 import re
 
-from hardware_model import Demand, Evidence, InstructionRule, Machine, Port, ResolvedInstruction, UopClass, expr as E
+from hardware_model import Demand, Evidence, InstructionRule, Machine, Port, ResolvedInstruction, Timing, UopClass, expr as E
 from model_errors import ToolError
 
 REVISION = 'e7bab53e66dfb3c4a1d11cf9519b0396f8576cae'
@@ -53,6 +54,133 @@ CLASSES = tuple(UopClass(name, ports, Evidence(PARAMETERS + '#L' + str(line)))
                 for name, (ports, line) in CLASS_PORTS.items()) + (
     UopClass('unknown', ('UNKNOWN',), Evidence('', 'Unverified class/port uses UNKNOWN.', True)),)
 MACHINE = Machine('xiangshan-kunminghu', REVISION, 128, 64, PORTS, CLASSES)
+ROB_ENTRIES = 48
+ROB_EVIDENCE = Evidence(
+    f'https://github.com/OpenXiangShan/XiangShan/blob/{REVISION}/src/main/scala/top/Configs.scala#L91',
+    'MinimalConfig RobSize. Rob.scala allocates on firstUop; split uops share an entry. '
+    'One non-meta body MIR instruction per ROB entry is the model approximation.')
+
+# LLVM RVV scalable type sizes are expressed at vscale=1 (64 bits).
+# This is a target convention, not a generic dependency-analysis constant.
+LLVM_VSCALE = MACHINE.vlen // 64
+MAX_STACK_ACCESS_BYTES = 8 * MACHINE.vlen // 8
+
+FU_CONFIG = ROOT + 'backend/fu/FuConfig.scala'
+EXU_PARAMS = ROOT + 'backend/exu/ExeUnitParams.scala'
+YUNSUAN_REVISION = '955921186e34bb8915806582a238181a6dc3435c'
+YUNSUAN_ROOT = f'https://github.com/OpenXiangShan/YunSuan/blob/{YUNSUAN_REVISION}/src/main/scala/yunsuan/'
+
+# (FuConfig record, CertainLatency literal). Omitted latency in FuConfig is 0.
+# Preserve the literal separately from the result-ready estimate. Vector OG2
+# adds one cycle in ExeUnitParams.fuLatencyMap. Combinational scalar FUs use a
+# one-cycle consumer boundary rather than zero cost. No cycle measurements fit
+# these values; port capacities remain the existing demand-only assumptions.
+FIXED_TIMING_ROWS = {
+    'alu': ('AluCfg', 0), 'mul': ('MulCfg', 2), 'bku': ('BkuCfg', 2),
+    'brh': ('BrhCfg', 0), 'jmp': ('JmpCfg', 0),
+    'i2f': ('I2fCfg', 2), 'i2v': ('I2vCfg', 0), 'f2v': ('F2vCfg', 0),
+    'falu': ('FaluCfg', 1), 'fmac': ('FmacCfg', 3), 'fcvt': ('FcvtCfg', 2),
+    'vialuF': ('VialuCfg', 1), 'vimac': ('VimacCfg', 2),
+    'vfma': ('VfmaCfg', 3), 'vfalu': ('VfaluCfg', 1),
+    'vfcvt': ('VfcvtCfg', 2), 'vipu': ('VipuCfg', 2), 'vppu': ('VppuCfg', 2),
+    'std': ('StdCfg', 0),
+}
+VECTOR_TIMING_CLASSES = frozenset(('vialuF', 'vimac', 'vfma', 'vfalu', 'vfcvt', 'vipu', 'vppu'))
+TIMINGS = {name: Timing(max(1, literal + int(name in VECTOR_TIMING_CLASSES)), 1, True,
+    Evidence(FU_CONFIG, 'CertainLatency + vector OG2; scalar minimum one cycle. '
+             'Nominal II=1 assumes no backpressure. ' + EXU_PARAMS, True),
+    rtl_latency=literal, configuration=config)
+    for name, (config, literal) in FIXED_TIMING_ROWS.items()}
+
+# Memory timings are conditional fast paths, NOT finite cache-miss bounds.
+# LduCfg has UncertainLatency(3); LoadUnit shares the scalar/vector load pipeline.
+# StoreUnit exposes S0/S1. Vector entries add one OG2 cycle. Merge, queue and
+# store-forwarding stalls are not predicted. Nominal memory II=1 is an assumption
+# even though FuConfig labels these interfaces piped=false/uncertain.
+for _name, _config, _latency, _path in (
+    ('ldu', 'LduCfg', 3, 'LoadUnit'), ('sta', 'StaCfg', 2, 'StoreUnit'),
+    ('vldu', 'VlduCfg', 4, 'LoadUnit'), ('vstu', 'VstuCfg', 3, 'StoreUnit'),
+    ('vsegldu', 'VseglduCfg', 4, 'LoadUnit'), ('vsegstu', 'VsegstuCfg', 3, 'StoreUnit')):
+    TIMINGS[_name] = Timing(_latency, 1, None,
+        Evidence(ROOT + 'mem/pipeline/' + _path + '.scala',
+                 'L1-hit/no-replay pipeline proxy; vector OG2 included; '
+                 'nominal II=1; segment sequencing and forwarding stalls unmodeled.', True),
+        configuration=_config)
+
+# Input-dependent iterative units: nominal conservative no-stall envelopes.
+# Integer division: inclusive radix-16 countdown plus pre/post/wrapper states.
+# These are estimates from the FSM, not CertainLatency literals or global bounds.
+INTEGER_DIV_LATENCIES = {32: 14, 64: 22}
+VECTOR_DIV_LATENCIES = {8: 10, 16: 12, 32: 16, 64: 24}
+# FP div countdowns 1/3/8 inclusive, up to 3 pre and 1 extra post cycle.
+# FP sqrt countdowns 2/5/12 inclusive, up to 2 initialization cycles.
+FP_DIV_LATENCIES = {16: 6, 32: 8, 64: 13}
+FP_SQRT_LATENCIES = {16: 5, 32: 8, 64: 15}
+for _name, _config in (('div', 'DivCfg'), ('vidiv', 'VidivCfg'),
+                       ('fDivSqrt', 'FdivCfg'), ('vfdiv', 'VfdivCfg')):
+    # Per-op precision/opcode refinements replace this widest-type descriptor.
+    TIMINGS[_name] = Timing(24, 25, False,
+        Evidence(FU_CONFIG, 'UncertainLatency: replaced by opcode/precision FSM estimate.', True),
+        configuration=_config)
+for _name, _config in (('csr', 'CsrCfg'), ('fence', 'FenceCfg'), ('unknown', '')):
+    TIMINGS[_name] = Timing(1, 1, None,
+        Evidence(FU_CONFIG if _config else '',
+                 'No finite static timing established; explicit one-cycle fallback, not an RTL latency.', True),
+        configuration=_config)
+assert set(TIMINGS) == {c.name for c in CLASSES}
+
+# These split families contain dependent temporary/reduction work in
+# DecodeUnitComp. Serializing every primary uop is a conservative approximation
+# to that internal graph, not a claim that the whole FU is non-pipelined.
+SERIAL_TIMING_SPLITS = frozenset(('VEC_SLIDEUP', 'VEC_SLIDEDOWN', 'VEC_SLIDE1DOWN',
+    'VEC_FSLIDE1DOWN', 'VEC_RGATHER', 'VEC_RGATHER_VX', 'VEC_RGATHEREI16',
+    'VEC_COMPRESS', 'VEC_VRED', 'VEC_VFRED', 'VEC_VFREDOSUM'))
+
+
+def timing_for_instruction(op, work):
+    """Resolve every supported opcode to (L, II) components and MIR latency.
+
+All target-specific precision, expansion and component-ordering decisions live
+here. The graph scorer only consumes the resulting instruction latency.
+"""
+    base = op['base_opcode']
+    split = work['rule'].partition(':')[2]
+    serial = split in SERIAL_TIMING_SPLITS
+    rows = []
+    for component in work['components']:
+        name, count = component['uop_class'], component['count']
+        timing = TIMINGS[name]
+        if name in ('div', 'vidiv'):
+            width = op['sew'] if name == 'vidiv' else 32 if base.endswith('W') else 64
+            latency = (VECTOR_DIV_LATENCIES if name == 'vidiv' else INTEGER_DIV_LATENCIES)[width]
+            source = (YUNSUAN_ROOT + 'vector/VectorIdiv/VectorIdiv.scala' if name == 'vidiv'
+                      else ROOT + 'backend/fu/SRT16Divider.scala')
+            timing = Timing(latency, latency + 1, False, Evidence(source,
+                'Conservative width-based FSM estimate; early exits ignored; one restart cycle; '
+                'vector wrapper/OG2 included; no external backpressure.', True), configuration=timing.configuration)
+        elif name in ('fDivSqrt', 'vfdiv'):
+            width = op['sew'] if name == 'vfdiv' else {'H': 16, 'S': 32, 'D': 64}[base.rsplit('_', 1)[-1]]
+            sqrt = 'SQRT' in base
+            latency = (FP_SQRT_LATENCIES if sqrt else FP_DIV_LATENCIES)[width] + int(name == 'vfdiv')
+            source = ('vector/vfsqrt/fpsqrt_vector_r16.scala' if name == 'vfdiv' else 'fpu/fqrt/fpsqrt_r16.scala') if sqrt else (
+                'vector/VectorFloatDivider.scala' if name == 'vfdiv' else 'fpu/FloatDivider.scala')
+            timing = Timing(latency, latency + 1, False, Evidence(YUNSUAN_ROOT + source,
+                'Inclusive precision-dependent countdown plus initialization/post stages; '
+                'one restart cycle; no external backpressure; vector OG2 included.', True), configuration=timing.configuration)
+        is_primary = name not in ('i2v', 'f2v')
+        span = timing.span(count, serial=serial and is_primary)
+        rows.append(dict(uop_class=name, count=count, **asdict(timing), completion_cycles=span,
+                         expansion='serial-upper-estimate' if serial and is_primary else 'pipeline-span'))
+    transfers = sum(r['completion_cycles'] for r in rows if r['uop_class'] in ('i2v', 'f2v'))
+    primary = max((r['completion_cycles'] for r in rows if r['uop_class'] not in ('i2v', 'f2v')), default=0)
+    # Scalar store address and data issue tasks run in parallel; vector scalar
+    # transfers precede the primary work (a conservative whole-op barrier).
+    return dict(latency=transfers + primary, components=rows,
+                combination='transfer-prefix + max(primary-components)',
+                assumptions=['Whole-instruction readiness; no lane streaming or multi-EXU uop striping.',
+                    'No bypass-specific operand latencies; not a measured CPU cycle prediction.'] +
+                    (['Dependent split uops conservatively serialized; exact internal DAG is not collected.'] if serial else []),
+                fallback=any(r['uop_class'] in ('unknown', 'csr', 'fence') for r in rows))
 
 L = E('max', 1, 'lmul')
 WIDE = E('if', E('ge', 'lmul', 1), E('mul', 2, 'lmul'), 1)
@@ -834,6 +962,7 @@ SCALAR_OPCODES = {
 }
 SCALAR_VECTOR_DECODER = frozenset(('FADD_D', 'FADD_H', 'FADD_S', 'FCLASS_D', 'FCLASS_H', 'FCLASS_S', 'FCVT_D_H', 'FCVT_D_S', 'FCVT_H_D', 'FCVT_H_S', 'FCVT_LU_D', 'FCVT_LU_H', 'FCVT_LU_S', 'FCVT_L_D', 'FCVT_L_H', 'FCVT_L_S', 'FCVT_S_D', 'FCVT_S_H', 'FCVT_WU_D', 'FCVT_WU_H', 'FCVT_WU_S', 'FCVT_W_D', 'FCVT_W_H', 'FCVT_W_S', 'FDIV_D', 'FDIV_H', 'FDIV_S', 'FEQ_D', 'FEQ_H', 'FEQ_S', 'FLE_D', 'FLE_H', 'FLE_S', 'FLT_D', 'FLT_H', 'FLT_S', 'FMADD_D', 'FMADD_H', 'FMADD_S', 'FMAX_D', 'FMAX_H', 'FMAX_S', 'FMIN_D', 'FMIN_H', 'FMIN_S', 'FMSUB_D', 'FMSUB_H', 'FMSUB_S', 'FMUL_D', 'FMUL_H', 'FMUL_S', 'FMV_X_D', 'FMV_X_H', 'FMV_X_W', 'FNMADD_D', 'FNMADD_H', 'FNMADD_S', 'FNMSUB_D', 'FNMSUB_H', 'FNMSUB_S', 'FSGNJN_D', 'FSGNJN_H', 'FSGNJN_S', 'FSGNJX_D', 'FSGNJX_H', 'FSGNJX_S', 'FSGNJ_D', 'FSGNJ_H', 'FSGNJ_S', 'FSQRT_D', 'FSQRT_H', 'FSQRT_S', 'FSUB_D', 'FSUB_H', 'FSUB_S'))
 SOURCE_HASHES = {
+    'Rob.scala': '6910ce3076a24a03212c5d09ad06e14f7ab6d5bca8eade9a4ee6196739c437c4',
     'Configs.scala': '52f1a7847cea7ccf759d863141700d3c5fa51986c555c5ec381d3e0a7c20bcb8',
     'Parameters.scala': '63781a89fa54333909045768aa6a8c5f20cf225c109751d46f7f050c0e1e4617',
     'VecDecoder.scala': '3eec0be04f5e3a375e57fea33b101a43d46184bcefbfec163b7942efdabf9aa6',
@@ -844,4 +973,35 @@ SOURCE_HASHES = {
     'NewDispatch.scala': '8bfe46e43ac9a238c1059d89fe80294958295637cb28559e0899a5ddb9a0e581',
     'Scheduler.scala': '025af518f2909bee54ac790553881f1c8b714fda0919d437fc8ab845b472b698',
 }
+# Flat local filenames -> pinned source URLs for the timing audit.
+TIMING_SOURCE_PATHS = {
+    'FuConfig.scala': ROOT + 'backend/fu/FuConfig.scala',
+    'FuncUnit.scala': ROOT + 'backend/fu/FuncUnit.scala',
+    'ExeUnitParams.scala': ROOT + 'backend/exu/ExeUnitParams.scala',
+    'SRT16Divider.scala': ROOT + 'backend/fu/SRT16Divider.scala',
+    'LoadUnit.scala': ROOT + 'mem/pipeline/LoadUnit.scala',
+    'StoreUnit.scala': ROOT + 'mem/pipeline/StoreUnit.scala',
+    'YunsuanFloatDivider.scala': YUNSUAN_ROOT + 'fpu/FloatDivider.scala',
+    'YunsuanVectorFloatDivider.scala': YUNSUAN_ROOT + 'vector/VectorFloatDivider.scala',
+    'YunsuanScalarSqrt.scala': YUNSUAN_ROOT + 'fpu/fqrt/fpsqrt_r16.scala',
+    'Yunsuanfpsqrt_vector_r16.scala': YUNSUAN_ROOT + 'vector/vfsqrt/fpsqrt_vector_r16.scala',
+    'YunsuanVectorIdiv.scala': YUNSUAN_ROOT + 'vector/VectorIdiv/VectorIdiv.scala',
+    'YunsuanSRT16Divint.scala': YUNSUAN_ROOT + 'vector/VectorIdiv/SRT16Divint.scala',
+    'YunsuanI8DivNr4.scala': YUNSUAN_ROOT + 'vector/VectorIdiv/I8DivNr4.scala',
+}
+SOURCE_HASHES.update({
+    'FuConfig.scala': 'f281e28478a905cd11782f8b8cfec66a4da7c11cd1997d88f0cef8860629fefa',
+    'FuncUnit.scala': '48ecf1db24de9a7a3b8511f49a082ae1517ffb16f20da90cb580fd486086ee1c',
+    'ExeUnitParams.scala': 'd6678dc21e3e48a583c583b2155488eb874182116702b1e090bb1aa2b7283f61',
+    'SRT16Divider.scala': 'b89dae02da4cbd2fa873d77ec5a755b84b7c186054e82721e714141b37ff9634',
+    'LoadUnit.scala': 'f6c9cac234168799602aded1e7cce206efabfa5eec46cbe261bc376dd1460b0f',
+    'StoreUnit.scala': 'd8014a60147c1a14eb9587b44c02361c208e1baac7e8af275cc37674b82daab8',
+    'YunsuanFloatDivider.scala': '7816253a30b9f57e0cfffdd51adbd4afe2accda4f3cab80e18749eefaed5c7f2',
+    'YunsuanVectorFloatDivider.scala': 'aa5c7c2471a44e5febec8c7e7dcf2f1d61d11a5d14217b9c19ad2f4de287d96a',
+    'YunsuanScalarSqrt.scala': '44f7f9965dcb7b74962da166538b835f279a45810c30d3c9349bbad0ade3a753',
+    'Yunsuanfpsqrt_vector_r16.scala': 'cd04a9d360bd7247fa9aa22bab0189e8e726675922bdb42cdbca6a76e61fbc5b',
+    'YunsuanVectorIdiv.scala': '241912b89767f623944365736b760866b8c8f277940bde2c3e3307e8e7b93f6b',
+    'YunsuanSRT16Divint.scala': 'b52fe4a7f56fdeb21c9ff118312f35041cae3920cc27ec2b178d32d770856f49',
+    'YunsuanI8DivNr4.scala': '9c16ecc2720e9c58ede21744d636fb9a309b9955248d3cb3983c52f54b0d9a45',
+})
 DATASHEET_DIGEST = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()

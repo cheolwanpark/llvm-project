@@ -63,6 +63,7 @@ def validate_observation(a):
         ids = [op['id'] for op in a['instructions']]
         if any(type(i) is not int for i in ids) or ids != list(range(len(ids))): raise ValueError('instruction IDs must preserve MIR order')
         order = a['body_order']
+        order_set = set(order)
         body = {b['id'] for b in a['blocks'] if b['role'] == 'body'}
         if order != [op['id'] for op in a['instructions'] if op['role'] == 'body']:
             raise ValueError('body execution order disagrees with single-block MIR order')
@@ -92,7 +93,7 @@ def validate_observation(a):
         for e in a['dependencies']:
             if not all(nonnegative(e[k]) for k in ('source', 'destination', 'iteration_distance', 'operand_index', 'unit')):
                 raise ValueError('invalid dependency field types')
-            if (e['source'] not in order or e['destination'] not in order or e['iteration_distance'] not in (0, 1)
+            if (e['source'] not in order_set or e['destination'] not in order_set or e['iteration_distance'] not in (0, 1)
                     or e['kind'] != 'register-raw'):
                 raise ValueError('invalid reaching-def edge')
             op = a['instructions'][e['destination']]

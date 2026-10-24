@@ -431,12 +431,20 @@ def compiler_from_args(args):
 def print_report(value, detail=False):
     print(f"{value['candidate']} vf={value['vf']} width={value['iteration_width']} score={value['score']:.8g} ({value['scope']})")
     print(f"  body={value['body_cost']:.8g} middle-end={value['middle_end_cost']:.8g} bottleneck={value['bottleneck_ports']}")
+    if 'dependency_path' in value:
+        print(f"  D={value['demand_cost']:.8g} W={value['window_cost']:.8g} "
+              f"L_path={value['dependency_path']['cost']:.8g} B={value['body_entries']} "
+              f"C_ROB={value['identity']['machine_parameters']['rob_entries']} "
+              f"path={value['dependency_path']['path']} "
+              f"stack_RAW={value['dependency_graph']['coverage']['stack_raw_edges']}")
     print('  class_demands=' + json.dumps(value['class_demands'], sort_keys=True))
     print('  normalized_ports=' + json.dumps(value['normalized_port_demands'], sort_keys=True))
     if detail:
         for op in value['ops']:
             print(f"  op {op['id']:3} {op['mir'].strip()}")
             print('    ' + json.dumps(op['hardware'], sort_keys=True))
+            if 'timing' in op:
+                print('    timing=' + json.dumps(op['timing'], sort_keys=True))
     print('  coverage=' + json.dumps(value['coverage'], sort_keys=True))
 
 

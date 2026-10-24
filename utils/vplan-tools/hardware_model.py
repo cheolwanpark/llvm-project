@@ -28,6 +28,33 @@ class UopClass:
 
 
 @dataclass(frozen=True)
+class Timing:
+    """Per-uop result latency and start-to-start interval, in cycles.
+
+Latency is never divided by pipeline depth on a dependency path. These are
+nominal estimates, not measured instruction timings or port capacities.
+"""
+    latency: int
+    initiation_interval: int
+    pipelined: bool | None
+    evidence: Evidence
+    rtl_latency: int | None = None
+    configuration: str = ''
+
+    def __post_init__(self):
+        if self.latency < 1 or self.initiation_interval < 1:
+            raise ToolError('timing latency and initiation interval must be positive')
+
+    def span(self, count, serial=False):
+        if type(count) is not int or count < 0:
+            raise ToolError('timing needs a nonnegative integer uop count')
+        if count == 0:
+            return 0
+        return self.latency + (count - 1) * (max(self.latency, self.initiation_interval)
+                                             if serial else self.initiation_interval)
+
+
+@dataclass(frozen=True)
 class Expr:
     """Small arithmetic tree. Strings are geometry variables, never Python code."""
     op: str

@@ -156,7 +156,7 @@ def main():
     if not summary['complete'] or not summary['successful']:
         raise vt.ToolError('requires a complete successful evaluation')
     coefficients = dict(summary['identity']['machine_parameters']['coefficients'])
-    if summary['identity']['model'] == 'mir-port-aware-v1':
+    if summary['identity']['model'] in ('mir-port-aware-v1', 'mir-port-latency-v2', 'mir-port-window-v3'):
         if args.term != ['body_scale'] or args.set:
             parser.error('port-aware analysis varies only body_scale; configuration and scalar tail remain fixed')
     for key in args.term:
