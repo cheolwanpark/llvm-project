@@ -26,11 +26,13 @@ def main():
     cases = sorted((ROOT / 'llvm/test/CodeGen/RISCV/vplan-ra').glob('*.*'))
     cases += sorted((ROOT / 'llvm/test/Transforms/LoopVectorize/RISCV').glob('vplan-ra*.ll'))
     failures, passed = [], 0
+    temporary_root = ROOT / '.cache/tmp'
+    temporary_root.mkdir(parents=True, exist_ok=True)
     for path in cases:
         if not path.is_file(): continue
         commands = [line.split('RUN: ', 1)[1] for line in path.read_text().splitlines() if re.match(r'[#;] RUN: ', line)]
         if not commands: continue
-        with tempfile.TemporaryDirectory(prefix='vplan-backend-') as td:
+        with tempfile.TemporaryDirectory(prefix='vplan-backend-', dir=temporary_root) as td:
             for command in commands:
                 command = command.replace('%python', sys.executable).replace('%S', str(path.parent)).replace('%s', str(path)).replace('%t', td + '/temp')
                 result = subprocess.run(['bash', '-o', 'pipefail', '-c', command], env=env, capture_output=True, text=True)

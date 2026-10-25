@@ -4,8 +4,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import unittest
+import vplan_tools as vt
 from cost_model import Settings, identity, score_observation
 from observations import bind_observation, validate_manifest
 
@@ -23,7 +23,7 @@ class CompilerIntegration(unittest.TestCase):
         cases = [(fixture, [3, 3, 3, 4, None, 2]),
                  (fixture.replace('tracksRegLiveness: true', 'tracksRegLiveness: false'), [None] * 6),
                  (opaque, [None] * 6), (middle, [None, None, None, 4, None, 2])]
-        with tempfile.TemporaryDirectory() as td:
+        with vt.temporary_directory() as td:
             p = Path(td)
             for text, expected in cases:
                 (p / 'input.mir').write_text(text)
@@ -44,7 +44,7 @@ class CompilerIntegration(unittest.TestCase):
                  '-mrvv-vector-bits=128', '-O3', '-fno-unroll-loops', '-fno-slp-vectorize',
                  '-mllvm', '-scalable-vectorization=always', '-mllvm', '-force-vector-interleave=1',
                  '-mllvm', '-enable-epilogue-vectorization=false', '-mllvm', '-riscv-v-register-bit-width-lmul=8']
-        with tempfile.TemporaryDirectory() as td:
+        with vt.temporary_directory() as td:
             p = Path(td); src = p / 'kernel.c'; src.write_text(source)
             def run(work, extra):
                 return subprocess.run([sys.executable, str(driver), '--clang', str(clang), '--input', str(src),

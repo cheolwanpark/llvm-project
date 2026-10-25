@@ -62,7 +62,7 @@ is explicit when no scalable candidate is supported.
 
 ```sh
 utils/vplan-meta-compile --clang build-local/bin/clang \
-  --input kernel.c --work-dir /tmp/local-compile --output /tmp/kernel.o \
+  --input kernel.c --work-dir .cache/local-compile --output .cache/kernel.o \
   --extract-function selected_kernel -- \
   --target=riscv64-unknown-elf -march=rv64gcv -mcpu=xiangshan-kunminghu \
   -mrvv-vector-bits=128 -O3 -fno-unroll-loops -fno-slp-vectorize \

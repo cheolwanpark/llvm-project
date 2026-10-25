@@ -115,7 +115,7 @@ def main(argv=None):
     parser = vt.argument_parser('Evaluate the port-demand model and verify selection replay.')
     parser.add_argument('--benchmark', help='evaluate one exact benchmark ID')
     parser.add_argument('--output-dir', type=vt.resolved_path, required=True)
-    parser.add_argument('--cache-dir', type=vt.resolved_path, default=vt.TOOLS / '.cache/local-observations')
+    parser.add_argument('--cache-dir', type=vt.resolved_path, default=vt.CACHE_ROOT / 'local-observations')
     parser.add_argument('--skip-build', action='store_true')
     parser.add_argument('--ranking-only', action='store_true', help='diagnostic without final selection replay')
     parser.add_argument('--no-baseline', action='store_true', help='diagnostic without ordinary LLVM comparison')

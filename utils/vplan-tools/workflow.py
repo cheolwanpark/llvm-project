@@ -12,7 +12,7 @@ def main(argv=None):
     parser = vt.argument_parser('Collect passive MIR facts without reading measurements into the model.')
     parser.add_argument('--benchmark', help='exact ID for collection diagnostics')
     parser.add_argument('--output', type=vt.resolved_path, required=True)
-    parser.add_argument('--cache-dir', type=vt.resolved_path, default=vt.TOOLS / '.cache/local-observations')
+    parser.add_argument('--cache-dir', type=vt.resolved_path, default=vt.CACHE_ROOT / 'local-observations')
     parser.add_argument('--skip-build', action='store_true')
     args = parser.parse_args(argv)
     if args.compiler_mode != 'meta': parser.error('collection requires meta mode')

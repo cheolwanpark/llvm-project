@@ -69,12 +69,28 @@ previously measured cycles. **These commands compile candidates and evaluate
 rankings; they do not run new hardware measurements.** VF 1 means scalable s1.
 Use fresh output/artifact directories for each run.
 
+Use the project-root `.cache/` for temporary files, MIR observations, reports,
+logs and experiment results, including one-off analysis scripts. The default raw
+observation cache is `.cache/local-observations/`; disposable tool/test directories
+are created under `.cache/tmp/`. Run the examples below from the repository root.
+Do not commit generated results or create a separate `results/` tree.
+
+The benchmark population is intentionally not divided into tuning and held-out
+evaluation sets. Database `split` labels such as `validation` are historical
+metadata; ignore them when choosing the population or interpreting results.
+For fixed inputs and simulator configuration, RTL execution is deterministic.
+One recorded cycle value per benchmark/VF is therefore intentional; repeated
+samples and statistical variance estimates are not required. Preserve the recorded
+measurement protocol, compiler revision, workload and target configuration when
+comparing results: deterministic execution does not make different binaries or
+measurement boundaries equivalent.
+
 ### 1. Inspect one benchmark
 
 ```sh
 uv run --project utils/vplan-tools python utils/vplan-tools/print-vplans \
   --build-dir build-local --skip-build \
-  --benchmark hpcc/stream-add --artifacts-dir /tmp/stream-add --detail --replay
+  --benchmark hpcc/stream-add --artifacts-dir .cache/stream-add --detail --replay
 ```
 
 Inspect instruction-to-class expansions, per-port demands, bottlenecks, fixed
@@ -87,7 +103,7 @@ directory. [PRINT_VPLANS.md](PRINT_VPLANS.md) explains the report fields.
 ```sh
 uv run --project utils/vplan-tools python utils/vplan-tools/evaluate \
   --build-dir build-local --skip-build \
-  --output-dir /tmp/window-model
+  --output-dir .cache/window-model
 ```
 
 The default evaluation replays every eligible selection and compares ordinary
@@ -100,7 +116,7 @@ Measured cycles are used only after selection; scoring does not read them.
 
 ```sh
 uv run --project utils/vplan-tools python utils/vplan-tools/rescore-evaluation \
-  --evaluation /tmp/window-model --body-scale 3/2 --output-dir /tmp/window-scaled
+  --evaluation .cache/window-model --body-scale 3/2 --output-dir .cache/window-scaled
 ```
 
 Rescoring needs neither recompilation nor DB access and preserves the candidate
@@ -112,7 +128,7 @@ observation bundles with `score-mir`.
 
 ```sh
 uv run --project utils/vplan-tools python utils/vplan-tools/analyze-boundaries \
-  --evaluation /tmp/window-model --term body_scale --output-dir /tmp/window-model-boundaries
+  --evaluation .cache/window-model --term body_scale --output-dir .cache/window-model-boundaries
 ```
 
 Each candidate has an affine score in body scale. The analyzer computes exact
@@ -130,7 +146,7 @@ The meta-compiler needs no database or measured cycles:
 uv run --project utils/vplan-tools python utils/vplan-meta-compile \
   --clang build-local/bin/clang --input kernel.c \
   --extract-function selected_kernel \
-  --work-dir /tmp/kernel-meta --output /tmp/kernel.o -- \
+  --work-dir .cache/kernel-meta --output .cache/kernel.o -- \
   --target=riscv64-unknown-elf -march=rv64gcv -mcpu=xiangshan-kunminghu \
   -mrvv-vector-bits=128 -O3 -fno-unroll-loops -fno-slp-vectorize \
   -mllvm -scalable-vectorization=always -mllvm -force-vector-interleave=1 \
@@ -150,15 +166,16 @@ cd utils/vplan-tools
 VPLAN_CLANG="$PWD/../../build-local/bin/clang" uv run --locked python -B -m unittest discover -s tests -q
 ```
 
-The [historical v1 evaluation](utils/vplan-tools/results/port-aware-v1/README.md)
-preserves results from the earlier model.
+Evaluation results are local artifacts under `.cache/`; they are not committed.
+Keep each run in a new directory and compare its recorded model/datasheet identity
+before treating it as a baseline for the current implementation.
 
 ## Raw observation tools
 
 ```sh
-uv run --project utils/vplan-tools python utils/vplan-tools/collect --output /tmp/population.json
+uv run --project utils/vplan-tools python utils/vplan-tools/collect --output .cache/population.json
 uv run --project utils/vplan-tools python utils/vplan-tools/score-mir \
-  --bundle utils/vplan-tools/.cache/local-observations/KEY/bundle.json --output /tmp/scores.json
+  --bundle .cache/local-observations/KEY/bundle.json --output .cache/scores.json
 ```
 
 Raw caches validate compiler/driver/collector identity and MIR/raw JSON checksums.

@@ -22,6 +22,7 @@ import tempfile
 TOOLS = Path(__file__).resolve().parent
 DEFAULT_LLVM = TOOLS.parents[1]
 DEFAULT_DB = DEFAULT_LLVM / "search-dataset.sqlite"
+CACHE_ROOT = DEFAULT_LLVM / ".cache"
 
 
 from model_errors import ToolError
@@ -29,6 +30,13 @@ from model_errors import ToolError
 
 class ReportError(ToolError):
     pass
+
+
+def temporary_directory(prefix="vplan-tools-"):
+    """Keep disposable tool and test artifacts inside this checkout."""
+    directory = CACHE_ROOT / "tmp"
+    directory.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(prefix=prefix, dir=directory)
 
 
 @dataclass
@@ -293,7 +301,7 @@ def compile_report(clang: Path, benchmark: Benchmark, detail: bool, timeout: int
                    artifacts_dir: Path | None = None,
                    *, stop_after_ra: bool = False, analytics_only: bool = False, settings=None) -> subprocess.CompletedProcess:
     flags = benchmark_flags(benchmark)
-    with tempfile.TemporaryDirectory(prefix="vplan-tools-") as temporary:
+    with temporary_directory() as temporary:
         root = Path(temporary)
         if artifacts_dir is not None:
             artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -449,7 +457,7 @@ def print_report(value, detail=False):
 
 
 def print_vplans_main(argv=None):
-    parser = argument_parser('Collect and report calibrated MIR decoder work costs.')
+    parser = argument_parser('Collect and report MIR service demand and finite-window costs.')
     parser.add_argument('--benchmark', required=True)
     parser.add_argument('--detail', action='store_true')
     parser.add_argument('--skip-build', action='store_true')

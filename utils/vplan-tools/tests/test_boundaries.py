@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import unittest
 
 import vplan_tools as vt
@@ -81,7 +80,7 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(f(dict(lower=Q(1), upper=None))['kind'], 'unbounded-above')
 
     def test_cli_uses_saved_terms_and_validates_overrides(self):
-        with tempfile.TemporaryDirectory() as td:
+        with vt.temporary_directory() as td:
             root = Path(td)
             source = dict(model='custom', machine_parameters=dict(coefficients=dict(work=1, traffic=1)))
             summary = dict(complete=True, successful=True, identity=source, dataset_fingerprint='test', rows=[

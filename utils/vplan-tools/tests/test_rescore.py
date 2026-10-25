@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import unittest
 
 from cost_model import Settings, identity, rescore, score_observation
@@ -21,7 +20,7 @@ class RescoreTests(unittest.TestCase):
         summary = dict(schema='mir-port-aware-evaluation-v1', complete=True, successful=True,
                        identity=identity(), rows=[row], metrics=summarize_rows([row]),
                        compiler_context={}, dataset_fingerprint='fixture', metadata={}, baseline_required=True)
-        with tempfile.TemporaryDirectory() as td:
+        with vt.temporary_directory() as td:
             root = Path(td); original = root / 'source'; target = root / 'target'
             vt.write_json(original / 'summary.json', summary)
             vt.write_json(original / 'baseline.json', dict(rows=[row]))

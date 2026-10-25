@@ -2,7 +2,6 @@ from dataclasses import replace
 import os
 from pathlib import Path
 import sqlite3
-import tempfile
 import unittest
 from unittest.mock import patch
 from cost_model import Settings
@@ -84,7 +83,7 @@ class DatabaseTests(unittest.TestCase):
         return p
 
     def test_read_only_and_scalable_one(self):
-        with tempfile.TemporaryDirectory() as td:
+        with vt.temporary_directory() as td:
             p = self.make_db(td); before = p.read_bytes()
             benchmarks, metadata = vt.load_database(p)
             self.assertEqual(benchmarks[0].measured[1], 10)
@@ -93,7 +92,7 @@ class DatabaseTests(unittest.TestCase):
             self.assertFalse(list(Path(td).glob('*-journal')))
 
     def test_missing_db_not_created(self):
-        with tempfile.TemporaryDirectory() as td:
+        with vt.temporary_directory() as td:
             p = Path(td) / 'missing'
             with self.assertRaises(ToolError): vt.load_database(p)
             self.assertFalse(p.exists())
@@ -131,7 +130,7 @@ class CacheContractTests(unittest.TestCase):
         candidate = dict(id=a['candidate'], function=a['function'], loop=0, vf='s2', estimated_width=4,
                          probeable=True, scalar_tail=True, middle_end=a['middle_end'])
         manifest = dict(version=4, run_id='test', loops=[loop], candidates=[candidate], selections=[], failures=[])
-        with tempfile.TemporaryDirectory() as td:
+        with vt.temporary_directory() as td:
             mir = Path(td) / 'probe-0000.mir'; mir.write_text('complete MIR artifact')
             raw = dict(a); raw.pop('middle_end'); raw.pop('scalar_cost')
             raw_path = mir.with_suffix('.analytics.json'); raw_path.write_text(json.dumps(raw))
