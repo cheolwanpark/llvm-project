@@ -1,6 +1,7 @@
 """Strict observation contract. No weights or measurements enter this module."""
 import math
 import re
+from fractions import Fraction
 from model_errors import ToolError
 
 PROTOCOL_VERSION = 4
@@ -122,7 +123,7 @@ def iteration_factors(a):
     t, width = a['exact_trip_count'], a['iteration_width']
     if width < 1: raise ToolError('unproven iteration width')
     if not t:
-        return 1 / width, 0, 'steady-state-per-scalar-iteration'
+        return Fraction(1, width), 0, 'steady-state-per-scalar-iteration'
     if a['scalar_tail']:
         return t // width, t % width, 'exact-trip-count'
     return (t + width - 1) // width, 0, 'exact-trip-count-folded-tail'

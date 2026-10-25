@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from fractions import Fraction
 import fcntl
 import hashlib
 from contextlib import closing, contextmanager
@@ -437,10 +438,12 @@ def compiler_from_args(args):
 
 
 def print_report(value, detail=False):
+    def display(v):
+        return 'disabled' if v is None else f'{float(Fraction(v)):.8g}'
     print(f"{value['candidate']} vf={value['vf']} width={value['iteration_width']} score={value['score']:.8g} ({value['scope']})")
-    print(f"  body={value['body_cost']:.8g} middle-end={value['middle_end_cost']:.8g} bottleneck={value['bottleneck_ports']}")
+    print(f"  body={display(value['body_cost'])} middle-end={display(value['middle_end_cost'])} bottleneck={value['bottleneck_ports']}")
     if 'dependency_path' in value:
-        print(f"  D={value['demand_cost']:.8g} W={value['window_cost']:.8g} "
+        print(f"  D={display(value['demand_cost'])} W={display(value['window_cost'])} "
               f"L_path={value['dependency_path']['cost']:.8g} B={value['body_entries']} "
               f"C_ROB={value['identity']['machine_parameters']['rob_entries']} "
               f"path={value['dependency_path']['path']} "
@@ -450,7 +453,8 @@ def print_report(value, detail=False):
     if detail:
         for op in value['ops']:
             print(f"  op {op['id']:3} {op['mir'].strip()}")
-            print('    ' + json.dumps(op['hardware'], sort_keys=True))
+            print('    expansion=' + json.dumps(op['expansion'], sort_keys=True))
+            print('    uops=' + json.dumps(op['uops'], sort_keys=True))
             if 'timing' in op:
                 print('    timing=' + json.dumps(op['timing'], sort_keys=True))
     print('  coverage=' + json.dumps(value['coverage'], sort_keys=True))

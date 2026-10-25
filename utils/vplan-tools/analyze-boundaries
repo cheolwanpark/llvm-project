@@ -156,7 +156,7 @@ def main():
     if not summary['complete'] or not summary['successful']:
         raise vt.ToolError('requires a complete successful evaluation')
     coefficients = dict(summary['identity']['machine_parameters']['coefficients'])
-    if summary['identity']['model'] in ('mir-port-aware-v1', 'mir-port-latency-v2', 'mir-port-window-v3', 'mir-service-window-v4'):
+    if summary['identity']['model'] == 'mir-uop-demand-v1':
         if args.term != ['body_scale'] or args.set:
             parser.error('port-aware analysis varies only body_scale; configuration and scalar tail remain fixed')
     for key in args.term:
@@ -190,7 +190,7 @@ def main():
     axes = [analyze(cases, key, coefficients) for key in dict.fromkeys(args.term)]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     output = dict(method='exact rational intersection of affine argmin inequalities; nonnegative unbounded coefficients',
-                  scope='exact affine boundaries of persisted numeric features; smoothing/norm features are rounded constants; existing measurements, no new timings',
+                  scope='exact affine boundaries of rational features; existing measurements, no new timings',
                   source_evaluation=str(args.evaluation), identity=summary['identity'],
                   baseline='saved evaluation selections; unchanged by coefficient overrides',
                   stability='per benchmark regret(new) <= regret(saved selection) + 0.15; diagnostic only, no acceptance threshold',

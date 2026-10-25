@@ -2,15 +2,31 @@ from dataclasses import replace
 from fractions import Fraction as Q
 import unittest
 
-from cost_model import Settings, demand_cost, identity, rescore, score_observation, score_value
-from hardware_model import Demand, Evidence, InstructionRule, Machine, Port, ResolvedInstruction, ServiceClass
-from kunminghu_v2 import MACHINE, SOURCE_HASHES, VECTOR_OPCODES, work_for_instruction
+from cost_model import Settings, identity, rescore, score_observation, score_value
+from hardware_model import (Evidence, Machine, Port, ServiceClass, ResourceUse, Uop, Timing,
+                            TimingGroup, InstructionExpansion, accumulate_port_demands,
+                            aggregate_demand, expansion_report, number)
+from kunminghu_v2 import MACHINE, SOURCE_HASHES, VECTOR_OPCODES, expand_instruction
 from model_errors import ToolError
 from observations import validate_observation
 from fixtures import edge, instruction, memory, observation, reg
 
 
-def work(base, **kwargs): return work_for_instruction(instruction(0, base, **kwargs))
+def work(base, **kwargs):
+    expansion = expand_instruction(instruction(0, base, **kwargs))
+    summary = accumulate_port_demands([expansion], MACHINE)
+    return expansion_report(expansion) | dict(
+        class_demands={k: number(v) for k, v in summary.class_demands},
+        port_demands={k: str(v) for k, v in summary.port_demands if v},
+        assumptions=list(expansion.assumptions))
+
+
+def synthetic_expansion(*uses):
+    groups = tuple(TimingGroup(str(i), r.demand_key, Timing(1, 1, True, Evidence('test')))
+                   for i, r in enumerate(uses))
+    uop = Uop(0, 0, 'test', 'assumed', (), uses, tuple(g.id for g in groups), ())
+    return InstructionExpansion(0, 'test', (uop,), None, groups)
+
 
 
 class HardwareRules(unittest.TestCase):
@@ -40,12 +56,12 @@ class HardwareRules(unittest.TestCase):
                                      ('FMV_D_X', 'i2v', ['BJU2'])]:
             r = work(opcode)
             self.assertEqual(r['class_demands'], {cls: 1})
-            self.assertEqual(r['components'][0]['possible_ports'], expected)
+            self.assertEqual(r['uops'][0]['resource_uses'][0]['possible_ports'], expected)
         r = work('SD', store=True)
         self.assertEqual(r['class_demands'], {'sta': 1, 'std': 1})
         self.assertNotIn('decode_uops', r)
         self.assertNotIn('issued_demands', r)
-        self.assertEqual(work('LD', load=True)['components'][0]['possible_ports'], ['LDU0', 'LDU1', 'LDU2'])
+        self.assertEqual(work('LD', load=True)['uops'][0]['resource_uses'][0]['possible_ports'], ['LDU0', 'LDU1', 'LDU2'])
 
     def test_memory_service_work_and_index_geometry(self):
         r = work('VLE32_V', load=True, lmul8=64, vl=1)
@@ -53,7 +69,7 @@ class HardwareRules(unittest.TestCase):
         self.assertEqual(r, work('VLE32_V', load=True, lmul8=64, vl=0, masked=True, stride=128))
         r = work('VLSEG2E32_V', load=True, lmul8=16)
         self.assertEqual(r['class_demands'], {'vsegload': 128, 'i2v': 1})
-        self.assertEqual(r['components'][0]['possible_ports'], ['VLSU0'])
+        self.assertEqual(r['uops'][1]['resource_uses'][0]['possible_ports'], ['VLSU0'])
         self.assertEqual(work('VLSE32_V', load=True)['class_demands'], {'vload_element': 4, 'i2v': 2})
         self.assertEqual(work('VLUXEI64_V', load=True, index_emul8=16, index_eew=64)['class_demands'], {'vload_element': 4, 'i2v': 1})
         with self.assertRaises(ToolError): work('VLUXEI64_V', load=True, index_emul8=32, index_eew=64)
@@ -70,8 +86,8 @@ class HardwareRules(unittest.TestCase):
         self.assertEqual(work('VMV4R_V', operands=[operand])['class_demands'], {'vppu': 4})
         r = score_observation(observation([instruction(0, 'LD', load=True, memory=[memory()])]))
         self.assertTrue(r['ops'][0]['spill_slot'])
-        self.assertEqual(r['demand_cost'], 1 / 3)
-        self.assertEqual(r['body_cost'], 1 / 3)
+        self.assertEqual(Q(r['demand_cost']), Q(1, 3))
+        self.assertEqual(Q(r['body_cost']), Q(1, 3))
         self.assertEqual(set(r['features']), {'body_scale', 'fixed_additions'})
 
     def test_unknown_explicit_but_illegal_geometry_rejected(self):
@@ -88,33 +104,36 @@ class HardwareRules(unittest.TestCase):
         e = Evidence('test')
         m = Machine('test', 'r', 128, 64, (Port('p', Q(2), e), Port('q', Q(1), e)),
                     (ServiceClass('a', ('p', 'q'), e), ServiceClass('b', ('p',), e)))
-        raw, normalized = m.distribute({'a': 6, 'b': 4})
-        self.assertEqual(raw, {'p': 7, 'q': 3})
-        self.assertEqual(normalized, {'p': Q(7, 2), 'q': 3})
-        self.assertEqual(sum(raw.values()), 10)
-        r = m.expand(ResolvedInstruction(InstructionRule('test', (Demand('a', 3), Demand('b', 1)), e)))
-        self.assertEqual(r['port_demands'], {'p': '5/2', 'q': '3/2'})
+        expansion = synthetic_expansion(
+            ResourceUse('a', ('p', 'q'), Q(6), 'operation', Q(1), 'assumed', (e,)),
+            ResourceUse('b', ('p',), Q(4), 'operation', Q(1), 'assumed', (e,)))
+        summary = accumulate_port_demands([expansion], m)
+        self.assertEqual(dict(summary.port_demands), {'p': 7, 'q': 3})
+        self.assertEqual(dict(summary.normalized_port_demands), {'p': Q(7, 2), 'q': 3})
+        self.assertEqual(sum(v for _, v in summary.port_demands), 10)
+        self.assertEqual(aggregate_demand(summary, 'max'), Q(7, 2))
+        self.assertEqual(aggregate_demand(summary, 'sum'), Q(13, 2))
         with self.assertRaises(ToolError): replace(m, ports=(Port('p', Q(0), e),))
 
     def test_datasheet_identity_and_assumptions(self):
         self.assertGreater(len(VECTOR_OPCODES), 300)
         self.assertIn('Scheduler.scala', SOURCE_HASHES)
-        self.assertEqual(identity()['model'], 'mir-service-window-v4')
+        self.assertEqual(identity()['model'], 'mir-uop-demand-v1')
         self.assertNotEqual(identity(), identity(Settings(body_scale='2')))
         self.assertTrue(all(p.evidence.assumed and p.capacity == 1 for p in MACHINE.ports))
 
     def test_service_demand_preserves_fractions_and_validates_rates(self):
-        e = Evidence('test')
-        m = Machine('test', 'r', 128, 64, (Port('p', Q(1), e),),
-                    (ServiceClass('a', ('p',), e, demand_per_unit=Q(3, 2)),))
-        rule = ResolvedInstruction(InstructionRule('test', (Demand('a', 3),), e))
-        r = m.expand(rule)
-        self.assertEqual(r['class_demands'], {'a': '9/2'})
-        self.assertEqual(r['port_demands'], {'p': '9/2'})
-        self.assertEqual(m.distribute(r['class_demands'])[1], {'p': Q(9, 2)})
+        op = instruction(0, 'VADD_VV', lmul8=32)
+        m = replace(MACHINE, classes=tuple(replace(c, demand_per_unit=Q(3, 2))
+                    if c.name == 'vialuF' else c for c in MACHINE.classes))
+        expansion = expand_instruction(op, m)
+        summary = accumulate_port_demands([expansion], m)
+        self.assertEqual(dict(summary.class_demands), {'vialuF': 6})
+        self.assertEqual(expansion.uops[0].demand, Q(3, 2))
         for rate in (0, -1):
             with self.assertRaises(ToolError):
-                replace(m, classes=(replace(m.classes[0], demand_per_unit=rate),)).expand(rule)
+                expand_instruction(op, replace(m, classes=tuple(replace(c, demand_per_unit=rate)
+                    if c.name == 'vialuF' else c for c in m.classes)))
 
     def test_pipeline_depth_does_not_inflate_demand(self):
         # Integer add and FP multiply have different result latencies, but II=1.
@@ -163,18 +182,19 @@ class HardwareRules(unittest.TestCase):
 
 class DemandTests(unittest.TestCase):
     def test_zero_and_positive_homogeneity(self):
-        self.assertEqual(demand_cost(dict(a=0, b=0)), 0)
-        v = demand_cost(dict(a=1, b=3, c=0))
+        self.assertEqual(aggregate_demand(accumulate_port_demands([], MACHINE), 'max'), 0)
         for k in (Q(1, 8), 2, 1000000):
-            self.assertAlmostEqual(demand_cost(dict(a=k, b=3*k, c=0)) / float(k), v)
-        self.assertEqual(demand_cost(dict(a=3, b=4)), 4)
+            expansion = synthetic_expansion(ResourceUse('test', ('ALU0',), Q(3),
+                'operation', k, 'assumed', (Evidence('test'),)))
+            summary = accumulate_port_demands([expansion], MACHINE)
+            self.assertEqual(aggregate_demand(summary, 'max'), 3 * k)
 
     def test_invalid_settings_and_demands(self):
         for scale in ('-1', 'nan'):
             with self.assertRaises(ToolError): Settings(body_scale=scale)
         for value in (-1, float('nan'), float('inf')):
             with self.assertRaises((ToolError, ValueError, OverflowError)):
-                demand_cost(dict(a=value))
+                ResourceUse('test', ('ALU0',), Q(value), 'operation', Q(1), 'assumed', ())
 
 
 class LocalModel(unittest.TestCase):
@@ -188,7 +208,7 @@ class LocalModel(unittest.TestCase):
         self.assertEqual(r['body_iterations'], 4)
         self.assertEqual(r['scalar_remainder'], 2)
         self.assertEqual(r['middle_end_cost'], 11)
-        self.assertAlmostEqual(r['score'], 4 * r['body_cost'] + 11)
+        self.assertAlmostEqual(r['score'], float(4 * Q(r['body_cost']) + 11))
         other = rescore(r, Settings(body_scale='7/3'))
         self.assertEqual(other['middle_end'], r['middle_end'])
         self.assertEqual(Q(other['score_exact']), score_value(other['features'], Settings(body_scale='7/3')))
@@ -196,7 +216,7 @@ class LocalModel(unittest.TestCase):
         self.assertEqual(folded['body_iterations'], 5)
         self.assertEqual(folded['middle_end_cost'], 6)
         steady = score_observation(a | {'exact_trip_count': 0})
-        self.assertEqual(steady['score'], (steady['body_cost'] + 1) / 4)
+        self.assertEqual(steady['score'], float((Q(steady['body_cost']) + 1) / 4))
         self.assertTrue(steady['middle_end']['unknown_setup_amortization'])
         self.assertIsNone(steady['scalar_remainder'])
 
@@ -204,7 +224,7 @@ class LocalModel(unittest.TestCase):
         r = score_observation(observation())
         self.assertEqual(score_observation(observation(vf=16))['score'], r['score'])
         steady = score_observation(observation(exact_trip_count=0, max_trip_count=19))
-        self.assertEqual(steady['score'], steady['body_cost'] / 4)
+        self.assertEqual(steady['score'], float(Q(steady['body_cost']) / 4))
         with self.assertRaises(ToolError): score_observation(observation(exact_trip_count=17, max_trip_count=17, scalar_cost=None))
         a = observation([instruction(0), instruction(1, 'VSETVLI', configuration=True)])
         a['middle_end']['configuration_unit_quarters'] = None

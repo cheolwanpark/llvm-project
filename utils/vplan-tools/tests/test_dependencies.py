@@ -1,11 +1,12 @@
 from copy import deepcopy
 import unittest
+from fractions import Fraction as Q
 
 from dependencies import longest_path, prepare_dependencies
 from fixtures import edge, instruction, memory, observation, reg
 from cost_model import rescore, score_observation
-from hardware_model import Evidence, Timing
-from kunminghu_v2 import timing_for_instruction, work_for_instruction
+from hardware_model import Evidence, Timing, instruction_latency
+from kunminghu_v2 import expand_instruction
 from model_errors import ToolError
 
 
@@ -56,7 +57,7 @@ class DependencyTests(unittest.TestCase):
         r = score_observation(observation(ops, [edge(0, 1), edge(2, 3, unit=2)]))
         self.assertEqual(r['dependency_path']['path'], [0, 1, 2, 3])
         self.assertEqual(r['dependency_path']['cost'], 1 + 2 + 3 + 1)
-        self.assertEqual(r['window_cost'], 4 * 7 / 48)
+        self.assertEqual(Q(r['window_cost']), Q(4 * 7, 48))
         self.assertEqual(r['body_cost'], r['window_cost'])
 
     def test_incomplete_register_graph_is_not_silently_scored(self):
@@ -101,11 +102,11 @@ class TimingTests(unittest.TestCase):
 
     def timing(self, opcode, **kwargs):
         op = instruction(0, opcode, **kwargs)
-        return timing_for_instruction(op, work_for_instruction(op))
+        return instruction_latency(expand_instruction(op))
 
     def test_fixed_rtl_latency_is_not_divided_by_pipeline_depth(self):
         r = self.timing('VFMACC_VV', lmul8=32)
-        c = r['components'][0]
+        c = r['groups'][0]
         self.assertEqual((c['rtl_latency'], c['latency'], c['initiation_interval']), (3, 4, 1))
         self.assertEqual(r['latency'], 7)  # 4 + (4 - 1) * 1
         self.assertEqual(self.timing('VFMACC_VV')['latency'], 4)
@@ -113,14 +114,14 @@ class TimingTests(unittest.TestCase):
 
     def test_dependent_splits_have_explicit_conservative_rule(self):
         r = self.timing('VSLIDEUP_VI', lmul8=16)
-        self.assertEqual(r['components'][0]['expansion'], 'serial-upper-estimate')
+        self.assertEqual(r['groups'][0]['expansion'], 'serial-upper-estimate')
         self.assertEqual(r['latency'], 3 * 3 + 1)
         op = instruction(0, 'VMV2R_V', operands=[reg(0, 1, define=True) | {'group8': 16}])
-        self.assertEqual(timing_for_instruction(op, work_for_instruction(op))['latency'], 4)
+        self.assertEqual(instruction_latency(expand_instruction(op))['latency'], 4)
 
     def test_precision_dependent_divide_and_sqrt(self):
         for name in ('FDIV_H', 'FDIV_S', 'FDIV_D', 'FSQRT_H', 'FSQRT_S', 'FSQRT_D'):
-            r = self.timing(name)['components'][0]
+            r = self.timing(name)['groups'][0]
             self.assertFalse(r['pipelined'])
             self.assertEqual(r['initiation_interval'], r['latency'] + 1)
             self.assertTrue(r['evidence']['assumed'])
@@ -132,7 +133,7 @@ class TimingTests(unittest.TestCase):
         r = score_observation(observation(ops, [edge(i, i + 1) for i in range(17)]))
         self.assertEqual(r['dependency_path']['cost'], 36)
         self.assertEqual(r['demand_cost'], 9)
-        self.assertEqual(r['body_cost'], 13.5)
+        self.assertEqual(Q(r['body_cost']), Q(27, 2))
         independent = score_observation(observation(ops))
         self.assertEqual(independent['demand_cost'], r['demand_cost'])
         self.assertEqual(independent['dependency_path']['cost'], 2)
@@ -154,11 +155,11 @@ class TimingTests(unittest.TestCase):
         r = score_observation(a)
         self.assertEqual(r['dependency_path']['path'], [0])
         self.assertEqual(r['body_entries'], 3)
-        self.assertEqual(r['window_cost'], 3 * 2 / 48)
+        self.assertEqual(Q(r['window_cost']), Q(3 * 2, 48))
         for lmul in (1, 8):
             r = score_observation(observation([instruction(0, 'VFMACC_VV', lmul8=lmul * 8)]))
             self.assertEqual(r['body_entries'], 1)
-            self.assertEqual(r['window_cost'], (4 + lmul - 1) / 48)
+            self.assertEqual(Q(r['window_cost']), Q(4 + lmul - 1, 48))
 
     def test_body_larger_than_rob_keeps_unclamped_window_cost(self):
         ops = [instruction(i, 'MUL', operands=[reg(0, 1, define=True, use=True)]) for i in range(60)]

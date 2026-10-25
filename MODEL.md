@@ -4,7 +4,7 @@
 고르는 것이다. 입력은 register allocation과 frame lowering 이후의 MIR이다.
 따라서 실제로 남은 scalar 연산, spill/reload, vector instruction의 LMUL 등을
 반영한다. 대상은 XiangShan Kunminghu v2 **MinimalConfig, VLEN=128**이며,
-모델 식별자는 `mir-service-window-v4`이다.
+모델 식별자는 `mir-uop-demand-v1`이다.
 
 한 body의 비용은 다음 두 관점 중 큰 값으로 정한다.
 
@@ -20,12 +20,16 @@ W는 window 비용을 뜻한다. 두 항은 같은 실행을 서로 다른 병�
 ## D: 실행 자원이 처리해야 하는 일
 
 D는 충분한 독립 작업이 준비되어 있을 때, 가장 바쁜 실행 자원의 처리량이
-제약하는 비용을 근사한다. 명령을 service class별 작업으로 해석하고, 모든 작업을
-동일한 demand 계산 경로에 넣는다.
+제약하는 비용을 근사한다. MIR을 명시적인 `Uop` 객체로 분해하고 각 객체의
+`ResourceUse`에서 작업량·단가·대안 포트를 해석한다. Class 합계는 이 객체들에서
+파생하는 진단값이며, 비용 계산은 자원 사용을 직접 포트에 누적한다.
 
 ```text
-demand(class, instruction) = work_units(class, geometry) × service_interval(class, precision)
-D = max_port(sum_class(distributed demand) / port capacity)
+resource_demand = work_units × demand_per_work_unit
+raw_port_demand[p] = Σ(resource_demand / number_of_possible_ports)
+normalized_port_demand[p] = raw_port_demand[p] / capacity[p]
+D_max = max(normalized_port_demand)
+D_sum = sum(normalized_port_demand)
 ```
 
 기준 단위는 II=1인 ALU 작업 하나다. 일반 vector ALU의 m1 작업은 1이고,
@@ -34,9 +38,18 @@ LMUL이 커지면 128-bit datapath 작업량이 증가한다. II=1인 pipelined 
 `max(work_units, stages)`도 사용하지 않는다. Pipeline fill은 아래 latency에 남기고,
 D는 독립 작업을 지속 처리할 때의 자원 사용량을 나타낸다.
 
-Decode uop 수를 비용으로 사용하거나 report에 유지하지 않는다. RTL의 split 구조는
-산술·permutation의 실제 datapath 작업량을 얻는 근거로만 활용한다. Memory는
-register 그룹 수 대신 실제 실행 방식에 맞는 flow 단위를 선택한다.
+Decode uop 수와 실행 작업량은 별개다. 예를 들어 LMUL=4 add는 작업량 1인 객체
+4개지만, EMUL=1의 `VLSE32_V`는 전달 객체 2개와 4개 element flow를 맡는 memory
+객체 1개다. Scalar store는 객체 1개에 주소·데이터 `ResourceUse`를 각각 두어
+두 작업을 모두 과금한다. 대안 포트와 모두 필요한 자원을 혼동하지 않는다.
+
+객체 ID는 `(mir_id, ordinal)`이며 전달 uop은 RTL decode 순서대로 앞에 둔다.
+`modeled_uop_count`와 검증된 `verified_decode_uops`를 구분하고, COPY나 미검증
+pseudo/fallback의 검증된 개수는 `null`이다. `origin`은 `rtl-derived`, `assumed`,
+`fallback`을 구분한다. Memory decode 개수는 pinned RTL의 EMUL/field/index 규칙을
+따르지만, 기존 full-active flow를 객체에 균등 배정하는 것은 명시적인 근사다.
+Decode 근거가 작업량·단가까지 검증하는 것은 아니다. 개수나 LMUL을 demand에
+다시 곱하지 않는다.
 
 | Service class | 작업량 | 작업당 고정 demand |
 |---|---|---|
@@ -71,6 +84,13 @@ Datasheet는 hardware revision별 고정값과 명시적인 근사로 관리한�
 계수나 runtime override는 없다. 근거가 바뀌면 datasheet 자체를 수정하고 digest를
 바꾼다. 기존 `body_scale` 옵션은 전체 body의 기존 외부 배율이며, hardware class
 parameter가 아니다. 기본값은 1이다.
+
+`--aggregation=max --window=enabled`가 기본 정책이다. 추가로 MAX-only
+(`max/disabled`)와 SUM-only (`sum/disabled`)를 지원하며 `sum/enabled`는 오류다.
+SUM은 capacity 정규화 후 포트 값의 합이다. 모든 capacity가 1인 현재 datasheet에서는
+총 Uop demand와 같지만 일반적으로는 같지 않다. W가 비활성화되면 report 값은
+`null`이며, dependency coverage 검사와 진단은 유지한다. 과거 보정 실험의 단가나
+프로필은 제공하지 않는다.
 
 ## W: 유한한 ROB 안에서 latency를 숨기는 정도
 
@@ -107,7 +127,11 @@ byte 범위별 store→reload RAW를 추가한다. 부분 overwrite와 완전 ov
 별도 cost penalty는 없다. 불완전한 register 정보와 지원하지 않는 stack 접근은
 scoring 오류로 처리한다. 일반 pointer 사이의 memory alias는 아직 모델링하지 않는다.
 
-Latency는 machine datasheet의 RTL 근거와 명시적인 가정에서 얻는다. Pipeline의
+Latency는 machine datasheet의 RTL 근거와 명시적인 가정에서 얻는다. Uop의 자원
+사용마다 `TimingGroup` 참조를 두고 group 전체의 작업량을 합산해 완료 시간을
+계산한다. 같은 group의 span을 객체마다 중복 합산하지 않는다. 전달 group의
+완료시간 합에 primary group의 최댓값을 더한다. Uop 나열 순서에서 내부 RAW
+edge를 만들지 않는다. Pipeline의
 첫 결과 latency와 독립 작업의 시작 간격을 구분하고, 여러 작업으로 나뉘는 명령은
 `L + (work_units - 1) × II`로 완료 시간을 근사한다. D의 가중 demand를 작업 수로
 재사용하지 않으므로 divide의 점유 시간을 중복 곱하지 않는다. Latency를 pipeline
@@ -138,7 +162,8 @@ latency는 현재 값보다 실행 비용을 크게 만들 수 있다. Iterative
 점유 시간은 D에 반영하지만, 그로 인한 다른 명령의 latency 증가는 계산하지 않는다.
 Load/store queue, issue queue, rename 자원, fetch/decode/retire bandwidth도 독립적인 병목 항으로 계산하지 않는다.
 
-계산은 graph의 node와 edge를 한 번씩 처리하는 O(N+E) 방식이다. Stack RAW
+Graph 계산은 node와 edge를 한 번씩 처리하는 O(N+E) 방식이다. Uop 생성과
+포트 누적에는 생성한 객체와 자원 사용 수에 비례하는 비용이 추가된다. Stack RAW
 전처리에는 접근 byte 수에 비례하는 비용이 추가되지만 target의 접근 폭은 제한된다.
 Path 열거, 여러 반복의 unroll, 동적 ROB simulation은 필요하지 않다.
 
@@ -146,6 +171,15 @@ Path 열거, 여러 반복의 unroll, 동적 ROB simulation은 필요하지 않�
 [kunminghu_v2.py](utils/vplan-tools/kunminghu_v2.py), 실행 방법은
 [README](README.md)에 있다.
 
-Report의 `components`는 service class, work unit, work units, demand per unit, demand,
-port 분배와 근거를 제공한다. `decode_uops`/`issued_demands`는 없다. 이전 count 기반
-report는 새 모델로 재표시할 수 없으며, raw MIR observation부터 다시 scoring해야 한다.
+계산은 포트 분배부터 반복 수, W, configuration/tail, score, tie-break까지
+`Fraction`을 사용한다. 입력의 정수·quarter 단위를 그대로 유지하고 compiler가
+제공한 유한 소수 scalar cost는 십진 표현으로 변환한다. JSON의 계산값은 정수 또는
+`"numerator/denominator"` 문자열이며 `score`는 표시용 float, `score_exact`는 정확한
+유리수다. 기존 v4의 float 중간값 제거로 생기는 수치·동점 차이를 숨기지 않는다.
+
+Report schema는 `uop-demand-report-v1`이다. `ops[].uops[].resource_uses`에 작업량,
+단위, 단가, demand, 포트별 기여와 각각의 근거를 제공한다. Model identity는 구현과
+datasheet digest, 분해 버전, pinned RTL, `fraction-v1` 산술 정책과 집계 설정을
+포함한다. 이전 report의 호환 계층은 없으며 raw MIR부터 다시 scoring한다.
+현재 schema의 `rescore-evaluation`은 Uop 정보의 일관성을 검증하고 집계 정책과
+body scale을 바꿀 수 있다. 재채점 결과는 새 설정으로 replay하기 전에는 ranking-only다.

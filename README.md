@@ -39,12 +39,12 @@ Run these commands from the repository root. Prerequisites are Python 3.12+
 ```sh
 uv sync --locked --project utils/vplan-tools
 
-cmake -S llvm -B build-local -G Ninja \
+cmake -S llvm -B .cache/compiler-build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DLLVM_ENABLE_PROJECTS=clang \
   -DLLVM_TARGETS_TO_BUILD=RISCV \
   -DLLVM_ENABLE_ASSERTIONS=ON \
-  -DLLVM_INCLUDE_TESTS=OFF \
+  -DLLVM_INCLUDE_TESTS=ON \
   -DLLVM_INCLUDE_EXAMPLES=OFF \
   -DLLVM_INCLUDE_BENCHMARKS=OFF \
   -DLLVM_PARALLEL_LINK_JOBS=1 \
@@ -52,10 +52,10 @@ cmake -S llvm -B build-local -G Ninja \
   -DCLANG_ENABLE_OBJC_REWRITER=OFF \
   -DCLANG_INCLUDE_TESTS=OFF
 
-cmake --build build-local --target clang clang-resource-headers llvm-extract --parallel 2
+cmake --build .cache/compiler-build --target clang clang-resource-headers llvm-extract llc opt FileCheck split-file not --parallel 2
 ```
 
-The experiment commands below reuse this build with `--build-dir build-local
+The experiment commands below reuse this build with `--build-dir .cache/compiler-build
 --skip-build`. After C++ changes, rebuild before using `--skip-build`.
 Alternatively, omit `--skip-build` to let the tools configure/build the compiler;
 without `--build-dir`, they use `build-vplan-tools`.
@@ -89,7 +89,7 @@ measurement boundaries equivalent.
 
 ```sh
 uv run --project utils/vplan-tools python utils/vplan-tools/print-vplans \
-  --build-dir build-local --skip-build \
+  --build-dir .cache/compiler-build --skip-build \
   --benchmark hpcc/stream-add --artifacts-dir .cache/stream-add --detail --replay
 ```
 
@@ -102,7 +102,7 @@ directory. [PRINT_VPLANS.md](PRINT_VPLANS.md) explains the report fields.
 
 ```sh
 uv run --project utils/vplan-tools python utils/vplan-tools/evaluate \
-  --build-dir build-local --skip-build \
+  --build-dir .cache/compiler-build --skip-build \
   --output-dir .cache/window-model
 ```
 
@@ -144,7 +144,7 @@ The meta-compiler needs no database or measured cycles:
 
 ```sh
 uv run --project utils/vplan-tools python utils/vplan-meta-compile \
-  --clang build-local/bin/clang --input kernel.c \
+  --clang .cache/compiler-build/bin/clang --input kernel.c \
   --extract-function selected_kernel \
   --work-dir .cache/kernel-meta --output .cache/kernel.o -- \
   --target=riscv64-unknown-elf -march=rv64gcv -mcpu=xiangshan-kunminghu \
@@ -162,8 +162,8 @@ replay; despite the flag name, the observation stage is post-frame-lowering.
 Run the Python tests, including compiler integration, after building:
 
 ```sh
-cd utils/vplan-tools
-VPLAN_CLANG="$PWD/../../build-local/bin/clang" uv run --locked python -B -m unittest discover -s tests -q
+PYTHONPATH=utils/vplan-tools VPLAN_CLANG="$PWD/.cache/compiler-build/bin/clang" \
+  uv run --locked --project utils/vplan-tools python -B -m unittest discover -s utils/vplan-tools/tests -q
 ```
 
 Evaluation results are local artifacts under `.cache/`; they are not committed.
@@ -196,11 +196,27 @@ and MinimalConfig ROB capacity. Source URLs and revisions are recorded in the
 datasheet. It does not download RTL or generate runtime rules, and scoring does
 not invoke it.
 
-The current `mir-service-window-v4` datasheet uses service classes with fixed
-work units and demand per unit, normalized to ALU II=1. Pipelined work, iterative
+The current `mir-uop-demand-v1` model expands MIR into explicit Uops with resource
+work and demand per work unit, normalized to ALU II=1. Pipelined work, iterative
 division/sqrt, 128-bit memory flows and element memory flows have separate rules.
-There are no fitted class weights. Reports expose `service_class`, `work_units`,
-`demand_per_unit` and `demand`; decoded-uop counts are not a cost input.
+There are no fitted class weights or calibration profiles. The
+`uop-demand-report-v1` report exposes Uops, their resource uses, work/rate evidence,
+timing groups and both MAX/SUM port aggregates. Verified decode counts are separate
+from nominal work; neither Uop count nor LMUL is multiplied into demand again.
+All calculation and ranking use exact fractions. JSON calculation values are
+integers or rational strings, with `score` retained as a display float.
 Old model reports must be recomputed from raw observations using `score-mir`;
-`rescore-evaluation` only changes the body multiplier within a matching model.
+`rescore-evaluation` validates Uop records and changes policy/body scale within a
+matching implementation and datasheet. Rescoring is ranking-only until replay.
 See [MODEL.md](MODEL.md) for the fixed fast-path assumptions and exclusions.
+
+The default is `--aggregation=max --window=enabled --body-scale=1`.
+MAX-only (`--aggregation=max --window=disabled`) and SUM-only
+(`--aggregation=sum --window=disabled`) are supported by reporting, scoring,
+evaluation and compiler replay. SUM with an enabled window is rejected. For example:
+
+```sh
+uv run --locked --project utils/vplan-tools python -B utils/vplan-tools/evaluate \
+  --build-dir .cache/compiler-build --skip-build --aggregation=sum --window=disabled \
+  --output-dir .cache/sum-evaluation
+```

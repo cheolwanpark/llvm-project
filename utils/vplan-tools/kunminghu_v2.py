@@ -4,12 +4,13 @@ All target-specific tables, expansion expressions and MIR geometry conventions
 live here. UNKNOWN is an explicit approximation, not a hidden generic ALU.
 """
 from fractions import Fraction as Q
-from dataclasses import asdict, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 from pathlib import Path
 import re
 
-from hardware_model import Demand, Evidence, InstructionRule, Machine, Port, ResolvedInstruction, Timing, ServiceClass, expr as E
+from hardware_model import (Evidence, Expr, InstructionExpansion, Machine, Port,
+                            ResourceUse, ServiceClass, Timing, TimingGroup, Uop, expr as E)
 from model_errors import ToolError
 
 REVISION = 'e7bab53e66dfb3c4a1d11cf9519b0396f8576cae'
@@ -207,47 +208,15 @@ SERIAL_TIMING_SPLITS = frozenset(('VEC_SLIDEUP', 'VEC_SLIDEDOWN', 'VEC_SLIDE1DOW
     'VEC_COMPRESS', 'VEC_VRED', 'VEC_VFRED', 'VEC_VFREDOSUM'))
 
 
-def timing_for_instruction(op, work):
-    """Resolve every supported opcode to (L, II) components and MIR latency.
-
-All target-specific precision, expansion and component-ordering decisions live
-here. The graph scorer only consumes the resulting instruction latency.
-"""
-    split = work['rule'].partition(':')[2]
-    serial = split in SERIAL_TIMING_SPLITS
-    rows = []
-    for component in work['components']:
-        name = component['service_class']
-        units = Q(component['work_units'])
-        if units.denominator != 1:
-            raise ToolError('instruction latency requires integral physical work units')
-        count = int(units)
-        timing = (ITERATIVE_TIMINGS[name][int(work['geometry']['precision'])]
-                  if name in ITERATIVE_TIMINGS else TIMINGS[name])
-        is_primary = name not in ('i2v', 'f2v')
-        span = timing.span(count, serial=serial and is_primary)
-        rows.append(dict(service_class=name, work_units=count, **asdict(timing), completion_cycles=span,
-                         expansion='serial-upper-estimate' if serial and is_primary else 'pipeline-span'))
-    transfers = sum(r['completion_cycles'] for r in rows if r['service_class'] in ('i2v', 'f2v'))
-    primary = max((r['completion_cycles'] for r in rows if r['service_class'] not in ('i2v', 'f2v')), default=0)
-    # Scalar store address and data issue tasks run in parallel; vector scalar
-    # transfers precede the primary work (a conservative whole-op barrier).
-    return dict(latency=transfers + primary, components=rows,
-                combination='transfer-prefix + max(primary-components)',
-                assumptions=['Whole-instruction readiness; no lane streaming or multi-EXU uop striping.',
-                    'No bypass-specific operand latencies; not a measured CPU cycle prediction.'] +
-                    (['Dependent split uops conservatively serialized; exact internal DAG is not collected.'] if serial else []),
-                fallback=any(r['service_class'] in ('unknown', 'csr', 'fence') for r in rows))
-
 L = E('max', 1, 'lmul')
 WIDE = E('if', E('ge', 'lmul', 1), E('mul', 2, 'lmul'), 1)
 GATHER = E('mul', L, L)
 FOLD = E('mod', E('add', E('min', 'log_lmul', 0), E('lookup', 'sew', ((16, 3), (32, 2), (64, 1)))), 8)
 
-# Work shape -> (128-bit datapath work, scalar temporary transfers).
-# The RTL split topology supplies arithmetic/permutation work geometry only.
-# Memory uses flow-based service rules below, not these decode shapes.
-WORK_SHAPES = {
+# UopInfoGen arithmetic split -> (primary decode uops, temporary transfers).
+# Each primary arithmetic uop carries one nominal datapath work unit.
+# Memory decode counts and execution flows have separate rules below.
+ARITHMETIC_SPLITS = {
     **dict.fromkeys(('dummy', 'SCA_SIM'), (1, 0)),
     **dict.fromkeys(('VEC_VVV', 'VEC_VVM', 'VEC_EXT2', 'VEC_EXT4', 'VEC_EXT8', 'VEC_VRED', 'VEC_M0X'), (L, 0)),
     **dict.fromkeys(('VEC_VXV', 'VEC_VFV', 'VEC_VXM', 'VEC_VFM', 'VEC_SLIDE1UP', 'VEC_FSLIDE1UP'), (L, 1)),
@@ -269,19 +238,39 @@ WIDE_SPLITS = ('VEC_VWW', 'VEC_VVW', 'VEC_WVW', 'VEC_WVV', 'VEC_VXW', 'VEC_WXW',
 LMULS = tuple(map(Q, ('1/8', '1/4', '1/2', '1', '2', '4', '8')))
 
 
+@dataclass(frozen=True)
+class _Work:
+    service_class: str
+    work: int | Q | Expr
+
+
+@dataclass(frozen=True)
+class _Rule:
+    name: str
+    components: tuple[_Work, ...]
+    evidence: Evidence
+
+
+@dataclass(frozen=True)
+class _ResolvedShape:
+    rule: _Rule
+    geometry: dict = field(default_factory=dict)
+    assumptions: tuple[str, ...] = ()
+
+
 def fallback(base, note):
-    return ResolvedInstruction(InstructionRule(base + ':unknown', (Demand('unknown', 1),),
+    return _ResolvedShape(_Rule(base + ':unknown', (_Work('unknown', 1),),
                                Evidence('', note + '; default unit demand on UNKNOWN.', True)))
 
 
-def resolve(op):
+def _resolve_shape(op):
     """Interpret LLVM's opcode/geometry facts using this datasheet's ISA conventions."""
     base = op['base_opcode']
     if op['meta'] or op['configuration']: raise ToolError('not an executable body instruction')
     if not op['vector']:
         # These pseudos materialize one jump; arbitrary pseudo expansion is unknown.
         if base in ('PseudoBR', 'PseudoRET'):
-            return ResolvedInstruction(InstructionRule(base, (Demand('jmp', 1),),
+            return _ResolvedShape(_Rule(base, (_Work('jmp', 1),),
                 Evidence(SCALAR_DECODE, 'One-instruction branch/return lowering.')))
         if op['pseudo'] or base == 'COPY': return fallback(base, 'Unverified scalar pseudo/copy expansion')
         row = SCALAR_OPCODES.get(base)
@@ -289,14 +278,14 @@ def resolve(op):
         fu, line = row
         source = (VECTOR_DECODE if base in SCALAR_VECTOR_DECODER else SCALAR_DECODE) + '#L' + str(line)
         if fu == 'stu':
-            return ResolvedInstruction(InstructionRule(base, (Demand('sta', 1), Demand('std', 1)),
+            return _ResolvedShape(_Rule(base, (_Work('sta', 1), _Work('std', 1)),
                 Evidence(DISPATCH, 'One decoded store is copied to address and data issue queues.')))
         if fu not in CLASS_PORTS: return fallback(base, f'Unverified scalar FU {fu}')
         service = ('fsqrt' if 'SQRT' in base else 'fdiv') if fu == 'fDivSqrt' else fu
         geometry = {}
         if service in ITERATIVE_TIMINGS:
             geometry['precision'] = (32 if base.endswith('W') else 64) if service == 'div' else {'H': 16, 'S': 32, 'D': 64}[base.rsplit('_', 1)[-1]]
-        return ResolvedInstruction(InstructionRule(base, (Demand(service, 1),), Evidence(source)), geometry)
+        return _ResolvedShape(_Rule(base, (_Work(service, 1),), Evidence(source)), geometry)
 
     whole = re.fullmatch(r'(?:VL([1248])RE(8|16|32|64)|VS([1248])R)_V', base)
     copy = re.fullmatch(r'VMV([1248])R_V', base)
@@ -364,17 +353,133 @@ def resolve(op):
             moves = 2 if split == 'VEC_S_LDST' else 1
         evidence = SERVICE_EVIDENCE[service]
     else:
-        if split not in WORK_SHAPES: return fallback(base, 'Unverified work shape ' + split)
-        primary, moves = WORK_SHAPES[split]
+        if split not in ARITHMETIC_SPLITS: return fallback(base, 'Unverified work shape ' + split)
+        primary, moves = ARITHMETIC_SPLITS[split]
         service = 'vfsqrt' if fu == 'vfdiv' and 'SQRT' in base else fu
         if service in ITERATIVE_TIMINGS: geometry['precision'] = op['sew']
         evidence = Evidence(SPLITS, 'Datapath work topology, not a decoded-uop demand count.')
-    parts = [Demand(service if service in SERVICE_FUS else 'unknown', primary)]
-    if moves: parts.append(Demand('f2v' if split in FP_MOVES or base == 'VFMV_S_F' else 'i2v', moves))
-    return ResolvedInstruction(InstructionRule(base + ':' + split, tuple(parts), evidence), geometry, assumptions)
+    parts = [_Work(service if service in SERVICE_FUS else 'unknown', primary)]
+    if moves: parts.append(_Work('f2v' if split in FP_MOVES or base == 'VFMV_S_F' else 'i2v', moves))
+    return _ResolvedShape(_Rule(base + ':' + split, tuple(parts), evidence), geometry, assumptions)
 
 
-def work_for_instruction(op): return MACHINE.expand(resolve(op))
+EXPANSION_VERSION = 'kunminghu-uops-v1'
+
+
+def expand_instruction(op, datasheet=MACHINE):
+    """Resolve pinned decode topology and assign nominal work to explicit uops.
+
+    No benchmark, measured cycle, or aggregation policy enters this function.
+    Decode counts are not service work: a memory uop can handle many flows.
+    """
+    resolved = _resolve_shape(op)
+    rule, geometry = resolved.rule, resolved.geometry
+    split = rule.name.partition(':')[2]
+    classes = {c.name: c for c in datasheet.classes}
+
+    def evaluate(value):
+        try:
+            return value.evaluate(geometry) if isinstance(value, Expr) else Q(value)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+            raise ToolError(f'{rule.name}: invalid/missing geometry: {exc}') from exc
+
+    origin = 'fallback' if split == 'unknown' else 'rtl-derived'
+    assumptions = list(resolved.assumptions)
+    if rule.evidence.assumed:
+        assumptions.append(rule.evidence.note)
+    if op['base_opcode'] == 'COPY' or op['base_opcode'] in ('PseudoBR', 'PseudoRET'):
+        origin = 'assumed' if split != 'unknown' else 'fallback'
+        assumptions.append('MIR pseudo lowering is modeled; not a verified decoded instruction.')
+
+    memory = op['vector'] and (op['load'] or op['store']) and split != 'unknown'
+    if memory:
+        if split == 'WHOLE_MEMORY':
+            primary_count = int(geometry['whole'])
+        elif split == 'VEC_I_LDST':
+            primary_count = int(max(1, geometry['data_emul'], geometry['index_emul']))
+        else:
+            # UopInfoGen's tables clamp fractional EMUL before multiplying NF.
+            primary_count = int(max(1, geometry['data_emul'])) * geometry['fields']
+        decode_evidence = Evidence(SPLITS + '#L193',
+            'Memory decode tables and whole-register special case; transfers are separate.')
+        allocation = Evidence(COMPONENTS + '#L1740',
+            'Nominal full-active service flows evenly apportioned across primary decode uops; '
+            'not a simulated split/merge schedule or a measured per-uop flow count.', True)
+        assumptions.append(allocation.note)
+    elif op['vector'] and split in ARITHMETIC_SPLITS:
+        primary_count = int(evaluate(ARITHMETIC_SPLITS[split][0]))
+        decode_evidence = Evidence(SPLITS + '#L198', 'Pinned arithmetic decode split count.')
+        allocation = Evidence(SPLITS + '#L198',
+            'One nominal datapath work unit per arithmetic decode uop; '
+            'not a decoded-uop multiplier on demand.', True)
+    else:
+        primary_count = 1
+        decode_evidence = rule.evidence
+        allocation = (rule.evidence if origin == 'fallback' else Evidence(rule.evidence.source,
+            'One nominal scalar execution task per required resource; '
+            'rename elimination, fusion and late lowering are not simulated.', True))
+
+    groups, uses = [], []
+    for index, component in enumerate(rule.components):
+        name = component.service_class
+        c = classes[name]
+        units, rate = evaluate(component.work), evaluate(c.demand_per_unit)
+        if units < 0 or rate <= 0:
+            raise ToolError(f'{rule.name}: invalid service work/rate {units}/{rate}')
+        if c.evidence.assumed:
+            assumptions.append(c.evidence.note)
+        timing = (ITERATIVE_TIMINGS[name][int(geometry['precision'])]
+                  if name in ITERATIVE_TIMINGS else TIMINGS[name])
+        transfer = name in ('i2v', 'f2v')
+        gid = f'{op["id"]}:{index}'
+        groups.append(TimingGroup(gid, name, timing,
+            serial=split in SERIAL_TIMING_SPLITS and not transfer, transfer_prefix=transfer))
+        fu = SERVICE_FUS[name]
+        line = CLASS_PORTS.get(fu, ((), 0))[1]
+        routing = Evidence(PARAMETERS + '#L' + str(line), 'Supported alternative EXUs.'
+                           ) if line else Evidence('', 'Virtual UNKNOWN fallback port.', True)
+        use = ResourceUse(name, c.ports, units, c.unit, rate,
+                          'assumed' if c.evidence.assumed else 'rtl-derived',
+                          (allocation, routing, c.evidence))
+        uses.append((use, gid, transfer))
+
+    uops = []
+    # LLVM non-indexed pseudo LMUL denotes DATA EMUL, and its normalized SEW
+    # above denotes EEW. Do not expose either alias as a known VTYPE value.
+    geometry_keys = (('whole',) if split == 'WHOLE_MEMORY' else
+                     ('data_emul', 'eew', 'fields', 'index_emul') if memory else
+                     ('lmul', 'sew', 'precision', 'whole'))
+    geo = tuple((k, Q(geometry[k])) for k in geometry_keys if k in geometry)
+    if memory and 'index_emul' in geometry:
+        geo += (('index_eew', Q(op['index_eew'])),)
+
+    def emit(kind, resources):
+        uops.append(Uop(op['id'], len(uops), kind, origin, geo,
+            tuple(r for r, _ in resources), tuple(g for _, g in resources),
+            (decode_evidence,), tuple(sorted(set(assumptions)))))
+
+    if not op['vector'] or split == 'unknown':
+        # One scalar store decode, with BOTH required issue tasks.
+        kind = 'fallback' if origin == 'fallback' else 'scalar-store' if op['store'] else 'scalar'
+        emit(kind, [(use, gid) for use, gid, _ in uses])
+    else:
+        # DecodeUnitComp places scalar/FP temporary transfers before primary work.
+        for use, gid, transfer in uses:
+            if transfer:
+                if use.work_units.denominator != 1:
+                    raise ToolError('transfer decode count must be integral')
+                for _ in range(int(use.work_units)):
+                    emit('transfer', [(replace(use, work_units=Q(1), evidence=(
+                        Evidence(COMPONENTS, 'One temporary scalar/FP transfer per prefix uop.'),
+                        *use.evidence[1:])), gid)])
+        primary = [(replace(use, work_units=use.work_units / primary_count), gid)
+                   for use, gid, transfer in uses if not transfer]
+        for _ in range(primary_count):
+            emit('vector-memory' if memory else 'vector-arithmetic', primary)
+    return InstructionExpansion(op['id'], rule.name, tuple(uops),
+        len(uops) if origin == 'rtl-derived' else None, tuple(groups),
+        assumptions=tuple(sorted(set(assumptions))))
+
 
 # Literal reviewed records follow: opcode -> FU, split and source line.
 VECTOR_OPCODES = {
