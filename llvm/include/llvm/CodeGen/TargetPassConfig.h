@@ -163,6 +163,13 @@ public:
   //
   void setInitialized() { Initialized = true; }
 
+  /// Limit this pipeline instance without modifying process-wide CLI options.
+  void setStopAfterPass(AnalysisID ID) {
+    assert(!Initialized && !AddingMachinePasses);
+    StopAfter = ID;
+    StopAfterInstanceNum = 0;
+  }
+
   CodeGenOptLevel getOptLevel() const;
 
   /// Returns true if one of the `-start-after`, `-start-before`, `-stop-after`

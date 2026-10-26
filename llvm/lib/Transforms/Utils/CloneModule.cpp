@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm-c/Core.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -29,6 +30,33 @@ static void copyComdat(GlobalObject *Dst, const GlobalObject *Src) {
   Comdat *DC = Dst->getParent()->getOrInsertComdat(SC->getName());
   DC->setSelectionKind(SC->getSelectionKind());
   Dst->setComdat(DC);
+}
+
+static void preserveClonedUseListOrder(const Value &Old,
+                                       const ValueToValueMapTy &VMap) {
+  Value *New = VMap.lookup(&Old);
+  if (!New || !New->hasNUsesOrMore(2))
+    return;
+
+  SmallDenseMap<const Use *, unsigned, 16> Order;
+  for (const Use &U : Old.uses()) {
+    auto *NewUser = dyn_cast_or_null<User>(VMap.lookup(U.getUser()));
+    // Definitions may have been omitted, and a constant user may have folded
+    // during remapping. Only restore uses with a corresponding cloned operand.
+    if (!NewUser || NewUser == U.getUser() ||
+        U.getOperandNo() >= NewUser->getNumOperands())
+      continue;
+    const Use &NewUse = NewUser->getOperandUse(U.getOperandNo());
+    if (NewUse.get() == New)
+      Order.try_emplace(&NewUse, Order.size());
+  }
+  if (Order.empty())
+    return;
+
+  New->sortUseList([&](const Use &A, const Use &B) {
+    return Order.lookup_or(&A, Order.size()) <
+           Order.lookup_or(&B, Order.size());
+  });
 }
 
 /// This is not as easy as it might seem because we have to worry about making
@@ -49,9 +77,10 @@ std::unique_ptr<Module> llvm::CloneModule(const Module &M,
   return CloneModule(M, VMap, [](const GlobalValue *GV) { return true; });
 }
 
-std::unique_ptr<Module> llvm::CloneModule(
-    const Module &M, ValueToValueMapTy &VMap,
-    function_ref<bool(const GlobalValue *)> ShouldCloneDefinition) {
+std::unique_ptr<Module>
+llvm::CloneModule(const Module &M, ValueToValueMapTy &VMap,
+                  function_ref<bool(const GlobalValue *)> ShouldCloneDefinition,
+                  bool PreserveUseListOrder) {
 
   assert(M.isMaterialized() && "Module must be materialized before cloning!");
 
@@ -230,6 +259,26 @@ std::unique_ptr<Module> llvm::CloneModule(
       GV->setInitializer(MapValue(G.getInitializer(), VMap));
 
     copyComdat(GV, &G);
+  }
+
+  if (PreserveUseListOrder) {
+    // Operand remapping rebuilds use-lists by prepending uses. Restore their
+    // original relative order after all definitions and initializers are
+    // mapped. Only visit module-owned values: uniqued constants may also have
+    // users in the source module or elsewhere in this LLVMContext.
+    for (const GlobalValue &GV : M.global_values())
+      preserveClonedUseListOrder(GV, VMap);
+    for (const Function &F : M) {
+      if (cast<Function>(VMap.lookup(&F))->isDeclaration())
+        continue;
+      for (const Argument &A : F.args())
+        preserveClonedUseListOrder(A, VMap);
+      for (const BasicBlock &BB : F) {
+        preserveClonedUseListOrder(BB, VMap);
+        for (const Instruction &I : BB)
+          preserveClonedUseListOrder(I, VMap);
+      }
+    }
   }
 
   return New;

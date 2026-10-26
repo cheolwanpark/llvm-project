@@ -633,6 +633,7 @@ struct FixedScalableVFPair {
 class VPlanCostReport;
 
 class VPlanRAContext;
+struct VPlanBackendProbe;
 class VFSelectionContext {
   /// \return True if maximizing vector bandwidth is enabled by the target or
   /// user options, for the given register kind (scalable or fixed-width).
@@ -714,6 +715,10 @@ class VFSelectionContext {
 public:
   VPlanCostReport *CostReport = nullptr;
   VPlanRAContext *RA = nullptr;
+  VPlanBackendProbe *BackendProbe = nullptr;
+  /// Owned backend facts for this planning invocation. Costing/selection do not
+  /// consume these yet; a future model can query them by candidate identity.
+  SmallVector<json::Object> BackendObservations;
 
   /// The kind of cost that we are calculating.
   const TTI::TargetCostKind CostKind;
@@ -909,6 +914,7 @@ public:
   void plan(ElementCount UserVF, unsigned UserIC);
 
   void registerRACandidates();
+  ArrayRef<VPlanPtr> getPlans() const { return VPlans; }
   std::pair<VectorizationFactor, VPlan *> selectRARequested();
 
   /// Return the VPlan for \p VF. At the moment, there is always a single VPlan

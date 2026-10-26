@@ -78,6 +78,8 @@ class ProfileSummaryInfo;
 class ScalarEvolution;
 class TargetLibraryInfo;
 class TargetTransformInfo;
+class VPlanBackendFeedback;
+struct VPlanBackendProbe;
 
 LLVM_ABI extern cl::opt<bool> EnableLoopInterleaving;
 LLVM_ABI extern cl::opt<bool> EnableLoopVectorization;
@@ -130,6 +132,8 @@ struct LoopVectorizeResult {
 /// The LoopVectorize Pass.
 struct LoopVectorizePass : public OptionalPassInfoMixin<LoopVectorizePass> {
 private:
+  VPlanBackendFeedback *BackendFeedback = nullptr;
+  VPlanBackendProbe *BackendProbe = nullptr;
   /// If false, consider all loops for interleaving.
   /// If true, only loops that explicitly request interleaving are considered.
   bool InterleaveOnlyWhenForced;
@@ -140,6 +144,12 @@ private:
 
 public:
   LLVM_ABI LoopVectorizePass(LoopVectorizeOptions Opts = {});
+
+  /// Internal materialization on a disposable function, using normal planning.
+  LoopVectorizePass &setBackendProbe(VPlanBackendProbe &Probe) {
+    BackendProbe = &Probe;
+    return *this;
+  }
 
   ScalarEvolution *SE;
   LoopInfo *LI;

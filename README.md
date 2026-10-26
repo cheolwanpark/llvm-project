@@ -7,6 +7,10 @@ The target is XiangShan Kunminghu v2 MinimalConfig, VLEN=128.
 
 모델의 목적, 가정과 한계는 [MODEL.md](MODEL.md)에 정리되어 있다.
 
+외부 wrapper 없이 LLVM vectorizer 내부에서 VF 후보의 backend 관찰값을 받는
+선택적 연구 경로는 [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md)에 정리되어 있다.
+이 경로는 기존 비용 계산과 VF 선택을 유지한다.
+
 ## LLVM passes and the meta-compiler
 
 [utils/vplan-meta-compile](utils/vplan-meta-compile) is a Python driver that

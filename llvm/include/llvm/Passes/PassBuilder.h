@@ -747,7 +747,9 @@ private:
   void addRequiredLTOPreLinkPasses(ModulePassManager &MPM);
 
   void addVectorPasses(OptimizationLevel Level, FunctionPassManager &FPM,
-                       ThinOrFullLTOPhase LTOPhase);
+                       ThinOrFullLTOPhase LTOPhase, bool AddVectorizer = true);
+
+  void registerVPlanBackendFeedbackAnalysis(FunctionAnalysisManager &FAM);
 
   static std::optional<std::vector<PipelineElement>>
   parsePipelineText(StringRef Text);

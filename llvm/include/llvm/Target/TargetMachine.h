@@ -22,6 +22,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/PGOOptions.h"
 #include "llvm/Target/CGPassBuilderOption.h"
 #include "llvm/Target/TargetOptions.h"
@@ -407,6 +408,12 @@ public:
   /// The returned TargetTransformInfo is specialized to the subtarget
   /// corresponding to \p F.
   virtual TargetTransformInfo getTargetTransformInfo(const Function &F) const;
+
+  /// Observe a disposable, already materialized candidate module. Implemented
+  /// by targets with a backend observer. This never supplies a cost or a VF.
+  virtual Expected<json::Object> getVPlanBackendFeedback(Module &M) {
+    return createStringError("target has no VPlan backend feedback observer");
+  }
 
   /// Allow the target to modify the pass pipeline.
   // TODO: Populate all pass names by using <Target>PassRegistry.def.

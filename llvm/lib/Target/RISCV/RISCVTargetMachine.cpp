@@ -17,6 +17,7 @@
 #include "RISCVMachineScheduler.h"
 #include "RISCVTargetObjectFile.h"
 #include "RISCVTargetTransformInfo.h"
+#include "RISCVVPlanAnalytics.h"
 #include "TargetInfo/RISCVTargetInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
@@ -32,10 +33,12 @@
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
@@ -439,6 +442,23 @@ TargetPassConfig *RISCVTargetMachine::createPassConfig(PassManagerBase &PM) {
   return new RISCVPassConfig(*this, PM);
 }
 
+Expected<json::Object> RISCVTargetMachine::getVPlanBackendFeedback(Module &M) {
+  if (TargetPassConfig::hasLimitedCodeGenPipeline())
+    return createStringError(
+        "backend feedback requires an unrestricted codegen pipeline");
+  std::optional<json::Object> Result;
+  SaveAndRestore<std::optional<json::Object> *> Guard(BackendFeedbackSink,
+                                                      &Result);
+  legacy::PassManager PM;
+  if (addPassesToBackendObserver(PM, &RISCVVPlanAnalytics::ID))
+    return createStringError(
+        "cannot configure candidate instruction selection");
+  PM.run(M);
+  if (!Result)
+    return createStringError("backend observer did not see candidate function");
+  return std::move(*Result);
+}
+
 std::unique_ptr<CSEConfigBase> RISCVPassConfig::getCSEConfig() const {
   return getStandardCSEConfigForOpt(TM->getOptLevel());
 }
@@ -577,7 +597,9 @@ void RISCVPassConfig::addPreSched2() {
     addPass(createRISCVLoadStoreOptPass());
   // Observe frame-address materialization and segment spill/copy lowering,
   // while RVV pseudos still retain their geometry.
-  if (vplanAnalyticsEnabled())
+  if (auto *Sink = getTM<RISCVTargetMachine>().getBackendFeedbackSink())
+    addPass(new RISCVVPlanAnalytics(Sink));
+  else if (vplanAnalyticsEnabled())
     addPass(createRISCVVPlanAnalyticsPass());
 }
 

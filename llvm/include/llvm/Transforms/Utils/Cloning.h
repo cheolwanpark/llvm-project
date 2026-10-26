@@ -60,9 +60,15 @@ LLVM_ABI std::unique_ptr<Module> CloneModule(const Module &M,
 /// controls whether a specific GlobalValue's definition is cloned. If the
 /// function returns false, the module copy will contain an external reference
 /// in place of the global definition.
+/// If PreserveUseListOrder is true, preserve the relative order of mapped uses
+/// of globals, arguments, basic blocks and instructions. Uses without a
+/// corresponding cloned operand follow the mapped uses in their existing order.
+/// Non-global constants are not reordered, as they can be shared with the
+/// source module in the same LLVMContext.
 LLVM_ABI std::unique_ptr<Module>
 CloneModule(const Module &M, ValueToValueMapTy &VMap,
-            function_ref<bool(const GlobalValue *)> ShouldCloneDefinition);
+            function_ref<bool(const GlobalValue *)> ShouldCloneDefinition,
+            bool PreserveUseListOrder = false);
 
 /// This struct can be used to capture information about code
 /// being cloned, while it is being cloned.

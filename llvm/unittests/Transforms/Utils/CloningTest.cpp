@@ -1440,4 +1440,121 @@ TEST_F(CloneModule, GlobalWithBlockAddressesInitializer) {
   ASSERT_NE(OriginalBa->getBasicBlock(), ClonedBa->getBasicBlock());
 }
 
+TEST(CloneModuleUseListOrder, FullAndPartialClone) {
+  for (bool CloneAll : {false, true}) {
+    SCOPED_TRACE(CloneAll);
+    LLVMContext Context;
+    auto M = parseIR(Context, R"(
+      @g = global i32 7
+      @h = global ptr @g
+      @shared = global { i32, ptr } { i32 7, ptr null }
+      @shared2 = global { i32, ptr } { i32 7, ptr null }
+      define i32 @keep(i32 %x, i1 %cond) {
+      entry:
+        %twice = add i32 %x, %x
+        %other = add i32 %x, 7
+        %mix = add i32 %twice, %twice
+        %glob = load i32, ptr @g
+        br i1 %cond, label %exit, label %exit
+      exit:
+        %result = add i32 %mix, %glob
+        ret i32 %result
+      }
+      define i32 @omit() {
+        %loaded = load i32, ptr @g
+        ret i32 %loaded
+      }
+    )");
+    ASSERT_TRUE(M);
+    ASSERT_FALSE(verifyModule(*M, &errs()));
+    Function *F = M->getFunction("keep");
+    auto I = F->front().begin();
+    Instruction *Twice = &*I++;
+    Instruction *Other = &*I++;
+    Instruction *Mix = &*I++;
+    Instruction *Load = &*I++;
+    Instruction *Branch = &*I;
+    Instruction *OmittedLoad = &M->getFunction("omit")->front().front();
+    GlobalVariable *G = M->getGlobalVariable("g");
+    GlobalVariable *H = M->getGlobalVariable("h");
+
+    auto Uses = [](const Value &V) {
+      return to_vector<4>(map_range(V.uses(), [](const Use &U) { return &U; }));
+    };
+    auto SetOrder = [](Value &V, ArrayRef<const Use *> Order) {
+      V.sortUseList([&](const Use &A, const Use &B) {
+        return llvm::find(Order, &A) < llvm::find(Order, &B);
+      });
+    };
+    // Neither instruction order nor its reverse. The two operands of %twice
+    // must remain distinguishable even though they have the same user.
+    SetOrder(*F->getArg(0), {&Twice->getOperandUse(0), &Other->getOperandUse(0),
+                             &Twice->getOperandUse(1)});
+    SetOrder(*Twice, {&Mix->getOperandUse(0), &Mix->getOperandUse(1)});
+    SetOrder(F->back(), {&Branch->getOperandUse(1), &Branch->getOperandUse(2)});
+    // Interleave a use in a definition that the partial clone will omit.
+    SetOrder(*G, {&Load->getOperandUse(0), &OmittedLoad->getOperandUse(0),
+                  &H->getOperandUse(0)});
+    auto ArgUses = Uses(*F->getArg(0));
+    auto InstUses = Uses(*Twice);
+    auto BlockUses = Uses(F->back());
+    auto GlobalUses = Uses(*G);
+    Value *SharedConstant = M->getGlobalVariable("shared")->getInitializer();
+    auto ConstantUses = Uses(*SharedConstant);
+
+    auto ShouldClone = [&](const GlobalValue *GV) {
+      return CloneAll || GV->getName() != "omit";
+    };
+    ValueToValueMapTy DefaultMap;
+    auto DefaultClone = llvm::CloneModule(*M, DefaultMap, ShouldClone);
+    // The opt-in must be necessary for this input; otherwise this would not
+    // exercise the regression that motivated preserving use-list order.
+    SmallVector<const Use *, 4> DefaultExpected{
+        &cast<User>(DefaultMap[Twice])->getOperandUse(0),
+        &cast<User>(DefaultMap[Other])->getOperandUse(0),
+        &cast<User>(DefaultMap[Twice])->getOperandUse(1)};
+    EXPECT_NE(Uses(*DefaultMap[F->getArg(0)]), DefaultExpected);
+    DefaultClone.reset();
+
+    ValueToValueMapTy VMap;
+    auto NewM = llvm::CloneModule(*M, VMap, ShouldClone,
+                                  /*PreserveUseListOrder=*/true);
+    ASSERT_FALSE(verifyModule(*NewM, &errs()));
+    SmallVector<const Use *, 4> NewArgUses{
+        &cast<User>(VMap[Twice])->getOperandUse(0),
+        &cast<User>(VMap[Other])->getOperandUse(0),
+        &cast<User>(VMap[Twice])->getOperandUse(1)};
+    SmallVector<const Use *, 4> NewInstUses{
+        &cast<User>(VMap[Mix])->getOperandUse(0),
+        &cast<User>(VMap[Mix])->getOperandUse(1)};
+    SmallVector<const Use *, 4> NewBlockUses{
+        &cast<User>(VMap[Branch])->getOperandUse(1),
+        &cast<User>(VMap[Branch])->getOperandUse(2)};
+    SmallVector<const Use *, 4> NewGlobalUses{
+        &cast<User>(VMap[Load])->getOperandUse(0)};
+    if (CloneAll)
+      NewGlobalUses.push_back(&cast<User>(VMap[OmittedLoad])->getOperandUse(0));
+    NewGlobalUses.push_back(&cast<User>(VMap[H])->getOperandUse(0));
+    EXPECT_EQ(Uses(*VMap[F->getArg(0)]), NewArgUses);
+    EXPECT_EQ(Uses(*VMap[Twice]), NewInstUses);
+    EXPECT_EQ(Uses(*VMap[&F->back()]), NewBlockUses);
+    EXPECT_EQ(Uses(*VMap[G]), NewGlobalUses);
+    EXPECT_EQ(NewM->getFunction("omit")->isDeclaration(), !CloneAll);
+
+    EXPECT_EQ(Uses(*F->getArg(0)), ArgUses);
+    EXPECT_EQ(Uses(*Twice), InstUses);
+    EXPECT_EQ(Uses(F->back()), BlockUses);
+    EXPECT_EQ(Uses(*G), GlobalUses);
+    EXPECT_EQ(NewM->getGlobalVariable("shared")->getInitializer(),
+              SharedConstant);
+    auto RemainingOriginalUses = Uses(*SharedConstant);
+    erase_if(RemainingOriginalUses,
+             [&](const Use *U) { return !is_contained(ConstantUses, U); });
+    EXPECT_EQ(RemainingOriginalUses, ConstantUses);
+    NewM.reset();
+    EXPECT_EQ(Uses(*SharedConstant), ConstantUses);
+    EXPECT_FALSE(verifyModule(*M, &errs()));
+  }
+}
+
 } // namespace

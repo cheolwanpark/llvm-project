@@ -116,11 +116,13 @@ CodeGenTargetMachineImpl::getTargetTransformInfo(const Function &F) const {
 /// addPassesToX helper drives creation and initialization of TargetPassConfig.
 static TargetPassConfig *
 addPassesToGenerateCode(CodeGenTargetMachineImpl &TM, PassManagerBase &PM,
-                        bool DisableVerify,
-                        MachineModuleInfoWrapperPass &MMIWP) {
+                        bool DisableVerify, MachineModuleInfoWrapperPass &MMIWP,
+                        AnalysisID StopAfter = nullptr) {
   // Targets may override createPassConfig to provide a target-specific
   // subclass.
   TargetPassConfig *PassConfig = TM.createPassConfig(PM);
+  if (StopAfter)
+    PassConfig->setStopAfterPass(StopAfter);
   // Set PassConfig options provided by TargetMachine.
   PassConfig->setDisableVerify(DisableVerify);
   PM.add(PassConfig);
@@ -140,6 +142,13 @@ addPassesToGenerateCode(CodeGenTargetMachineImpl &TM, PassManagerBase &PM,
   PassConfig->addMachinePasses();
   PassConfig->setInitialized();
   return PassConfig;
+}
+
+bool CodeGenTargetMachineImpl::addPassesToBackendObserver(
+    PassManagerBase &PM, const void *StopAfter) {
+  auto *MMI = new MachineModuleInfoWrapperPass(this);
+  return !addPassesToGenerateCode(*this, PM, /*DisableVerify=*/false, *MMI,
+                                  StopAfter);
 }
 
 bool CodeGenTargetMachineImpl::addAsmPrinter(PassManagerBase &PM,

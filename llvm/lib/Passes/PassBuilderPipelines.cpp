@@ -1400,9 +1400,11 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
 /// TODO: Should LTO cause any differences to this set of passes?
 void PassBuilder::addVectorPasses(OptimizationLevel Level,
                                   FunctionPassManager &FPM,
-                                  ThinOrFullLTOPhase LTOPhase) {
-  FPM.addPass(LoopVectorizePass(
-      LoopVectorizeOptions(!PTO.LoopInterleaving, !PTO.LoopVectorization)));
+                                  ThinOrFullLTOPhase LTOPhase,
+                                  bool AddVectorizer) {
+  if (AddVectorizer)
+    FPM.addPass(LoopVectorizePass(
+        LoopVectorizeOptions(!PTO.LoopInterleaving, !PTO.LoopVectorization)));
 
   // Drop dereferenceable assumes after vectorization, as they are no longer
   // needed and can inhibit further optimization.

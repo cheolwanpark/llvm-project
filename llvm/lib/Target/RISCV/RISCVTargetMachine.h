@@ -23,6 +23,7 @@ namespace llvm {
 class RISCVTargetMachine : public CodeGenTargetMachineImpl {
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
   mutable StringMap<std::unique_ptr<RISCVSubtarget>> SubtargetMap;
+  std::optional<json::Object> *BackendFeedbackSink = nullptr;
 
 public:
   RISCVTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
@@ -48,6 +49,11 @@ public:
                             const TargetSubtargetInfo *STI) const override;
 
   TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
+
+  Expected<json::Object> getVPlanBackendFeedback(Module &M) override;
+  std::optional<json::Object> *getBackendFeedbackSink() const {
+    return BackendFeedbackSink;
+  }
 
   bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DstAS) const override;
 

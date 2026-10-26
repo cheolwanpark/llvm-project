@@ -30,6 +30,10 @@ protected: // Can only create subclasses.
 
   void initAsmInfo();
 
+  /// Reuse normal codegen setup through a requested observer, without assembly
+  /// emission. Returns true if instruction selection cannot be configured.
+  bool addPassesToBackendObserver(PassManagerBase &PM, const void *StopAfter);
+
   /// Reset internal state.
   virtual void reset() {};
 

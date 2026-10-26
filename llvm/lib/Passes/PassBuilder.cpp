@@ -733,6 +733,7 @@ void PassBuilder::registerCGSCCAnalyses(CGSCCAnalysisManager &CGAM) {
 }
 
 void PassBuilder::registerFunctionAnalyses(FunctionAnalysisManager &FAM) {
+  registerVPlanBackendFeedbackAnalysis(FAM);
   // We almost always want the default alias analysis pipeline.
   // If a user wants a different one, they can register their own before calling
   // registerFunctionAnalyses().
