@@ -18,6 +18,7 @@
 #include "RISCVTargetObjectFile.h"
 #include "RISCVTargetTransformInfo.h"
 #include "RISCVVPlanAnalytics.h"
+#include "RISCVVPlanSpill.h"
 #include "TargetInfo/RISCVTargetInfo.h"
 #include "XiangShanV2TargetTransformInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -35,6 +36,7 @@
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Module.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -447,21 +449,53 @@ TargetPassConfig *RISCVTargetMachine::createPassConfig(PassManagerBase &PM) {
   return new RISCVPassConfig(*this, PM);
 }
 
-Expected<json::Object> RISCVTargetMachine::getVPlanBackendFeedback(Module &M) {
+Expected<VPlanBackendResult>
+RISCVTargetMachine::getVPlanBackendFeedback(Module &M, bool Time) {
   if (TargetPassConfig::hasLimitedCodeGenPipeline())
     return createStringError(
         "backend feedback requires an unrestricted codegen pipeline");
-  std::optional<json::Object> Result;
-  SaveAndRestore<std::optional<json::Object> *> Guard(BackendFeedbackSink,
-                                                      &Result);
   legacy::PassManager PM;
-  if (addPassesToBackendObserver(PM, &RISCVVPlanAnalytics::ID))
+  RISCVPassConfig Config(*this, PM);
+  llvm::call_once(InitializeDefaultRVVRegisterAllocatorFlag,
+                  initializeDefaultRVVRegisterAllocatorOnce);
+  auto Ctor = RVVRegisterRegAlloc::getDefault();
+  if (!Config.getOptimizeRegAlloc() ||
+      (Ctor != useDefaultRegisterAllocator &&
+       Ctor != createGreedyRVVRegisterAllocator &&
+       Ctor != createBasicRVVRegisterAllocator))
+    return createStringError(
+        "backend feedback requires optimized RVV allocation");
+  std::optional<Expected<VPlanBackendResult>> Result;
+  VPlanFeedbackTimer Timer(Time);
+  SaveAndRestore Guard(BackendFeedbackSink, &Result);
+  SaveAndRestore TimerGuard(BackendFeedbackTimer, Time ? &Timer : nullptr);
+  if (addPassesToBackendObserver(PM, &RISCVVPlanSpill::ID))
     return createStringError(
         "cannot configure candidate instruction selection");
+  Timer.mark("backend_pipeline_construction");
   PM.run(M);
+  Timer.mark("backend_return");
+  if (Time && (!Result || !*Result)) {
+    // Expected errors have no result payload. Preserve executed phase timings
+    // in a separate diagnostic record, without turning failure into spill=0.
+    json::Object Timing;
+    for (const auto &F : M)
+      if (F.hasFnAttribute("vplan.ra.candidate"))
+        Timing["candidate"] =
+            F.getFnAttribute("vplan.ra.candidate").getValueAsString();
+    for (const auto &P : Timer.Phases) {
+      Timing[P.Phase + "_wall_seconds"] = P.Wall;
+      Timing[P.Phase + "_cpu_seconds"] = P.CPU;
+    }
+    errs() << "VPLAN-BACKEND-FAILED-TIMING: " << json::Value(std::move(Timing))
+           << '\n';
+  }
   if (!Result)
     return createStringError("backend observer did not see candidate function");
-  return std::move(*Result);
+  if (!*Result)
+    return Result->takeError();
+  (*Result)->Timings = std::move(Timer.Phases);
+  return std::move(**Result);
 }
 
 std::unique_ptr<CSEConfigBase> RISCVPassConfig::getCSEConfig() const {
@@ -494,8 +528,15 @@ bool RISCVPassConfig::addRegAssignAndRewriteFast() {
 }
 
 bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
+  auto *Timer = getTM<RISCVTargetMachine>().BackendFeedbackTimer;
+  if (Timer)
+    addPass(createRISCVVPlanTimingMarker(*Timer, "pre_rvv_ra"));
   addPass(createRVVRegAllocPass(true));
+  if (Timer)
+    addPass(createRISCVVPlanTimingMarker(*Timer, "rvv_allocation"));
   addPass(createVirtRegRewriter(false));
+  if (auto *Sink = getTM<RISCVTargetMachine>().getBackendFeedbackSink())
+    addPass(new RISCVVPlanSpill(*Sink, Timer));
   addPass(createRISCVInsertVSETVLIPass());
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
       EnableRISCVDeadRegisterElimination)
@@ -602,9 +643,7 @@ void RISCVPassConfig::addPreSched2() {
     addPass(createRISCVLoadStoreOptPass());
   // Observe frame-address materialization and segment spill/copy lowering,
   // while RVV pseudos still retain their geometry.
-  if (auto *Sink = getTM<RISCVTargetMachine>().getBackendFeedbackSink())
-    addPass(new RISCVVPlanAnalytics(Sink));
-  else if (vplanAnalyticsEnabled())
+  if (vplanAnalyticsEnabled())
     addPass(createRISCVVPlanAnalyticsPass());
 }
 
@@ -693,7 +732,6 @@ void RISCVPassConfig::addFastRegAlloc() {
   addPass(&InitUndefID);
   TargetPassConfig::addFastRegAlloc();
 }
-
 
 void RISCVPassConfig::addPostRegAlloc() {
   if (TM->getOptLevel() != CodeGenOptLevel::None &&

@@ -1315,7 +1315,10 @@ void TargetPassConfig::addMachinePasses() {
   if (!DisableCFIFixup && TM->Options.EnableCFIFixup)
     addPass(createCFIFixupLegacy());
 
-  PM->add(createStackFrameLayoutAnalysisPass());
+  // This diagnostic analysis bypasses addPass(), so honor a pipeline stop
+  // explicitly (including the in-process RVV spill observer boundary).
+  if (!Stopped)
+    PM->add(createStackFrameLayoutAnalysisPass());
 
   // Add passes that directly emit MI after all other MI passes.
   addPreEmitPass2();

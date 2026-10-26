@@ -14,6 +14,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/TypeSize.h"
+#include "llvm/Support/VPlanBackendResult.h"
 #include <functional>
 
 namespace llvm {
@@ -44,8 +45,6 @@ struct VPlanBackendProbe {
   BasicBlock *Header;
   bool Emitted = false;
   std::string Error;
-  json::Value ScalarCost = nullptr;
-  json::Object MiddleEnd;
 };
 
 /// A dependency-inverted service: Vectorize does not link CodeGen or Passes.
@@ -54,13 +53,14 @@ struct VPlanBackendProbe {
 /// query.
 class VPlanBackendFeedback {
 public:
-  using Query = std::function<Expected<json::Object>(
+  using Query = std::function<Expected<VPlanBackendResult>(
       const Function &, const BasicBlock &, const VPlanBackendCandidate &)>;
 
   explicit VPlanBackendFeedback(Query Q = {}) : QueryCandidate(std::move(Q)) {}
 
-  Expected<json::Object> get(const Function &F, const BasicBlock &Header,
-                             const VPlanBackendCandidate &Candidate) const {
+  Expected<VPlanBackendResult>
+  get(const Function &F, const BasicBlock &Header,
+      const VPlanBackendCandidate &Candidate) const {
     if (!QueryCandidate)
       return createStringError("backend feedback provider unavailable");
     return QueryCandidate(F, Header, Candidate);
@@ -90,6 +90,8 @@ public:
 };
 
 LLVM_ABI bool vplanBackendFeedbackEnabled();
+LLVM_ABI bool vplanBackendFeedbackTimingEnabled();
+LLVM_ABI json::Object summarizeVPlanBackendResult(const VPlanBackendResult &R);
 /// Diagnostic oracle: retain the gate's decision but query every candidate.
 LLVM_ABI bool vplanBackendFeedbackForceAll();
 /// Optional diagnostic JSONL/stderr output of the data stored in LV, after the

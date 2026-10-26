@@ -1,5 +1,8 @@
 # In-process VF 비용 선택 검증 — 2026-10-26
 
+이 문서는 이전 구현과 203개 DB의 기록이다. RVV RA 직후 종료하는 최신 구현의
+313개 DB 검증은 [RVV_SPILL_PROBE_VALIDATION.md](RVV_SPILL_PROBE_VALIDATION.md)를 참조한다.
+
 기준 revision은 `de1dc1e703cda4f8392b184b26a77fdcfa3a1692`이며,
 `/work/llvm-baware-integration`에서 기준 compiler를 먼저 빌드했다.
 구현과 모든 빌드는 이 워크트리에서 수행했다. 참조 워크트리를 수정하거나

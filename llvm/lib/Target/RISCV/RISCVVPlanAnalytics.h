@@ -12,11 +12,10 @@ json::Object collectAnalytics(MachineFunction &MF);
 }
 class RISCVVPlanAnalytics : public MachineFunctionPass {
   bool Seen = false;
-  std::optional<json::Object> *Sink = nullptr;
 
 public:
   static char ID;
-  explicit RISCVVPlanAnalytics(std::optional<json::Object> *Sink = nullptr);
+  RISCVVPlanAnalytics();
   StringRef getPassName() const override {
     return "RISC-V local cost observations";
   }

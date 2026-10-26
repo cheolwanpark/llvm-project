@@ -120,6 +120,13 @@ struct RISCVRegisterInfo : public RISCVGenRegisterInfo {
   int64_t getFrameIndexInstrOffset(const MachineInstr *MI,
                                    int Idx) const override;
 
+  // Pure physical-encoding rule shared by lowering and early spill observation.
+  static unsigned getSegmentSpillGroup(unsigned Remaining, unsigned Encoding) {
+    for (unsigned Group : {8u, 4u, 2u})
+      if (Remaining >= Group && Encoding % Group == 0)
+        return Group;
+    return 1;
+  }
   void lowerSegmentSpillReload(MachineBasicBlock::iterator II,
                                bool IsSpill) const;
 

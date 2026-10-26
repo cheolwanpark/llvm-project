@@ -188,7 +188,8 @@ TEST_F(XiangShanV2TTITest, EpilogueObservationsAndTransactionalFallback) {
   SaveAndRestore<bool> SaveForceAll(ForceAll.getValue(), true);
   SaveAndRestore<unsigned> SaveIC(IC.getValue(), 2);
   unsigned EpilogueQueries = 0, MainQueries = 0;
-  auto Run = [&](bool Enabled, bool FailEpilogue) {
+  auto Run = [&](bool Enabled, unsigned FailureMode) {
+    unsigned ThisMainQueries = 0;
     Enable = Enabled;
     SMDiagnostic D;
     auto Module = parseAssemblyString(R"(
@@ -232,29 +233,36 @@ TEST_F(XiangShanV2TTITest, EpilogueObservationsAndTransactionalFallback) {
     PB.registerLoopAnalyses(LAM);
     PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
     auto &Service = FAM.getResult<VPlanBackendFeedbackAnalysis>(Fn);
-    Service = VPlanBackendFeedback(
-        [&, Native = Service](
-            const Function &F, const BasicBlock &H,
-            const VPlanBackendCandidate &Candidate) -> Expected<json::Object> {
-          EXPECT_FALSE(VPlanCostProfileScope::active());
-          if (Candidate.IsEpilogue) {
-            ++EpilogueQueries;
-            EXPECT_EQ(Candidate.IC, 1u);
-            EXPECT_EQ(Candidate.MainIC, 2u);
-            if (FailEpilogue)
-              return createStringError("injected epilogue failure");
-          } else
-            ++MainQueries;
-          auto O = Native.get(F, H, Candidate);
-          EXPECT_TRUE(bool(O));
-          if (O) {
-            EXPECT_EQ(O->getBoolean("iteration_mapping"), true);
-            EXPECT_EQ(O->getString("error"), "");
-            EXPECT_EQ(O->getString("observation_role"),
-                      Candidate.IsEpilogue ? "epilogue" : "main");
-          }
-          return O;
-        });
+    Service = VPlanBackendFeedback([&, Native = Service](
+                                       const Function &F, const BasicBlock &H,
+                                       const VPlanBackendCandidate &Candidate)
+                                       -> Expected<VPlanBackendResult> {
+      EXPECT_FALSE(VPlanCostProfileScope::active());
+      if (Candidate.IsEpilogue) {
+        ++EpilogueQueries;
+        EXPECT_EQ(Candidate.IC, 1u);
+        EXPECT_EQ(Candidate.MainIC, 2u);
+        if (FailureMode == 1)
+          return createStringError("injected epilogue failure");
+      } else {
+        ++MainQueries;
+        if (++ThisMainQueries == 2 && FailureMode == 2)
+          return createStringError("injected second main candidate failure");
+      }
+      auto O = Native.get(F, H, Candidate);
+      EXPECT_TRUE(bool(O));
+      if (O) {
+        EXPECT_TRUE(O->IterationMapping);
+        EXPECT_EQ(O->Stage, "post-rvv-ra-rewrite");
+        EXPECT_EQ(O->IsEpilogue, Candidate.IsEpilogue);
+        EXPECT_EQ(O->IC, Candidate.IC);
+        if (FailureMode == 3)
+          O->Candidate = "incorrect identity";
+        if (FailureMode == 4)
+          O->IterationMapping = false;
+      }
+      return O;
+    });
     FunctionPassManager FPM;
     FPM.addPass(LoopVectorizePass());
     FPM.run(Fn, FAM);
@@ -271,6 +279,8 @@ TEST_F(XiangShanV2TTITest, EpilogueObservationsAndTransactionalFallback) {
   EXPECT_GT(MainQueries, 0u);
   EXPECT_GT(EpilogueQueries, 0u);
   EXPECT_NE(Hybrid.find("vec.epilog"), std::string::npos);
-  auto Fallback = Run(true, true);
-  EXPECT_EQ(Fallback, Native);
+  for (unsigned FailureMode : {1u, 2u, 3u, 4u}) {
+    auto Fallback = Run(true, FailureMode);
+    EXPECT_EQ(Fallback, Native) << "failure mode " << FailureMode;
+  }
 }

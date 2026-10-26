@@ -32,6 +32,34 @@ static cl::opt<bool> ForceAllFeedback(
     "vplan-backend-feedback-force-all", cl::Hidden,
     cl::desc("Query every candidate, retaining the register-bound decision"));
 
+static cl::opt<bool>
+    TimeFeedback("time-vplan-backend-feedback", cl::Hidden,
+                 cl::desc("Print per-candidate spill probe phase timings"));
+bool llvm::vplanBackendFeedbackTimingEnabled() { return TimeFeedback; }
+
+json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R) {
+  json::Array Accesses;
+  for (const auto &A : R.Spills)
+    Accesses.push_back(json::Object{{"load", A.IsLoad},
+                                    {"bytes", A.MinBytes},
+                                    {"scalable", A.Scalable},
+                                    {"alignment", A.Alignment},
+                                    {"address_space", A.AddressSpace},
+                                    {"whole_register", A.WholeRegister},
+                                    {"register_group", A.RegisterGroup},
+                                    {"segment_lowering", A.FromSegment}});
+  return json::Object{{"schema", "rvv-vector-spill-v1"},
+                      {"candidate", R.Candidate},
+                      {"vf", R.VF.getKnownMinValue()},
+                      {"scalable", R.VF.isScalable()},
+                      {"ic", R.IC},
+                      {"observation_role", R.IsEpilogue ? "epilogue" : "main"},
+                      {"stage", R.Stage},
+                      {"iteration_width", R.IterationWidth},
+                      {"iteration_mapping", R.IterationMapping},
+                      {"spills", std::move(Accesses)}};
+}
+
 AnalysisKey VPlanBackendFeedbackAnalysis::Key;
 
 bool llvm::vplanBackendFeedbackEnabled() { return EnableBackendCostModel; }

@@ -75,6 +75,7 @@ add_llvm_target(RISCVCodeGen
   RISCVVLOptimizer.cpp
   RISCVVPlanAnalytics.cpp
   RISCVVPlanPasses.cpp
+  RISCVVPlanSpill.cpp
   RISCVVMV0Elimination.cpp
   RISCVVSETVLIInfoAnalysis.cpp
   RISCVZacasABIFix.cpp

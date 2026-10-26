@@ -23,9 +23,10 @@ namespace llvm {
 class RISCVTargetMachine : public CodeGenTargetMachineImpl {
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
   mutable StringMap<std::unique_ptr<RISCVSubtarget>> SubtargetMap;
-  std::optional<json::Object> *BackendFeedbackSink = nullptr;
+  std::optional<Expected<VPlanBackendResult>> *BackendFeedbackSink = nullptr;
 
 public:
+  VPlanFeedbackTimer *BackendFeedbackTimer = nullptr;
   RISCVTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                      StringRef FS, const TargetOptions &Options,
                      std::optional<Reloc::Model> RM,
@@ -50,8 +51,9 @@ public:
 
   TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
 
-  Expected<json::Object> getVPlanBackendFeedback(Module &M) override;
-  std::optional<json::Object> *getBackendFeedbackSink() const {
+  Expected<VPlanBackendResult>
+  getVPlanBackendFeedback(Module &M, bool Time = false) override;
+  std::optional<Expected<VPlanBackendResult>> *getBackendFeedbackSink() const {
     return BackendFeedbackSink;
   }
 

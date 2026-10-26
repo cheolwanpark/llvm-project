@@ -14,8 +14,15 @@ The target is XiangShan Kunminghu v2 MinimalConfig, VLEN=128.
 유지한다. XiangShan Kunminghu/확정 VLEN=128에서는 후보 throughput 조회에만
 [고정 TTI profile](TTI_PROFILE.md)을 적용한다. 다른 RISC-V/RVV에서는 native TTI를
 사용한다. 기본값은 OFF이며 외부 Python/meta-compiler 경로와 중첩하지 않는다.
-[구현 검증 결과](BACKEND_COST_MODEL_VALIDATION.md)에 회귀 테스트와 203개 입력의
-flag OFF 대조, gate/force-all 비교 및 관측 한계를 기록했다.
+In-process probe는 RVV allocator와 부분 `VirtRegRewriter` 직후 spill 전용
+collector에서 종료한다. VSETVLI·scalar RA·frame lowering은 실행하지 않으며,
+전체 MIR 대신 소유권 있는 spill 구조체와 비용·gate 요약을 전달한다. 필요한 후보가
+실패하면 원본 loop 전체를 native 선택으로 복귀시키고 post-frame 재질의는 하지 않는다.
+Scalar spill의 실제 관측까지 필요해지면 종료 지점을 더 뒤로 옮겨야 한다.
+Timing은 단계별 중첩 total을 중복 합산하지 않으며 일반 컴파일 측정과 분리한다.
+[새 검증 결과](RVV_SPILL_PROBE_VALIDATION.md)는 저장된 기준 자료와 313개 DB를
+비교한다. [이전 검증 결과](BACKEND_COST_MODEL_VALIDATION.md)의 203개 DB 결과와
+구분한다. 외부 MIR/Python 경로는 유지하며 `utils/`의 새 요약 호환성은 범위 밖이다.
 
 ## LLVM passes and the meta-compiler
 

@@ -8930,30 +8930,17 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     }
   }
   bool RAProbe = (RA && RA->probesThisLoop()) || BackendProbe;
-  if (BackendProbe) {
-    auto ScalarQuarters =
-        quarterCost(CM.expectedCost(ElementCount::getFixed(1)));
-    if (auto Q = ScalarQuarters.getAsInteger())
-      BackendProbe->ScalarCost = double(*Q) / 4;
-    Type *IntTy = Type::getInt64Ty(F->getContext());
-    IntrinsicCostAttributes ICA(Intrinsic::riscv_vsetvlimax, IntTy,
-                                {IntTy, IntTy});
-    auto Unit = Config.CostKind == TargetTransformInfo::TCK_RecipThroughput &&
-                        F->getParent()->getTargetTriple().isRISCV()
-                    ? TTI->getIntrinsicInstrCost(ICA, Config.CostKind)
-                    : InstructionCost::getInvalid();
-    BackendProbe->MiddleEnd = json::Object{
-        {"configuration_unit_quarters", quarterCost(Unit)},
-        {"configuration_source", "TTI.getIntrinsicInstrCost(riscv_vsetvlimax)"},
-        {"configuration_scope", "per-observed-MIR-configuration"},
-        {"unit", "TTI-reciprocal-throughput-quarter"}};
-  }
   if (RAProbe) {
     F->addFnAttr("vplan.ra.candidate",
                  BackendProbe ? BackendProbe->Candidate.ID : getVPlanRAProbe());
     ElementCount ObservedVF =
         BackendProbe ? BackendProbe->Candidate.VF : VF.Width;
     unsigned ObservedIC = BackendProbe ? BackendProbe->Candidate.IC : 1;
+    if (BackendProbe) {
+      F->addFnAttr("vplan.ra.ic", std::to_string(ObservedIC));
+      F->addFnAttr("vplan.ra.role",
+                   BackendProbe->Candidate.IsEpilogue ? "epilogue" : "main");
+    }
     F->addFnAttr("vplan.ra.vf", std::to_string(ObservedVF.getKnownMinValue()));
     F->addFnAttr("vplan.ra.scalable", ObservedVF.isScalable() ? "1" : "0");
     F->addFnAttr("vplan.ra.width",

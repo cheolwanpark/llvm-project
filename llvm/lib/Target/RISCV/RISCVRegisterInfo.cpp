@@ -453,13 +453,15 @@ void RISCVRegisterInfo::adjustReg(MachineBasicBlock &MBB,
 
 static std::tuple<RISCVVType::VLMUL, const TargetRegisterClass &, unsigned>
 getSpillReloadInfo(unsigned NumRemaining, uint16_t RegEncoding, bool IsSpill) {
-  if (NumRemaining >= 8 && RegEncoding % 8 == 0)
+  unsigned Group =
+      RISCVRegisterInfo::getSegmentSpillGroup(NumRemaining, RegEncoding);
+  if (Group == 8)
     return {RISCVVType::LMUL_8, RISCV::VRM8RegClass,
             IsSpill ? RISCV::VS8R_V : RISCV::VL8RE8_V};
-  if (NumRemaining >= 4 && RegEncoding % 4 == 0)
+  if (Group == 4)
     return {RISCVVType::LMUL_4, RISCV::VRM4RegClass,
             IsSpill ? RISCV::VS4R_V : RISCV::VL4RE8_V};
-  if (NumRemaining >= 2 && RegEncoding % 2 == 0)
+  if (Group == 2)
     return {RISCVVType::LMUL_2, RISCV::VRM2RegClass,
             IsSpill ? RISCV::VS2R_V : RISCV::VL2RE8_V};
   return {RISCVVType::LMUL_1, RISCV::VRRegClass,

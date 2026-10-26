@@ -84,22 +84,13 @@ public:
     return A.RegisterGroup + 1;
   }
 };
-json::Object observation() {
-  auto V =
-      json::parse(R"({"iteration_mapping":true,"iteration_width":64,"error":"",
-    "body_order":[0,1,2],"instructions":[
-    {"id":0,"role":"body","meta":false,"load":false,"store":true,"vector":true,
-     "registers_complete":true,"whole_register":true,
-     "operands":[{"group8":16,"physical":true,"subregister":0}],
-     "memory":[{"spill_slot":true,"alignment":16,"address_space":0}]},
-    {"id":1,"role":"body","meta":false,"vector":false,
-     "operands":[{"group8":0}],"memory":[{"spill_slot":true}]},
-    {"id":2,"role":"body","meta":false,"vector":true,
-     "operands":[{"group8":64}],"memory":[{"spill_slot":false}]},
-    {"id":3,"role":"setup","meta":false,"vector":true,
-     "operands":[{"group8":64}],"memory":[{"spill_slot":true}]}]})");
-  EXPECT_TRUE(bool(V));
-  return std::move(*V->getAsObject());
+VPlanBackendResult observation() {
+  VPlanBackendResult R;
+  R.Candidate = "owned:candidate";
+  R.IterationMapping = true;
+  R.IterationWidth = 64;
+  R.Spills.push_back({false, 16, true, 16, 0, true, 2, false});
+  return R;
 }
 } // namespace
 TEST(VPlanBackendCost, PreserveScalarEstimatedSpills) {
@@ -129,12 +120,12 @@ TEST(VPlanBackendCost, PriceOnlyActualBodyVectorSpills) {
   EXPECT_EQ(Raw, 3);
   EXPECT_EQ(*Cost, VPExactCost::ratio(12, 64));
   EXPECT_FALSE(VPlanCostProfileScope::active());
-  O["iteration_mapping"] = false;
+  O.IterationMapping = false;
   auto Bad = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
   EXPECT_FALSE(bool(Bad));
   consumeError(Bad.takeError());
   O = observation();
-  (*O.getArray("instructions"))[0].getAsObject()->erase("whole_register");
+  O.Spills[0].WholeRegister = false;
   Bad = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
   EXPECT_FALSE(bool(Bad));
   consumeError(Bad.takeError());
@@ -145,17 +136,50 @@ TEST(VPlanBackendCost, SplitSegmentSpillsPriceEachAccessNotTheSlot) {
   LLVMContext C;
   InstructionCost Raw;
   auto O = observation();
-  auto *Instructions = O.getArray("instructions");
-  auto *First = (*Instructions)[0].getAsObject();
-  auto *Memory = First->getArray("memory")->front().getAsObject();
-  (*Memory)["stack_slot"] = 7;
-  (*Memory)["bytes"] = 4096; // The slot can describe the entire segment.
-  json::Object Second(*First);
-  Second["id"] = 4;
-  Instructions->push_back(std::move(Second));
-  O["body_order"] = json::Array{0, 4};
+  O.Spills[0].FromSegment = true;
+  O.Spills.push_back(O.Spills[0]);
   auto Cost = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
   ASSERT_TRUE(bool(Cost));
   EXPECT_EQ(Raw, 6); // Two group-2 stores, each costs 2+1.
   EXPECT_EQ(*Cost, VPExactCost::ratio(24, 64));
+}
+
+TEST(VPlanBackendCost, ValidateSpillFactsAndEmptyMapping) {
+  TargetTransformInfo TTI(std::make_unique<TestTTI>());
+  LLVMContext C;
+  InstructionCost Raw;
+  auto O = observation();
+  O.Spills.clear();
+  auto Zero = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
+  ASSERT_TRUE(bool(Zero));
+  EXPECT_EQ(*Zero, VPExactCost());
+  for (unsigned Mode = 0; Mode != 7; ++Mode) {
+    O = observation();
+    switch (Mode) {
+    case 0:
+      O.IterationWidth = 0;
+      break;
+    case 1:
+      O.IterationMapping = false;
+      break;
+    case 2:
+      O.Stage = "post-frame-lowering";
+      break;
+    case 3:
+      O.Spills[0].Alignment = 3;
+      break;
+    case 4:
+      O.Spills[0].RegisterGroup = 3;
+      break;
+    case 5:
+      O.Spills[0].MinBytes = 0;
+      break;
+    case 6:
+      O.Spills[0].WholeRegister = false;
+      break;
+    }
+    auto Bad = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
+    EXPECT_FALSE(bool(Bad));
+    consumeError(Bad.takeError());
+  }
 }

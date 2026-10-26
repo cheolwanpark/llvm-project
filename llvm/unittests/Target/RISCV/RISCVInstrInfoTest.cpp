@@ -9,8 +9,12 @@
 #include "RISCVInstrInfo.h"
 #include "RISCVSubtarget.h"
 #include "RISCVTargetMachine.h"
+#include "RISCVVPlanSpill.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
@@ -66,6 +70,221 @@ protected:
     MF = std::make_unique<MachineFunction>(*F, *TM, *ST, MMI->getContext(), 42);
   }
 };
+
+TEST_P(RISCVInstrInfoTest, SpillLoopMappingAndLifetime) {
+  Function &F = MF->getFunction();
+  F.addFnAttr("vplan.ra.candidate", "owned:test");
+  F.addFnAttr("vplan.ra.vf", "4");
+  F.addFnAttr("vplan.ra.scalable", "1");
+  F.addFnAttr("vplan.ra.ic", "2");
+  F.addFnAttr("vplan.ra.role", "epilogue");
+  F.addFnAttr("vplan.ra.width", "16");
+  F.addFnAttr("vplan.ra.iteration-mapping", "1");
+  auto *Entry = BasicBlock::Create(*Ctx, "entry", &F);
+  auto *Body = BasicBlock::Create(*Ctx, "body", &F);
+  UncondBrInst::Create(Body, Entry);
+  auto *Backedge = UncondBrInst::Create(Body, Body);
+  auto *Tag =
+      MDNode::get(*Ctx, {MDString::get(*Ctx, "llvm.loop.vplan.candidate"),
+                         MDString::get(*Ctx, "owned:test")});
+  auto *LoopID = MDNode::getDistinct(*Ctx, {nullptr, Tag});
+  LoopID->replaceOperandWith(0, LoopID);
+  Backedge->setMetadata(LLVMContext::MD_loop, LoopID);
+  auto *Setup = MF->CreateMachineBasicBlock(Entry);
+  auto *Loop = MF->CreateMachineBasicBlock(Body);
+  MF->push_back(Setup);
+  MF->push_back(Loop);
+  Setup->addSuccessor(Loop);
+  Loop->addSuccessor(Loop);
+  auto *TII = ST->getInstrInfo();
+  BuildMI(*Loop, Loop->end(), DebugLoc(), TII->get(RISCV::PseudoBR))
+      .addMBB(Loop);
+  int FI = MF->getFrameInfo().CreateSpillStackObject(8, Align(8));
+  auto AddSpill = [&](MachineBasicBlock &BB) {
+    BuildMI(BB, BB.end(), DebugLoc(), TII->get(RISCV::VS1R_V))
+        .addReg(RISCV::V8)
+        .addFrameIndex(FI)
+        .addMemOperand(MF->getMachineMemOperand(
+            MachinePointerInfo::getFixedStack(*MF, FI),
+            MachineMemOperand::MOStore, TypeSize::getScalable(8), Align(8)));
+  };
+  AddSpill(*Setup);
+  AddSpill(*Loop); // After the backedge: not on the repeated execution path.
+  auto Result = vplan::collectVectorSpills(*MF);
+  ASSERT_TRUE(bool(Result));
+  EXPECT_TRUE(Result->Spills.empty());
+  EXPECT_EQ(Result->IterationWidth, 16u);
+  EXPECT_EQ(Result->IC, 2u);
+  EXPECT_TRUE(Result->IsEpilogue);
+  for (unsigned Mode = 0; Mode != 3; ++Mode) {
+    F.addFnAttr("vplan.ra.iteration-mapping", Mode == 0 ? "0" : "1");
+    F.addFnAttr("vplan.ra.candidate", Mode == 1 ? "wrong" : "owned:test");
+    F.addFnAttr("vplan.ra.role", Mode == 2 ? "unknown" : "epilogue");
+    auto Bad = vplan::collectVectorSpills(*MF);
+    EXPECT_FALSE(bool(Bad));
+    consumeError(Bad.takeError());
+  }
+  F.addFnAttr("vplan.ra.role", "epilogue");
+  auto BeforeBackedge = Loop->begin();
+  BuildMI(*Loop, BeforeBackedge, DebugLoc(), TII->get(RISCV::VL1RE8_V))
+      .addReg(RISCV::V8, RegState::Define)
+      .addFrameIndex(FI)
+      .addMemOperand(MF->getMachineMemOperand(
+          MachinePointerInfo::getFixedStack(*MF, FI), MachineMemOperand::MOLoad,
+          TypeSize::getScalable(8), Align(8)));
+  BuildMI(*Loop, BeforeBackedge, DebugLoc(), TII->get(RISCV::VS1R_V))
+      .addReg(RISCV::V8)
+      .addFrameIndex(FI)
+      .addMemOperand(MF->getMachineMemOperand(
+          MachinePointerInfo::getFixedStack(*MF, FI),
+          MachineMemOperand::MOStore, TypeSize::getScalable(8), Align(8)));
+  auto Unstable = vplan::collectVectorSpills(*MF);
+  EXPECT_FALSE(bool(Unstable));
+  EXPECT_EQ(toString(Unstable.takeError()),
+            "vector reload/store pair requires later spill cleanup");
+  MF.reset();
+  M.reset();
+  EXPECT_EQ(Result->Candidate, "owned:test");
+  EXPECT_EQ(Result->VF, ElementCount::getScalable(4));
+  EXPECT_EQ(Result->Stage, "post-rvv-ra-rewrite");
+}
+
+TEST_P(RISCVInstrInfoTest, EarlyVectorSpillAccesses) {
+  auto *BB = MF->CreateMachineBasicBlock();
+  MF->push_back(BB);
+  auto *TII = ST->getInstrInfo();
+  int FI = MF->getFrameInfo().CreateSpillStackObject(4096, Align(16));
+  auto Ptr = MachinePointerInfo::getFixedStack(*MF, FI);
+  Register Address =
+      MF->getRegInfo().createVirtualRegister(&RISCV::GPRRegClass);
+  std::vector<VPlanVectorSpillAccess> Accesses;
+  for (bool Load : {false, true})
+    for (unsigned Group : {1u, 2u, 4u, 8u}) {
+      unsigned Opcode = Load ? (Group == 1   ? RISCV::VL1RE8_V
+                                : Group == 2 ? RISCV::VL2RE8_V
+                                : Group == 4 ? RISCV::VL4RE8_V
+                                             : RISCV::VL8RE8_V)
+                             : (Group == 1   ? RISCV::VS1R_V
+                                : Group == 2 ? RISCV::VS2R_V
+                                : Group == 4 ? RISCV::VS4R_V
+                                             : RISCV::VS8R_V);
+      Register Reg = Group == 1   ? RISCV::V8
+                     : Group == 2 ? RISCV::V8M2
+                     : Group == 4 ? RISCV::V8M4
+                                  : RISCV::V8M8;
+      auto MIB = BuildMI(*BB, BB->end(), DebugLoc(), TII->get(Opcode))
+                     .addReg(Reg, getDefRegState(Load));
+      if (Load)
+        MIB.addFrameIndex(FI);
+      else
+        MIB.addReg(Address);
+      auto *MI = MIB.getInstr();
+      // Normal whole-register accesses without a spill MMO do not count.
+      auto E = vplan::collectVectorSpillAccess(*MI, Accesses);
+      ASSERT_FALSE(bool(E));
+      size_t Before = Accesses.size();
+      MI->addMemOperand(*MF, MF->getMachineMemOperand(
+                                 Ptr,
+                                 Load ? MachineMemOperand::MOLoad
+                                      : MachineMemOperand::MOStore,
+                                 TypeSize::getScalable(4096), Align(16)));
+      E = vplan::collectVectorSpillAccess(*MI, Accesses);
+      ASSERT_FALSE(bool(E));
+      ASSERT_EQ(Accesses.size(), Before + 1);
+      const auto &A = Accesses.back();
+      EXPECT_EQ(A.RegisterGroup, Group);
+      EXPECT_EQ(A.MinBytes, Group * 8); // Never the oversized slot.
+      EXPECT_EQ(A.IsLoad, Load);
+      EXPECT_TRUE(A.Scalable);
+      EXPECT_EQ(A.Alignment, 16u);
+      EXPECT_EQ(A.AddressSpace, 0u);
+      EXPECT_FALSE(A.FromSegment);
+    }
+  int OrdinaryFI = MF->getFrameInfo().CreateStackObject(8, Align(8), false);
+  auto *Ordinary =
+      BuildMI(*BB, BB->end(), DebugLoc(), TII->get(RISCV::VS1R_V))
+          .addReg(RISCV::V8)
+          .addFrameIndex(OrdinaryFI)
+          .addMemOperand(MF->getMachineMemOperand(
+              MachinePointerInfo::getFixedStack(*MF, OrdinaryFI),
+              MachineMemOperand::MOStore, TypeSize::getScalable(8), Align(8)))
+          .getInstr();
+  auto OrdinaryError = vplan::collectVectorSpillAccess(*Ordinary, Accesses);
+  ASSERT_FALSE(bool(OrdinaryError));
+  EXPECT_EQ(Accesses.size(), 8u);
+  auto *Scalar = BuildMI(*BB, BB->end(), DebugLoc(), TII->get(RISCV::SW))
+                     .addReg(RISCV::X10)
+                     .addFrameIndex(FI)
+                     .addImm(0)
+                     .addMemOperand(MF->getMachineMemOperand(
+                         Ptr, MachineMemOperand::MOStore, 4, Align(4)))
+                     .getInstr();
+  size_t Before = Accesses.size();
+  auto E = vplan::collectVectorSpillAccess(*Scalar, Accesses);
+  ASSERT_FALSE(bool(E));
+  EXPECT_EQ(Accesses.size(), Before);
+  auto Virtual = MF->getRegInfo().createVirtualRegister(&RISCV::VRRegClass);
+  auto *Bad = BuildMI(*BB, BB->end(), DebugLoc(), TII->get(RISCV::VS1R_V))
+                  .addReg(Virtual)
+                  .addFrameIndex(FI)
+                  .addMemOperand(MF->getMachineMemOperand(
+                      Ptr, MachineMemOperand::MOStore, TypeSize::getScalable(8),
+                      Align(8)))
+                  .getInstr();
+  E = vplan::collectVectorSpillAccess(*Bad, Accesses);
+  EXPECT_TRUE(bool(E));
+  consumeError(std::move(E));
+  Bad->getOperand(0).setReg(RISCV::V8M2);
+  E = vplan::collectVectorSpillAccess(*Bad, Accesses);
+  EXPECT_TRUE(bool(E));
+  consumeError(std::move(E));
+  MF.reset(); // The result contains no borrowed MachineFunction data.
+  M.reset();
+  EXPECT_EQ(Accesses.size(), 8u);
+  EXPECT_EQ(Accesses.back().MinBytes, 64u);
+}
+
+TEST_P(RISCVInstrInfoTest, SegmentSpillPhysicalEncodingAndSize) {
+  auto *BB = MF->CreateMachineBasicBlock();
+  MF->push_back(BB);
+  int FI = MF->getFrameInfo().CreateSpillStackObject(24, Align(16));
+  auto Ptr = MachinePointerInfo::getFixedStack(*MF, FI);
+  for (bool Load : {false, true}) {
+    auto *RC = &RISCV::VRN3M1RegClass;
+    // Three registers at an even encoding split 2+1, at an odd encoding 1+2.
+    for (MCPhysReg Reg : *RC) {
+      unsigned Encoding = ST->getRegisterInfo()->getEncodingValue(Reg);
+      auto *MI =
+          BuildMI(*BB, BB->end(), DebugLoc(),
+                  ST->getInstrInfo()->get(Load ? RISCV::PseudoVRELOAD3_M1
+                                               : RISCV::PseudoVSPILL3_M1))
+              .addReg(Reg, getDefRegState(Load))
+              .addFrameIndex(FI)
+              .addMemOperand(MF->getMachineMemOperand(
+                  Ptr,
+                  Load ? MachineMemOperand::MOLoad : MachineMemOperand::MOStore,
+                  TypeSize::getScalable(24), Align(16)))
+              .getInstr();
+      std::vector<VPlanVectorSpillAccess> Accesses;
+      auto E = vplan::collectVectorSpillAccess(*MI, Accesses);
+      ASSERT_FALSE(bool(E));
+      ASSERT_EQ(Accesses.size(), 2u);
+      EXPECT_EQ(Accesses[0].RegisterGroup, Encoding % 2 ? 1u : 2u);
+      EXPECT_EQ(Accesses[1].RegisterGroup, Encoding % 2 ? 2u : 1u);
+      EXPECT_EQ(Accesses[0].MinBytes + Accesses[1].MinBytes, 24u);
+      for (auto &A : Accesses) {
+        EXPECT_TRUE(A.FromSegment);
+        EXPECT_EQ(A.MinBytes, A.RegisterGroup * 8);
+        EXPECT_EQ(A.Alignment, 16u);
+        EXPECT_EQ(A.IsLoad, Load);
+      }
+    }
+  }
+  EXPECT_EQ(RISCVRegisterInfo::getSegmentSpillGroup(8, 8), 8u);
+  EXPECT_EQ(RISCVRegisterInfo::getSegmentSpillGroup(7, 8), 4u);
+  EXPECT_EQ(RISCVRegisterInfo::getSegmentSpillGroup(7, 10), 2u);
+  EXPECT_EQ(RISCVRegisterInfo::getSegmentSpillGroup(7, 9), 1u);
+}
 
 TEST_P(RISCVInstrInfoTest, IsAddImmediate) {
   const RISCVInstrInfo *TII = ST->getInstrInfo();

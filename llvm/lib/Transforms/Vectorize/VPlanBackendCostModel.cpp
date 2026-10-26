@@ -5,13 +5,25 @@
 #include "VPlan.h"
 #include "VPlanRegisterUsageBounds.h"
 #include "llvm/ADT/APInt.h"
-#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Module.h"
 #include <numeric>
 using namespace llvm;
+namespace {
+void printCostTiming(StringRef ID, const VPlanFeedbackTimer &Timer) {
+  if (!Timer.Enabled)
+    return;
+  json::Object O{{"candidate", ID}};
+  for (const auto &P : Timer.Phases) {
+    O[P.Phase + "_wall_seconds"] = P.Wall;
+    O[P.Phase + "_cpu_seconds"] = P.CPU;
+  }
+  errs() << "VPLAN-BACKEND-COST-TIMING: " << json::Value(std::move(O)) << '\n';
+}
+} // namespace
 VPExactCost VPExactCost::ratio(int64_t N, int64_t D) {
   VPExactCost R;
   if (N < 0 || D <= 0) {
@@ -62,75 +74,25 @@ bool VPExactCost::operator<=(VPExactCost B) const {
 }
 
 Expected<VPExactCost> llvm::priceVPlanVectorSpills(
-    const json::Object &O, const TargetTransformInfo &TTI, LLVMContext &Context,
-    unsigned Width, InstructionCost &RawCost) {
-  if (O.getBoolean("iteration_mapping") != true || !O.getString("error") ||
-      !O.getString("error")->empty())
+    const VPlanBackendResult &O, const TargetTransformInfo &TTI,
+    LLVMContext &Context, unsigned Width, InstructionCost &RawCost) {
+  if (!O.IterationMapping || O.Stage != "post-rvv-ra-rewrite")
     return createStringError("invalid backend loop/iteration mapping");
-  auto Wobs = O.getInteger("iteration_width");
-  auto *Order = O.getArray("body_order");
-  auto *Instructions = O.getArray("instructions");
-  if (!Wobs || *Wobs <= 0 || !Width || *Wobs % Width || !Order ||
-      Order->empty() || !Instructions)
-    return createStringError("invalid backend body or iteration width");
+  uint64_t Wobs = O.IterationWidth;
+  if (!Wobs || Wobs > INT64_MAX || !Width || Wobs % Width)
+    return createStringError("invalid backend iteration width");
   int64_t RawQuarters = 0;
-  SmallDenseSet<int64_t> Seen;
-  for (const auto &ID : *Order) {
-    auto Index = ID.getAsInteger();
-    if (!Index || *Index < 0 || uint64_t(*Index) >= Instructions->size() ||
-        !Seen.insert(*Index).second)
-      return createStringError("invalid backend body order");
-    auto *I = (*Instructions)[*Index].getAsObject();
-    if (!I || I->getInteger("id") != Index || I->getString("role") != "body")
-      return createStringError("backend body identity mismatch");
-    if (I->getBoolean("meta") == true)
-      continue;
-    auto *Memory = I->getArray("memory");
-    if (!Memory)
-      return createStringError("missing memory facts");
-    bool Spill = any_of(*Memory, [](const json::Value &V) {
-      auto *M = V.getAsObject();
-      return M && M->getBoolean("spill_slot") == true;
-    });
-    if (!Spill)
-      continue;
-    auto *Operands = I->getArray("operands");
-    if (!Operands)
-      return createStringError("missing spill register facts");
-    unsigned Group = 0;
-    for (auto &V : *Operands) {
-      auto *R = V.getAsObject();
-      if (!R)
-        return createStringError("invalid spill register");
-      auto G = R->getInteger("group8");
-      if (!G || !*G)
-        continue;
-      if (*G < 8 || *G > 64 || *G % 8 || R->getBoolean("physical") != true ||
-          R->getInteger("subregister") != 0)
-        return createStringError("unsupported spill register group");
-      Group = std::max(Group, unsigned(*G / 8));
-    }
-    if (!Group) {
-      if (I->getBoolean("vector") == true)
-        return createStringError("vector spill without physical group");
-      continue; // Scalar spills retain the middle-end estimate.
-    }
-    if (I->getBoolean("registers_complete") != true || Memory->size() != 1)
-      return createStringError("incomplete vector spill access");
-    auto *M = Memory->front().getAsObject();
-    auto Load = I->getBoolean("load"), Store = I->getBoolean("store");
-    auto Alignment = M->getInteger("alignment");
-    auto AS = M->getInteger("address_space");
-    auto Whole = I->getBoolean("whole_register");
-    if (!Load || !Store || *Load == *Store || !Alignment || *Alignment <= 0 ||
-        !isPowerOf2_64(*Alignment) || !AS || *AS < 0 || !Whole || !*Whole ||
-        !isPowerOf2_32(Group))
+  for (const auto &A : O.Spills) {
+    if (!A.MinBytes || A.MinBytes > UINT32_MAX || !A.Alignment ||
+        !isPowerOf2_64(A.Alignment) || A.Alignment > Value::MaximumAlignment ||
+        !A.WholeRegister || !isPowerOf2_32(A.RegisterGroup) ||
+        A.RegisterGroup > 8)
       return createStringError("unsupported vector spill access");
-    // A scalable RVV register has 64 minimum bits in LLVM's type model.
-    // Use the actual instruction group, never the size of the stack slot.
-    Type *Ty = ScalableVectorType::get(Type::getInt8Ty(Context), Group * 8);
+    Type *Ty = VectorType::get(Type::getInt8Ty(Context),
+                               ElementCount::get(A.MinBytes, A.Scalable));
     TargetTransformInfo::SpillReloadAccess Access{
-        *Load, Ty, Align(*Alignment), unsigned(*AS), true, Group};
+        A.IsLoad,       Ty, Align(A.Alignment), A.AddressSpace, A.WholeRegister,
+        A.RegisterGroup};
     VPlanCostProfileScope Scope(true);
     auto Cost = TTI.getSpillReloadCost(
         Access, TargetTransformInfo::TCK_RecipThroughput);
@@ -143,7 +105,7 @@ Expected<VPExactCost> llvm::priceVPlanVectorSpills(
   int64_t Numerator;
   if (MulOverflow(RawQuarters, int64_t(Width), Numerator))
     return createStringError("vector spill normalization overflow");
-  return VPExactCost::ratio(Numerator, *Wobs);
+  return VPExactCost::ratio(Numerator, Wobs);
 }
 void VPlanBackendCostModel::fail(StringRef Reason) {
   if (Failed)
@@ -172,8 +134,11 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
                                 InstructionCost Ev, unsigned Width) {
   if (Failed)
     return false;
+  VPlanFeedbackTimer Timer(vplanBackendFeedbackTimingEnabled());
+  auto ReportTime = scope_exit([&] { printCostTiming(C.ID, Timer); });
   auto Bound = computeVPlanRegisterUsageBound(Plan, C.VF, TTI);
   Bound.applyInterleave(C.IC);
+  Timer.mark("gate");
   bool Query = Bound.shouldQuery() || vplanBackendFeedbackForceAll();
   json::Object Gate{{"known", Bound.Known},
                     {"reason", Bound.Reason},
@@ -211,14 +176,19 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
   if (!Native.isValid() || !Profile.isValid() || !Ev.isValid())
     Error = "invalid TTI candidate cost";
   else if (Query) {
+    Timer.mark("summary_preparation");
     auto O = Feedback.get(F, Header, C);
+    Timer.mark("query_total");
     if (!O) {
       Error = toString(O.takeError());
       Row["status"] = "unavailable";
       Row["reason"] = Error;
     } else {
-      auto Wobs = O->getInteger("iteration_width");
-      if (!Wobs || *Wobs <= 0 || uint64_t(*Wobs) % (uint64_t(Width) * C.IC))
+      auto Wobs = O->IterationWidth;
+      if (O->Candidate != C.ID || O->VF != C.VF || O->IC != C.IC ||
+          O->IsEpilogue != C.IsEpilogue)
+        Error = "backend observation identity mismatch";
+      else if (!Wobs || Wobs % (uint64_t(Width) * C.IC))
         Error = "observed iteration width disagrees with requested IC";
       else {
         auto S = priceVPlanVectorSpills(*O, TTI, F.getContext(), Width, Raw);
@@ -227,7 +197,8 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
         else
           Spill = *S;
       }
-      Row["observation"] = std::move(*O);
+      Timer.mark("spill_pricing");
+      Row["observation"] = summarizeVPlanBackendResult(*O);
       Row["status"] = "collected";
     }
   } else {
@@ -251,6 +222,7 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
     Row["body_quarters_denominator"] = Body.denominator();
   } else
     Row["cost_failure"] = Error;
+  Timer.mark("hybrid_cost_and_summary");
   printVPlanBackendFeedback(Row);
   if (!Error.empty()) {
     fail(Error);
@@ -272,12 +244,14 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
     for (ElementCount VF : Plan->vectorFactors()) {
       if (VF.isScalar())
         continue;
+      VPlanFeedbackTimer Preparation(vplanBackendFeedbackTimingEnabled());
       InstructionCost Ev;
       auto Native = LVP.backendCandidateCost(*Plan, VF, false, Ev);
       if (!Native.isValid()) {
         fail("invalid native candidate cost");
         return false;
       }
+      Preparation.mark("native_cost");
       unsigned IC = LVP.selectInterleaveCount(*Plan, VF, Native);
       if (UserIC)
         IC = UserIC;
@@ -289,6 +263,7 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
         fail("candidate iteration width overflow");
         return false;
       }
+      Preparation.mark("native_ic");
       auto Profile = LVP.backendCandidateCost(*Plan, VF, true, Ev);
       if (!Profile.isValid() || !Ev.isValid()) {
         fail("invalid profile candidate cost");
@@ -299,6 +274,8 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
            ":" + Twine(PlanIndex) + ":" + (VF.isScalable() ? "s" : "f") +
            Twine(VF.getKnownMinValue()) + ":ic" + Twine(IC) + ":main")
               .str();
+      Preparation.mark("profile_cost");
+      printCostTiming(ID, Preparation);
       VPlanBackendCandidate C{ID,
                               unsigned(PlanIndex),
                               VF,
@@ -332,6 +309,7 @@ bool VPlanBackendCostModel::prepareEpilogue(
     if (P.get() == &MainPlan)
       MPI = Index;
   }
+  VPlanFeedbackTimer Preparation(vplanBackendFeedbackTimingEnabled());
   InstructionCost Ev;
   auto Native = LVP.backendCandidateCost(Plan, VF, false, Ev);
   auto Profile = LVP.backendCandidateCost(Plan, VF, true, Ev);
@@ -351,6 +329,8 @@ bool VPlanBackendCostModel::prepareEpilogue(
       Plan.hasScalarTail(),
       InterleaveOnly,
       VectorizeOnly};
+  Preparation.mark("native_and_profile_cost");
+  printCostTiming(C.ID, Preparation);
   C.IsEpilogue = true;
   C.IC = 1;
   C.MainPlanIndex = MPI;

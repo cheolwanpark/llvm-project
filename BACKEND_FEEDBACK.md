@@ -78,17 +78,26 @@ Overflow는 unknown이다. 32 미만이면 질의를 생략하고 Sv=0으로 둔
 강제한다. Scalar spill gate는 없다. 기존 gate의 수학적 근거와 population
 검증은 [이전 검증 기록](BACKEND_FEEDBACK_COMPARISON.md)에 보존돼 있다.
 
-가격 계산에는 검증된 `body_order`에 속하는 실행 명령 중 실제 MMO의
-`spill_slot=true`와 physical vector register group이 확인되는 load/store만
-포함한다. Scalar spill, 일반 whole-register memory, setup/exit/다른 loop spill은
+가격 계산에는 유일한 candidate identity, 검증된 iteration mapping 및 단일 block
+innermost machine loop의 반복 경로에서 실제 spill-slot MMO와 physical vector data
+register가 확인되는 load/store만 포함한다. Backedge 뒤의 명령도 제외한다.
+부분 rewrite 시점의 scalar 주소 operand는 virtual register 또는 frame index여도
+유효하다. Vector data register의 미할당·subregister나 미지원 접근은 실패다. Scalar spill, 일반 whole-register memory, setup/exit/다른 loop spill은
 제외한다. Mapping 실패, 불완전 register 정보, 해석할 수 없는 vector spill은
 실패다. Observer는 address space와 whole-register 여부를 포함한 사실만 제공한다.
+같은 physical vector register·spill slot·접근 크기의 연속 reload/store는 이후
+`StackSlotColoring`에서 제거될 수 있으므로 명시적 미지원이다. Debug instruction을
+제외한 인접 관계를 검사하며, benchmark 이름별 예외나 자체 dead-store 제거 없이
+원본 loop 전체를 native로 복귀시킨다. 이 조건은 저장된 post-frame 자료와의 실제
+차이에서 도출했으며 근거는 새 검증 보고서에 기록한다.
 
 새 `TTI::getSpillReloadCost`는 방향, 실제 접근 type, alignment, address space,
 whole-register 여부와 실제 group 크기를 받는다. 기본 구현은 memory-op 비용에
 위임한다. XiangShan/128 profile의 whole-register 명령은 group+1 (2/3/5/9)이다.
-Segment spill은 분할된 실제 명령마다 계산하며 stack slot 전체 크기를 반복 적용하지
-않는다. 기존 register-class spill/reload hook의 의미는 바꾸지 않는다.
+Segment spill pseudo는 `lowerSegmentSpillReload()`와 공유하는 순수 helper의
+물리 register encoding 분할 규칙으로 접근을 해석한다. 명령 생성이나 frame
+lowering 없이 각 분할 접근의 크기·alignment·address space를 보존한다.
+Stack slot 전체 크기를 각 접근에 반복 적용하지 않는다. 기존 register-class spill/reload hook의 의미는 바꾸지 않는다.
 
 ## Probe, epilogue, fallback
 
@@ -96,6 +105,20 @@ Segment spill은 분할된 실제 명령마다 계산하며 stack slot 전체 �
 backend observer`이다. LLVMVectorize가 CodeGen이나 Passes에 직접 의존하지 않는다.
 후보별 함수 clone, fresh analysis, 독립 TargetMachine, 기존 vector pipeline suffix를
 재사용한다. 전역 command-line 값이나 외부 RA replay 상태를 바꾸지 않는다.
+
+```text
+clone → candidate materialization → 기존 IR suffix → iteration mapping 검증
+  → instruction selection / pre-RA 최적화·scheduling
+  → RVV allocator → VirtRegRewriter(false) → vector spill collector → 종료
+```
+
+Collector 고유 pass ID를 `addPassesToBackendObserver()`의 종료 대상으로 지정한다.
+Probe는 VSETVLI 삽입, scalar RA, post-RA 최적화, frame lowering을 실행하지 않는다.
+최종 object 생성의 정상 backend는 계속 전체 pipeline을 실행한다. 지원되는
+optimized RVV allocator(default/greedy/basic)와 정상 codegen pipeline을 요구하며,
+fast allocator, optnone, limited pipeline 등 종료 위치를 보장할 수 없는 구성은
+미지원이다. 실패 시 post-frame으로 재질의하거나 관측 지점을 선택하는 옵션은 없다.
+**Scalar spill까지 실제로 관측해야 한다면 관측 지점을 더 뒤로 옮겨야 한다.**
 
 요청은 VF/plan/IC/관측 역할을 포함한다. Epilogue 요청에는 선택된 main 형상도
 전달한다. Main probe는 실제 강제 epilogue를 함께 생성한다. 자동 epilogue는
@@ -125,6 +148,36 @@ native/profile/estimated-vector-spill/raw-vector-spill quarter 비용,
 기록한다. Candidate 행의 collected는 raw facts 수신을 뜻하며 cost_failure가 있으면
 성공한 비용으로 사용하지 않는다. JSONL은 append 방식이므로 새 경로를 사용한다.
 
+Provider와 TargetMachine hook은 `Expected<VPlanBackendResult>`를 반환한다.
+`rvv-vector-spill-v1` 요약의 stage는 `post-rvv-ra-rewrite`이며 candidate/VF/IC/역할,
+검증된 반복 폭과 vector 접근 목록만 담는다. 접근은 load 방향, 최소 bytes,
+scalable 여부, alignment, address space, whole-register 여부, register group 및
+`segment_lowering` 여부를 기록한다. 소유권 있는 값만 전달하며 clone의 Type,
+MachineFunction, MachineInstr 또는 문자열 포인터는 반환하지 않는다.
+TTI 가격 조회와 정확한 정규화는 middle-end에서 수행한다.
+
+In-process 경로의 전체 MIR 문자열, operand 문자열, dependency JSON,
+ReachingDefInfo 기반 VL·stride 추론, scalar/configuration 비용 관측은 제거했다.
+전체 MIR 출력 복원 옵션은 없다. 외부 `riscv-vplan-analytics`는 별도 경로로 유지한다.
+기존 `utils/` Python 도구의 새 요약 호환성은 이번 변경 범위가 아니며 해당 suite는
+완료 조건으로 실행하지 않는다.
+
+`-time-vplan-backend-feedback`은 stderr에 다음 진단을 기록한다.
+Timing OFF에는 clock 조회나 backend marker pass를 활성화하지 않는다.
+
+- `VPLAN-BACKEND-FEEDBACK-TIMING`: clone, target/analysis 준비, materialization,
+  IR suffix, iteration mapping/verification, backend pipeline 구성, pre-RVV-RA,
+  RVV allocation, 부분 rewrite, spill 수집, backend 반환, clone/analysis/TM 정리,
+  query wall/CPU total.
+- `VPLAN-BACKEND-COST-TIMING`: native/profile 비용 준비, native IC, gate,
+  query total, middle-end spill pricing, hybrid 비용·요약 준비.
+
+Backend marker는 pass 경계를 측정하므로 allocation/rewrite 구간에는 해당 pass에
+필요한 분석 실행도 포함된다. `backend_total`, `query_total`, `query_*_seconds`는
+하위 구간을 포함하므로 세부 구간과 중복 합산하지 않는다. 실패한 관측의 실행된 backend 단계는
+`VPLAN-BACKEND-FAILED-TIMING`에 기록하며, 실행하지 못한 단계의 측정값은 생략한다. Timing 진단 실행은 일반 compiler wall 평균에 섞지 않는다.
+
+
 [README의 빌드 설정](README.md#build)에서 `clang;lld` 및 호스트/RISCV backend를
 설정한다. 아래 회귀 테스트는 `LLVM_INCLUDE_TESTS=ON`과 assertions가 활성화된
 `.cache/compiler-build`를 사용한다. 앱용 `LLVM_INCLUDE_TESTS=OFF` 빌드와 구분한다.
@@ -137,21 +190,17 @@ cmake --build .cache/compiler-build --target clang clang-resource-headers lld \
 .cache/compiler-build/unittests/Transforms/Vectorize/VectorizeTests
 .cache/compiler-build/unittests/Target/RISCV/RISCVTests
 .cache/compiler-build/bin/llvm-lit -v llvm/test/Transforms/LoopVectorize/RISCV
-PYTHONPATH=utils/vplan-tools VPLAN_CLANG="$PWD/.cache/compiler-build/bin/clang" \
-  uv run --locked --project utils/vplan-tools python -B -m unittest discover \
-  -s utils/vplan-tools/tests -q
-python3 utils/vplan-tools/check-backend-feedback-gate \
-  --clang .cache/compiler-build/bin/clang \
-  --db /work/mir-port-aware-goal/search-dataset.sqlite \
-  --output-dir .cache/backend-cost-gate --jobs 2
+.cache/compiler-build/unittests/Transforms/Vectorize/VPlanRATests
+.cache/compiler-build/bin/llvm-lit -v llvm/test/CodeGen/RISCV/vplan-ra
 ```
 
-Gate 검증은 exact 비용, 관측 spill, provider 호출 수 및 최종 assembly를 비교한다.
-Native 대비 assembly 변경은 이 경로에서 허용하며 별도로 보고한다. 참조 모델의
-`/work/llvm-cost-model/dataset.sqlite`와 같은 population으로 취급하지 않는다.
+313개 `dataset.sqlite` 전수 비교의 재현 스크립트·실행 수·평균 및 관측 차이는
+[RVV_SPILL_PROBE_VALIDATION.md](RVV_SPILL_PROBE_VALIDATION.md)에 기록한다.
+기준 compiler는 재실행하지 않고 저장된 자료를 비교한다. 과거 다른 DB의 203개
+결과와 population을 섞지 않는다.
 
-관측은 post-frame-lowering이며 최종 scheduling/RVV pseudo expansion 이전이다.
 Probe suffix는 임의의 전체 LTO, module pass, 사용자 추가 pass를 재현하지 않는다.
-관측 MIR과 최종 machine instruction 전체가 동일하다고 주장하지 않는다.
-이전 transport/gate의 수치와 한계는 BACKEND_FEEDBACK_COMPARISON.md의 당시
-commit 기준 결과이며, 새 선택 모델의 검증 결과와 구별해야 한다.
+조기 spill 관측과 post-frame/최종 machine instruction 전체가 동일하다고 주장하지
+않는다. 관측 차이가 남으면 비용 모델이나 관측 지점을 임의로 바꾸지 않고 보고한다.
+이전 transport/gate 결과는 BACKEND_FEEDBACK_COMPARISON.md 및
+BACKEND_COST_MODEL_VALIDATION.md의 당시 commit 기준 결과와 구별해야 한다.

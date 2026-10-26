@@ -81,7 +81,7 @@ public:
 };
 /// Strict adapter for the in-process facts; no cost rules live in the backend.
 LLVM_ABI_FOR_TEST Expected<VPExactCost>
-priceVPlanVectorSpills(const json::Object &Observation,
+priceVPlanVectorSpills(const VPlanBackendResult &Observation,
                        const TargetTransformInfo &TTI, LLVMContext &Context,
                        unsigned Width, InstructionCost &RawCost);
 } // namespace llvm

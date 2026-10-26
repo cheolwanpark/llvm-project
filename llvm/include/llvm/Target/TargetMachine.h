@@ -22,7 +22,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/JSON.h"
+#include "llvm/Support/VPlanBackendResult.h"
 #include "llvm/Support/PGOOptions.h"
 #include "llvm/Target/CGPassBuilderOption.h"
 #include "llvm/Target/TargetOptions.h"
@@ -411,7 +411,7 @@ public:
 
   /// Observe a disposable, already materialized candidate module. Implemented
   /// by targets with a backend observer. This never supplies a cost or a VF.
-  virtual Expected<json::Object> getVPlanBackendFeedback(Module &M) {
+  virtual Expected<VPlanBackendResult> getVPlanBackendFeedback(Module &M, bool Time = false) {
     return createStringError("target has no VPlan backend feedback observer");
   }
 
