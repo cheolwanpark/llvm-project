@@ -8,6 +8,7 @@
 
 #include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -39,6 +40,7 @@ void PassBuilder::registerVPlanBackendFeedbackAnalysis(
         [Target, Tuning, FileSystem](
             const Function &F, const BasicBlock &Header,
             const VPlanBackendCandidate &Candidate) -> Expected<json::Object> {
+          VPlanCostProfileScope NativeScope(false);
           TimeRecord QueryStart =
               TimeFeedback ? TimeRecord::getCurrentTime() : TimeRecord();
           TimeRecord LateTime, BackendTime;
@@ -167,6 +169,9 @@ void PassBuilder::registerVPlanBackendFeedbackAnalysis(
               Result->getInteger("vf") != Candidate.VF.getKnownMinValue() ||
               Result->getBoolean("scalable") != Candidate.VF.isScalable())
             return createStringError("backend observation identity mismatch");
+          (*Result)["ic"] = Candidate.IC;
+          (*Result)["observation_role"] =
+              Candidate.IsEpilogue ? "epilogue" : "main";
           (*Result)["middle_end"] = std::move(Probe.MiddleEnd);
           (*Result)["scalar_cost"] = std::move(Probe.ScalarCost);
           std::string Pipeline = Level == OptimizationLevel::O3

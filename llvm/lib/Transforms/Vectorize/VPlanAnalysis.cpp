@@ -84,9 +84,11 @@ bool VPDominatorTree::properlyDominates(const VPRecipeBase *A,
 InstructionCost
 VPRegisterUsage::spillCost(const TargetTransformInfo &TTI,
                            TargetTransformInfo::TargetCostKind CostKind,
-                           unsigned OverrideMaxNumRegs,
-                           VPlanCostReport *Report) const {
+                           unsigned OverrideMaxNumRegs, VPlanCostReport *Report,
+                           InstructionCost *VectorCost) const {
   InstructionCost Cost;
+  if (VectorCost)
+    *VectorCost = 0;
   for (const auto &Entry : MaxLocalUsers) {
     unsigned RegClass = Entry.first;
     unsigned MaxUsers = Entry.second;
@@ -117,6 +119,8 @@ VPRegisterUsage::spillCost(const TargetTransformInfo &TTI,
                         << Spills << " spills of "
                         << TTI.getRegisterClassName(RegClass) << "\n");
       Cost += TotalCost;
+      if (VectorCost && RegClass == TTI.getRegisterClassForType(true))
+        *VectorCost += TotalCost;
     }
   }
   return Cost;

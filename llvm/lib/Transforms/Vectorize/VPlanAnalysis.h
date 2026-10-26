@@ -48,7 +48,8 @@ struct VPRegisterUsage {
   InstructionCost spillCost(const TargetTransformInfo &TTI,
                             TargetTransformInfo::TargetCostKind CostKind,
                             unsigned OverrideMaxNumRegs = 0,
-                            VPlanCostReport *Report = nullptr) const;
+                            VPlanCostReport *Report = nullptr,
+                            InstructionCost *VectorCost = nullptr) const;
 };
 
 /// Estimate the register usage for \p Plan and vectorization factors in \p VFs

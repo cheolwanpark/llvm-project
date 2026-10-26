@@ -20,7 +20,7 @@ namespace llvm {
 class BasicBlock;
 
 /// Identity is local to a planning invocation, not a persistent cache key.
-/// Probe geometry is always IC=1 without a separate vector epilogue.
+/// Geometry is explicit and local to this planning invocation.
 struct VPlanBackendCandidate {
   std::string ID;
   unsigned PlanIndex;
@@ -28,6 +28,13 @@ struct VPlanBackendCandidate {
   bool ScalarTail;
   bool InterleaveOnlyWhenForced;
   bool VectorizeOnlyWhenForced;
+  unsigned IC = 1;
+  bool IsEpilogue = false;
+  // Epilogue probes materialize the selected main and the requested epilogue.
+  unsigned MainPlanIndex = 0;
+  ElementCount MainVF = ElementCount::getFixed(1);
+  unsigned MainIC = 1;
+  ElementCount EpilogueVF = ElementCount::getFixed(0);
 };
 
 /// Explicit per-pass state for materializing a candidate on a disposable clone.

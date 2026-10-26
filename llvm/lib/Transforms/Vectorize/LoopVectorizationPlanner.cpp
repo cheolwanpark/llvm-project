@@ -707,110 +707,121 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
                                                 const unsigned MaxTripCount,
                                                 bool HasTail,
                                                 bool IsEpilogue) const {
-  InstructionCost CostA = A.Cost;
-  InstructionCost CostB = B.Cost;
-  auto Decision = [&](bool Result, StringRef Reason) {
+  auto Compare = [&](auto CostA, auto CostB) {
+    using CostT = decltype(CostA);
+    auto Decision = [&](bool Result, StringRef Reason) {
+      if (Config.CostReport)
+        Config.CostReport->comparisonResult(Result, Reason);
+      return Result;
+    };
     if (Config.CostReport)
-      Config.CostReport->comparisonResult(Result, Reason);
-    return Result;
-  };
-  if (Config.CostReport)
-    Config.CostReport->comparisonContext(MaxTripCount, HasTail);
+      Config.CostReport->comparisonContext(MaxTripCount, HasTail);
 
-  // When there is a hint to always prefer scalable vectors, honour that hint.
-  if (Hints.isScalableVectorizationAlwaysPreferred())
-    if (A.Width.isScalable() && CostA.isValid() && !B.Width.isScalable() &&
-        !B.Width.isScalar())
-      return Decision(true, "scalable-hint-policy-before-ranking");
+    // When there is a hint to always prefer scalable vectors, honour that hint.
+    if (Hints.isScalableVectorizationAlwaysPreferred())
+      if (A.Width.isScalable() && CostA.isValid() && !B.Width.isScalable() &&
+          !B.Width.isScalar())
+        return Decision(true, "scalable-hint-policy-before-ranking");
 
-  // Improve estimate for the vector width if it is scalable.
-  unsigned EstimatedWidthA = A.Width.getKnownMinValue();
-  unsigned EstimatedWidthB = B.Width.getKnownMinValue();
-  if (std::optional<unsigned> VScale = Config.getVScaleForTuning()) {
-    if (A.Width.isScalable())
-      EstimatedWidthA *= *VScale;
-    if (B.Width.isScalable())
-      EstimatedWidthB *= *VScale;
-  }
-
-  // When optimizing for size choose whichever is smallest, which will be the
-  // one with the smallest cost for the whole loop. On a tie pick the larger
-  // vector width, on the assumption that throughput will be greater.
-
-  if (Config.CostKind == TTI::TCK_CodeSize) {
-    if (Config.CostReport)
-      Config.CostReport->comparisonScore(CostA, CostB, "code-size");
-    return Decision(CostA < CostB ||
-                        (CostA == CostB && EstimatedWidthA > EstimatedWidthB),
-                    "code-size-less-than-or-tie-larger-width");
-  }
-
-  // Assume vscale may be larger than 1 (or the value being tuned for),
-  // so that scalable vectorization is slightly favorable over fixed-width
-  // vectorization.
-  bool PreferScalable = !TTI.preferFixedOverScalableIfEqualCost(IsEpilogue) &&
-                        A.Width.isScalable() && !B.Width.isScalable();
-
-  auto CmpFn = [PreferScalable](const InstructionCost &LHS,
-                                const InstructionCost &RHS) {
-    return PreferScalable ? LHS <= RHS : LHS < RHS;
-  };
-
-  // To avoid the need for FP division:
-  //      (CostA / EstimatedWidthA) < (CostB / EstimatedWidthB)
-  // <=>  (CostA * EstimatedWidthB) < (CostB * EstimatedWidthA)
-  InstructionCost CrossProductA = CostA * EstimatedWidthB;
-  InstructionCost CrossProductB = CostB * EstimatedWidthA;
-  bool LowerCostWithoutTC = CmpFn(CrossProductA, CrossProductB);
-
-  if (!MaxTripCount) {
-    if (Config.CostReport)
-      Config.CostReport->comparisonScore(CostA, CostB, "cost-per-lane",
-                                         EstimatedWidthA, EstimatedWidthB);
-    return Decision(LowerCostWithoutTC,
-                    PreferScalable
-                        ? "unknown-trip-count-cross-products-scalable-tie"
-                        : "unknown-trip-count-cross-products");
-  }
-
-  auto GetCostForTC = [MaxTripCount, HasTail](unsigned VF,
-                                              InstructionCost VectorCost,
-                                              InstructionCost ScalarCost) {
-    // If the trip count is a known (possibly small) constant, the trip count
-    // will be rounded up to an integer number of iterations under
-    // FoldTailByMasking. The total cost in that case will be
-    // VecCost*ceil(TripCount/VF). When not folding the tail, the total
-    // cost will be VecCost*floor(TC/VF) + ScalarCost*(TC%VF). There will be
-    // some extra overheads, but for the purpose of comparing the costs of
-    // different VFs we can use this to compare the total loop-body cost
-    // expected after vectorization.
-    if (HasTail) {
-      InstructionCost VectorTerm = VectorCost * (MaxTripCount / VF);
-      InstructionCost ScalarTerm = ScalarCost * (MaxTripCount % VF);
-
-      return VectorTerm + ScalarTerm;
+    // Improve estimate for the vector width if it is scalable.
+    unsigned EstimatedWidthA = A.Width.getKnownMinValue();
+    unsigned EstimatedWidthB = B.Width.getKnownMinValue();
+    if (std::optional<unsigned> VScale = Config.getVScaleForTuning()) {
+      if (A.Width.isScalable())
+        EstimatedWidthA *= *VScale;
+      if (B.Width.isScalable())
+        EstimatedWidthB *= *VScale;
     }
-    InstructionCost VectorTerm = VectorCost * divideCeil(MaxTripCount, VF);
 
-    return VectorTerm;
+    // When optimizing for size choose whichever is smallest, which will be the
+    // one with the smallest cost for the whole loop. On a tie pick the larger
+    // vector width, on the assumption that throughput will be greater.
+
+    if (Config.CostKind == TTI::TCK_CodeSize) {
+      if (Config.CostReport)
+        Config.CostReport->comparisonScore(CostA, CostB, "code-size");
+      return Decision(CostA < CostB ||
+                          (CostA == CostB && EstimatedWidthA > EstimatedWidthB),
+                      "code-size-less-than-or-tie-larger-width");
+    }
+
+    // Assume vscale may be larger than 1 (or the value being tuned for),
+    // so that scalable vectorization is slightly favorable over fixed-width
+    // vectorization.
+    bool PreferScalable = !TTI.preferFixedOverScalableIfEqualCost(IsEpilogue) &&
+                          A.Width.isScalable() && !B.Width.isScalable();
+
+    auto CmpFn = [PreferScalable](const CostT &LHS, const CostT &RHS) {
+      return PreferScalable ? LHS <= RHS : LHS < RHS;
+    };
+
+    // To avoid the need for FP division:
+    //      (CostA / EstimatedWidthA) < (CostB / EstimatedWidthB)
+    // <=>  (CostA * EstimatedWidthB) < (CostB * EstimatedWidthA)
+    CostT CrossProductA = CostA * EstimatedWidthB;
+    CostT CrossProductB = CostB * EstimatedWidthA;
+    if constexpr (std::is_same_v<CostT, VPExactCost>)
+      if (!CrossProductA.isValid() || !CrossProductB.isValid())
+        Config.BackendCosts->fail("exact comparison overflow");
+    bool LowerCostWithoutTC = CmpFn(CrossProductA, CrossProductB);
+
+    if (!MaxTripCount) {
+      if (Config.CostReport)
+        Config.CostReport->comparisonScore(CostA, CostB, "cost-per-lane",
+                                           EstimatedWidthA, EstimatedWidthB);
+      return Decision(LowerCostWithoutTC,
+                      PreferScalable
+                          ? "unknown-trip-count-cross-products-scalable-tie"
+                          : "unknown-trip-count-cross-products");
+    }
+
+    auto GetCostForTC = [MaxTripCount, HasTail](unsigned VF, CostT VectorCost,
+                                                CostT ScalarCost) {
+      // If the trip count is a known (possibly small) constant, the trip count
+      // will be rounded up to an integer number of iterations under
+      // FoldTailByMasking. The total cost in that case will be
+      // VecCost*ceil(TripCount/VF). When not folding the tail, the total
+      // cost will be VecCost*floor(TC/VF) + ScalarCost*(TC%VF). There will be
+      // some extra overheads, but for the purpose of comparing the costs of
+      // different VFs we can use this to compare the total loop-body cost
+      // expected after vectorization.
+      if (HasTail) {
+        CostT VectorTerm = VectorCost * (MaxTripCount / VF);
+        CostT ScalarTerm = ScalarCost * (MaxTripCount % VF);
+
+        return VectorTerm + ScalarTerm;
+      }
+      CostT VectorTerm = VectorCost * divideCeil(MaxTripCount, VF);
+
+      return VectorTerm;
+    };
+
+    auto RTCostA = GetCostForTC(EstimatedWidthA, CostA, A.ScalarCost);
+    auto RTCostB = GetCostForTC(EstimatedWidthB, CostB, B.ScalarCost);
+    if constexpr (std::is_same_v<CostT, VPExactCost>)
+      if (!RTCostA.isValid() || !RTCostB.isValid())
+        Config.BackendCosts->fail("exact trip-count comparison overflow");
+    bool LowerCostWithTC = CmpFn(RTCostA, RTCostB);
+    LLVM_DEBUG(if (LowerCostWithTC != LowerCostWithoutTC) {
+      dbgs() << "LV: VF " << (LowerCostWithTC ? A.Width : B.Width)
+             << " has lower cost than VF "
+             << (LowerCostWithTC ? B.Width : A.Width)
+             << " when taking the cost of the remaining scalar loop iterations "
+                "into consideration for a maximum trip count of "
+             << MaxTripCount << ".\n";
+    });
+    if (Config.CostReport)
+      Config.CostReport->comparisonScore(RTCostA, RTCostB, "whole-loop");
+    return Decision(LowerCostWithTC, PreferScalable
+                                         ? "known-trip-count-scalable-tie"
+                                         : "known-trip-count");
   };
-
-  auto RTCostA = GetCostForTC(EstimatedWidthA, CostA, A.ScalarCost);
-  auto RTCostB = GetCostForTC(EstimatedWidthB, CostB, B.ScalarCost);
-  bool LowerCostWithTC = CmpFn(RTCostA, RTCostB);
-  LLVM_DEBUG(if (LowerCostWithTC != LowerCostWithoutTC) {
-    dbgs() << "LV: VF " << (LowerCostWithTC ? A.Width : B.Width)
-           << " has lower cost than VF "
-           << (LowerCostWithTC ? B.Width : A.Width)
-           << " when taking the cost of the remaining scalar loop iterations "
-              "into consideration for a maximum trip count of "
-           << MaxTripCount << ".\n";
-  });
-  if (Config.CostReport)
-    Config.CostReport->comparisonScore(RTCostA, RTCostB, "whole-loop");
-  return Decision(LowerCostWithTC, PreferScalable
-                                       ? "known-trip-count-scalable-tie"
-                                       : "known-trip-count");
+  if (A.ExactCost && !B.ExactCost && B.Cost == InstructionCost::getMax())
+    return true;
+  if (A.ExactCost || B.ExactCost)
+    return Compare(A.ExactCost.value_or(VPExactCost(A.Cost)),
+                   B.ExactCost.value_or(VPExactCost(B.Cost)));
+  return Compare(A.Cost, B.Cost);
 }
 
 bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,

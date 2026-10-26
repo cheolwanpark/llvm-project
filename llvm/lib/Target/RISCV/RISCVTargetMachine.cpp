@@ -19,6 +19,7 @@
 #include "RISCVTargetTransformInfo.h"
 #include "RISCVVPlanAnalytics.h"
 #include "TargetInfo/RISCVTargetInfo.h"
+#include "XiangShanV2TargetTransformInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
@@ -282,6 +283,10 @@ MachineFunctionInfo *RISCVTargetMachine::createMachineFunctionInfo(
 
 TargetTransformInfo
 RISCVTargetMachine::getTargetTransformInfo(const Function &F) const {
+  const auto *ST = getSubtargetImpl(F);
+  if (ST->getTuneCPU() == "xiangshan-kunminghu" &&
+      ST->getRealMinVLen() == 128 && ST->getRealMaxVLen() == 128)
+    return TargetTransformInfo(std::make_unique<XiangShanV2TTIImpl>(this, F));
   return TargetTransformInfo(std::make_unique<RISCVTTIImpl>(this, F));
 }
 

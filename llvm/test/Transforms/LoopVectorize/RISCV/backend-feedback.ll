@@ -1,27 +1,40 @@
 ; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize %s -S -o %t.base.ll
 ; RUN: rm -f %t.jsonl
-; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -vplan-backend-feedback-force-all -vplan-backend-feedback-output=%t.jsonl -verify-each -verify-machineinstrs %s -S -o %t.feedback.ll
-; RUN: diff %t.base.ll %t.feedback.ll
+; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-cost-model -vplan-backend-feedback-force-all -vplan-backend-feedback-output=%t.jsonl -verify-each -verify-machineinstrs %s -S -o %t.feedback.ll
+
 ; RUN: %python %S/Inputs/check-backend-feedback.py %t.jsonl
 ; The transport works without any output file.
-; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -vplan-backend-feedback-force-all %s -S -o %t.memory.ll
-; RUN: diff %t.base.ll %t.memory.ll
-; Optional late cleanup and timing must also leave the original IR unchanged.
+; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-cost-model -vplan-backend-feedback-force-all %s -S -o %t.memory.ll
+; RUN: diff %t.feedback.ll %t.memory.ll
+; Optional late cleanup and timing preserve the observation contract.
 ; RUN: rm -f %t.late.jsonl
-; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -vplan-backend-feedback-force-all -vplan-backend-feedback-late-cleanup -time-vplan-backend-feedback -vplan-backend-feedback-output=%t.late.jsonl -verify-each -verify-machineinstrs %s -S -o %t.late.ll 2>%t.timing
-; RUN: diff %t.base.ll %t.late.ll
+; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-cost-model -vplan-backend-feedback-force-all -vplan-backend-feedback-late-cleanup -time-vplan-backend-feedback -vplan-backend-feedback-output=%t.late.jsonl -verify-each -verify-machineinstrs %s -S -o %t.late.ll 2>%t.timing
+
 ; RUN: %python %S/Inputs/check-backend-feedback.py %t.late.jsonl
 ; RUN: FileCheck %s --check-prefix=TIMING <%t.timing
 ; TIMING: VPLAN-BACKEND-FEEDBACK-TIMING:
 ; TIMING-SAME: "late_cleanup":true
 ; RUN: FileCheck %s --check-prefix=LATE <%t.late.jsonl
 ; LATE: "feedback_pipeline":"vector-suffix-O{{[23]}}+late-cleanup"
-; Unsupported probe geometry must leave the real IC decision alone.
+; IC=2 is materialized and normalized, rather than rejected.
 ; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=2 -disable-loop-unrolling -passes=loop-vectorize %s -S -o %t.ic2.base.ll
 ; RUN: rm -f %t.ic2.jsonl
-; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=2 -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -vplan-backend-feedback-force-all -vplan-backend-feedback-output=%t.ic2.jsonl %s -S -o %t.ic2.ll
-; RUN: diff %t.ic2.base.ll %t.ic2.ll
-; RUN: %python %S/Inputs/check-backend-feedback.py %t.ic2.jsonl unavailable
+; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=2 -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-cost-model -vplan-backend-feedback-force-all -vplan-backend-feedback-output=%t.ic2.jsonl %s -S -o %t.ic2.ll
+
+; RUN: %python %S/Inputs/check-backend-feedback.py %t.ic2.jsonl 2
+
+; Diagnostic flags without the master must not query the provider or tune costs.
+; RUN: rm -f %t.off.jsonl
+; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -print-vplan-backend-feedback -time-vplan-backend-feedback -vplan-backend-feedback-force-all -vplan-backend-feedback-output=%t.off.jsonl %s -S -o %t.off.ll 2>%t.off.stderr
+; RUN: diff %t.base.ll %t.off.ll
+; RUN: test ! -e %t.off.jsonl
+; RUN: test ! -s %t.off.stderr
+
+; External RA discovery owns selection when both switches are present.
+; RUN: rm -f %t.nested.jsonl
+; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -passes='default<O2>' -vplan-ra-run-id=nested -vplan-candidates-output=%t.ra.json -enable-vplan-backend-cost-model -print-vplan-backend-feedback -time-vplan-backend-feedback -vplan-backend-feedback-output=%t.nested.jsonl %s -disable-output 2>%t.nested.stderr
+; RUN: test ! -e %t.nested.jsonl
+; RUN: test ! -s %t.nested.stderr
 
 define void @kernel(ptr noalias %a, ptr noalias %b) #0 {
 entry:

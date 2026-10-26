@@ -344,6 +344,7 @@ json::Object instruction(MachineInstr &MI, unsigned ID,
         {"atomic", MMO->isAtomic()},
         {"offset", MMO->getOffset()},
         {"alignment", MMO->getAlign().value()},
+        {"address_space", MMO->getAddrSpace()},
         {"base", valueName(MMO->getValue())},
         {"stack_slot", nullptr},
         {"bytes", Size.hasValue()
@@ -395,6 +396,25 @@ json::Object instruction(MachineInstr &MI, unsigned ID,
       {"configuration", RISCVInstrInfo::isVectorConfigInstr(MI)},
       {"load", MI.mayLoad()},
       {"store", MI.mayStore()},
+      {"whole_register",
+       MI.getOpcode() == RISCV::VS1R_V || MI.getOpcode() == RISCV::VS2R_V ||
+           MI.getOpcode() == RISCV::VS4R_V || MI.getOpcode() == RISCV::VS8R_V ||
+           MI.getOpcode() == RISCV::VL1RE8_V ||
+           MI.getOpcode() == RISCV::VL2RE8_V ||
+           MI.getOpcode() == RISCV::VL4RE8_V ||
+           MI.getOpcode() == RISCV::VL8RE8_V ||
+           MI.getOpcode() == RISCV::VL1RE16_V ||
+           MI.getOpcode() == RISCV::VL2RE16_V ||
+           MI.getOpcode() == RISCV::VL4RE16_V ||
+           MI.getOpcode() == RISCV::VL8RE16_V ||
+           MI.getOpcode() == RISCV::VL1RE32_V ||
+           MI.getOpcode() == RISCV::VL2RE32_V ||
+           MI.getOpcode() == RISCV::VL4RE32_V ||
+           MI.getOpcode() == RISCV::VL8RE32_V ||
+           MI.getOpcode() == RISCV::VL1RE64_V ||
+           MI.getOpcode() == RISCV::VL2RE64_V ||
+           MI.getOpcode() == RISCV::VL4RE64_V ||
+           MI.getOpcode() == RISCV::VL8RE64_V},
       {"registers_complete", Complete},
       {"lmul8", Group ? json::Value(Group) : json::Value(nullptr)},
       {"sew", std::move(SEW)},

@@ -1693,9 +1693,24 @@ public:
       Type *EltTy, int ReplicationFactor, int VF, const APInt &DemandedDstElts,
       TTI::TargetCostKind CostKind) const;
 
-  /// \return The cost of Load and Store instructions. The operand info
-  /// \p OpdInfo should refer to the stored value for stores and the address
-  /// for loads.
+  /// Name of the profile available to explicit VPlan throughput cost scopes.
+  LLVM_ABI StringRef getVPlanCostProfileName() const;
+
+  /// Describes one actual spill/reload access, not an entire stack slot.
+  /// RegisterGroup is the number of whole vector registers accessed.
+  struct SpillReloadAccess {
+    bool IsLoad;
+    Type *AccessType;
+    Align Alignment;
+    unsigned AddressSpace;
+    bool WholeRegister;
+    unsigned RegisterGroup;
+  };
+  LLVM_ABI InstructionCost getSpillReloadCost(const SpillReloadAccess &Access,
+                                              TargetCostKind CostKind) const;
+
+  /// Cost of a load or store. OpdInfo describes the stored value for stores
+  /// and the address for loads.
   LLVM_ABI InstructionCost getMemoryOpCost(
       unsigned Opcode, Type *Src, Align Alignment, unsigned AddressSpace,
       TTI::TargetCostKind CostKind = TTI::TCK_RecipThroughput,

@@ -62,6 +62,10 @@ RISCVTTIImpl::getRISCVInstructionCost(ArrayRef<unsigned> OpCodes, MVT VT,
     return LMULCost * NumInstr;
   InstructionCost Cost = 0;
   for (auto Op : OpCodes) {
+    if (auto Tuned = profileOpcodeCost(Op, VT, CostKind)) {
+      Cost += *Tuned;
+      continue;
+    }
     switch (Op) {
     case RISCV::VRGATHER_VI:
       Cost += TLI->getVRGatherVICost(VT);
@@ -1140,7 +1144,9 @@ InstructionCost RISCVTTIImpl::getInterleavedMemoryOpCost(
         // Otherwise, the cost is proportional to the number of elements (VL *
         // Factor ops).
         unsigned NumLoads = getEstimatedVLFor(VTy);
-        return NumLoads * TTI::TCC_Basic;
+        return profileMemoryCost(NumLoads * TTI::TCC_Basic,
+                                 MemoryCostPath::Segment, Opcode, NumLoads,
+                                 CostKind);
       }
     }
   }
@@ -1251,7 +1257,9 @@ RISCVTTIImpl::getGatherScatterOpCost(const MemIntrinsicCostAttributes &MICA,
   // know exactly what VL will be.
   auto &VTy = *cast<VectorType>(DataTy);
   unsigned NumLoads = getEstimatedVLFor(&VTy);
-  return NumLoads * TTI::TCC_Basic;
+  return profileMemoryCost(NumLoads * TTI::TCC_Basic,
+                           MemoryCostPath::GatherScatter, 0, NumLoads,
+                           CostKind);
 }
 
 InstructionCost RISCVTTIImpl::getExpandCompressMemoryOpCost(
@@ -1314,7 +1322,8 @@ RISCVTTIImpl::getStridedMemoryOpCost(const MemIntrinsicCostAttributes &MICA,
   // know exactly what VL will be.
   auto &VTy = *cast<VectorType>(DataTy);
   unsigned NumLoads = getEstimatedVLFor(&VTy);
-  return NumLoads * TTI::TCC_Basic;
+  return profileMemoryCost(NumLoads * TTI::TCC_Basic, MemoryCostPath::Strided,
+                           0, NumLoads, CostKind);
 }
 
 InstructionCost
@@ -2371,6 +2380,9 @@ InstructionCost RISCVTTIImpl::getMemoryOpCost(unsigned Opcode, Type *Src,
   if (ST->hasVInstructions() && LT.second.isVector() &&
       CostKind != TTI::TCK_CodeSize)
     BaseCost *= TLI->getLMULCost(LT.second);
+  if (ST->hasVInstructions() && LT.second.isVector())
+    return profileMemoryCost(Cost + BaseCost, MemoryCostPath::Contiguous,
+                             Opcode, LT.first, CostKind);
   return Cost + BaseCost;
 }
 
@@ -2881,8 +2893,9 @@ InstructionCost RISCVTTIImpl::getArithmeticInstrCost(
   // We use BasicTTIImpl to calculate scalar costs, which assumes floating point
   // ops are twice as expensive as integer ops. Do the same for vectors so
   // scalar floating point ops aren't cheaper than their vector equivalents.
-  if (Ty->isFPOrFPVectorTy())
-    InstrCost *= 2;
+  InstrCost = profileArithmeticCost(InstrCost, Ty->isFPOrFPVectorTy(),
+                                    Op1Info.isUniform() || Op2Info.isUniform(),
+                                    CostKind);
   return CastCost + ConstantMatCost + LT.first * InstrCost;
 }
 

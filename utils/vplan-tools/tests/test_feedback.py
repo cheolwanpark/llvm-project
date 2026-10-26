@@ -31,19 +31,19 @@ class BackendFeedbackIntegration(unittest.TestCase):
                      '-riscv-v-register-bit-width-lmul=8', *extra_flags]
             for name, extra in [
                 ('base', []),
-                ('feedback', ['-mllvm', '-vplan-backend-feedback-force-all',
+                ('feedback', ['-mllvm', '-enable-vplan-backend-cost-model',
+                              '-mllvm', '-vplan-backend-feedback-force-all',
                               '-mllvm', '-print-vplan-backend-feedback', '-mllvm',
                               '-vplan-backend-feedback-output=' + str(p / 'facts.jsonl')]),
-                ('memory', ['-mllvm', '-enable-vplan-backend-feedback',
+                ('memory', ['-mllvm', '-enable-vplan-backend-cost-model',
                             '-mllvm', '-vplan-backend-feedback-force-all']),
             ]:
                 result = subprocess.run(flags + extra + ['-S', str(src), '-o', str(p / (name + '.s'))],
                                         capture_output=True, text=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 (p / (name + '.stderr')).write_text(result.stderr)
-            self.assertEqual((p / 'base.s').read_bytes(), (p / 'feedback.s').read_bytes())
-            self.assertEqual((p / 'base.s').read_bytes(), (p / 'memory.s').read_bytes())
-            rows = [json.loads(line) for line in (p / 'facts.jsonl').read_text().splitlines()]
+            self.assertEqual((p / 'feedback.s').read_bytes(), (p / 'memory.s').read_bytes())
+            rows = read_feedback(p / 'facts.jsonl')
             self.assertEqual(read_feedback(p / 'feedback.stderr'), rows)
             self.assertGreaterEqual(len({r['vf'] for r in rows if r['scalable']}), 3)
             self.assertEqual(len({r['candidate'] for r in rows}), len(rows))
@@ -87,7 +87,7 @@ class BackendFeedbackIntegration(unittest.TestCase):
                                 for r in empty['candidates']))
             return rows
 
-    def test_direct_clang_feedback_preserves_assembly_and_model_contract(self):
+    def test_direct_clang_feedback_preserves_observation_contract(self):
         self.check_feedback('void kernel(double *restrict a, const double *restrict b) {'
                             'for (int i=0; i<1024; ++i) a[i] = b[i] + 1.; }')
 

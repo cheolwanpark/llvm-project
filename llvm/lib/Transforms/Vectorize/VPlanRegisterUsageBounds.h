@@ -44,6 +44,19 @@ struct VPRegisterUsageBound {
   StringRef Recipe;
   std::optional<unsigned> Opcode;
 
+  uint64_t UsageBeforeIC = 0;
+  void applyInterleave(unsigned IC) {
+    UsageBeforeIC = Usage;
+    if (!Known)
+      return;
+    if (!IC || Usage > UINT64_MAX / IC) {
+      Known = false;
+      Reason = "interleave-bound-overflow";
+      return;
+    }
+    Usage *= IC;
+  }
+
   bool shouldQuery() const { return !Known || Usage >= 32; }
 };
 

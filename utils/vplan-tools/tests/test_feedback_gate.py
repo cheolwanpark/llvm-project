@@ -43,7 +43,7 @@ class FeedbackGateIntegration(unittest.TestCase):
                      '-riscv-v-register-bit-width-lmul=8']
             for mode in ('off', 'gate', 'oracle'):
                 extra = [] if mode == 'off' else [
-                    '-mllvm', '-enable-vplan-backend-feedback',
+                    '-mllvm', '-enable-vplan-backend-cost-model',
                     '-mllvm', '-time-vplan-backend-feedback', '-mllvm',
                     '-vplan-backend-feedback-output=' + str(root / (mode + '.jsonl'))]
                 if mode == 'oracle':
@@ -53,8 +53,7 @@ class FeedbackGateIntegration(unittest.TestCase):
                                         capture_output=True, text=True, timeout=120)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 (root / (mode + '.stderr')).write_text(result.stderr)
-            self.assertEqual((root / 'off.s').read_bytes(), (root / 'gate.s').read_bytes())
-            self.assertEqual((root / 'off.s').read_bytes(), (root / 'oracle.s').read_bytes())
+            self.assertEqual((root / 'gate.s').read_bytes(), (root / 'oracle.s').read_bytes())
             gated = read_feedback(root / 'gate.jsonl')
             oracle = read_feedback(root / 'oracle.jsonl')
             audit = audit_pair(gated, oracle)

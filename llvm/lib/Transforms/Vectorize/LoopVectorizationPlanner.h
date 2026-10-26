@@ -25,6 +25,7 @@
 #define LLVM_TRANSFORMS_VECTORIZE_LOOPVECTORIZATIONPLANNER_H
 
 #include "VPlan.h"
+#include "VPlanBackendCostModel.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Support/InstructionCost.h"
@@ -574,6 +575,7 @@ struct VectorizationFactor {
 
   /// Cost of the scalar loop.
   InstructionCost ScalarCost;
+  std::optional<VPExactCost> ExactCost;
 
   /// The minimum trip count required to make vectorization profitable, e.g. due
   /// to runtime checks.
@@ -716,9 +718,7 @@ public:
   VPlanCostReport *CostReport = nullptr;
   VPlanRAContext *RA = nullptr;
   VPlanBackendProbe *BackendProbe = nullptr;
-  /// Owned backend facts for this planning invocation. Costing/selection do not
-  /// consume these yet; a future model can query them by candidate identity.
-  SmallVector<json::Object> BackendObservations;
+  VPlanBackendCostModel *BackendCosts = nullptr;
 
   /// The kind of cost that we are calculating.
   const TTI::TargetCostKind CostKind;
@@ -913,6 +913,14 @@ public:
   /// interleaving should be avoided up-front, no plans are generated.
   void plan(ElementCount UserVF, unsigned UserIC);
 
+  InstructionCost backendCandidateCost(VPlan &Plan, ElementCount VF,
+                                       bool Profile,
+                                       InstructionCost &VectorSpill);
+  unsigned limitBackendIC(VPlan &Plan, unsigned IC) const;
+  void resetVFSelection() {
+    ProfitableVFs.clear();
+    ReportProfitablePlans.clear();
+  }
   void registerRACandidates();
   ArrayRef<VPlanPtr> getPlans() const { return VPlans; }
   std::pair<VectorizationFactor, VPlan *> selectRARequested();

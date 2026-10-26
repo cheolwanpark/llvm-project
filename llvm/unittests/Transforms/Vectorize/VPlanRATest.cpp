@@ -116,7 +116,7 @@ TEST(VPlanRA, ExplicitSelectionAndScalarRetention) {
     writeVPlanRAJSON(
         Feedback,
         json::Object{
-            {"version", 3},
+            {"version", 4},
             {"run_id", "unit-test"},
             {"candidates", json::Array(*Rows)},
             {"loops", json::Array(*Baseline.getAsObject()->getArray("loops"))},

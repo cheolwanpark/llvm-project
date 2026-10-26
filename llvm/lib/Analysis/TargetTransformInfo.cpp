@@ -817,6 +817,16 @@ const char *TargetTransformInfo::getRegisterClassName(unsigned ClassID) const {
   return TTIImpl->getRegisterClassName(ClassID);
 }
 
+StringRef TargetTransformInfo::getVPlanCostProfileName() const {
+  return TTIImpl->getVPlanCostProfileName();
+}
+
+InstructionCost
+TargetTransformInfo::getSpillReloadCost(const SpillReloadAccess &Access,
+                                        TargetCostKind Kind) const {
+  return TTIImpl->getSpillReloadCost(Access, Kind);
+}
+
 InstructionCost TargetTransformInfo::getRegisterClassSpillCost(
     unsigned ClassID, TTI::TargetCostKind CostKind) const {
   return TTIImpl->getRegisterClassSpillCost(ClassID, CostKind);

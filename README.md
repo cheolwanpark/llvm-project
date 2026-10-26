@@ -9,7 +9,13 @@ The target is XiangShan Kunminghu v2 MinimalConfig, VLEN=128.
 
 외부 wrapper 없이 LLVM vectorizer 내부에서 VF 후보의 backend 관찰값을 받는
 선택적 연구 경로는 [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md)에 정리되어 있다.
-이 경로는 기존 비용 계산과 VF 선택을 유지한다.
+`-mllvm -enable-vplan-backend-cost-model` 하나로 활성화하며, 비용은
+`TTI body − estimated vector spill + observed vector spill`이다. Scalar spill 추정은
+유지한다. XiangShan Kunminghu/확정 VLEN=128에서는 후보 throughput 조회에만
+[고정 TTI profile](TTI_PROFILE.md)을 적용한다. 다른 RISC-V/RVV에서는 native TTI를
+사용한다. 기본값은 OFF이며 외부 Python/meta-compiler 경로와 중첩하지 않는다.
+[구현 검증 결과](BACKEND_COST_MODEL_VALIDATION.md)에 회귀 테스트와 203개 입력의
+flag OFF 대조, gate/force-all 비교 및 관측 한계를 기록했다.
 
 ## LLVM passes and the meta-compiler
 
@@ -40,13 +46,58 @@ complete compiler contract and observation fields.
 Run these commands from the repository root. Prerequisites are Python 3.12+
 (managed by `uv`), CMake 3.20+, Ninja and a host C++ compiler.
 
+The application and loop workflows use the following components:
+
+| Purpose | Required components |
+|---|---|
+| CMake projects | `clang;lld` |
+| CPU backends | `X86;RISCV` on an x86-64 host; `AArch64;RISCV` on an ARM64 host |
+| Application builds and ELF inspection | `clang`, `clang++`, `opt`, `ld.lld`, `llvm-nm`, `llvm-objdump` |
+| Loop extraction and LLVM IR inspection | `llvm-extract`, `llvm-dis` |
+| Compiler regression tests below | `llc`, `FileCheck`, `split-file`, `not`, and the requested unit-test targets |
+
+All executables are in the build directory's `bin/`. Building `clang` also
+creates `clang++`; building the CMake target `lld` creates `ld.lld`.
+The host backend supports native application builds, while `--target=riscv64-unknown-elf`
+selects RISC-V. Executable links also need the application's target libraries,
+startup objects and linker script where applicable; the LLVM build does not supply
+a RISC-V libc/sysroot.
+
+For an application-only Release build, tests can be disabled. This separate build
+directory keeps the regression build available:
+
+```sh
+cmake -S llvm -B .cache/build-spec -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DLLVM_TARGETS_TO_BUILD="X86;RISCV" \
+  -DLLVM_INCLUDE_TESTS=OFF \
+  -DLLVM_INCLUDE_EXAMPLES=OFF \
+  -DLLVM_INCLUDE_BENCHMARKS=OFF
+
+cmake --build .cache/build-spec --parallel 8
+```
+
+On ARM64, replace `X86;RISCV` with `AArch64;RISCV` in the configure commands.
+For only the required application/loop tools, the last command can instead be:
+
+```sh
+cmake --build .cache/build-spec --target clang clang-resource-headers lld opt \
+  llvm-nm llvm-objdump llvm-extract llvm-dis --parallel 8
+```
+
+For the VPlan experiments and compiler regression tests, use the existing
+`.cache/compiler-build` directory with assertions and LLVM tests enabled.
+The Python experiment tools require assertions or `LLVM_ENABLE_DUMP=ON` for VPlan
+reporting; the application-only configuration above does not enable that reporting.
+
 ```sh
 uv sync --locked --project utils/vplan-tools
 
 cmake -S llvm -B .cache/compiler-build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DLLVM_ENABLE_PROJECTS=clang \
-  -DLLVM_TARGETS_TO_BUILD=RISCV \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DLLVM_TARGETS_TO_BUILD="X86;RISCV" \
   -DLLVM_ENABLE_ASSERTIONS=ON \
   -DLLVM_INCLUDE_TESTS=ON \
   -DLLVM_INCLUDE_EXAMPLES=OFF \
@@ -56,13 +107,24 @@ cmake -S llvm -B .cache/compiler-build -G Ninja \
   -DCLANG_ENABLE_OBJC_REWRITER=OFF \
   -DCLANG_INCLUDE_TESTS=OFF
 
-cmake --build .cache/compiler-build --target clang clang-resource-headers llvm-extract llc opt FileCheck split-file not --parallel 2
+cmake --build .cache/compiler-build --target clang clang-resource-headers lld \
+  opt llvm-nm llvm-objdump llvm-extract llvm-dis llc FileCheck split-file not \
+  --parallel 8
 ```
+
+When adding the host backend to an existing RISCV-only build, append
+`-U LLVM_DEFAULT_TARGET_TRIPLE` to the configure command once. This clears a
+possibly empty cached default and lets CMake select the host triple. Confirm it
+with `bin/clang -dumpmachine`, and list compiled backends with `bin/llc --version`.
+Choose the parallel job count to fit available memory; the regression configuration
+above limits concurrent links to one.
 
 The experiment commands below reuse this build with `--build-dir .cache/compiler-build
 --skip-build`. After C++ changes, rebuild before using `--skip-build`.
 Alternatively, omit `--skip-build` to let the tools configure/build the compiler;
-without `--build-dir`, they use `build-vplan-tools`.
+without `--build-dir`, they use `build-vplan-tools`. That automatic configuration
+is a minimal RISCV-only experiment build; use the explicit configuration above
+for the complete application toolchain.
 
 ## Experiments
 

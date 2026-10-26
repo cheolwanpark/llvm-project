@@ -25,7 +25,7 @@
 
 namespace llvm {
 
-class RISCVTTIImpl final : public BasicTTIImplBase<RISCVTTIImpl> {
+class RISCVTTIImpl : public BasicTTIImplBase<RISCVTTIImpl> {
   using BaseT = BasicTTIImplBase<RISCVTTIImpl>;
   using TTI = TargetTransformInfo;
 
@@ -34,6 +34,7 @@ class RISCVTTIImpl final : public BasicTTIImplBase<RISCVTTIImpl> {
   const RISCVSubtarget *ST;
   const RISCVTargetLowering *TLI;
 
+protected:
   const RISCVSubtarget *getST() const { return ST; }
   const RISCVTargetLowering *getTLI() const { return TLI; }
 
@@ -71,6 +72,22 @@ class RISCVTTIImpl final : public BasicTTIImplBase<RISCVTTIImpl> {
   /// return a cost for it.
   InstructionCost getSlideCost(FixedVectorType *Tp, ArrayRef<int> Mask,
                                TTI::TargetCostKind CostKind) const;
+
+  enum class MemoryCostPath { Contiguous, Strided, GatherScatter, Segment };
+  virtual std::optional<InstructionCost>
+  profileOpcodeCost(unsigned Opcode, MVT VT, TTI::TargetCostKind Kind) const {
+    return std::nullopt;
+  }
+  virtual InstructionCost
+  profileArithmeticCost(InstructionCost Cost, bool FP, bool Uniform,
+                        TTI::TargetCostKind Kind) const {
+    return FP ? Cost * 2 : Cost;
+  }
+  virtual InstructionCost
+  profileMemoryCost(InstructionCost Cost, MemoryCostPath Path, unsigned Opcode,
+                    InstructionCost Count, TTI::TargetCostKind Kind) const {
+    return Cost;
+  }
 
 public:
   explicit RISCVTTIImpl(const RISCVTargetMachine *TM, const Function &F)

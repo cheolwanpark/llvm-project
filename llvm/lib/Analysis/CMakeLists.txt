@@ -152,6 +152,7 @@ add_llvm_component_library(LLVMAnalysis
   SyntheticCountsUtils.cpp
   TFLiteUtils.cpp
   TargetLibraryInfo.cpp
+  VPlanCostProfile.cpp
   TargetTransformInfo.cpp
   TensorSpec.cpp
   Trace.cpp

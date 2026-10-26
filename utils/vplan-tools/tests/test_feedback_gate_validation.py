@@ -82,3 +82,22 @@ class FeedbackGateValidationTests(unittest.TestCase):
             obs['blocks'][0]['successors'] = [0]
             result = audit_pair(*pair(obs))
             self.assertEqual(result['counts']['skipped_unverified'], 1)
+
+    def test_truncated_population_requires_matching_loop_fallback(self):
+        gated, _ = pair()
+        gated[0].update(function='kernel', loop=3)
+        with self.assertRaises(ToolError):
+            audit_pair(gated, [], fallback_loops={('kernel', 4)})
+        result = audit_pair(gated, [], fallback_loops={('kernel', 3)})
+        self.assertEqual(result['counts']['not_evaluated_after_loop_fallback'], 1)
+        self.assertEqual(result['candidates'][0]['verification'], 'loop-fallback-not-evaluated')
+        self.assertNotIn('skipped_verified', result['counts'])
+
+    def test_exact_fractional_cost_comparison(self):
+        gated, oracle = pair()
+        gated[0].update(body_quarters_numerator=1, body_quarters_denominator=8)
+        oracle[0].update(body_quarters_numerator=2, body_quarters_denominator=16)
+        self.assertEqual(audit_pair(gated, oracle)['counts']['costs_equal'], 1)
+        oracle[0]['body_quarters_denominator'] = 17
+        with self.assertRaises(ToolError):
+            audit_pair(gated, oracle)

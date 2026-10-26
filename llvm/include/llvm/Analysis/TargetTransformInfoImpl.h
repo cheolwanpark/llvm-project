@@ -630,6 +630,17 @@ public:
     }
   }
 
+  virtual StringRef getVPlanCostProfileName() const { return "native"; }
+
+  virtual InstructionCost
+  getSpillReloadCost(const TTI::SpillReloadAccess &Access,
+                     TTI::TargetCostKind Kind) const {
+    return getMemoryOpCost(
+        Access.IsLoad ? Instruction::Load : Instruction::Store,
+        Access.AccessType, Access.Alignment, Access.AddressSpace, Kind,
+        TTI::OperandValueInfo(), nullptr);
+  }
+
   virtual InstructionCost
   getRegisterClassSpillCost(unsigned ClassID,
                             TTI::TargetCostKind CostKind) const {

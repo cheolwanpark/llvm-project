@@ -93,6 +93,12 @@ public:
   /// This function is intended to be used as sparingly as possible, since the
   /// class provides the full range of operator support required for arithmetic
   /// and comparisons.
+  /// Exact numerator in quarter-cost units, for rational normalization.
+  CostType getQuarterValue() const {
+    assert(isValid());
+    return Value;
+  }
+
   CostType getValue() const {
     assert(isValid());
     return Value / CostGranularity;

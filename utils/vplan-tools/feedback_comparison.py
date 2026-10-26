@@ -11,7 +11,7 @@ from model_errors import ToolError
 from observations import bind_observation, validate_manifest, validate_observation
 
 PREFIX = 'VPLAN-BACKEND-FEEDBACK: '
-IGNORED_FIELDS = ('candidate', 'run_id', 'feedback_pipeline')
+IGNORED_FIELDS = ('candidate', 'run_id', 'feedback_pipeline', 'ic', 'observation_role')
 
 
 def read_feedback(path, *, allow_empty=False):
@@ -20,13 +20,15 @@ def read_feedback(path, *, allow_empty=False):
     if any(line.startswith(PREFIX) for line in lines):
         lines = [line[len(PREFIX):] for line in lines if line.startswith(PREFIX)]
     rows = [json.loads(line) for line in lines if line.strip()]
+    # Selection/fallback diagnostics share the stream but are not observations.
+    rows = [r for r in rows if r.get('status') not in ('selected', 'native-fallback')]
     if not rows and not allow_empty:
         raise ToolError('no middle-end feedback rows')
     for row in rows:
         if row.get('feedback_point') != 'middle-end-before-vf-selection':
             raise ToolError('feedback was not marked as received before VF selection')
-        if row.get('ic') != 1 or row.get('vector_epilogue') is not False:
-            raise ToolError('feedback probe geometry must be IC=1 without vector epilogue')
+        if not isinstance(row.get('ic'), int) or row['ic'] < 1:
+            raise ToolError('invalid feedback interleave count')
     return rows
 
 
@@ -94,6 +96,8 @@ def compare_collection(middle_end_path, backend_dir):
     # An empty receipt is a population mismatch when the backend has candidates.
     # Keep those candidates in the report instead of dropping the whole input.
     for row in read_feedback(middle_end_path, allow_empty=True):
+        if row.get('ic') != 1 or row.get('vector_epilogue') is not False:
+            raise ToolError('external RA comparison requires IC=1 without vector epilogue')
         vf = ('s' if row['scalable'] else 'f') + str(row['vf'])
         key = (row['function'], row['loop'], row['plan'], vf)
         if key in left:

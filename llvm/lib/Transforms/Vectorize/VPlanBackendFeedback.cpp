@@ -15,10 +15,13 @@
 
 using namespace llvm;
 
-static cl::opt<bool> EnableFeedback(
-    "enable-vplan-backend-feedback", cl::Hidden,
-    cl::desc(
-        "Observe backend facts for VPlan candidates without changing costs"));
+static cl::opt<bool> EnableBackendCostModel(
+    "enable-vplan-backend-cost-model", cl::Hidden, cl::init(false),
+    cl::desc("Select VF using scoped TTI and actual vector spill costs"));
+static cl::opt<bool>
+    EnableFeedback("enable-vplan-backend-feedback", cl::Hidden,
+                   cl::desc("Legacy compatibility flag (requires "
+                            "enable-vplan-backend-cost-model)"));
 static cl::opt<std::string> FeedbackOutput(
     "vplan-backend-feedback-output", cl::Hidden,
     cl::desc("Append candidate feedback as JSONL (diagnostic only)"));
@@ -31,9 +34,7 @@ static cl::opt<bool> ForceAllFeedback(
 
 AnalysisKey VPlanBackendFeedbackAnalysis::Key;
 
-bool llvm::vplanBackendFeedbackEnabled() {
-  return EnableFeedback || PrintFeedback;
-}
+bool llvm::vplanBackendFeedbackEnabled() { return EnableBackendCostModel; }
 
 bool llvm::vplanBackendFeedbackForceAll() { return ForceAllFeedback; }
 
