@@ -1,5 +1,63 @@
 # Backend feedback 검증 결과
 
+## Register usage gate 추가 검증 — 2026-10-26
+
+`VPlanRegisterUsageBounds` 적용 후 이전과 SHA-256이 같은 203개 입력 DB를
+`/work/mir-port-aware-goal/search-dataset.sqlite`에서 읽어 검증했다.
+동일 pre-vectorizer checkpoint, 입력별 compile flags, IC=1에서 default gate와
+`-vplan-backend-feedback-force-all`을 비교했다. 기본 feedback OFF assembly도
+비교했다. Late cleanup OFF/ON을 각각 실행했으며 아래 수치는 **모드별**이다.
+
+| 항목 | Late OFF | Late ON |
+|---|---:|---:|
+| 전체 입력 / 후보 | 203 / 1,528 | 203 / 1,528 |
+| Force-all 실제 backend 호출 | 1,528 | 1,528 |
+| Gate 적용 실제 backend 호출 | 815 | 815 |
+| 생략 / 감소율 | 713 / 46.66% | 713 / 46.66% |
+| 대상 loop body를 관찰한 생략 후보 | 707 | 707 |
+| Loop 제거 후 함수 전체를 관찰한 생략 후보 | 3 | 3 |
+| 검증한 710개에서 대상 RVV spill/reload | 0 | 0 |
+| 후보 미생성으로 spill 검증 불가 | 3 | 3 |
+| Mask가 포함된 생략 후보 | 80 | 80 |
+| Query 유지: 상한 32 이상 / 미지원 Recipe | 140 / 675 | 140 / 675 |
+
+서브에이전트 하나가 전체 입력을 새로 컴파일하고 실제 provider timing 기록과
+후보별 정책을 대조했다. 다른 서브에이전트는 자체 checker로 raw JSONL의 후보,
+상한식, register operand의 `group8`, `spill_slot` MMO와 body 소속을 독립 감사했다.
+두 모드의 gate/force-all assembly를 feedback OFF와 비교한 **812회 모두 동일**했다.
+
+검증 예외는 다음처럼 분리했다.
+
+* `polybench/polybench-reg_detect-l02` s4/s8/s16은 loop가 사라져 iteration mapping이
+  없다. 각 관찰에는 successor 없는 machine block 하나와 11개 명령 전체가 있고,
+  함수 전체의 spill-slot 접근이 0이다. 이 세 후보는 함수 전체를 검사한 더 강한
+  근거로 검증했으며, 임의의 mapping 실패를 무-spill로 간주한 것은 아니다.
+* `polybench/p32-adi-full` loop 0 s1/s2/s4는 force-all에서도 후보가 생성되지 않는다.
+  별도 RA probe로 `always-failing-memory-check`를 재현했다. 이 세 후보는
+  **spill 0으로 집계하지 않았다**. 따라서 모든 생략 후보에 대한 관찰 검증을
+  요구하는 도구의 최종 상태는 `passed=false`, exit 1이다. 발견된 spill 반례는 없다.
+* ADI의 다른 후보에서 대상 body **밖** vector spill/reload가 각각 3개,
+  scalar spill-slot store/load가 각각 483개 관찰됐다. 이 수치는 생략 후보들의
+  정적 관찰 합계이며 대상 RVV body spill과 구분한다. 함수 전체에 spill이 없다는
+  주장은 하지 않는다.
+
+검증 binary SHA-256:
+`9c73cec243ba9781eb2212f42ce78bcde03d0d1951c7fa6a07e4c8f5a0694dd7`.
+
+재현 명령:
+
+```sh
+python3 utils/vplan-tools/check-backend-feedback-gate \
+  --clang .cache/compiler-build/bin/clang \
+  --db /work/mir-port-aware-goal/search-dataset.sqlite \
+  --output-dir .cache/gate-validation-new --jobs 8
+```
+
+사용자 요청으로 이번 검증의 임시 산출물, 일회성 감사 스크립트, ADI 진단 파일과
+실행 로그를 삭제했다. 위 결과와 재현 명령, 정식 검증 도구 및 회귀 테스트는 보존했다.
+
+## 이전 transport 비교
+
 검증일: 2026-10-25. 정리일: 2026-10-26.
 
 사용자 요청으로 실행 산출물, 입력 snapshot, 빌드, 일회성 진단 스크립트는 삭제했다.

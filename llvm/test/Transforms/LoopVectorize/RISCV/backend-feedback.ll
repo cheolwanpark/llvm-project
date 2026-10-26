@@ -1,14 +1,14 @@
 ; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize %s -S -o %t.base.ll
 ; RUN: rm -f %t.jsonl
-; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -vplan-backend-feedback-output=%t.jsonl -verify-each -verify-machineinstrs %s -S -o %t.feedback.ll
+; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -vplan-backend-feedback-force-all -vplan-backend-feedback-output=%t.jsonl -verify-each -verify-machineinstrs %s -S -o %t.feedback.ll
 ; RUN: diff %t.base.ll %t.feedback.ll
 ; RUN: %python %S/Inputs/check-backend-feedback.py %t.jsonl
 ; The transport works without any output file.
-; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback %s -S -o %t.memory.ll
+; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -vplan-backend-feedback-force-all %s -S -o %t.memory.ll
 ; RUN: diff %t.base.ll %t.memory.ll
 ; Optional late cleanup and timing must also leave the original IR unchanged.
 ; RUN: rm -f %t.late.jsonl
-; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -vplan-backend-feedback-late-cleanup -time-vplan-backend-feedback -vplan-backend-feedback-output=%t.late.jsonl -verify-each -verify-machineinstrs %s -S -o %t.late.ll 2>%t.timing
+; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -vplan-backend-feedback-force-all -vplan-backend-feedback-late-cleanup -time-vplan-backend-feedback -vplan-backend-feedback-output=%t.late.jsonl -verify-each -verify-machineinstrs %s -S -o %t.late.ll 2>%t.timing
 ; RUN: diff %t.base.ll %t.late.ll
 ; RUN: %python %S/Inputs/check-backend-feedback.py %t.late.jsonl
 ; RUN: FileCheck %s --check-prefix=TIMING <%t.timing
@@ -19,7 +19,7 @@
 ; Unsupported probe geometry must leave the real IC decision alone.
 ; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=2 -disable-loop-unrolling -passes=loop-vectorize %s -S -o %t.ic2.base.ll
 ; RUN: rm -f %t.ic2.jsonl
-; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=2 -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -vplan-backend-feedback-output=%t.ic2.jsonl %s -S -o %t.ic2.ll
+; RUN: opt -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=2 -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-feedback -vplan-backend-feedback-force-all -vplan-backend-feedback-output=%t.ic2.jsonl %s -S -o %t.ic2.ll
 ; RUN: diff %t.ic2.base.ll %t.ic2.ll
 ; RUN: %python %S/Inputs/check-backend-feedback.py %t.ic2.jsonl unavailable
 

@@ -120,6 +120,11 @@ def compare_collection(middle_end_path, backend_dir):
         path = directory / f'probe-{i:04d}.analytics.json'
         record.update(middle_end_candidate=row['candidate'], backend_candidate=candidate['id'],
                       backend_observation=str(path))
+        if row['status'] == 'skipped':
+            record.update(equal=False, status='skipped',
+                          middle_end_reason=row.get('reason'),
+                          register_usage_bound=row.get('register_usage_bound'))
+            continue
         if row['status'] != 'collected' or not path.exists():
             record.update(equal=False, status='unavailable',
                           middle_end_status=row['status'], middle_end_reason=row.get('reason'),
@@ -140,5 +145,6 @@ def compare_collection(middle_end_path, backend_dir):
                 population_equal=left.keys() == right.keys(),
                 middle_end_candidates=len(left), backend_candidates=len(right),
                 compared=compared, equal=equal, different=compared-equal,
-                unavailable_or_missing=len(rows)-compared,
+                unavailable_or_missing=sum(r['status'] in ('unavailable', 'missing-candidate') for r in rows),
+                skipped=sum(r['status'] == 'skipped' for r in rows),
                 all_equal=bool(rows) and equal == len(rows), candidates=rows)

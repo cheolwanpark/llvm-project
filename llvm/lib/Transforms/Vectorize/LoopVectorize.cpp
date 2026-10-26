@@ -58,6 +58,7 @@
 #include "VPRecipeBuilder.h"
 #include "VPlan.h"
 #include "VPlanAnalysis.h"
+#include "VPlanRegisterUsageBounds.h"
 #include "VPlanCFG.h"
 #include "VPlanCostReport.h"
 #include "VPlanHelpers.h"
@@ -8844,13 +8845,39 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                          {"scalable", CandidateVF.isScalable()},
                          {"ic", 1},
                          {"vector_epilogue", false}};
-        auto Feedback = BackendFeedback->get(*F, *L->getHeader(), Candidate);
-        if (Feedback) {
-          Row["status"] = "collected";
-          Row["observation"] = std::move(*Feedback);
+        VPRegisterUsageBound Bound;
+        if (UserIC > 1 || hasForcedEpilogueVF())
+          Bound.Reason = "unsupported-probe-geometry";
+        else
+          Bound = computeVPlanRegisterUsageBound(*Plan, CandidateVF, *TTI);
+        json::Object Gate{{"known", Bound.Known},
+                          {"reason", Bound.Reason},
+                          {"would_skip", !Bound.shouldQuery()},
+                          {"force_all", vplanBackendFeedbackForceAll()},
+                          {"budget", 32}};
+        if (Bound.Known) {
+          Gate["peak_bound"] = Bound.Peak;
+          Gate["max_register_group"] = Bound.MaxRegisterGroup;
+          Gate["has_mask"] = Bound.HasMask;
+          Gate["usage_bound"] = Bound.Usage;
+        }
+        if (!Bound.Recipe.empty())
+          Gate["recipe"] = Bound.Recipe;
+        if (Bound.Opcode)
+          Gate["opcode"] = *Bound.Opcode;
+        Row["register_usage_bound"] = std::move(Gate);
+        if (!Bound.shouldQuery() && !vplanBackendFeedbackForceAll()) {
+          Row["status"] = "skipped";
+          Row["reason"] = Bound.Reason;
         } else {
-          Row["status"] = "unavailable";
-          Row["reason"] = toString(Feedback.takeError());
+          auto Feedback = BackendFeedback->get(*F, *L->getHeader(), Candidate);
+          if (Feedback) {
+            Row["status"] = "collected";
+            Row["observation"] = std::move(*Feedback);
+          } else {
+            Row["status"] = "unavailable";
+            Row["reason"] = toString(Feedback.takeError());
+          }
         }
         Config.BackendObservations.push_back(std::move(Row));
         // Print the received, owned data from the original middle-end pass.

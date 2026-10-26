@@ -15,7 +15,88 @@ raw 불일치는 60개로 줄며 서브에이전트의 양 경로 전체 재실�
 양쪽 모두 같은 memory check에서 벡터화를 거절한 경우이며 후보 정책 차이로
 누락 3개도 남는다. 모델 미지원 17개는 별도다.
 [검증 결과](BACKEND_FEEDBACK_COMPARISON.md)에 비교 조건, 최종 수치와 원인을 정리했다.
-2026-10-26 정리에서 실행 산출물과 빌드는 삭제하고 구현·회귀 테스트·핵심 문서를 남겼다.
+이전 transport 검증의 실행 산출물과 빌드는 정리했다. 이후 register usage gate를
+검증하며 다시 만든 컴파일러 빌드는 유지했고, 해당 검증의 임시 스크립트·산출물·로그와
+Python 캐시는 삭제했다. 구현·회귀 테스트·재현 도구·검증 결과 문서는 보존했다.
+
+## 빠른 register usage 상한 검사
+
+`llvm/lib/Transforms/Vectorize/VPlanRegisterUsageBounds.{h,cpp}`는 VPlan을
+변경하지 않는 독립 분석이다. 기존 register-pressure cost에는 연결하지 않는다.
+RISC-V RVV, IC=1, 단일 vector-body block을 지원하며 nested/replicating region과
+미지원 probe geometry에서는 기존 backend 질의를 유지한다.
+
+`I`는 vector live-in·materialize되는 상수·uniform 값·header PHI 수다.
+이 값들은 loop 전체에 걸쳐 살아 있다고 본다. `D(r)`는 Recipe의 vector 정의 수,
+`K(r)`는 소비 Recipe가 r 하나뿐인 비-persistent 입력 값 수다. 중복 operand는
+한 번만 세며 PHI/backedge나 외부 사용자가 있는 값은 K에서 제외한다.
+
+```text
+B = I + sum(max(0, D(r) - K(r)))
+PeakBound = min(I + sum(D(r)), B + max(D(r)))
+UsageBound = (PeakBound + HasMask) * MaxRegisterGroup
+query = unknown || UsageBound >= 32
+```
+
+이는 모든 순서의 peak를 덮는 상한이며 정확한 register saturation은 아니다.
+마지막 `max(D(r))`는 입력을 해제하기 전 출력도 필요한 순간을 포함한다.
+Mask 값도 개별 VPValue로 센 뒤, mask가 있으면 v0용 슬롯 1을 추가한다.
+`MaxRegisterGroup`은 입력·출력·live-in의 예상 물리 vector register 수의 최댓값이다.
+Fractional LMUL과 mask는 최소 1이며, mask의 i1은 RVV data element legality와
+구분한다. 후보 VF와 reduction PHI의 VF scale factor를 반영한다.
+Multi-group 분할, 불명확한 legalization, 산술 overflow는 질의한다.
+
+사용 여부는 worklist로 전파하고 값·Recipe·operand는 상수 횟수만 방문한다.
+타입별 TTI 결과를 캐시하며 재귀적인 user 추론이나 schedule 열거는 하지 않는다.
+평균 해시 조회 비용을 가정한 후보별 시간은 O(Recipe + VPValue + operand)다.
+
+초기 지원은 consecutive load/store 및 EVL 형태, 기본 정수/FP 산술·비교·select,
+단일 단계 cast, mask 논리 연산, broadcast/stepvector와 명시적인 PHI다.
+Scalar-only 주소/제어 연산은 vector pressure에서 제외한다. 아래 경우는 명시적으로
+질의하며, 새로운 Recipe도 기본적으로 질의한다.
+
+| 종류 | 질의하는 이유/조건 |
+|---|---|
+| `VPInterleave[EVL]`, `VPHistogram` | 결합 memory operation과 내부 temporary |
+| `VPWidenCall`, `VPWidenIntrinsic`, `VPWidenMemIntrinsic` | call clobber 또는 미모델링 lowering |
+| `VPReduction[EVL]`, `VPFirstOrderRecurrencePHI`, `VPExpression` | in-loop reduction, splice, expression 확장 |
+| `VPWidenIntOrFpInduction`, `VPWidenCanonicalIV` | 암시적인 vector increment 및 중간값 |
+| Vector를 요구하는 `VPWidenGEP`, `VPWidenPointerInduction`, `VPScalarIVSteps` | 주소/여러 lane 생성의 확장 |
+| `VPReplicate`, `VPBranchOnMask`, `VPPredInstPHI` | 단일 비-predicated scalar replicate 이외의 경우 |
+| `VPBlend` | normalized 두 입력의 단일 select 이외 |
+| Gather/scatter, reverse/shuffle, build/unpack, active-lane-mask 생성 | 숨은 index/mask/vector 값 |
+| `FRem`, 복합 FCmp, 상수 integer div/rem | library/복합 연산/strength reduction temporary |
+| Mask↔data cast, bitcast, 여러 단계의 narrowing/FP 변환 | 추가 중간값; integer zext/sext의 vf2/vf4/vf8은 지원 |
+| f16/bf16, 기타 미지원 element type/분할 타입 | 승격/분할에 따른 추가 값 |
+
+FP 비교는 `OEQ/OLT/OLE/OGT/OGE/UNE`를 지원한다. 미지원 진단에는 Recipe 이름과
+가능한 경우 opcode가 들어간다. 모든 후보의 진단 행에 `register_usage_bound`를
+추가하며, 생략된 행은 `status=skipped`이고 `observation`이 없다.
+`collected`의 기존 MIR observation 형식은 유지한다.
+
+`-vplan-backend-feedback-force-all`은 진단용 대조 옵션이다. 분석과 `would_skip`
+판정은 그대로 수행하되 모든 후보를 질의한다. 이 옵션만으로 feedback을 활성화하지는
+않는다. 기존 전체 관찰을 요구하는 분석/transport 테스트는 이 옵션을 함께 사용한다.
+
+전체 검증은 동일 checkpoint의 gate/force-all을 비교하며, timing 로그로 실제
+provider 호출 수도 대조한다. 관찰된 생략 후보의 `body_order`에 속한 `spill_slot`
+MMO와 vector register operand를 검사한다. Scalar spill과 body 밖 spill은 별도
+보고하며 수집 실패나 iteration mapping 실패를 spill 0으로 처리하지 않는다.
+단, mapping이 사라진 결과가 successor 없는 단일 machine block인 경우에는 loop가
+없는 함수 전체의 vector spill을 검사하여 별도로 검증한다. 이 경우 body 밖의
+vector spill도 실패로 처리한다.
+
+```sh
+python3 utils/vplan-tools/check-backend-feedback-gate \
+  --clang .cache/compiler-build/bin/clang \
+  --db /work/mir-port-aware-goal/search-dataset.sqlite \
+  --output-dir .cache/feedback-gate-validation --jobs 8
+```
+
+기본값은 late cleanup OFF/ON 모두이며 `--benchmark ID`로 입력을 한정할 수 있다.
+출력에는 재현 명령, assembly, 후보별 raw 관찰·spill 감사와 summary가 포함된다.
+검증 불가 후보는 별도로 집계하며 이 도구는 검증 불가 또는 vector spill 반례가
+있으면 비영(非零) 종료 상태를 반환한다.
 
 ## 어떤 정보가 필요한가
 
@@ -43,9 +124,11 @@ instruction-cost 질의만으로 얻을 수 없다. 따라서 TTI에 정적인 �
 
 ### 원본 함수와 후보 복제본의 실행 흐름
 
-Feedback이 활성화됐을 때의 흐름이다. 원본 LV가 실제로 만든 vector VF 후보마다
-현재 함수 상태를 복제해 backend까지 실행한다. 반환값은 보관하며, VF 선택은
-계속 기존 cost를 사용한다. 그림의 VF 선택으로 향하는 화살표는 실행 순서다.
+Feedback이 활성화됐을 때의 흐름이다. 원본 LV가 만든 vector VF 후보마다
+`VPlanRegisterUsageBounds`로 먼저 검사한다. 계산 가능한 상한이 32 미만이면
+질의를 생략하고, 그 외에는 현재 함수 상태를 복제해 backend까지 실행한다.
+반환값은 보관하며 VF 선택은 계속 기존 cost를 사용한다.
+그림의 VF 선택으로 향하는 화살표는 실행 순서다.
 
 ```mermaid
 flowchart TD
@@ -53,11 +136,16 @@ flowchart TD
         Plan["LVP.plan()<br/>VPlan과 VF 후보 생성"]
         More{"질의할 vector VF가 남았는가?"}
         Query["현재 함수 · loop header · 후보로 질의"]
+        Gate{"register usage 상한 < 32?"}
+        Skip["skipped 진단 저장"]
         Store["Config.BackendObservations에 결과 보관"]
         Select["기존 cost로 computeBestVF()"]
         Emit["기존 IC · epilogue 선택 및 IR 생성"]
         Plan --> More
-        More -->|있음| Query
+        More -->|있음| Gate
+        Gate -->|아니오 또는 미지원| Query
+        Gate -->|예| Skip
+        Skip --> More
         Store --> More
         More -->|없음| Select
         Select --> Emit
@@ -206,8 +294,8 @@ sink 경계에서 모든 string value와 object key를 소유하는 값으로 �
 
 ## 실행 및 검증
 
-빌드는 [README](README.md)의 설정을 사용한다. 빌드 산출물은 정리했으므로 먼저
-`.cache/compiler-build`에 다시 빌드한다. 일반 Clang 호출에 옵션 하나를 추가하면 활성화된다.
+빌드는 [README](README.md)의 설정을 사용한다. 빌드가 없는 환경에서는 먼저
+`.cache/compiler-build`에 빌드한다. 일반 Clang 호출에 옵션 하나를 추가하면 활성화된다.
 아래 JSONL 출력 옵션은 반환 경로를 확인하기 위한 선택적 진단이다.
 
 ```sh
@@ -268,6 +356,12 @@ Python은 테스트에서만 사용하며 compiler 경로에는 들어가지 않
 2026-10-25 검증 결과: Utils unit test **183/183**, 관련 LLVM lit **149/149**,
 Python **73/73** 통과.
 
+2026-10-26 register usage gate 검증 결과: Vectorize unit test **75/75**,
+관련 LLVM lit **149/149**, Python **81/81** 통과. 203개 입력의 backend 질의는
+모드별 1,528회에서 815회로 **46.66% 감소**했다. 생략 후보 713개 중 관찰 가능한
+710개에서 대상 RVV spill/reload는 0이었으며, 후보가 생성되지 않은 3개는 검증 불가로
+남겼다. 상세 조건과 한계는 [검증 결과](BACKEND_FEEDBACK_COMPARISON.md)에 있다.
+
 ## 통합 전에 남는 범위
 
 1. **Pipeline 계약.** 현재 probe는 `addVectorPasses`의 LV 이후 부분과 backend를
@@ -281,9 +375,10 @@ Python **73/73** 통과.
    module summary 등으로 planning context가 달라지는 일반화까지 보증하지 않는다.
    그런 범위를 지원하려면 분석 환경을 더 전달하거나 recipe/decision fingerprint를
    대조해야 한다. 직접 VPlan remapping은 그 이후 검토할 최적화다.
-3. **비용.** K개 후보에 대해 함수 복제, LV 재계획, cleanup, backend 실행을 K번 한다.
-   대략 `O(K × (clone + planning + cleanup + codegen))`이며 관찰 저장량도 K에 비례한다.
-   아직 cache/batching/budget 제한은 없다. 현재 단계에서는 기본 비활성 상태를 유지한다.
+3. **비용.** 후보별 선형시간 상한 검사 후 질의하는 K개 후보에 대해서만 함수 복제,
+   LV 재계획, cleanup, backend를 실행한다. 그 부분의 비용은
+   `O(K × (clone + planning + cleanup + codegen))`이다. Cache/batching은 없고
+   feedback 자체는 기본 비활성 상태를 유지한다.
 4. **실패 격리.** 일반적인 unavailable/unsupported 결과는 반환하지만 LLVM backend의
    fatal error/assertion은 같은 프로세스를 종료할 수 있다. 프로세스 격리와 동일한
    내고장성을 주장하지 않는다. New PM, RISC-V, inner-loop 연구 경로가 검증 범위다.

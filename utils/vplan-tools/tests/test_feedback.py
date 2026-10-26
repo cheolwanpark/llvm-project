@@ -31,9 +31,11 @@ class BackendFeedbackIntegration(unittest.TestCase):
                      '-riscv-v-register-bit-width-lmul=8', *extra_flags]
             for name, extra in [
                 ('base', []),
-                ('feedback', ['-mllvm', '-print-vplan-backend-feedback', '-mllvm',
+                ('feedback', ['-mllvm', '-vplan-backend-feedback-force-all',
+                              '-mllvm', '-print-vplan-backend-feedback', '-mllvm',
                               '-vplan-backend-feedback-output=' + str(p / 'facts.jsonl')]),
-                ('memory', ['-mllvm', '-enable-vplan-backend-feedback']),
+                ('memory', ['-mllvm', '-enable-vplan-backend-feedback',
+                            '-mllvm', '-vplan-backend-feedback-force-all']),
             ]:
                 result = subprocess.run(flags + extra + ['-S', str(src), '-o', str(p / (name + '.s'))],
                                         capture_output=True, text=True, timeout=60)

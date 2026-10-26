@@ -83,6 +83,8 @@ public:
 };
 
 LLVM_ABI bool vplanBackendFeedbackEnabled();
+/// Diagnostic oracle: retain the gate's decision but query every candidate.
+LLVM_ABI bool vplanBackendFeedbackForceAll();
 /// Optional diagnostic JSONL/stderr output of the data stored in LV, after the
 /// synchronous query returns and before the original VF selection runs.
 LLVM_ABI void printVPlanBackendFeedback(const json::Object &Result);

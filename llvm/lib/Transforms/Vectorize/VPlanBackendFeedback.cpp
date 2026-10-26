@@ -25,12 +25,17 @@ static cl::opt<std::string> FeedbackOutput(
 static cl::opt<bool> PrintFeedback(
     "print-vplan-backend-feedback", cl::Hidden,
     cl::desc("Print received backend facts in LV before VF selection"));
+static cl::opt<bool> ForceAllFeedback(
+    "vplan-backend-feedback-force-all", cl::Hidden,
+    cl::desc("Query every candidate, retaining the register-bound decision"));
 
 AnalysisKey VPlanBackendFeedbackAnalysis::Key;
 
 bool llvm::vplanBackendFeedbackEnabled() {
   return EnableFeedback || PrintFeedback;
 }
+
+bool llvm::vplanBackendFeedbackForceAll() { return ForceAllFeedback; }
 
 void llvm::printVPlanBackendFeedback(const json::Object &Result) {
   if (PrintFeedback)

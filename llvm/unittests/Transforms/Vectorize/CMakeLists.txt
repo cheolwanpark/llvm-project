@@ -13,6 +13,7 @@ add_llvm_unittest(VectorizeTests
   PARTIAL_SOURCES_INTENDED
   VPlanTest.cpp
   VPlanCostReportTest.cpp
+  VPlanRegisterUsageBoundsTest.cpp
   VPDomTreeTest.cpp
   VPPostDomFrontierTest.cpp
   VPlanHCFGTest.cpp
