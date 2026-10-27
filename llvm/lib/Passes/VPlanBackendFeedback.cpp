@@ -1,4 +1,5 @@
-//===- VPlanBackendFeedback.cpp - In-process candidate lowering ------------===//
+//===- VPlanBackendFeedback.cpp - In-process candidate lowering
+//------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,144 +7,418 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
+#include "VPlanBackendProbe.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
+#include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/OptBisect.h"
+#include "llvm/IR/PassTimingInfo.h"
+#include "llvm/IR/PrintPasses.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/Timer.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/DebugCounter.h"
+#include "llvm/Support/TimeProfiler.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 
 using namespace llvm;
 
-void PassBuilder::registerVPlanBackendFeedbackAnalysis(
-    FunctionAnalysisManager &FAM) {
-  // Capture configuration by value: the analysis can outlive this PassBuilder.
-  FAM.registerPass([Target = TM, Tuning = PTO, FileSystem = FS] {
-    return VPlanBackendFeedbackAnalysis([Target, Tuning,
-                                         FileSystem](const Function &F,
-                                                     const BasicBlock &Header,
-                                                     const VPlanBackendCandidate
-                                                         &Candidate)
-                                            -> Expected<VPlanBackendResult> {
-      VPlanCostProfileScope NativeScope(false);
-      const bool TimeFeedback = vplanBackendFeedbackTimingEnabled();
-      VPlanFeedbackTimer Timer(TimeFeedback);
-      TimeRecord QueryStart = Timer.Last;
-      std::vector<VPlanFeedbackTiming> BackendPhases;
-      auto Run = [&]() -> Expected<VPlanBackendResult> {
-        if (!Target)
-          return createStringError("backend feedback requires a TargetMachine");
-        if (!Target->getTargetTriple().isRISCV())
-          return createStringError(
-              "backend feedback observer currently supports RISC-V");
-        // Profile-dependent module analyses and instrumentation are not part
-        // of this first function-local probe contract.
-        if (F.getParent()->getProfileSummary(/*IsCS=*/false) ||
-            F.getParent()->getProfileSummary(/*IsCS=*/true) ||
-            Target->getPGOOption())
-          return createStringError(
-              "profile-dependent backend probes are unsupported");
+VPlanBackendFeedback::Batch VPlanBackendProbePool::run(
+    unsigned Count, function_ref<VPlanBackendProbeResult(unsigned)> Probe) {
+  SmallVector<std::optional<VPlanBackendProbeResult>> Slots(Count);
+  auto Run = [&](unsigned I) {
+    VPlanCostProfileScope NativeScope(false);
+    Slots[I].emplace(Probe(I));
+  };
+  if (Count > 1 && Threads > 1) {
+    if (!Pool)
+      Pool = std::make_unique<DefaultThreadPool>(hardware_concurrency(Threads));
+    ThreadPoolTaskGroup Group(*Pool);
+    for (unsigned I = 0; I != Count; ++I)
+      Group.async([&, I] { Run(I); });
+    Group.wait();
+  } else {
+    for (unsigned I = 0; I != Count; ++I)
+      Run(I);
+  }
+  VPlanBackendFeedback::Batch Results;
+  Results.reserve(Count);
+  for (auto &Slot : Slots)
+    Results.push_back(std::move(*Slot));
+  return Results;
+}
 
-        if (F.hasOptNone())
-          return createStringError("backend feedback does not support optnone");
-        ValueToValueMapTy VMap;
-        auto Clone = CloneModule(
-            *F.getParent(), VMap,
-            [&](const GlobalValue *GV) {
-              return GV == &F || isa<GlobalVariable>(GV);
-            },
-            /*PreserveUseListOrder=*/true);
-        Timer.mark("clone");
-        auto *ProbeF = cast<Function>(VMap.lookup(&F));
-        auto *ProbeHeader = cast<BasicBlock>(VMap.lookup(&Header));
-        // Avoid mutation of the live target's subtarget cache and options.
-        std::unique_ptr<TargetMachine> ProbeTM(
-            Target->getTarget().createTargetMachine(
-                Target->getTargetTriple(), Target->getTargetCPU(),
-                Target->getTargetFeatureString(), Target->Options,
-                Target->getRelocationModel(), Target->getCodeModel(),
-                Target->getOptLevel()));
-        if (!ProbeTM)
-          return createStringError("cannot create candidate TargetMachine");
+namespace {
+cl::opt<unsigned> ProbeThreads(
+    "vplan-backend-probe-threads", cl::Hidden, cl::init(1),
+    cl::desc("Maximum concurrent VPlan backend probes (default 1)"),
+    cl::callback([](const unsigned &N) {
+      if (!N)
+        reportFatalUsageError("vplan-backend-probe-threads must be positive");
+    }));
 
-        PassBuilder PB(ProbeTM.get(), Tuning, std::nullopt, nullptr,
-                       FileSystem);
-        LoopAnalysisManager LAM;
-        FunctionAnalysisManager LocalFAM;
-        CGSCCAnalysisManager CGAM;
-        ModuleAnalysisManager MAM;
-        PB.registerModuleAnalyses(MAM);
-        PB.registerCGSCCAnalyses(CGAM);
-        PB.registerFunctionAnalyses(LocalFAM);
-        PB.registerLoopAnalyses(LAM);
-        PB.crossRegisterProxies(LAM, LocalFAM, CGAM, MAM);
+/// These settings have process-global state or direct output. Retain their
+/// existing execution order instead of changing options or LLVM
+/// instrumentation.
+std::string serialReason(const Function &F) {
+  if (!LLVM_ENABLE_THREADS)
+    return "LLVM was built without threads";
+  if (vplanBackendFeedbackTimingEnabled())
+    return "-vplan-backend-time uses process CPU timers";
+  if (DebugFlag || legacy::debugPassSpecified())
+    return "LLVM debug output is enabled";
+  if (shouldPrintBeforeSomePass() || shouldPrintAfterSomePass() ||
+      PrintChanged != ChangePrinter::None)
+    return "pass IR printing is enabled";
+  if (TimePassesIsEnabled || timeTraceProfilerEnabled())
+    return "pass timing or time tracing is enabled";
+  if (F.getContext().getOptPassGate().isEnabled())
+    return "an optimization pass gate is enabled";
+  const auto &Context = F.getContext();
+  if (Context.getLLVMRemarkStreamer() || Context.getMainRemarkStreamer() ||
+      Context.getDiagHandlerPtr()->isAnyRemarkEnabled())
+    return "optimization remarks are enabled";
+  for (auto [Name, Counter] : DebugCounter::instance())
+    if (DebugCounter::isCounterSet(*Counter))
+      return "debug counters are enabled";
+  // Some diagnostic switches have no public value accessor. Inspect only their
+  // presence; never change a registered option. Keep the fork's cost reports
+  // out of this list: they are passive and emitted by the original thread.
+  auto &Options = cl::getRegisteredOptions();
+  auto ReportEnabled = [&](StringRef Name) {
+    auto *Option = Options.lookup(Name);
+    return Option && static_cast<cl::opt<bool> *>(Option)->getValue();
+  };
+  if (ReportEnabled("print-vplans") || ReportEnabled("print-detailed-vplans")) {
+    auto *ForcedEpilogue = Options.lookup("epilogue-vectorization-force-VF");
+    if (ForcedEpilogue && static_cast<cl::opt<ElementCount> *>(ForcedEpilogue)
+                              ->getValue()
+                              .isVector())
+      return "forced-epilogue cost reporting requires serial preparation";
+  }
+  for (const auto &Entry : Options) {
+    StringRef Name = Entry.first;
+    if (Name == "print-vplans" || Name == "print-detailed-vplans")
+      continue;
+    if (Entry.second->getNumOccurrences() &&
+        (Name.starts_with("view-") || Name.contains("print") ||
+         Name.starts_with("debug-") || Name.starts_with("dot-") ||
+         Name.contains("dump") || Name == "misched-detail-resource-booking" ||
+         Name == "misched-dcpl" ||
+         (Name.starts_with("regalloc-") &&
+          (Name.ends_with("training-log") ||
+           Name.ends_with("interactive-channel-base")))))
+      return ("-" + Name + " requires serial diagnostics").str();
+  }
+  return {};
+}
 
-        Timer.mark("target_and_analyses");
-        VPlanBackendProbe Probe{Candidate, ProbeHeader};
-        LoopVectorizePass LV(
-            LoopVectorizeOptions(Candidate.InterleaveOnlyWhenForced,
-                                 Candidate.VectorizeOnlyWhenForced));
-        LV.setBackendProbe(Probe);
-        FunctionPassManager Materialize;
-        Materialize.addPass(std::move(LV));
-        Materialize.run(*ProbeF, LocalFAM);
-        Timer.mark("candidate_materialization");
-        if (!Probe.Emitted)
-          return createStringError(Probe.Error.empty()
-                                       ? "candidate was not materialized"
-                                       : Probe.Error);
+/// All target settings used below are copied on the calling thread. Workers
+/// never read the live TargetMachine or its mutable subtarget/options caches.
+struct ProbeTarget {
+  const Target &TheTarget;
+  Triple TargetTriple;
+  std::string CPU, Features;
+  TargetOptions Options;
+  Reloc::Model Relocation;
+  CodeModel::Model CodeModel;
+  CodeGenOptLevel OptLevel;
 
-        // Reuse the normal post-LV vector pipeline. This is an explicit probe
-        // continuation, not a promise to reproduce arbitrary later module,
-        // LTO, instrumentation or user-added passes.
-        auto Level = Target->getOptLevel() == CodeGenOptLevel::Aggressive
-                         ? OptimizationLevel::O3
-                         : OptimizationLevel::O2;
-        FunctionPassManager Cleanup;
-        PB.addVectorPasses(Level, Cleanup, ThinOrFullLTOPhase::None,
-                           /*AddVectorizer=*/false);
-        Cleanup.run(*ProbeF, LocalFAM);
-        Timer.mark("ir_suffix");
-        finalizeVPlanBackendIterationMapping(*ProbeF, LocalFAM);
-        if (verifyModule(*Clone, &errs()))
-          return createStringError("invalid candidate module");
+  explicit ProbeTarget(const TargetMachine &TM)
+      : TheTarget(TM.getTarget()), TargetTriple(TM.getTargetTriple()),
+        CPU(TM.getTargetCPU()), Features(TM.getTargetFeatureString()),
+        Options(TM.Options), Relocation(TM.getRelocationModel()),
+        CodeModel(TM.getCodeModel()), OptLevel(TM.getOptLevel()) {}
+};
 
-        Timer.mark("iteration_mapping_and_verification");
-        auto Result = ProbeTM->getVPlanBackendFeedback(*Clone, TimeFeedback);
-        Timer.mark("backend_total");
+Error checkInput(const TargetMachine *TM, const Function &F) {
+  if (!TM)
+    return createStringError("backend feedback requires a TargetMachine");
+  if (!TM->getTargetTriple().isRISCV())
+    return createStringError(
+        "backend feedback observer currently supports RISC-V");
+  if (F.getParent()->getProfileSummary(/*IsCS=*/false) ||
+      F.getParent()->getProfileSummary(/*IsCS=*/true) || TM->getPGOOption())
+    return createStringError(
+        "profile-dependent backend probes are unsupported");
+  if (F.hasOptNone())
+    return createStringError("backend feedback does not support optnone");
+  return Error::success();
+}
+
+std::unique_ptr<Module> cloneInput(const Function &F, ValueToValueMapTy &VMap) {
+  return CloneModule(
+      *F.getParent(), VMap,
+      [&](const GlobalValue *GV) {
+        return GV == &F || isa<GlobalVariable>(GV);
+      },
+      /*PreserveUseListOrder=*/true);
+}
+
+struct ProbePipeline {
+  PipelineTuningOptions Tuning;
+  void (*BuildSuffix)(PassBuilder &, OptimizationLevel, FunctionPassManager &);
+};
+
+Expected<VPlanBackendResult>
+runProbe(Module &M, Function &F, BasicBlock &Header,
+         const VPlanBackendCandidate &Candidate, const ProbeTarget &Target,
+         const ProbePipeline &Pipeline,
+         IntrusiveRefCntPtr<vfs::FileSystem> FileSystem,
+         VPlanFeedbackTimer &Timer, raw_ostream &Diagnostics) {
+  std::unique_ptr<TargetMachine> TM(Target.TheTarget.createTargetMachine(
+      Target.TargetTriple, Target.CPU, Target.Features, Target.Options,
+      Target.Relocation, Target.CodeModel, Target.OptLevel));
+  if (!TM)
+    return createStringError("cannot create candidate TargetMachine");
+  PassBuilder PB(TM.get(), Pipeline.Tuning, std::nullopt, nullptr,
+                 std::move(FileSystem));
+  LoopAnalysisManager LAM;
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+  Timer.mark("target_and_analyses");
+
+  VPlanBackendProbe Probe{Candidate, &Header};
+  LoopVectorizePass LV(LoopVectorizeOptions(Candidate.InterleaveOnlyWhenForced,
+                                            Candidate.VectorizeOnlyWhenForced));
+  LV.setBackendProbe(Probe);
+  FunctionPassManager Materialize;
+  Materialize.addPass(std::move(LV));
+  Materialize.run(F, FAM);
+  Timer.mark("candidate_materialization");
+  if (!Probe.Emitted)
+    return createStringError(
+        Probe.Error.empty() ? "candidate was not materialized" : Probe.Error);
+
+  // This is the same explicit post-LV continuation for both execution modes.
+  auto Level = Target.OptLevel == CodeGenOptLevel::Aggressive
+                   ? OptimizationLevel::O3
+                   : OptimizationLevel::O2;
+  FunctionPassManager Cleanup;
+  Pipeline.BuildSuffix(PB, Level, Cleanup);
+  Cleanup.run(F, FAM);
+  Timer.mark("ir_suffix");
+  finalizeVPlanBackendIterationMapping(F, FAM);
+  if (verifyModule(M, &Diagnostics))
+    return createStringError("invalid candidate module");
+  Timer.mark("iteration_mapping_and_verification");
+  auto Result = TM->getVPlanBackendFeedback(M, Timer.Enabled);
+  Timer.mark("backend_total");
+  if (!Result)
+    return Result.takeError();
+  if (Result->Candidate != Candidate.ID || Result->VF != Candidate.VF ||
+      Result->IC != Candidate.IC || Result->IsEpilogue != Candidate.IsEpilogue)
+    return createStringError("backend observation identity mismatch");
+  return Result;
+}
+
+/// Single-query compatibility path: retain the live context, diagnostic
+/// handler, VFS and phase timing, including short-circuiting before the next
+/// candidate.
+Expected<VPlanBackendResult>
+runSerial(const Function &F, const BasicBlock &Header,
+          const VPlanBackendCandidate &Candidate, TargetMachine *LiveTarget,
+          const ProbePipeline &Pipeline,
+          IntrusiveRefCntPtr<vfs::FileSystem> FileSystem) {
+  VPlanFeedbackTimer Timer(vplanBackendFeedbackTimingEnabled());
+  TimeRecord Start = Timer.Last;
+  auto Run = [&]() -> Expected<VPlanBackendResult> {
+    if (auto E = checkInput(LiveTarget, F))
+      return std::move(E);
+    ValueToValueMapTy VMap;
+    auto Clone = cloneInput(F, VMap);
+    Timer.mark("clone");
+    ProbeTarget Target(*LiveTarget);
+    return runProbe(*Clone, *cast<Function>(VMap.lookup(&F)),
+                    *cast<BasicBlock>(VMap.lookup(&Header)), Candidate, Target,
+                    Pipeline, FileSystem, Timer, errs());
+  };
+  auto Result = Run();
+  Timer.mark("return_and_cleanup");
+  if (Timer.Enabled) {
+    auto Total = TimeRecord::getCurrentTime(false) - Start;
+    if (Result)
+      Timer.Phases.insert(Timer.Phases.end(), Result->Timings.begin(),
+                          Result->Timings.end());
+    json::Object Timing{{"candidate", Candidate.ID},
+                        {"status", Result ? "collected" : "unavailable"},
+                        {"query_wall_seconds", Total.getWallTime()},
+                        {"query_cpu_seconds", Total.getProcessTime()}};
+    for (const auto &P : Timer.Phases) {
+      Timing[P.Phase + "_wall_seconds"] = P.Wall;
+      Timing[P.Phase + "_cpu_seconds"] = P.CPU;
+    }
+    errs() << "VPLAN-BACKEND-FEEDBACK-TIMING: "
+           << json::Value(std::move(Timing)) << '\n';
+    if (Result)
+      Result->Timings = std::move(Timer.Phases);
+  }
+  return Result;
+}
+
+class ProbeDiagnostics final : public DiagnosticHandler {
+  raw_ostream &OS;
+
+public:
+  explicit ProbeDiagnostics(raw_ostream &OS) : OS(OS) {}
+  bool handleDiagnostics(const DiagnosticInfo &DI) override {
+    HasErrors |= DI.getSeverity() == DS_Error;
+    OS << LLVMContext::getDiagnosticMessagePrefix(DI.getSeverity()) << ": ";
+    DiagnosticPrinterRawOStream Printer(OS);
+    DI.print(Printer);
+    OS << '\n';
+    return true;
+  }
+};
+
+struct ProbeSnapshot {
+  SmallVector<char, 0> Bitcode;
+  std::string ModuleIdentifier;
+  unsigned FunctionIndex, HeaderIndex;
+  bool DiscardNames, ODRTypes;
+
+  ProbeSnapshot(const Function &F, const BasicBlock &Header)
+      : ModuleIdentifier(F.getParent()->getModuleIdentifier()),
+        DiscardNames(F.getContext().shouldDiscardValueNames()),
+        ODRTypes(F.getContext().isODRUniquingDebugTypes()) {
+    ValueToValueMapTy VMap;
+    auto Clone = cloneInput(F, VMap);
+    auto *CloneF = cast<Function>(VMap.lookup(&F));
+    FunctionIndex = std::distance(Clone->begin(), CloneF->getIterator());
+    HeaderIndex = std::distance(
+        CloneF->begin(), cast<BasicBlock>(VMap.lookup(&Header))->getIterator());
+    raw_svector_ostream OS(Bitcode);
+    WriteBitcodeToFile(*Clone, OS, /*ShouldPreserveUseListOrder=*/true);
+  }
+
+  VPlanBackendProbeResult run(const VPlanBackendCandidate &Candidate,
+                              const ProbeTarget &Target,
+                              const ProbePipeline &Pipeline) const {
+    std::string Diagnostics;
+    raw_string_ostream OS(Diagnostics);
+    auto Run = [&]() -> Expected<VPlanBackendResult> {
+      LLVMContext Context;
+      Context.setDiscardValueNames(DiscardNames);
+      if (ODRTypes)
+        Context.enableDebugTypeODRUniquing();
+      Context.setDiagnosticHandler(std::make_unique<ProbeDiagnostics>(OS),
+                                   /*RespectFilters=*/true);
+      auto M = parseBitcodeFile(
+          MemoryBufferRef(StringRef(Bitcode.data(), Bitcode.size()),
+                          "vplan-backend-probe"),
+          Context);
+      if (!M)
+        return M.takeError();
+      (*M)->setModuleIdentifier(ModuleIdentifier);
+      if (FunctionIndex >= (*M)->size())
+        return createStringError("backend snapshot function identity mismatch");
+      auto *F = &*std::next((*M)->begin(), FunctionIndex);
+      if (HeaderIndex >= F->size())
+        return createStringError("backend snapshot header identity mismatch");
+      auto &Header = *std::next(F->begin(), HeaderIndex);
+      VPlanFeedbackTimer Timer(false);
+      // This profile-free, function-local pipeline uses no VFS inputs. Do not
+      // share the original frontend's filesystem or diagnostic callbacks.
+      auto Result = runProbe(**M, *F, Header, Candidate, Target, Pipeline,
+                             nullptr, Timer, OS);
+      if (Context.getDiagHandlerPtr()->HasErrors) {
         if (!Result)
-          return Result.takeError();
-        BackendPhases = std::move(Result->Timings);
-        if (Result->Candidate != Candidate.ID || Result->VF != Candidate.VF ||
-            Result->IC != Candidate.IC ||
-            Result->IsEpilogue != Candidate.IsEpilogue)
-          return createStringError("backend observation identity mismatch");
-        return Result;
-      };
-      auto Result = Run();
-      Timer.mark("return_and_cleanup");
-      if (TimeFeedback) {
-        auto Total = TimeRecord::getCurrentTime(false) - QueryStart;
-        Timer.Phases.insert(Timer.Phases.end(), BackendPhases.begin(),
-                            BackendPhases.end());
-        json::Object Timing{{"candidate", Candidate.ID},
-                            {"status", Result ? "collected" : "unavailable"},
-                            {"query_wall_seconds", Total.getWallTime()},
-                            {"query_cpu_seconds", Total.getProcessTime()}};
-        for (const auto &P : Timer.Phases) {
-          Timing[P.Phase + "_wall_seconds"] = P.Wall;
-          Timing[P.Phase + "_cpu_seconds"] = P.CPU;
-        }
-        errs() << "VPLAN-BACKEND-FEEDBACK-TIMING: "
-               << json::Value(std::move(Timing)) << '\n';
-        if (Result)
-          Result->Timings = std::move(Timer.Phases);
+          consumeError(Result.takeError());
+        return createStringError("backend probe emitted an error diagnostic");
       }
       return Result;
+    };
+    auto Result = Run();
+    return {std::move(Result), std::move(Diagnostics)};
+  }
+};
+
+class FeedbackProvider {
+  TargetMachine *Target;
+  ProbePipeline Pipeline;
+  IntrusiveRefCntPtr<vfs::FileSystem> FileSystem;
+  unsigned Threads;
+  VPlanBackendProbePool Pool;
+  unsigned SerialMainQueries = 0;
+  bool Warned = false;
+
+public:
+  FeedbackProvider(TargetMachine *Target, ProbePipeline Pipeline,
+                   IntrusiveRefCntPtr<vfs::FileSystem> FileSystem)
+      : Target(Target), Pipeline(Pipeline), FileSystem(std::move(FileSystem)),
+        Threads(ProbeThreads), Pool(Threads) {}
+
+  bool canBatch(const Function &F) {
+    SerialMainQueries = 0;
+    return Threads > 1 && serialReason(F).empty();
+  }
+
+  Expected<VPlanBackendFeedback::Batch>
+  query(const Function &F, const BasicBlock &Header,
+        ArrayRef<VPlanBackendCandidate> Candidates) {
+    VPlanCostProfileScope NativeScope(false);
+    std::string Reason = Threads > 1 ? serialReason(F) : std::string();
+    if (!Reason.empty() && !Warned) {
+      for (const auto &C : Candidates)
+        SerialMainQueries += !C.IsEpilogue;
+      // No warning for an empty/gated loop or a single main query. The original
+      // thread emits this once, when serial execution actually prevents
+      // overlap.
+      if (SerialMainQueries > 1) {
+        errs() << "warning: -vplan-backend-probe-threads=" << Threads
+               << ": using serial backend probes because " << Reason << '\n';
+        Warned = true;
+      }
+    }
+    if (Candidates.size() < 2 || Threads == 1 || !Reason.empty()) {
+      VPlanBackendFeedback::Batch Results;
+      for (const auto &C : Candidates)
+        Results.emplace_back(
+            runSerial(F, Header, C, Target, Pipeline, FileSystem));
+      return Results;
+    }
+    if (auto E = checkInput(Target, F))
+      return std::move(E);
+    ProbeTarget Settings(*Target);
+    ProbeSnapshot Snapshot(F, Header);
+    return Pool.run(Candidates.size(), [&](unsigned I) {
+      return Snapshot.run(Candidates[I], Settings, Pipeline);
     });
+  }
+};
+} // namespace
+
+void PassBuilder::registerVPlanBackendFeedbackAnalysis(
+    FunctionAnalysisManager &FAM) {
+  // The service owns the lazy pool and outlives this PassBuilder. Each local
+  // probe PassBuilder registers its own unused service, never a nested pool.
+  ProbePipeline Pipeline{PTO, [](PassBuilder &PB, OptimizationLevel Level,
+                                 FunctionPassManager &FPM) {
+                           PB.addVectorPasses(Level, FPM,
+                                              ThinOrFullLTOPhase::None,
+                                              /*AddVectorizer=*/false);
+                         }};
+  auto Provider = std::make_shared<FeedbackProvider>(TM, Pipeline, FS);
+  FAM.registerPass([Provider] {
+    return VPlanBackendFeedbackAnalysis(
+        [Provider](const Function &F, const BasicBlock &Header,
+                   ArrayRef<VPlanBackendCandidate> Candidates) {
+          return Provider->query(F, Header, Candidates);
+        },
+        [Provider](const Function &F) { return Provider->canBatch(F); });
   });
 }

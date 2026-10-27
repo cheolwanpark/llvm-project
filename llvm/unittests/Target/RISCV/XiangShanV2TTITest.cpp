@@ -233,36 +233,44 @@ TEST_F(XiangShanV2TTITest, EpilogueObservationsAndTransactionalFallback) {
     PB.registerLoopAnalyses(LAM);
     PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
     auto &Service = FAM.getResult<VPlanBackendFeedbackAnalysis>(Fn);
-    Service = VPlanBackendFeedback([&, Native = Service](
-                                       const Function &F, const BasicBlock &H,
-                                       const VPlanBackendCandidate &Candidate)
-                                       -> Expected<VPlanBackendResult> {
-      EXPECT_FALSE(VPlanCostProfileScope::active());
-      if (Candidate.IsEpilogue) {
-        ++EpilogueQueries;
-        EXPECT_EQ(Candidate.IC, 1u);
-        EXPECT_EQ(Candidate.MainIC, 2u);
-        if (FailureMode == 1)
-          return createStringError("injected epilogue failure");
-      } else {
-        ++MainQueries;
-        if (++ThisMainQueries == 2 && FailureMode == 2)
-          return createStringError("injected second main candidate failure");
-      }
-      auto O = Native.get(F, H, Candidate);
-      EXPECT_TRUE(bool(O));
-      if (O) {
-        EXPECT_TRUE(O->IterationMapping);
-        EXPECT_EQ(O->Stage, "post-stack-slot-coloring");
-        EXPECT_EQ(O->IsEpilogue, Candidate.IsEpilogue);
-        EXPECT_EQ(O->IC, Candidate.IC);
-        if (FailureMode == 3)
-          O->Candidate = "incorrect identity";
-        if (FailureMode == 4)
-          O->IterationMapping = false;
-      }
-      return O;
-    });
+    Service = VPlanBackendFeedback(
+        [&, Native = Service](const Function &F, const BasicBlock &H,
+                              ArrayRef<VPlanBackendCandidate> Candidates)
+            -> Expected<VPlanBackendFeedback::Batch> {
+          VPlanBackendFeedback::Batch Results;
+          for (const auto &Candidate : Candidates) {
+            auto Query = [&]() -> Expected<VPlanBackendResult> {
+              EXPECT_FALSE(VPlanCostProfileScope::active());
+              if (Candidate.IsEpilogue) {
+                ++EpilogueQueries;
+                EXPECT_EQ(Candidate.IC, 1u);
+                EXPECT_EQ(Candidate.MainIC, 2u);
+                if (FailureMode == 1)
+                  return createStringError("injected epilogue failure");
+              } else {
+                ++MainQueries;
+                if (++ThisMainQueries == 2 && FailureMode == 2)
+                  return createStringError(
+                      "injected second main candidate failure");
+              }
+              auto O = Native.get(F, H, Candidate);
+              EXPECT_TRUE(bool(O));
+              if (O) {
+                EXPECT_TRUE(O->IterationMapping);
+                EXPECT_EQ(O->Stage, "post-stack-slot-coloring");
+                EXPECT_EQ(O->IsEpilogue, Candidate.IsEpilogue);
+                EXPECT_EQ(O->IC, Candidate.IC);
+                if (FailureMode == 3)
+                  O->Candidate = "incorrect identity";
+                if (FailureMode == 4)
+                  O->IterationMapping = false;
+              }
+              return O;
+            };
+            Results.emplace_back(Query());
+          }
+          return Results;
+        });
     FunctionPassManager FPM;
     FPM.addPass(LoopVectorizePass());
     FPM.run(Fn, FAM);

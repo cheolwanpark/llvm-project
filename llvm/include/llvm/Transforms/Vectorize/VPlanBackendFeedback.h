@@ -10,6 +10,8 @@
 #ifndef LLVM_TRANSFORMS_VECTORIZE_VPLANBACKENDFEEDBACK_H
 #define LLVM_TRANSFORMS_VECTORIZE_VPLANBACKENDFEEDBACK_H
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
@@ -49,23 +51,70 @@ struct VPlanBackendProbe {
   std::string Error;
 };
 
+/// A completed query, including diagnostics owned independently of its context.
+/// Errors are consumed into strings at the provider boundary so discarding an
+/// unneeded speculative suffix never leaves unchecked llvm::Errors behind.
+struct VPlanBackendProbeResult {
+  std::optional<VPlanBackendResult> Observation;
+  std::string Failure;
+  std::string Diagnostics;
+
+  VPlanBackendProbeResult(Expected<VPlanBackendResult> Result,
+                          std::string Diagnostics = {})
+      : Diagnostics(std::move(Diagnostics)) {
+    if (Result)
+      Observation = std::move(*Result);
+    else
+      Failure = toString(Result.takeError());
+  }
+
+  Expected<VPlanBackendResult> takeResult() {
+    if (!Observation)
+      return createStringError(Failure);
+    return std::move(*Observation);
+  }
+};
+
 /// A dependency-inverted service: Vectorize does not link CodeGen or Passes.
 /// The provider owns cloning, fresh analyses and the backend invocation.
 /// Results own their data; no MachineFunction/Instruction pointers escape the
 /// query.
 class VPlanBackendFeedback {
 public:
-  using Query = std::function<Expected<VPlanBackendResult>(
-      const Function &, const BasicBlock &, const VPlanBackendCandidate &)>;
+  using Batch = SmallVector<VPlanBackendProbeResult>;
+  using Query = std::function<Expected<Batch>(
+      const Function &, const BasicBlock &, ArrayRef<VPlanBackendCandidate>)>;
+  using BatchPolicy = std::function<bool(const Function &)>;
 
-  explicit VPlanBackendFeedback(Query Q = {}) : QueryCandidate(std::move(Q)) {}
+  explicit VPlanBackendFeedback(Query Q = {}, BatchPolicy Policy = {})
+      : QueryCandidates(std::move(Q)), Policy(std::move(Policy)) {}
+
+  /// Called once at the start of main-candidate preparation. The provider may
+  /// reset its per-loop serial-query diagnostic accounting here.
+  bool canBatch(const Function &F) const { return Policy && Policy(F); }
+
+  Expected<Batch> getBatch(const Function &F, const BasicBlock &Header,
+                           ArrayRef<VPlanBackendCandidate> Candidates) const {
+    if (Candidates.empty())
+      return Batch();
+    if (!QueryCandidates)
+      return createStringError("backend feedback provider unavailable");
+    auto Results = QueryCandidates(F, Header, Candidates);
+    if (!Results)
+      return Results.takeError();
+    if (Results->size() != Candidates.size())
+      return createStringError("backend feedback batch size mismatch");
+    return Results;
+  }
 
   Expected<VPlanBackendResult>
   get(const Function &F, const BasicBlock &Header,
       const VPlanBackendCandidate &Candidate) const {
-    if (!QueryCandidate)
-      return createStringError("backend feedback provider unavailable");
-    return QueryCandidate(F, Header, Candidate);
+    auto Results = getBatch(F, Header, {Candidate});
+    if (!Results)
+      return Results.takeError();
+    errs() << Results->front().Diagnostics;
+    return Results->front().takeResult();
   }
 
   bool invalidate(Function &, const PreservedAnalyses &,
@@ -75,7 +124,8 @@ public:
   }
 
 private:
-  Query QueryCandidate;
+  Query QueryCandidates;
+  BatchPolicy Policy;
 };
 
 class VPlanBackendFeedbackAnalysis
@@ -83,12 +133,17 @@ class VPlanBackendFeedbackAnalysis
   friend AnalysisInfoMixin<VPlanBackendFeedbackAnalysis>;
   LLVM_ABI static AnalysisKey Key;
   VPlanBackendFeedback::Query Query;
+  VPlanBackendFeedback::BatchPolicy Policy;
 
 public:
   using Result = VPlanBackendFeedback;
-  explicit VPlanBackendFeedbackAnalysis(VPlanBackendFeedback::Query Q = {})
-      : Query(std::move(Q)) {}
-  Result run(Function &, FunctionAnalysisManager &) { return Result(Query); }
+  explicit VPlanBackendFeedbackAnalysis(
+      VPlanBackendFeedback::Query Q = {},
+      VPlanBackendFeedback::BatchPolicy Policy = {})
+      : Query(std::move(Q)), Policy(std::move(Policy)) {}
+  Result run(Function &, FunctionAnalysisManager &) {
+    return Result(Query, Policy);
+  }
 };
 
 LLVM_ABI bool vplanBackendFeedbackEnabled();

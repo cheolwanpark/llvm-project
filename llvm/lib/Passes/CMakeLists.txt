@@ -16,6 +16,8 @@ add_llvm_component_library(LLVMPasses
   LINK_COMPONENTS
   AggressiveInstCombine
   Analysis
+  BitReader
+  BitWriter
   CFGuard
   CodeGen
   GlobalISel

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #ifndef LLVM_TRANSFORMS_VECTORIZE_VPLANBACKENDCOSTMODEL_H
 #define LLVM_TRANSFORMS_VECTORIZE_VPLANBACKENDCOSTMODEL_H
+#include "VPlanRegisterUsageBounds.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/InstructionCost.h"
 #include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
@@ -48,6 +49,14 @@ struct VPBackendCostEntry {
 /// All state belongs to one original loop. Preparation is transactional: on
 /// failure discard every score before native selection can observe the table.
 class VPlanBackendCostModel {
+  struct PreparedCandidate {
+    VPlan *Plan;
+    VPlanBackendCandidate Candidate;
+    InstructionCost Native, Profile, Ev;
+    unsigned Width;
+    VPRegisterUsageBound Bound;
+    bool Query;
+  };
   SmallVector<VPBackendCostEntry> Costs;
   const VPlanBackendFeedback &Feedback;
   const TargetTransformInfo &TTI;
@@ -58,6 +67,14 @@ class VPlanBackendCostModel {
   VPlanCostReport *Report;
   bool Failed = false;
   std::string Failure;
+
+  PreparedCandidate prepareCost(VPlan &Plan, VPlanBackendCandidate Candidate,
+                                InstructionCost Native, InstructionCost Profile,
+                                InstructionCost Ev, unsigned Width) const;
+  bool applyCost(const PreparedCandidate &Prepared,
+                 std::optional<VPlanBackendProbeResult> Result,
+                 VPlanFeedbackTimer &Timer);
+  bool addBatch(ArrayRef<PreparedCandidate> Candidates);
 
 public:
   VPlanBackendCostModel(const VPlanBackendFeedback &Feedback,

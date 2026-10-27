@@ -42,8 +42,9 @@ Sv=0으로 둔다. `-vplan-backend-force-all`은 gate의 `would_skip`을 유지�
 ## Probe와 fallback
 
 의존 구조는 `LLVMVectorize → analysis callback → LLVMPasses → TargetMachine →
-backend observer`다. 후보별 함수 clone, fresh analysis, 독립 TargetMachine과 기존
-vector pipeline suffix를 사용한다. 전역 command-line 값은 변경하지 않는다.
+backend observer`다. 기본 직렬 경로는 후보별 함수 clone을 사용한다. 두 실행
+경로 모두 fresh analysis, 독립 TargetMachine과 동일한 vector pipeline suffix를
+사용하며 전역 command-line 값은 변경하지 않는다.
 
 ```text
 clone → candidate materialization → IR suffix → iteration mapping 검증
@@ -88,6 +89,71 @@ epilogue 비용 실패 시 원본 loop의 backend 비용과 ProfitableVFs를 버
 간주하지 않으며 일부 성공 비용만 적용하지 않는다. LLVM fatal error/assertion의
 예외 격리는 제공하지 않는다. Probe suffix는 임의의 LTO·module pass·사용자 추가
 pass를 재현하지 않으며, 최종 machine instruction 전체와의 동등성을 보장하지 않는다.
+
+### 제한된 probe 병렬 실행
+
+`-vplan-backend-probe-threads=N`은 양의 정수이며 기본값은 1이다. 기본 경로는
+기존 후보별 준비 → probe → 반영과 첫 실패 시 중단을 유지한다. N>1의 일반
+경로만 한 원본 loop의 main 후보들을 준비하고, gate가 요구한 query들을 batch로
+실행한 뒤 기존 후보 순서로 반영한다. LVP·원본 TTI·분석·비용표·report는 기존
+컴파일 스레드에서만 접근한다. 자동 epilogue는 직렬이고 강제 epilogue는 기존대로
+main probe에 포함된다.
+
+구현 경계는 다음과 같다. Vectorize에는 scheduling이나 CodeGen 의존을 추가하지
+않고, 기존 feedback service를 batch query로 확장한다.
+
+| 구성 요소 | 역할과 실행 위치 |
+|---|---|
+| `VPlanBackendCostModel::prepareCost` / `addBatch` / `applyCost` | 기존 스레드에서 후보·TTI 비용·gate를 준비하고, 완료된 관측을 pricing과 선택에 반영 |
+| `VPlanBackendFeedback::getBatch` | 후보 순서와 개수가 같은 개별 결과를 반환하는 service 경계. 기존 `get`은 단일 후보 adapter |
+| Passes의 `FeedbackProvider` / `ProbeSnapshot` | 기존 스레드에서 실행 정책·target 설정·snapshot을 준비하고, worker에서 독립 IR과 backend pipeline 실행 |
+| `VPlanBackendProbePool` | lazy 생성한 제한된 pool을 재사용. 작업별 결과 슬롯을 채우고 batch 전체 완료를 기다림 |
+
+```text
+기존 스레드: 후보 준비 / gate → getBatch → 후보 순서대로 applyCost → VF 선택
+                                  │
+                     snapshot → 제한된 worker pool → 완료 대기
+                                  │
+                    독립 context/module → materialize → IR suffix
+                           → backend / spill observation
+```
+
+Provider는 현재 clone 정책과 use-list order를 보존한 메모리 bitcode snapshot을
+batch마다 만든다. 함수·header를 snapshot에서 다시 찾고 작업마다 별도
+LLVMContext·module·TargetMachine·분석을 생성한다. 앞선 loop 선택 문맥은 다음
+snapshot에 반영한다. Pool만 재사용하며 IR·TM·분석 결과는 cache하지 않는다.
+실제 동시 실행은 N과 query 수를 넘지 않고, query가 없으면 snapshot과 pool을
+만들지 않는다. 하나뿐인 query는 기존 스레드에서 처리한다.
+
+Worker는 원본 Function·BasicBlock·VPlan 포인터를 받지 않는다. 함수와 header는
+snapshot의 ordinal로 찾고, module identifier와 context의 이름/ODR 설정을
+보존한다. 원본 TargetMachine의 mutable 상태와 frontend diagnostic handler/VFS도
+공유하지 않는다. 기존 후보 재생성·관측 identity 검사는 두 경로 모두 유지한다.
+공통 `runProbe`를 사용하므로 materialization·suffix·관측 종료 지점은 같다.
+각 작업은 native TTI scope에서 실행하고 작업 종료 시 thread-local 상태를 복원한다.
+
+준비 오류·관측 오류·pricing 오류는 후보 순서로 처리한다. 첫 실패 뒤에 미리
+실행된 결과는 선택이나 일반 candidate JSON에 반영하지 않는다. 모든 작업 종료
+후 결과를 해제하며 실패를 spill 0으로 사용하지 않는다. 따라서 진단의 논리적
+query 수는 기존과 같지만 실제 실행한 probe 수는 실패 loop에서 더 많을 수 있다.
+취소와 fatal error/assertion 격리는 제공하지 않는다.
+
+개별 결과는 context와 독립된 관측 값·오류 문자열·diagnostic 문자열을 소유한다.
+Service는 반환 개수를 검증하고, snapshot과 결과 저장소는 모든 작업이 끝날
+때까지 유지한다. 늦은 준비 오류가 있어도 먼저 준비된 prefix의 query/pricing
+오류를 우선 처리한다. 사용하지 않을 결과의 오류도 안전하게 폐기하며, worker가
+직접 candidate JSON이나 비용 보고를 출력하지 않는다.
+
+Fork의 JSON과 두 비용 보고는 병렬 실행에서도 passive하며 기존 스레드에서
+출력한다. 강제 epilogue와 비용 보고를 함께 사용하면 기존 준비·보고 순서를
+보존하기 위해 직렬로 전환한다. `-vplan-backend-time`은 process CPU timer의
+기존 의미를 유지하도록 직렬로 전환한다. Upstream debug·pass dump/view·pass
+timing/time trace·opt-bisect·opt-disable·debug counter·optimization remark/streamer,
+register allocator의 training log·interactive channel도 직렬로 전환한다. 둘
+이상의 main query가 실제 요청되면 provider당 한 번 원인을 warning으로 알린다.
+Master OFF·query 없음·main query 하나인 경우는 불필요한 warning을 내지 않는다.
+Threads 비활성 빌드도 같은 정책을 사용한다. 병렬 성능은 외부에서 compiler
+프로세스의 wall·CPU·peak RSS를 측정한다.
 
 ## XiangShan TTI 보정
 

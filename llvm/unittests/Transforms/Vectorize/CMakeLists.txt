@@ -12,6 +12,7 @@ set(LLVM_LINK_COMPONENTS
 add_llvm_unittest(VectorizeTests
   PARTIAL_SOURCES_INTENDED
   VPlanBackendCostModelTest.cpp
+  VPlanBackendFeedbackTest.cpp
   VPlanTest.cpp
   VPlanCostReportTest.cpp
   VPlanRegisterUsageBoundsTest.cpp

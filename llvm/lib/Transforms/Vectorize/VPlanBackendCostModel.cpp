@@ -155,6 +155,15 @@ const VPBackendCostEntry *VPlanBackendCostModel::lookup(const VPlan &Plan,
       return &C;
   return nullptr;
 }
+VPlanBackendCostModel::PreparedCandidate VPlanBackendCostModel::prepareCost(
+    VPlan &Plan, VPlanBackendCandidate C, InstructionCost Native,
+    InstructionCost Profile, InstructionCost Ev, unsigned Width) const {
+  auto Bound = computeVPlanRegisterUsageBound(Plan, C.VF, TTI);
+  Bound.applyInterleave(C.IC);
+  bool Query = Bound.shouldQuery() || vplanBackendFeedbackForceAll();
+  return {&Plan, std::move(C), Native, Profile, Ev, Width, Bound, Query};
+}
+
 bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
                                 InstructionCost Native, InstructionCost Profile,
                                 InstructionCost Ev, unsigned Width) {
@@ -162,10 +171,49 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
     return false;
   VPlanFeedbackTimer Timer(vplanBackendFeedbackTimingEnabled());
   auto ReportTime = scope_exit([&] { printCostTiming(C.ID, Timer); });
-  auto Bound = computeVPlanRegisterUsageBound(Plan, C.VF, TTI);
-  Bound.applyInterleave(C.IC);
+  auto Prepared = prepareCost(Plan, C, Native, Profile, Ev, Width);
   Timer.mark("gate");
-  bool Query = Bound.shouldQuery() || vplanBackendFeedbackForceAll();
+  std::optional<VPlanBackendProbeResult> Result;
+  if (Prepared.Query && Native.isValid() && Profile.isValid() && Ev.isValid()) {
+    Result.emplace(Feedback.get(F, Header, C));
+    Timer.mark("query_total");
+  }
+  return applyCost(Prepared, std::move(Result), Timer);
+}
+
+bool VPlanBackendCostModel::addBatch(ArrayRef<PreparedCandidate> Candidates) {
+  SmallVector<VPlanBackendCandidate> Queries;
+  for (const auto &P : Candidates)
+    if (P.Query)
+      Queries.push_back(P.Candidate);
+  auto Results = Feedback.getBatch(F, Header, Queries);
+  std::string BatchFailure;
+  if (!Results)
+    BatchFailure = toString(Results.takeError());
+  unsigned QueryIndex = 0;
+  VPlanFeedbackTimer Timer(false);
+  for (const auto &P : Candidates) {
+    std::optional<VPlanBackendProbeResult> Result;
+    if (P.Query) {
+      if (!BatchFailure.empty())
+        Result.emplace(createStringError(BatchFailure));
+      else
+        Result = std::move((*Results)[QueryIndex++]);
+    }
+    if (!applyCost(P, std::move(Result), Timer))
+      return false;
+  }
+  return true;
+}
+
+bool VPlanBackendCostModel::applyCost(
+    const PreparedCandidate &P, std::optional<VPlanBackendProbeResult> Result,
+    VPlanFeedbackTimer &Timer) {
+  const auto &C = P.Candidate;
+  const auto &Bound = P.Bound;
+  auto Native = P.Native, Profile = P.Profile, Ev = P.Ev;
+  unsigned Width = P.Width;
+  bool Query = P.Query;
   VPExactCost Spill;
   InstructionCost Raw;
   std::string Error;
@@ -174,8 +222,9 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
   if (!Native.isValid() || !Profile.isValid() || !Ev.isValid())
     Error = "invalid TTI candidate cost";
   else if (Query) {
-    auto O = Feedback.get(F, Header, C);
-    Timer.mark("query_total");
+    assert(Result && "missing required backend query result");
+    errs() << Result->Diagnostics;
+    auto O = Result->takeResult();
     if (!O)
       Error = toString(O.takeError());
     else {
@@ -203,7 +252,7 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
     Error = "invalid or overflowing hybrid cost";
   if (Error.empty()) {
     Costs.push_back(
-        {&Plan, C.VF, C.IC, C.IsEpilogue, Native, Profile, Ev, Body});
+        {P.Plan, C.VF, C.IC, C.IsEpilogue, Native, Profile, Ev, Body});
     if (Report)
       Report->backendCost(Costs.back(), Bound,
                           Observation ? &*Observation : nullptr, AccessCosts,
@@ -280,67 +329,81 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
   this->Invocation = Invocation;
   InterleaveOnly = InterleaveOnlyWhenForced;
   VectorizeOnly = VectorizeOnlyWhenForced;
-  for (auto [PlanIndex, Plan] : enumerate(LVP.getPlans()))
-    for (ElementCount VF : Plan->vectorFactors()) {
-      if (VF.isScalar())
-        continue;
-      VPlanFeedbackTimer Preparation(vplanBackendFeedbackTimingEnabled());
-      InstructionCost Ev;
-      auto Native = LVP.backendCandidateCost(*Plan, VF, false, Ev);
-      if (!Native.isValid()) {
-        fail("invalid native candidate cost");
-        return false;
+  const bool Batch = Feedback.canBatch(F);
+  SmallVector<PreparedCandidate> Pending;
+  std::string PreparationError;
+  auto Prepare = [&]() -> bool {
+    for (auto [PlanIndex, Plan] : enumerate(LVP.getPlans()))
+      for (ElementCount VF : Plan->vectorFactors()) {
+        if (VF.isScalar())
+          continue;
+        VPlanFeedbackTimer Preparation(vplanBackendFeedbackTimingEnabled());
+        InstructionCost Ev;
+        auto Native = LVP.backendCandidateCost(*Plan, VF, false, Ev);
+        if (!Native.isValid()) {
+          PreparationError = "invalid native candidate cost";
+          return false;
+        }
+        Preparation.mark("native_cost");
+        unsigned IC;
+        {
+          std::optional<SaveAndRestore<StringRef>> Phase;
+          if (Report)
+            Phase.emplace(Report->Phase, "backend-native-ic");
+          IC = LVP.selectInterleaveCount(*Plan, VF, Native);
+        }
+        if (UserIC)
+          IC = UserIC;
+        IC = LVP.limitBackendIC(*Plan, IC);
+        uint64_t Width =
+            uint64_t(VF.getKnownMinValue()) *
+            (VF.isScalable() ? Config.getVScaleForTuning().value_or(1) : 1);
+        if (!IC || !Width || Width > UINT32_MAX / IC) {
+          PreparationError = "candidate iteration width overflow";
+          return false;
+        }
+        Preparation.mark("native_ic");
+        auto Profile = LVP.backendCandidateCost(*Plan, VF, true, Ev);
+        if (!Profile.isValid() || !Ev.isValid()) {
+          PreparationError = "invalid profile candidate cost";
+          return false;
+        }
+        std::string ID =
+            (F.getName() + ":" + Twine(Invocation) + ":" + Twine(LoopIndex) +
+             ":" + Twine(PlanIndex) + ":" + (VF.isScalable() ? "s" : "f") +
+             Twine(VF.getKnownMinValue()) + ":ic" + Twine(IC) + ":main")
+                .str();
+        Preparation.mark("profile_cost");
+        printCostTiming(ID, Preparation);
+        VPlanBackendCandidate C{ID,
+                                unsigned(PlanIndex),
+                                VF,
+                                Plan->hasScalarTail(),
+                                InterleaveOnlyWhenForced,
+                                VectorizeOnlyWhenForced};
+        C.IC = IC;
+        if (ForcedEpilogue.isVector()) {
+          auto Epilogue = LVP.selectBestEpiloguePlan(*Plan, VF, IC);
+          if (Epilogue)
+            C.EpilogueVF = Epilogue->getSingleVF();
+        }
+        if (Batch)
+          Pending.push_back(prepareCost(*Plan, std::move(C), Native, Profile,
+                                        Ev, unsigned(Width)));
+        else if (!add(*Plan, std::move(C), Native, Profile, Ev,
+                      unsigned(Width)))
+          return false;
       }
-      Preparation.mark("native_cost");
-      unsigned IC;
-      {
-        std::optional<SaveAndRestore<StringRef>> Phase;
-        if (Report)
-          Phase.emplace(Report->Phase, "backend-native-ic");
-        IC = LVP.selectInterleaveCount(*Plan, VF, Native);
-      }
-      if (UserIC)
-        IC = UserIC;
-      IC = LVP.limitBackendIC(*Plan, IC);
-      uint64_t Width =
-          uint64_t(VF.getKnownMinValue()) *
-          (VF.isScalable() ? Config.getVScaleForTuning().value_or(1) : 1);
-      if (!IC || !Width || Width > UINT32_MAX / IC) {
-        fail("candidate iteration width overflow");
-        return false;
-      }
-      Preparation.mark("native_ic");
-      auto Profile = LVP.backendCandidateCost(*Plan, VF, true, Ev);
-      if (!Profile.isValid() || !Ev.isValid()) {
-        fail("invalid profile candidate cost");
-        return false;
-      }
-      std::string ID =
-          (F.getName() + ":" + Twine(Invocation) + ":" + Twine(LoopIndex) +
-           ":" + Twine(PlanIndex) + ":" + (VF.isScalable() ? "s" : "f") +
-           Twine(VF.getKnownMinValue()) + ":ic" + Twine(IC) + ":main")
-              .str();
-      Preparation.mark("profile_cost");
-      printCostTiming(ID, Preparation);
-      VPlanBackendCandidate C{ID,
-                              unsigned(PlanIndex),
-                              VF,
-                              Plan->hasScalarTail(),
-                              InterleaveOnlyWhenForced,
-                              VectorizeOnlyWhenForced};
-      C.IC = IC;
-      if (ForcedEpilogue.isVector()) {
-        auto Epilogue = LVP.selectBestEpiloguePlan(*Plan, VF, IC);
-        if (Epilogue)
-          C.EpilogueVF = Epilogue->getSingleVF();
-      }
-      if (!add(*Plan, C, Native, Profile, Ev,
-               (VF.getKnownMinValue() *
-                (VF.isScalable() ? Config.getVScaleForTuning().value_or(1)
-                                 : 1))))
-        return false;
-    }
-  return true;
+    return true;
+  };
+  bool Prepared = Prepare();
+  // Earlier query/pricing failures take precedence over a later preparation
+  // error. Only the successfully prepared prefix can have work dispatched.
+  if (Batch && !addBatch(Pending))
+    return false;
+  if (!PreparationError.empty())
+    fail(PreparationError);
+  return Prepared && !Failed;
 }
 
 bool VPlanBackendCostModel::prepareEpilogue(
