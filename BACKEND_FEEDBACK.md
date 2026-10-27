@@ -1,7 +1,7 @@
 # Backend 비용 모델과 진단
 
 `-vplan-backend`는 RISC-V RVV의 VPlan VF 선택에 backend 비용을 적용한다.
-모델 ID는 `tti-real-vector-spill-v1`이며 기본값은 OFF다. 옵션 목록·실행 예제·빌드와
+기본 모델 ID는 `tti-real-vector-spill-v1`이며 master 기본값은 OFF다. 옵션 목록·실행 예제·빌드와
 테스트 명령은 [README](README.md)에 있다. 비 RISC-V, RVV 없음, outer loop,
 reciprocal-throughput 이외 비용 모드는 native 선택을 유지한다.
 
@@ -25,6 +25,55 @@ profitability는 native 정책을 유지한다. Ev는 기존 register-pressure �
 `VPExactCost`는 quarter-cost 분자와 양의 분모를 유지하고 비교 전에 절삭하지
 않는다. Cross product는 128비트 정수로 계산하며 산술 overflow는 native fallback이다.
 기존 `InstructionCost` 소비자에서는 해당 타입의 변환 의미를 유지한다.
+
+### Body/spill ablation과 MIR Info
+
+`-use-mir`, `-use-estimated-spill`, `-use-default-tti`는 모두 기본 OFF이며
+master가 OFF이면 효과가 없다. 조합별 수식과 실행 명령은 README의
+[Body/spill ablations](README.md#bodyspill-ablations)를 따른다.
+
+기본 `L - Ev + Sv` 경로의 stage, vector-only 수집과 TTI pricing은 유지한다.
+`use-default-tti`는 비-MIR 모드에서 `RISCVTTIImpl`을 선택하며 body, estimated
+vector spill, 실제 vector spill 가격에 같은 TTI를 사용한다.
+비-MIR `use-estimated-spill`은 TTI body를 그대로 사용하고 probe를 하지 않는다.
+
+MIR 모드는 별도 observer의 pass ID까지 backend를 실행한다. 위치는
+`addPreSched2()`의 RISC-V post-RA pseudo 확장·KCFI·load/store optimization 이후,
+최종 scheduling과 RVV pseudo 확장 이전이다. Stage는 `post-frame-lowering`이다.
+Pressure gate에 관계없이 필요한 body를 관측하며 post-frame 재시도 경로는 없다.
+
+Collector는 기존 candidate/role/iteration mapping 검증과 단일 block 반복 경로를
+공유한다. Meta 명령을 제외하고 backedge까지의 opcode, pseudo 여부,
+configuration, load/store, LMUL/SEW/index EMUL/EEW, 물리 vector register group과
+spill-slot 표식을 소유권 있는 `VPlanMIRInstruction`으로 복사한다. 이 가산 모델은
+VL·stride의 실제 실행값이나 dependency graph를 가격 입력으로 사용하지 않는다.
+상세 report에서만 MIR 문자열도 수집하며 MachineInstr/Function 포인터는 경계를
+넘지 않는다. Setup/exit/frame prologue 전체를 body에 합산하지 않는다.
+
+`TargetMIRInfo`는 관측 데이터에 대한 read-only 명령별 service-demand API다.
+`TargetMachine::getTargetMIRInfo(F)`가 함수의 CPU/VLEN에 맞는 구현을 만들고,
+feedback analysis service를 통해 Vectorize에 전달한다. Vectorize에는 CodeGen이나
+특정 target에 대한 링크 의존을 추가하지 않는다. 새로운 target/profile은 해당
+타겟 디렉터리에 MIR Info 구현과 factory 선택 조건을 추가한다. 다른 ISA는
+해당 타겟의 observer/pipeline 지원과 vectorizer의 대상 허용도 함께 확장해야 한다.
+미지원 대상은
+nullptr를 반환하여 native fallback하며 generic MIR 가격을 추정하지 않는다.
+
+최초 구현은 `XiangShanV2MIRInfo`이며 XiangShan Kunminghu/VLEN=128을 지원한다.
+`llvm-cost-model`의 `rtl-service-sum-v1`, RTL revision
+`e7bab53e66dfb3c4a1d11cf9519b0396f8576cae`의 opcode/service/geometry 규칙을
+C++로 이식했다. 비용은 service별 work × nominal demand의 합이며 port/max,
+latency 배수, dependency/window penalty는 없다. Configuration은 body에 한 번
+포함한다. Unknown opcode는 명시적 unit demand이고 잘못된 geometry는 오류다.
+
+`R`은 전체 body, `S`는 spill-slot MMO가 있는 scalar/vector load/store의 전체
+service demand다. 별도 주소 계산은 `R - S`에 남는다. 두 값에 `Wtti / Wobs`를
+정확히 적용한 뒤 `R` 또는 `R - S + Et`를 사용한다. `Et`는 scoped XiangShan
+TTI의 전체 추정 spill이며 기존 vector-only `Ev`와 별도 보관한다.
+MIR에서는 `use-default-tti`를 무시하여 `Et`도 바뀌지 않는다.
+
+Native scalar 기준, native-cost IC, 후보 순서와 main/epilogue 정책은 동일하다.
+필수 관측이나 가격 계산 실패 시 전체 원본 loop가 native 선택으로 복귀한다.
 
 ### Pressure gate
 
@@ -55,7 +104,7 @@ clone → candidate materialization → IR suffix → iteration mapping 검증
   → vector spill collector → 종료
 ```
 
-Collector의 pass ID가 probe 종료 지점을 지정한다. Stage는
+Collector의 pass ID가 probe 종료 지점을 지정한다. 기본 real-vector-spill 경로의 stage는
 `post-stack-slot-coloring`이다. 이후 copy propagation, post-RA LICM, frame lowering은
 일반 최종 codegen에서 실행된다. RegAllocScoring은 기본 설정에서 no-op이다.
 Optimized RVV allocator(default/greedy/basic)와 정상 pipeline을 요구한다.
@@ -73,8 +122,8 @@ subregister, 미지원 접근과 불완전 mapping은 실패다.
 여부와 register group을 받아 가격을 계산한다. 기본 구현은 `getMemoryOpCost`에
 위임한다. Segment spill은 실제 lowering과 공유하는 물리 register 분할 helper로
 접근을 해석하며 각 접근의 크기·alignment·address space를 보존한다.
-**수집과 가격 계산은 vector spill 전용이며, 실제 scalar spill과 최종 frame 주소
-비용은 모델에 포함하지 않는다.**
+**이 기본 경로의 수집과 가격 계산은 vector spill 전용이며, 실제 scalar spill과
+최종 frame 주소 비용은 포함하지 않는다. MIR 모드의 전체 body 수집과는 구분한다.**
 
 요청은 plan/VF/IC/역할을 포함한다. Main probe는 강제 epilogue를 함께 생성한다.
 자동 epilogue는 기존 main-후-epilogue 순서와 후보 필터를 유지하며, 비교가 필요한
@@ -244,3 +293,19 @@ Clone의 Type/MachineFunction/MachineInstr/문자열 포인터는 반환하지 �
 Timing OFF는 clock 조회나 marker pass를 활성화하지 않는다. Pass 경계 측정에는
 필요한 analysis 실행도 포함된다. Total은 하위 구간을 포함하므로 중복 합산하지
 않으며, 진단 실행은 일반 compiler wall 평균과 분리한다.
+
+### Ablation report 추가 항목
+
+기존 기본 mode의 model ID와 vector spill 필드 의미는 유지한다. JSON 후보 행에는
+유효한 `use_mir`, `use_estimated_spill`, `use_default_tti`와 전체 추정 spill을
+추가한다. MIR 모드의 observation schema는 `mir-body-observation-v1`이고 `body`에
+가격 입력을 보존한다. `mir_model`/`mir_revision`, 정규화된 MIR body/spill의
+quarter-cost 분자·분모, 명령 순서와 대응하는 `mir_costs`의 rule/unknown/service
+항을 보고한다. MIR 값을 기존 vector-spill 필드로 위장하지 않는다.
+
+TTI-only estimated 모드는 `estimated-spill-no-probe`, MIR 상세 report는
+`gate=bypassed-for-mir-body`로 구분한다. 상세 MIR report는 raw/정규화 R·S와 Et,
+실제 적용 수식 및 명령별 service demand를 출력한다. 모두 실제 비용 계산 결과를
+사용하며 추가 query/재계산을 하지 않는다. Whole-loop fallback에서는 기존처럼
+시도 중인 두 cost report를 폐기하고 native report를 복구한다. JSONL은 기존처럼
+실패 이전 후보 관측과 최종 fallback record를 함께 남긴다.

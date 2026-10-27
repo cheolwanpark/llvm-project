@@ -12,6 +12,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/TargetMIRInfo.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
@@ -40,6 +41,7 @@ struct VPlanBackendCandidate {
   ElementCount MainVF = ElementCount::getFixed(1);
   unsigned MainIC = 1;
   ElementCount EpilogueVF = ElementCount::getFixed(0);
+  VPlanBackendObservationOptions Observation;
 };
 
 /// Explicit per-pass state for materializing a candidate on a disposable clone.
@@ -86,8 +88,15 @@ public:
       const Function &, const BasicBlock &, ArrayRef<VPlanBackendCandidate>)>;
   using BatchPolicy = std::function<bool(const Function &)>;
 
-  explicit VPlanBackendFeedback(Query Q = {}, BatchPolicy Policy = {})
-      : QueryCandidates(std::move(Q)), Policy(std::move(Policy)) {}
+  using MIRInfoProvider =
+      std::function<std::unique_ptr<TargetMIRInfo>(const Function &)>;
+  explicit VPlanBackendFeedback(Query Q = {}, BatchPolicy Policy = {},
+                                MIRInfoProvider MIRInfo = {})
+      : QueryCandidates(std::move(Q)), Policy(std::move(Policy)),
+        MIRInfo(std::move(MIRInfo)) {}
+  std::unique_ptr<TargetMIRInfo> getMIRInfo(const Function &F) const {
+    return MIRInfo ? MIRInfo(F) : nullptr;
+  }
 
   /// Called once at the start of main-candidate preparation. The provider may
   /// reset its per-loop serial-query diagnostic accounting here.
@@ -126,6 +135,7 @@ public:
 private:
   Query QueryCandidates;
   BatchPolicy Policy;
+  MIRInfoProvider MIRInfo;
 };
 
 class VPlanBackendFeedbackAnalysis
@@ -134,19 +144,26 @@ class VPlanBackendFeedbackAnalysis
   LLVM_ABI static AnalysisKey Key;
   VPlanBackendFeedback::Query Query;
   VPlanBackendFeedback::BatchPolicy Policy;
+  VPlanBackendFeedback::MIRInfoProvider MIRInfo;
 
 public:
   using Result = VPlanBackendFeedback;
   explicit VPlanBackendFeedbackAnalysis(
       VPlanBackendFeedback::Query Q = {},
-      VPlanBackendFeedback::BatchPolicy Policy = {})
-      : Query(std::move(Q)), Policy(std::move(Policy)) {}
+      VPlanBackendFeedback::BatchPolicy Policy = {},
+      VPlanBackendFeedback::MIRInfoProvider MIRInfo = {})
+      : Query(std::move(Q)), Policy(std::move(Policy)),
+        MIRInfo(std::move(MIRInfo)) {}
   Result run(Function &, FunctionAnalysisManager &) {
-    return Result(Query, Policy);
+    return Result(Query, Policy, MIRInfo);
   }
 };
 
 LLVM_ABI bool vplanBackendFeedbackEnabled();
+LLVM_ABI bool vplanBackendUseMIR();
+LLVM_ABI bool vplanBackendUseEstimatedSpill();
+LLVM_ABI bool vplanBackendUseDefaultTTI();
+LLVM_ABI StringRef vplanBackendModelName();
 LLVM_ABI bool vplanBackendFeedbackTimingEnabled();
 LLVM_ABI json::Object summarizeVPlanBackendResult(const VPlanBackendResult &R);
 /// Diagnostic oracle: retain the gate's decision but query every candidate.

@@ -351,9 +351,8 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
   OS << "  backend-cost phase=" << (Cost.IsEpilogue ? "epilogue" : "main")
      << " plan=" << C.PlanID << " vf=";
   printVF(OS, Cost.VF);
-  OS << " ic=" << Cost.IC
-     << " model=tti-real-vector-spill-v1 profile=" << ProfileName
-     << " queried=" << bool(Observation)
+  OS << " ic=" << Cost.IC << " model=" << vplanBackendModelName()
+     << " profile=" << ProfileName << " queried=" << bool(Observation)
      << " would_skip=" << !Bound.shouldQuery()
      << " force_all=" << vplanBackendFeedbackForceAll() << " body_cost=";
   Cost.Body.print(OS);
@@ -365,6 +364,43 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
      << (Cost.IsEpilogue ? "epilogue" : "main") << " plan=" << C.PlanID
      << " vf=";
   printVF(DS, Cost.VF);
+  if (Cost.MIR) {
+    const auto &M = *Cost.MIR;
+    DS << " ic=" << Cost.IC << " mir_model=" << M.Model
+       << " revision=" << M.Revision << " stage=" << Observation->Stage
+       << " Wtti=" << Width << " Wobs=" << Observation->IterationWidth;
+    DS << " raw_R=";
+    M.RawBody.print(DS);
+    DS << " raw_S=";
+    M.RawSpill.print(DS);
+    DS << " R=";
+    M.Body.print(DS);
+    DS << " S=";
+    M.Spill.print(DS);
+    DS << " Et=" << Cost.EstimatedSpill
+       << (vplanBackendUseEstimatedSpill() ? " B=R-S+Et=" : " B=R=");
+    Cost.Body.print(DS);
+    DS << " spill_scope=scalar-and-vector gate=bypassed-for-mir-body"
+          " scalar_baseline=native ic_policy=native-cost\n";
+    for (auto [MI, IC] : zip(*Observation->MIRBody, M.Instructions)) {
+      DS << "      mir-op " << MI.Opcode << " rule=" << IC.Rule
+         << " spill=" << MI.Spill << " unknown=" << IC.Unknown;
+      for (const auto &D : IC.Demands)
+        DS << " " << D.Service << "=" << D.Numerator << "/" << D.Denominator;
+      DS << '\n';
+      if (!MI.Text.empty())
+        DS << "        " << MI.Text;
+    }
+    return;
+  }
+  if (vplanBackendUseEstimatedSpill()) {
+    DS << " ic=" << Cost.IC << " native=" << Cost.Native
+       << " L=" << Cost.Profile
+       << " estimated_total_spill=" << Cost.EstimatedSpill << " B=L=";
+    Cost.Body.print(DS);
+    DS << " probe=not-required scalar_baseline=native ic_policy=native-cost\n";
+    return;
+  }
   DS << " ic=" << Cost.IC << " native=" << Cost.Native << " L=" << Cost.Profile
      << " Ev=" << Cost.EstimatedVectorSpill << " raw_vector_spill=" << Raw
      << " Wtti=" << Width << " Wobs=";

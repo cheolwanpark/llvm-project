@@ -4,9 +4,24 @@
 #define LLVM_SUPPORT_VPLANBACKENDRESULT_H
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/TypeSize.h"
+#include <optional>
 #include <string>
 #include <vector>
 namespace llvm {
+enum class VPlanBackendObservationKind { VectorSpills, MIRBody };
+struct VPlanBackendObservationOptions {
+  VPlanBackendObservationKind Kind = VPlanBackendObservationKind::VectorSpills;
+  bool CaptureMIRText = false;
+};
+/// The pricing inputs of a body instruction, independent of CodeGen lifetimes.
+/// Zero geometry denotes unavailable information, never a guessed value.
+struct VPlanMIRInstruction {
+  std::string Opcode, BaseOpcode, Text;
+  bool Vector = false, Pseudo = false, Configuration = false;
+  bool Load = false, Store = false, Spill = false;
+  unsigned LMUL8 = 0, SEW = 0, IndexEMUL8 = 0, IndexEEW = 0;
+  std::vector<unsigned> RegisterGroups8;
+};
 /// Owned, cost-independent facts. No IR or CodeGen objects cross the boundary.
 struct VPlanVectorSpillAccess {
   bool IsLoad = false;
@@ -51,6 +66,7 @@ struct VPlanBackendResult {
   bool IterationMapping = false;
   std::string Stage = "post-stack-slot-coloring";
   std::vector<VPlanVectorSpillAccess> Spills;
+  std::optional<std::vector<VPlanMIRInstruction>> MIRBody;
   std::vector<VPlanFeedbackTiming> Timings;
 };
 } // namespace llvm

@@ -1,7 +1,7 @@
 # RISC-V backend-aware vectorization
 
 This LLVM fork selects VPlan vectorization factors using TTI costs and observed
-vector spills. The model is OFF by default. IC and scalar costs retain native
+vector spills, with optional MIR body-cost ablations. The model is OFF by default. IC and scalar costs retain native
 LLVM policy; a required candidate failure returns the whole loop to native
 selection.
 
@@ -17,7 +17,10 @@ selection.
 |---|---|
 | `-vplan-backend` | Enable backend costs; default false. |
 | `-vplan-backend-probe-threads=N` | Bound concurrent main-candidate probes; positive integer, default `1`. |
-| `-vplan-backend-force-all` | Query every candidate; default false applies the pressure gate. |
+| `-use-mir` | Use target MIR service demand for the body; default false. |
+| `-use-estimated-spill` | Keep TTI estimates, or replace all MIR spill demand with tuned TTI estimates; default false. |
+| `-use-default-tti` | Use generic RISC-V TTI in non-MIR modes; ignored with `-use-mir`; default false. |
+| `-vplan-backend-force-all` | Query every real-spill candidate; MIR always queries and TTI-only estimates never query. |
 | `-vplan-backend-jsonl=FILE` | Append candidate and selection/fallback diagnostics as JSONL. |
 | `-vplan-backend-time` | Print probe and cost-preparation timings to stderr. |
 | `-print-vplans` | Print costs and selection decisions to stderr. |
@@ -40,6 +43,49 @@ exact backend costs when applied. Internal probe clones do not emit cost reports
 The fixed XiangShan profile applies to `xiangshan-kunminghu` with exact VLEN=128;
 other RISC-V CPU/VLEN settings use native TTI with actual vector spill costs.
 
+### Body/spill ablations
+
+All three controls require `-vplan-backend`. LLVM accepts both `-use-mir` and
+`--use-mir` spellings; Clang requires `-mllvm` before each LLVM option.
+
+| Additional flags | Body cost | Model ID |
+|---|---|---|
+| none | `Lt - Evt + Svt` | `tti-real-vector-spill-v1` (unchanged default) |
+| `-use-estimated-spill` | `Lt` | `tti-v1` |
+| `-use-default-tti` | `L0 - Ev0 + Sv0` | `llvm-real-vector-spill-v1` |
+| `-use-default-tti -use-estimated-spill` | `L0` | `llvm-v1` |
+| `-use-mir` | `R` | `mir-v1` |
+| `-use-mir -use-estimated-spill` | `R - S + Et` | `mir-me-spill-v1` |
+
+`L0/Lt` are generic/tuned TTI body costs. `Ev/Sv` are estimated/observed
+**vector** spill costs, priced with the selected TTI. `R/S` are the MIR body
+and its **scalar and vector** spill service demand; `Et` is the tuned TTI's
+**total** estimated spill. MIR demand is normalized by the validated iteration
+width before substituting `Et`. `-use-default-tti` has no effect in either MIR
+mode, including on `Et`.
+
+MIR uses a separate post-frame-lowering observer, after RISC-V post-RA pseudo
+expansion and load/store optimization but before final scheduling/RVV pseudo
+expansion. It queries every required candidate even when the vector-spill gate
+would skip. TTI-only estimated modes require no backend query. Other modes retain
+the existing post-stack-slot-coloring observer and gate.
+
+The first MIR Info implementation supports XiangShan Kunminghu, exact VLEN=128.
+Other CPU/VLEN settings fall back to native selection in MIR modes. Its
+`rtl-service-sum-v1` rules are ported from `llvm-cost-model`; unsupported opcode
+rules have explicit unit demand and are reported as unknown, while invalid
+geometry or required observations cause whole-loop native fallback. This is
+nominal service demand, not a prediction of CPU cycles. The non-MIR real-spill
+models retain their earlier stage, vector-only scope and TTI pricing; they are
+not numerically identical to the sibling project's full post-frame models.
+
+```sh
+.cache/build/bin/clang --target=riscv64-unknown-elf \
+  -march=rv64gcv -mcpu=xiangshan-kunminghu -mrvv-vector-bits=128 -O3 \
+  -mllvm -vplan-backend -mllvm -use-mir -mllvm -use-estimated-spill \
+  -mllvm -print-detailed-vplans kernel.c -c -o .cache/kernel.o
+```
+
 ### Parallel probes
 
 With `-mllvm -vplan-backend-probe-threads=4`, independent main-candidate
@@ -48,7 +94,8 @@ stay on the compiler thread. Each batch snapshots the current loop context;
 workers use separate LLVM contexts, target machines and analyses. The default
 `1` retains the existing serial clone path and stops at the first failure.
 Automatic epilogue queries remain serial; forced epilogues remain part of main
-probes. The gate and whole-loop native fallback are unchanged.
+probes. Whole-loop native fallback applies to every mode; query eligibility follows
+the selected ablation as described above.
 
 ```sh
 .cache/build/bin/clang --target=riscv64-unknown-elf \
@@ -93,7 +140,8 @@ configure `.cache/build` directly only for a fresh build.
 
 ```sh
 cmake --build .cache/build --target clang clang-resource-headers llc opt \
-  FileCheck split-file not VectorizeTests RISCVTests --parallel 2
+  FileCheck split-file not count llvm-config llvm-readobj \
+  VectorizeTests RISCVTests --parallel 2
 ```
 
 Fresh configuration:

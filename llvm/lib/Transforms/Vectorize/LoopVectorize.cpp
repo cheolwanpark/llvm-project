@@ -6390,7 +6390,8 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
 }
 
 InstructionCost LoopVectorizationPlanner::backendCandidateCost(
-    VPlan &Plan, ElementCount VF, bool Profile, InstructionCost &VectorSpill) {
+    VPlan &Plan, ElementCount VF, bool Profile, InstructionCost &VectorSpill,
+    InstructionCost *TotalSpill) {
   VPlanCostProfileScope Scope(Profile);
   std::optional<SaveAndRestore<StringRef>> ReportPhase;
   if (Config.CostReport)
@@ -6398,11 +6399,15 @@ InstructionCost LoopVectorizationPlanner::backendCandidateCost(
                                                       ? "backend-profile-body"
                                                       : "backend-native-body");
   VectorSpill = 0;
+  if (TotalSpill)
+    *TotalSpill = 0;
   SmallVector<VPRegisterUsage, 8> RU;
   if (Config.shouldConsiderRegPressureForVF(VF)) {
     RU = calculateRegisterUsageForPlan(Plan, {VF}, TTI, CM.ValuesToIgnore);
-    RU[0].spillCost(TTI, Config.CostKind, ForceTargetNumVectorRegs, nullptr,
-                    &VectorSpill);
+    auto Total = RU[0].spillCost(TTI, Config.CostKind, ForceTargetNumVectorRegs,
+                                 nullptr, &VectorSpill);
+    if (TotalSpill)
+      *TotalSpill = Total;
   }
   return cost(Plan, VF, RU.empty() ? nullptr : &RU[0]);
 }

@@ -3,6 +3,42 @@
 측정 시점과 compiler identity를 구분한다. 사용법은 [README](README.md),
 비용·probe·TTI 계약은 [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md)에 있다.
 
+## 2026-10-27 — LLVM 내부 body/spill ablation 기본 검증
+
+`cf0330d4664acb831a3c17be8c84c4e671834e25` 기반 작업 트리에 세 ablation 옵션과
+타겟별 MIR Info를 구현했다. 이 checkout에는 기존 build cache가 없어
+`.cache/build`에 Release/assertions/tests, `clang;lld`, `X86;RISCV` 설정으로 새로
+빌드했다. `.cache/compiler-build -> build` 호환 symlink도 유지한다.
+빌드는 `--parallel 2`를 사용했고 최종 증분 검사에는 남은 작업이 없었다.
+최종 Clang SHA-256은 `b9447658e040ccc9f55b4915c1529ebc817d7cee48dcaf6beeac8bd99f395be3`이다.
+
+| 검증 | 결과 |
+|---|---|
+| Vectorize unit suite | 86/86 통과 |
+| RISC-V unit suite | 38/38 통과 |
+| 관련 lit | 6/6 통과 |
+| Clang 객체 생성 smoke | 6개 body/spill 조합 모두 성공, native fallback 없음 |
+| Python/C++ MIR 가격 규칙 대조 | 2,343 opcode/geometry 사례, 불일치 0 |
+
+Lit 범위는 `backend-ablation.ll`, 기존 `backend-feedback.ll`,
+`backend-feedback-spills.ll`, `backend-feedback-parallel.ll`,
+`backend-cost-report.ll`, `rvv/stack-slot-coloring.mir`다. 새 테스트는 8개 boolean
+조합·master OFF 무효화·MIR에서 default-TTI 무시·TTI estimated 모드의 probe
+생략·MIR gate 우회·실제 spill 교체·직렬/병렬 일치·IC=4 정규화·강제 epilogue·
+미지원 CPU/VLEN 및 제한된 pipeline의 fallback·상세 report의 수동성을 검사한다.
+RISC-V의 기존 자동 epilogue 거부 정책은 바꾸지 않았다.
+
+가격 규칙 대조는 `llvm-cost-model`의 Python service-sum 모델과 이 checkout의
+C++ MIR Info를 같은 명령 정보에 적용한 것으로, 전체 dataset이나 최종 실행 성능
+비교가 아니다. Unit test는 scalar/vector 전체 spill의 합산, 유리수 정규화와
+약분 전 곱셈의 overflow 경계도 검사한다. 실제 후보 probe와 객체 생성은 이
+checkout에서 빌드한 compiler로 확인했다.
+
+로그, 가격 대조 스크립트/결과와 smoke 명령·binary/object hash는
+`.cache/ablation-implementation/`에 보관한다. 전체 dataset 측정, RTL 실행 및
+성능 비교는 수행하지 않았다. 아래의 과거 측정값은 이번 ablation binary의
+측정값으로 해석하지 않는다.
+
 ## 2026-10-27 — 제한된 probe 병렬 실행
 
 ### 조건과 측정 방법

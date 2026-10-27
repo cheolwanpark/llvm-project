@@ -198,3 +198,58 @@ TEST(VPlanBackendCost, ExactReportUnitsAndLargeDenominators) {
   EXPECT_EQ(Text(VPExactCost::ratio(1, INT64_MAX)), "1/36893488147419103228");
   EXPECT_EQ(Text(VPExactCost::ratio(1, 0)), "Invalid");
 }
+
+namespace {
+class FractionMIRInfo : public TargetMIRInfo {
+public:
+  StringRef getModelName() const override { return "test-mir"; }
+  StringRef getRevision() const override { return "test"; }
+  Expected<MIRInstructionCost>
+  getInstructionCost(const VPlanMIRInstruction &MI) const override {
+    if (MI.Opcode == "invalid")
+      return createStringError("invalid geometry");
+    return MIRInstructionCost{
+        "fraction", false, {{"test", MI.Spill ? 5 : 7, 3}}};
+  }
+};
+} // namespace
+TEST(VPlanBackendCost, MIRExactNormalizationAndSpillScope) {
+  VPlanBackendResult O;
+  O.Stage = "post-frame-lowering";
+  O.IterationMapping = true;
+  O.IterationWidth = 24;
+  O.MIRBody.emplace();
+  O.MIRBody->push_back({});
+  VPlanMIRInstruction ScalarSpill, VectorSpill;
+  ScalarSpill.Load = ScalarSpill.Spill = true;
+  VectorSpill = ScalarSpill;
+  VectorSpill.Vector = true;
+  O.MIRBody->push_back(ScalarSpill);
+  O.MIRBody->push_back(VectorSpill);
+  auto C = priceVPlanMIR(O, FractionMIRInfo(), 4);
+  ASSERT_TRUE(bool(C));
+  EXPECT_EQ(C->RawBody, VPExactCost::ratio(68, 3));
+  EXPECT_EQ(C->RawSpill, VPExactCost::ratio(40, 3));
+  EXPECT_EQ(C->Body, VPExactCost::ratio(34, 9));
+  EXPECT_EQ(C->Spill, VPExactCost::ratio(20, 9));
+  EXPECT_EQ(C->Body - C->Spill + VPExactCost(InstructionCost(2)),
+            VPExactCost::ratio(86, 9));
+  EXPECT_FALSE(VPExactCost::ratio(INT64_MAX, 1).normalize(2, 1).isValid());
+  EXPECT_EQ(VPExactCost::ratio(INT64_MAX, 1).normalize(2, 2),
+            VPExactCost::ratio(INT64_MAX, 1));
+  for (unsigned Case = 0; Case < 4; ++Case) {
+    auto Bad = O;
+    if (Case == 0)
+      Bad.Stage = "post-stack-slot-coloring";
+    if (Case == 1)
+      Bad.IterationWidth = 0;
+    if (Case == 2)
+      Bad.MIRBody->clear();
+    if (Case == 3)
+      Bad.MIRBody->front().Opcode = "invalid";
+    auto R = priceVPlanMIR(Bad, FractionMIRInfo(), 4);
+    EXPECT_FALSE(bool(R));
+    if (!R)
+      consumeError(R.takeError());
+  }
+}

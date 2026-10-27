@@ -27,6 +27,7 @@ class RISCVTargetMachine : public CodeGenTargetMachineImpl {
 
 public:
   VPlanFeedbackTimer *BackendFeedbackTimer = nullptr;
+  VPlanBackendObservationOptions BackendObservation;
   RISCVTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
                      StringRef FS, const TargetOptions &Options,
                      std::optional<Reloc::Model> RM,
@@ -51,8 +52,11 @@ public:
 
   TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
 
+  std::unique_ptr<TargetMIRInfo>
+  getTargetMIRInfo(const Function &F) const override;
   Expected<VPlanBackendResult>
-  getVPlanBackendFeedback(Module &M, bool Time = false) override;
+  getVPlanBackendFeedback(Module &M, bool Time = false,
+                          VPlanBackendObservationOptions Options = {}) override;
   std::optional<Expected<VPlanBackendResult>> *getBackendFeedbackSink() const {
     return BackendFeedbackSink;
   }

@@ -15,6 +15,7 @@
 
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/TargetMIRInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Allocator.h"
@@ -22,8 +23,8 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/VPlanBackendResult.h"
 #include "llvm/Support/PGOOptions.h"
+#include "llvm/Support/VPlanBackendResult.h"
 #include "llvm/Target/CGPassBuilderOption.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
@@ -409,9 +410,17 @@ public:
   /// corresponding to \p F.
   virtual TargetTransformInfo getTargetTransformInfo(const Function &F) const;
 
+  /// Null means that the function's CPU/VLEN has no MIR service model.
+  virtual std::unique_ptr<TargetMIRInfo>
+  getTargetMIRInfo(const Function &F) const {
+    return nullptr;
+  }
+
   /// Observe a disposable, already materialized candidate module. Implemented
   /// by targets with a backend observer. This never supplies a cost or a VF.
-  virtual Expected<VPlanBackendResult> getVPlanBackendFeedback(Module &M, bool Time = false) {
+  virtual Expected<VPlanBackendResult>
+  getVPlanBackendFeedback(Module &M, bool Time = false,
+                          VPlanBackendObservationOptions Options = {}) {
     return createStringError("target has no VPlan backend feedback observer");
   }
 

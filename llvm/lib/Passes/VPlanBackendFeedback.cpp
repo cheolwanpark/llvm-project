@@ -216,7 +216,8 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   if (verifyModule(M, &Diagnostics))
     return createStringError("invalid candidate module");
   Timer.mark("iteration_mapping_and_verification");
-  auto Result = TM->getVPlanBackendFeedback(M, Timer.Enabled);
+  auto Result =
+      TM->getVPlanBackendFeedback(M, Timer.Enabled, Candidate.Observation);
   Timer.mark("backend_total");
   if (!Result)
     return Result.takeError();
@@ -413,12 +414,15 @@ void PassBuilder::registerVPlanBackendFeedbackAnalysis(
                                               /*AddVectorizer=*/false);
                          }};
   auto Provider = std::make_shared<FeedbackProvider>(TM, Pipeline, FS);
-  FAM.registerPass([Provider] {
+  FAM.registerPass([Provider, TM = TM] {
     return VPlanBackendFeedbackAnalysis(
         [Provider](const Function &F, const BasicBlock &Header,
                    ArrayRef<VPlanBackendCandidate> Candidates) {
           return Provider->query(F, Header, Candidates);
         },
-        [Provider](const Function &F) { return Provider->canBatch(F); });
+        [Provider](const Function &F) { return Provider->canBatch(F); },
+        [TM](const Function &F) {
+          return TM ? TM->getTargetMIRInfo(F) : nullptr;
+        });
   });
 }

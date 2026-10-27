@@ -913,7 +913,8 @@ public:
 
   InstructionCost backendCandidateCost(VPlan &Plan, ElementCount VF,
                                        bool Profile,
-                                       InstructionCost &VectorSpill);
+                                       InstructionCost &VectorSpill,
+                                       InstructionCost *TotalSpill = nullptr);
   unsigned limitBackendIC(VPlan &Plan, unsigned IC) const;
   void resetVFSelection() {
     ProfitableVFs.clear();

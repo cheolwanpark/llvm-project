@@ -3,6 +3,7 @@
 #include "RISCVVPlanSpill.h"
 #include "RISCVInstrInfo.h"
 #include "RISCVSubtarget.h"
+#include "RISCVVPlanMIR.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -163,8 +164,8 @@ Error llvm::vplan::collectVectorSpillAccess(
   return Error::success();
 }
 
-Expected<VPlanBackendResult>
-llvm::vplan::collectVectorSpills(MachineFunction &MF) {
+static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
+                                                bool Text) {
   const Function &F = MF.getFunction();
   auto ID = F.getFnAttribute("vplan.backend.candidate").getValueAsString();
   auto Role = F.getFnAttribute("vplan.backend.role").getValueAsString();
@@ -197,9 +198,16 @@ llvm::vplan::collectVectorSpills(MachineFunction &MF) {
   Result.IsEpilogue = Role == "epilogue";
   Result.IterationWidth = Width;
   Result.IterationMapping = true;
+  if (MIR) {
+    Result.Stage = "post-frame-lowering";
+    Result.MIRBody.emplace();
+  }
   bool BackedgeSeen = false;
   for (auto &MI : *Loop->getHeader()) {
-    if (auto E = collectVectorSpillAccess(MI, Result.Spills))
+    if (MIR) {
+      if (!MI.isMetaInstruction())
+        Result.MIRBody->push_back(vplan::collectMIRInstruction(MI, Text));
+    } else if (auto E = vplan::collectVectorSpillAccess(MI, Result.Spills))
       return std::move(E);
     if (MI.isBranch())
       for (const auto &MO : MI.operands())
@@ -211,6 +219,14 @@ llvm::vplan::collectVectorSpills(MachineFunction &MF) {
   if (!BackedgeSeen)
     return createStringError("candidate backedge is unproven");
   return Result;
+}
+Expected<VPlanBackendResult>
+llvm::vplan::collectVectorSpills(MachineFunction &MF) {
+  return collectBody(MF, false, false);
+}
+Expected<VPlanBackendResult> llvm::vplan::collectMIRBody(MachineFunction &MF,
+                                                         bool Text) {
+  return collectBody(MF, true, Text);
 }
 char RISCVVPlanSpill::ID = 0;
 RISCVVPlanSpill::RISCVVPlanSpill(

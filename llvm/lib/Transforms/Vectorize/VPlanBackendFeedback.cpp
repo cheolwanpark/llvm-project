@@ -22,6 +22,31 @@ using namespace llvm;
 static cl::opt<bool> EnableBackendCostModel(
     "vplan-backend", cl::Hidden, cl::init(false),
     cl::desc("Select VF using scoped TTI and actual vector spill costs"));
+static cl::opt<bool> UseMIR(
+    "use-mir", cl::Hidden, cl::init(false),
+    cl::desc("Use target MIR service demand for VPlan backend body costs"));
+static cl::opt<bool> UseEstimatedSpill(
+    "use-estimated-spill", cl::Hidden, cl::init(false),
+    cl::desc("Use estimated spill costs in VPlan backend selection"));
+static cl::opt<bool>
+    UseDefaultTTI("use-default-tti", cl::Hidden, cl::init(false),
+                  cl::desc("Use generic TTI for non-MIR VPlan backend costs"));
+bool llvm::vplanBackendUseMIR() { return EnableBackendCostModel && UseMIR; }
+bool llvm::vplanBackendUseEstimatedSpill() {
+  return EnableBackendCostModel && UseEstimatedSpill;
+}
+bool llvm::vplanBackendUseDefaultTTI() {
+  return EnableBackendCostModel && !UseMIR && UseDefaultTTI;
+}
+StringRef llvm::vplanBackendModelName() {
+  if (vplanBackendUseMIR())
+    return vplanBackendUseEstimatedSpill() ? "mir-me-spill-v1" : "mir-v1";
+  if (vplanBackendUseDefaultTTI())
+    return vplanBackendUseEstimatedSpill() ? "llvm-v1"
+                                           : "llvm-real-vector-spill-v1";
+  return vplanBackendUseEstimatedSpill() ? "tti-v1"
+                                         : "tti-real-vector-spill-v1";
+}
 static cl::opt<std::string> FeedbackOutput(
     "vplan-backend-jsonl", cl::Hidden,
     cl::desc("Append candidate feedback as JSONL (diagnostic only)"));
@@ -45,16 +70,44 @@ json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R) {
                                     {"whole_register", A.WholeRegister},
                                     {"register_group", A.RegisterGroup},
                                     {"segment_lowering", A.FromSegment}});
-  return json::Object{{"schema", "rvv-vector-spill-v1"},
-                      {"candidate", R.Candidate},
-                      {"vf", R.VF.getKnownMinValue()},
-                      {"scalable", R.VF.isScalable()},
-                      {"ic", R.IC},
-                      {"observation_role", R.IsEpilogue ? "epilogue" : "main"},
-                      {"stage", R.Stage},
-                      {"iteration_width", R.IterationWidth},
-                      {"iteration_mapping", R.IterationMapping},
-                      {"spills", std::move(Accesses)}};
+  json::Object Result{
+      {"schema", R.MIRBody ? "mir-body-observation-v1" : "rvv-vector-spill-v1"},
+      {"candidate", R.Candidate},
+      {"vf", R.VF.getKnownMinValue()},
+      {"scalable", R.VF.isScalable()},
+      {"ic", R.IC},
+      {"observation_role", R.IsEpilogue ? "epilogue" : "main"},
+      {"stage", R.Stage},
+      {"iteration_width", R.IterationWidth},
+      {"iteration_mapping", R.IterationMapping},
+      {"spills", std::move(Accesses)}};
+  if (R.MIRBody) {
+    Result.erase("spills");
+    json::Array Body;
+    for (const auto &MI : *R.MIRBody) {
+      json::Array Groups;
+      for (auto G : MI.RegisterGroups8)
+        Groups.push_back(G);
+      json::Object Op{{"opcode", MI.Opcode},
+                      {"base_opcode", MI.BaseOpcode},
+                      {"vector", MI.Vector},
+                      {"pseudo", MI.Pseudo},
+                      {"configuration", MI.Configuration},
+                      {"load", MI.Load},
+                      {"store", MI.Store},
+                      {"spill_slot", MI.Spill},
+                      {"lmul8", MI.LMUL8},
+                      {"sew", MI.SEW},
+                      {"index_emul8", MI.IndexEMUL8},
+                      {"index_eew", MI.IndexEEW},
+                      {"register_groups8", std::move(Groups)}};
+      if (!MI.Text.empty())
+        Op["mir"] = MI.Text;
+      Body.push_back(std::move(Op));
+    }
+    Result["body"] = std::move(Body);
+  }
+  return Result;
 }
 
 AnalysisKey VPlanBackendFeedbackAnalysis::Key;

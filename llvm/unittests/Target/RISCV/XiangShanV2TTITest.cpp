@@ -292,3 +292,14 @@ TEST_F(XiangShanV2TTITest, EpilogueObservationsAndTransactionalFallback) {
     EXPECT_EQ(Fallback, Native) << "failure mode " << FailureMode;
   }
 }
+
+TEST_F(XiangShanV2TTITest, MIRInfoRequiresSupportedCPUAndVLEN) {
+  auto Info = TM->getTargetMIRInfo(*F);
+  ASSERT_TRUE(Info);
+  EXPECT_EQ(Info->getModelName(), "rtl-service-sum-v1");
+  F->addFnAttr("tune-cpu", "generic-rv64");
+  EXPECT_FALSE(TM->getTargetMIRInfo(*F));
+  F->removeFnAttr("tune-cpu");
+  F->addFnAttr(Attribute::getWithVScaleRangeArgs(C, 4, 4));
+  EXPECT_FALSE(TM->getTargetMIRInfo(*F));
+}
