@@ -43,9 +43,12 @@ decomposition from `kunminghu_v2.py`; this in-process model only prices actual
 vector spills through TTI.
 
 Whole-register spill/reload uses the new `getSpillReloadCost` descriptor hook:
-actual register groups 1/2/4/8 cost 2/3/5/9 under the active profile. Each emitted
-instruction is priced independently, even when multiple instructions share a
-segment spill slot. The default hook delegates to `getMemoryOpCost`.
+actual register groups 1/2/4/8 cost 2/3/5/9 under the active profile. The observer
+collects vector spill accesses immediately after StackSlotColoring, before frame
+lowering. Segment pseudos are interpreted with the same physical-register group
+partition helper as lowering. Each resulting access is priced independently,
+even when accesses share a segment spill slot. The default hook delegates to
+`getMemoryOpCost`.
 
 The in-process body model is `tti-real-vector-spill-v1`:
 `L - estimated-vector-spill + observed-vector-spill * Wtti / Wobs`.

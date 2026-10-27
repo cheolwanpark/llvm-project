@@ -11,7 +11,7 @@ assert any(a['load'] for r in spilling for a in r['observation']['spills'])
 assert any(not a['load'] for r in spilling for a in r['observation']['spills'])
 for r in candidates:
     o = r['observation']
-    assert o['stage'] == 'post-rvv-ra-rewrite' and o['iteration_mapping']
+    assert o['stage'] == 'post-stack-slot-coloring' and o['iteration_mapping']
     spill = Fraction(r['normalized_vector_spill_quarters_numerator'],
                      r['normalized_vector_spill_quarters_denominator'])
     assert spill == Fraction(r['raw_vector_spill_quarters'] * r['tti_width'],

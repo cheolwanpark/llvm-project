@@ -51,27 +51,6 @@ unsigned wholeGroup(unsigned Opcode) {
     return 0;
   }
 }
-// StackSlotColoring can remove a reload followed by a store of the same
-// value to the same slot after our observation point. Do not guess its final
-// spill cost or run that later pass: reject this structurally recognizable
-// case and let the original loop use native selection.
-bool needsLaterSpillCleanup(const MachineInstr &MI) {
-  auto *Previous = MI.getPrevNode();
-  while (Previous && Previous->isDebugInstr())
-    Previous = Previous->getPrevNode();
-  if (!Previous)
-    return false;
-  const auto &MF = *MI.getMF();
-  const auto &TII = *MF.getSubtarget<RISCVSubtarget>().getInstrInfo();
-  int LoadFI, StoreFI;
-  TypeSize LoadSize = TypeSize::getZero(), StoreSize = TypeSize::getZero();
-  Register LoadReg = TII.isLoadFromStackSlot(*Previous, LoadFI, LoadSize);
-  Register StoreReg = TII.isStoreToStackSlot(MI, StoreFI, StoreSize);
-  return LoadReg && StoreReg && LoadReg == StoreReg && LoadFI == StoreFI &&
-         LoadFI != -1 && LoadSize && LoadSize == StoreSize &&
-         MF.getFrameInfo().isSpillSlotObjectIndex(LoadFI);
-}
-
 class TimingMarker : public MachineFunctionPass {
   VPlanFeedbackTimer &Timer;
   std::string Phase;
@@ -220,13 +199,8 @@ llvm::vplan::collectVectorSpills(MachineFunction &MF) {
   Result.IterationMapping = true;
   bool BackedgeSeen = false;
   for (auto &MI : *Loop->getHeader()) {
-    size_t Before = Result.Spills.size();
     if (auto E = collectVectorSpillAccess(MI, Result.Spills))
       return std::move(E);
-    if (Result.Spills.size() != Before && !Result.Spills.back().IsLoad &&
-        needsLaterSpillCleanup(MI))
-      return createStringError(
-          "vector reload/store pair requires later spill cleanup");
     if (MI.isBranch())
       for (const auto &MO : MI.operands())
         if (MO.isMBB() && MO.getMBB() == Loop->getHeader())
@@ -259,7 +233,7 @@ void RISCVVPlanSpill::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 bool RISCVVPlanSpill::runOnMachineFunction(MachineFunction &MF) {
   if (Timer)
-    Timer->mark("partial_rewrite");
+    Timer->mark("post_rvv_to_stack_slot_coloring");
   if (MF.getFunction().hasFnAttribute("vplan.ra.candidate")) {
     if (Sink) {
       if (!*Sink)

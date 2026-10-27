@@ -10,6 +10,6 @@ for r in rows:
         continue
     assert r['status'] == 'collected', r
     o = r['observation']
-    assert o['stage'] == 'post-rvv-ra-rewrite'
+    assert o['stage'] == 'post-stack-slot-coloring'
     assert o['ic'] == 4 and o['observation_role'] == 'main'
     assert o['iteration_mapping'] and o['iteration_width'] >= r['vf'] * r['ic']

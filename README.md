@@ -1,11 +1,12 @@
-# MIR cost model and meta-compiler
+# RISC-V backend-aware vectorization
 
-This repository selects RISC-V vectorization candidates using their generated MIR.
-LLVM materializes each VPlan and records machine instructions; a Python model
-scores the candidates; the meta-compiler asks LLVM to compile the selected plan.
-The target is XiangShan Kunminghu v2 MinimalConfig, VLEN=128.
+This repository provides in-process VF selection using TTI costs and observed
+vector spills, plus a separate external MIR/Python meta-compiler workflow.
+The target profile is XiangShan Kunminghu v2 MinimalConfig, VLEN=128.
 
-모델의 목적, 가정과 한계는 [MODEL.md](MODEL.md)에 정리되어 있다.
+Repository working guidelines are in [AGENTS.md](AGENTS.md).
+
+외부 MIR 모델의 목적, 가정과 한계는 [MODEL.md](MODEL.md)에 정리되어 있다.
 
 외부 wrapper 없이 LLVM vectorizer 내부에서 VF 후보의 backend 관찰값을 받는
 선택적 연구 경로는 [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md)에 정리되어 있다.
@@ -14,15 +15,14 @@ The target is XiangShan Kunminghu v2 MinimalConfig, VLEN=128.
 유지한다. XiangShan Kunminghu/확정 VLEN=128에서는 후보 throughput 조회에만
 [고정 TTI profile](TTI_PROFILE.md)을 적용한다. 다른 RISC-V/RVV에서는 native TTI를
 사용한다. 기본값은 OFF이며 외부 Python/meta-compiler 경로와 중첩하지 않는다.
-In-process probe는 RVV allocator와 부분 `VirtRegRewriter` 직후 spill 전용
-collector에서 종료한다. VSETVLI·scalar RA·frame lowering은 실행하지 않으며,
-전체 MIR 대신 소유권 있는 spill 구조체와 비용·gate 요약을 전달한다. 필요한 후보가
-실패하면 원본 loop 전체를 native 선택으로 복귀시키고 post-frame 재질의는 하지 않는다.
-Scalar spill의 실제 관측까지 필요해지면 종료 지점을 더 뒤로 옮겨야 한다.
-Timing은 단계별 중첩 total을 중복 합산하지 않으며 일반 컴파일 측정과 분리한다.
-[새 검증 결과](RVV_SPILL_PROBE_VALIDATION.md)는 저장된 기준 자료와 313개 DB를
-비교한다. [이전 검증 결과](BACKEND_COST_MODEL_VALIDATION.md)의 203개 DB 결과와
-구분한다. 외부 MIR/Python 경로는 유지하며 `utils/`의 새 요약 호환성은 범위 밖이다.
+In-process probe는 `StackSlotColoring` 직후 종료하고 소유권 있는 vector spill
+구조체와 비용·gate 요약을 전달한다. VSETVLI와 scalar RA는 실행하며 frame lowering은
+실행하지 않는다. 필요한 후보가 실패하면 원본 loop 전체를 native 선택으로 복귀시킨다.
+최종 scalar spill을 관측하려면 더 뒤로 진행하고 collector를 확장해야 한다.
+[전수 검증 및 세 버전의 시간 비교](BACKEND_COST_MODEL_VALIDATION.md)에 측정 조건과
+결과를 기록한다. 외부 MIR/Python 경로는 별도로 유지한다.
+재사용할 post-frame 원본 reference는 `.cache/post-frame-reference/`에 보존하며,
+그 안의 `reference.py verify`로 입력·측정·MIR·object의 무결성을 확인한다.
 
 ## LLVM passes and the meta-compiler
 
@@ -70,38 +70,21 @@ selects RISC-V. Executable links also need the application's target libraries,
 startup objects and linker script where applicable; the LLVM build does not supply
 a RISC-V libc/sysroot.
 
-For an application-only Release build, tests can be disabled. This separate build
-directory keeps the regression build available:
-
-```sh
-cmake -S llvm -B .cache/build-spec -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DLLVM_ENABLE_PROJECTS="clang;lld" \
-  -DLLVM_TARGETS_TO_BUILD="X86;RISCV" \
-  -DLLVM_INCLUDE_TESTS=OFF \
-  -DLLVM_INCLUDE_EXAMPLES=OFF \
-  -DLLVM_INCLUDE_BENCHMARKS=OFF
-
-cmake --build .cache/build-spec --parallel 8
-```
-
-On ARM64, replace `X86;RISCV` with `AArch64;RISCV` in the configure commands.
-For only the required application/loop tools, the last command can instead be:
-
-```sh
-cmake --build .cache/build-spec --target clang clang-resource-headers lld opt \
-  llvm-nm llvm-objdump llvm-extract llvm-dis --parallel 8
-```
-
-For the VPlan experiments and compiler regression tests, use the existing
-`.cache/compiler-build` directory with assertions and LLVM tests enabled.
+The current compiler is built in `.cache/build`; its `clang`, `opt`
+and `llc` executables are in `.cache/build/bin`. Rebuilding updates
+those binaries in place and reuses the existing CMake/Ninja cache.
+The existing cache was moved intact; `.cache/compiler-build` is a compatibility
+symlink to `build` for generated absolute paths. Use `cmake --build .cache/build`
+to reuse it; reconfigure that existing cache through `.cache/compiler-build`.
+The configuration command below is for a fresh build directory. Use the
+Release build with assertions and LLVM tests enabled for VPlan work.
+On ARM64, replace `X86;RISCV` with `AArch64;RISCV` below.
 The Python experiment tools require assertions or `LLVM_ENABLE_DUMP=ON` for VPlan
-reporting; the application-only configuration above does not enable that reporting.
+reporting. For the external tools, run `uv sync --locked --project utils/vplan-tools`.
+This Python/uv setup is not needed for in-process feedback.
 
 ```sh
-uv sync --locked --project utils/vplan-tools
-
-cmake -S llvm -B .cache/compiler-build -G Ninja \
+cmake -S llvm -B .cache/build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DLLVM_ENABLE_PROJECTS="clang;lld" \
   -DLLVM_TARGETS_TO_BUILD="X86;RISCV" \
@@ -114,9 +97,9 @@ cmake -S llvm -B .cache/compiler-build -G Ninja \
   -DCLANG_ENABLE_OBJC_REWRITER=OFF \
   -DCLANG_INCLUDE_TESTS=OFF
 
-cmake --build .cache/compiler-build --target clang clang-resource-headers lld \
+cmake --build .cache/build --target clang clang-resource-headers lld \
   opt llvm-nm llvm-objdump llvm-extract llvm-dis llc FileCheck split-file not \
-  --parallel 8
+  --parallel 2
 ```
 
 When adding the host backend to an existing RISCV-only build, append
@@ -126,12 +109,12 @@ with `bin/clang -dumpmachine`, and list compiled backends with `bin/llc --versio
 Choose the parallel job count to fit available memory; the regression configuration
 above limits concurrent links to one.
 
-The experiment commands below reuse this build with `--build-dir .cache/compiler-build
+The experiment commands below reuse this build with `--build-dir .cache/build
 --skip-build`. After C++ changes, rebuild before using `--skip-build`.
-Alternatively, omit `--skip-build` to let the tools configure/build the compiler;
-without `--build-dir`, they use `build-vplan-tools`. That automatic configuration
-is a minimal RISCV-only experiment build; use the explicit configuration above
-for the complete application toolchain.
+For a fresh, separate build directory, omit `--skip-build` to let the tools
+configure/build the compiler; without `--build-dir`, they use `build-vplan-tools`.
+That automatic configuration is a minimal RISCV-only experiment build. For the
+relocated cache, keep `--skip-build` and rebuild explicitly as described above.
 
 ## Experiments
 
@@ -162,7 +145,7 @@ measurement boundaries equivalent.
 
 ```sh
 uv run --project utils/vplan-tools python utils/vplan-tools/print-vplans \
-  --build-dir .cache/compiler-build --skip-build \
+  --build-dir .cache/build --skip-build \
   --benchmark hpcc/stream-add --artifacts-dir .cache/stream-add --detail --replay
 ```
 
@@ -175,7 +158,7 @@ directory. [PRINT_VPLANS.md](PRINT_VPLANS.md) explains the report fields.
 
 ```sh
 uv run --project utils/vplan-tools python utils/vplan-tools/evaluate \
-  --build-dir .cache/compiler-build --skip-build \
+  --build-dir .cache/build --skip-build \
   --output-dir .cache/window-model
 ```
 
@@ -217,7 +200,7 @@ The meta-compiler needs no database or measured cycles:
 
 ```sh
 uv run --project utils/vplan-tools python utils/vplan-meta-compile \
-  --clang .cache/compiler-build/bin/clang --input kernel.c \
+  --clang .cache/build/bin/clang --input kernel.c \
   --extract-function selected_kernel \
   --work-dir .cache/kernel-meta --output .cache/kernel.o -- \
   --target=riscv64-unknown-elf -march=rv64gcv -mcpu=xiangshan-kunminghu \
@@ -235,7 +218,7 @@ replay; despite the flag name, the observation stage is post-frame-lowering.
 Run the Python tests, including compiler integration, after building:
 
 ```sh
-PYTHONPATH=utils/vplan-tools VPLAN_CLANG="$PWD/.cache/compiler-build/bin/clang" \
+PYTHONPATH=utils/vplan-tools VPLAN_CLANG="$PWD/.cache/build/bin/clang" \
   uv run --locked --project utils/vplan-tools python -B -m unittest discover -s utils/vplan-tools/tests -q
 ```
 
@@ -290,6 +273,6 @@ evaluation and compiler replay. SUM with an enabled window is rejected. For exam
 
 ```sh
 uv run --locked --project utils/vplan-tools python -B utils/vplan-tools/evaluate \
-  --build-dir .cache/compiler-build --skip-build --aggregation=sum --window=disabled \
+  --build-dir .cache/build --skip-build --aggregation=sum --window=disabled \
   --output-dir .cache/sum-evaluation
 ```

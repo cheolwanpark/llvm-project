@@ -438,6 +438,7 @@ public:
   bool addRegAssignAndRewriteOptimized() override;
   void addPreRegAlloc() override;
   void addPostRegAlloc() override;
+  void addPostRewrite() override;
   void addFastRegAlloc() override;
   bool addILPOpts() override;
 
@@ -456,6 +457,8 @@ RISCVTargetMachine::getVPlanBackendFeedback(Module &M, bool Time) {
         "backend feedback requires an unrestricted codegen pipeline");
   legacy::PassManager PM;
   RISCVPassConfig Config(*this, PM);
+  if (Config.isPassSubstitutedOrOverridden(&StackSlotColoringID))
+    return createStringError("backend feedback requires StackSlotColoring");
   llvm::call_once(InitializeDefaultRVVRegisterAllocatorFlag,
                   initializeDefaultRVVRegisterAllocatorOnce);
   auto Ctor = RVVRegisterRegAlloc::getDefault();
@@ -535,14 +538,22 @@ bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
   if (Timer)
     addPass(createRISCVVPlanTimingMarker(*Timer, "rvv_allocation"));
   addPass(createVirtRegRewriter(false));
-  if (auto *Sink = getTM<RISCVTargetMachine>().getBackendFeedbackSink())
-    addPass(new RISCVVPlanSpill(*Sink, Timer));
+  if (Timer)
+    addPass(createRISCVVPlanTimingMarker(*Timer, "partial_rewrite"));
   addPass(createRISCVInsertVSETVLIPass());
   if (TM->getOptLevel() != CodeGenOptLevel::None &&
       EnableRISCVDeadRegisterElimination)
     addPass(createRISCVDeadRegisterDefinitionsPass());
   bool Result = TargetPassConfig::addRegAssignAndRewriteOptimized();
   return Result;
+}
+
+// The optimized pipeline invokes this hook immediately after StackSlotColoring.
+// Stop before post-RA copy propagation, LICM, and frame lowering.
+void RISCVPassConfig::addPostRewrite() {
+  auto &TM = getTM<RISCVTargetMachine>();
+  if (auto *Sink = TM.getBackendFeedbackSink())
+    addPass(new RISCVVPlanSpill(*Sink, TM.BackendFeedbackTimer));
 }
 
 void RISCVPassConfig::addIRPasses() {

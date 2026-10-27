@@ -253,7 +253,7 @@ TEST_F(XiangShanV2TTITest, EpilogueObservationsAndTransactionalFallback) {
       EXPECT_TRUE(bool(O));
       if (O) {
         EXPECT_TRUE(O->IterationMapping);
-        EXPECT_EQ(O->Stage, "post-rvv-ra-rewrite");
+        EXPECT_EQ(O->Stage, "post-stack-slot-coloring");
         EXPECT_EQ(O->IsEpilogue, Candidate.IsEpilogue);
         EXPECT_EQ(O->IC, Candidate.IC);
         if (FailureMode == 3)

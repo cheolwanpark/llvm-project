@@ -63,6 +63,8 @@ autoconf/autom4te.cache
 /GEMINI.md
 .gemini/
 AGENTS.md
+# Keep the shared repository working guide under version control.
+!/AGENTS.md
 .codex/
 # Cursor specific files
 .cursor

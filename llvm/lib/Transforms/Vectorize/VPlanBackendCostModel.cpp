@@ -76,7 +76,7 @@ bool VPExactCost::operator<=(VPExactCost B) const {
 Expected<VPExactCost> llvm::priceVPlanVectorSpills(
     const VPlanBackendResult &O, const TargetTransformInfo &TTI,
     LLVMContext &Context, unsigned Width, InstructionCost &RawCost) {
-  if (!O.IterationMapping || O.Stage != "post-rvv-ra-rewrite")
+  if (!O.IterationMapping || O.Stage != "post-stack-slot-coloring")
     return createStringError("invalid backend loop/iteration mapping");
   uint64_t Wobs = O.IterationWidth;
   if (!Wobs || Wobs > INT64_MAX || !Width || Wobs % Width)

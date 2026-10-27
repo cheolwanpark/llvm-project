@@ -138,15 +138,16 @@ TEST_P(RISCVInstrInfoTest, SpillLoopMappingAndLifetime) {
       .addMemOperand(MF->getMachineMemOperand(
           MachinePointerInfo::getFixedStack(*MF, FI),
           MachineMemOperand::MOStore, TypeSize::getScalable(8), Align(8)));
-  auto Unstable = vplan::collectVectorSpills(*MF);
-  EXPECT_FALSE(bool(Unstable));
-  EXPECT_EQ(toString(Unstable.takeError()),
-            "vector reload/store pair requires later spill cleanup");
+  // The collector reports the provided instructions; cleanup belongs to the
+  // preceding StackSlotColoring pass, not to this read-only observer.
+  auto Uncleaned = vplan::collectVectorSpills(*MF);
+  ASSERT_TRUE(bool(Uncleaned));
+  EXPECT_EQ(Uncleaned->Spills.size(), 2u);
   MF.reset();
   M.reset();
   EXPECT_EQ(Result->Candidate, "owned:test");
   EXPECT_EQ(Result->VF, ElementCount::getScalable(4));
-  EXPECT_EQ(Result->Stage, "post-rvv-ra-rewrite");
+  EXPECT_EQ(Result->Stage, "post-stack-slot-coloring");
 }
 
 TEST_P(RISCVInstrInfoTest, EarlyVectorSpillAccesses) {

@@ -1,4 +1,8 @@
-# 현재 cost model: resource demand와 finite window
+# 외부 MIR cost model: resource demand와 finite window
+
+이 문서는 외부 Python/meta-compiler의 `mir-uop-demand-v1` 모델을 설명한다.
+In-process의 TTI·vector spill 모델(`tti-real-vector-spill-v1`)은
+[BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md)를 참조한다.
 
 이 모델의 목적은 같은 loop의 vectorization 후보 중 실행 비용이 작을 후보를
 고르는 것이다. 입력은 register allocation과 frame lowering 이후의 MIR이다.

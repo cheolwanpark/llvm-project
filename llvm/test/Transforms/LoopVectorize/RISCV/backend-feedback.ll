@@ -15,7 +15,7 @@
 ; TIMING: VPLAN-BACKEND-FEEDBACK-TIMING:
 ; TIMING-SAME: "late_cleanup":true
 ; RUN: FileCheck %s --check-prefix=LATE <%t.late.jsonl
-; LATE: "stage":"post-rvv-ra-rewrite"
+; LATE: "stage":"post-stack-slot-coloring"
 ; Timing and summary output do not alter costs or selected IR.
 ; RUN: rm -f %t.timed.jsonl
 ; RUN: opt -codegen-opt-level=2 -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-cost-model -vplan-backend-feedback-force-all -time-vplan-backend-feedback -vplan-backend-feedback-output=%t.timed.jsonl %s -S -o %t.timed.ll 2>%t.phases
@@ -23,6 +23,7 @@
 ; RUN: diff %t.jsonl %t.timed.jsonl
 ; RUN: FileCheck %s --check-prefix=PHASE <%t.phases
 ; PHASE: "partial_rewrite_wall_seconds":
+; PHASE-SAME: "post_rvv_to_stack_slot_coloring_wall_seconds":
 ; PHASE-SAME: "rvv_allocation_wall_seconds":
 ; PHASE-SAME: "spill_collection_wall_seconds":
 ; Probe only: opt does not run normal final object codegen.
@@ -51,6 +52,13 @@
 ; RUN: FileCheck %s --check-prefix=FAST-FAIL <%t.unsupported
 ; FAST-FAIL: "reason":"backend feedback requires optimized RVV allocation"
 ; FAST-FAIL: "status":"native-fallback"
+
+; Disabling the required cleanup cannot masquerade as a post-coloring probe.
+; RUN: opt -codegen-opt-level=2 -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-cost-model -vplan-backend-feedback-force-all -disable-ssc -print-vplan-backend-feedback %s -S -o %t.no-ssc.ll 2>%t.no-ssc
+; RUN: diff %t.base.ll %t.no-ssc.ll
+; RUN: FileCheck %s --check-prefix=NO-SSC <%t.no-ssc
+; NO-SSC: "reason":"backend feedback requires StackSlotColoring"
+; NO-SSC: "status":"native-fallback"
 
 ; Diagnostic flags without the master must not query the provider or tune costs.
 ; RUN: rm -f %t.off.jsonl

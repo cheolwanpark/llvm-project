@@ -6,7 +6,7 @@
 별도 경로로 유지한다.
 
 ```sh
-.cache/compiler-build/bin/clang --target=riscv64-unknown-elf \
+.cache/build/bin/clang --target=riscv64-unknown-elf \
   -march=rv64gcv -mcpu=xiangshan-kunminghu -mrvv-vector-bits=128 -O3 \
   -mllvm -enable-vplan-backend-cost-model \
   -mllvm -vplan-backend-feedback-output=.cache/feedback.jsonl \
@@ -75,21 +75,21 @@ query   = unknown OR UsageIC >= 32
 
 Overflow는 unknown이다. 32 미만이면 질의를 생략하고 Sv=0으로 둔다.
 `-vplan-backend-feedback-force-all`은 같은 would_skip을 기록하면서 실제 질의만
-강제한다. Scalar spill gate는 없다. 기존 gate의 수학적 근거와 population
-검증은 [이전 검증 기록](BACKEND_FEEDBACK_COMPARISON.md)에 보존돼 있다.
+강제한다. Scalar spill gate는 없다. Gate는 위 보수적 상한을 사용하며, 검증 범위는
+[검증 기록](BACKEND_COST_MODEL_VALIDATION.md)에 정리한다.
 
 가격 계산에는 유일한 candidate identity, 검증된 iteration mapping 및 단일 block
 innermost machine loop의 반복 경로에서 실제 spill-slot MMO와 physical vector data
 register가 확인되는 load/store만 포함한다. Backedge 뒤의 명령도 제외한다.
-부분 rewrite 시점의 scalar 주소 operand는 virtual register 또는 frame index여도
-유효하다. Vector data register의 미할당·subregister나 미지원 접근은 실패다. Scalar spill, 일반 whole-register memory, setup/exit/다른 loop spill은
+Collector는 scalar 주소 operand가 virtual register 또는 frame index인 경우도
+해석할 수 있다. Vector data register의 미할당·subregister나 미지원 접근은 실패다. Scalar spill, 일반 whole-register memory, setup/exit/다른 loop spill은
 제외한다. Mapping 실패, 불완전 register 정보, 해석할 수 없는 vector spill은
 실패다. Observer는 address space와 whole-register 여부를 포함한 사실만 제공한다.
-같은 physical vector register·spill slot·접근 크기의 연속 reload/store는 이후
-`StackSlotColoring`에서 제거될 수 있으므로 명시적 미지원이다. Debug instruction을
-제외한 인접 관계를 검사하며, benchmark 이름별 예외나 자체 dead-store 제거 없이
-원본 loop 전체를 native로 복귀시킨다. 이 조건은 저장된 post-frame 자료와의 실제
-차이에서 도출했으며 근거는 새 검증 보고서에 기록한다.
+현재 구현에서는 `StackSlotColoring` 직후 관측하므로 이 pass가 제거한 연속
+reload/store의 dead store를 비용에 포함하지 않는다. RVV RA 직후 버전의
+구조적 거부 조건은 제거했다. Collector 자체가 dead-store 제거를 수행하지 않는다.
+RVV RA 직후 버전과 post-frame 기준을 포함한 전수 비교는
+[검증 기록](BACKEND_COST_MODEL_VALIDATION.md)에 있다.
 
 새 `TTI::getSpillReloadCost`는 방향, 실제 접근 type, alignment, address space,
 whole-register 여부와 실제 group 크기를 받는다. 기본 구현은 memory-op 비용에
@@ -109,16 +109,23 @@ backend observer`이다. LLVMVectorize가 CodeGen이나 Passes에 직접 의존�
 ```text
 clone → candidate materialization → 기존 IR suffix → iteration mapping 검증
   → instruction selection / pre-RA 최적화·scheduling
-  → RVV allocator → VirtRegRewriter(false) → vector spill collector → 종료
+  → RVV allocator → VirtRegRewriter(false)
+  → InsertVSETVLI → DeadRegisterDefinitions → scalar allocator
+  → VirtRegRewriter → RegAllocScoring → StackSlotColoring
+  → vector spill collector → 종료
 ```
 
 Collector 고유 pass ID를 `addPassesToBackendObserver()`의 종료 대상으로 지정한다.
-Probe는 VSETVLI 삽입, scalar RA, post-RA 최적화, frame lowering을 실행하지 않는다.
+Probe는 위 여섯 pass까지 실행하며 이후 MachineCopyPropagation, post-RA LICM,
+frame lowering은 실행하지 않는다. RegAllocScoring은 기본 설정에서 no-op이다.
 최종 object 생성의 정상 backend는 계속 전체 pipeline을 실행한다. 지원되는
 optimized RVV allocator(default/greedy/basic)와 정상 codegen pipeline을 요구하며,
 fast allocator, optnone, limited pipeline 등 종료 위치를 보장할 수 없는 구성은
-미지원이다. 실패 시 post-frame으로 재질의하거나 관측 지점을 선택하는 옵션은 없다.
-**Scalar spill까지 실제로 관측해야 한다면 관측 지점을 더 뒤로 옮겨야 한다.**
+미지원이다. StackSlotColoring 비활성화도 명시적으로 거부한다. 실패 시 post-frame으로
+재질의하거나 관측 지점을 선택하는 옵션은 없다.
+**현재 수집·가격 계산은 vector spill 전용이다. Scalar allocation은 실행하지만
+scalar spill까지 지원한다는 뜻은 아니다. 이후 최적화와 frame lowering을 반영한
+scalar spill이 필요하면 관측 지점을 더 뒤로 옮기고 collector를 확장해야 한다.**
 
 요청은 VF/plan/IC/관측 역할을 포함한다. Epilogue 요청에는 선택된 main 형상도
 전달한다. Main probe는 실제 강제 epilogue를 함께 생성한다. 자동 epilogue는
@@ -149,7 +156,7 @@ native/profile/estimated-vector-spill/raw-vector-spill quarter 비용,
 성공한 비용으로 사용하지 않는다. JSONL은 append 방식이므로 새 경로를 사용한다.
 
 Provider와 TargetMachine hook은 `Expected<VPlanBackendResult>`를 반환한다.
-`rvv-vector-spill-v1` 요약의 stage는 `post-rvv-ra-rewrite`이며 candidate/VF/IC/역할,
+`rvv-vector-spill-v1` 요약의 stage는 `post-stack-slot-coloring`이며 candidate/VF/IC/역할,
 검증된 반복 폭과 vector 접근 목록만 담는다. 접근은 load 방향, 최소 bytes,
 scalable 여부, alignment, address space, whole-register 여부, register group 및
 `segment_lowering` 여부를 기록한다. 소유권 있는 값만 전달하며 clone의 Type,
@@ -167,7 +174,8 @@ Timing OFF에는 clock 조회나 backend marker pass를 활성화하지 않는�
 
 - `VPLAN-BACKEND-FEEDBACK-TIMING`: clone, target/analysis 준비, materialization,
   IR suffix, iteration mapping/verification, backend pipeline 구성, pre-RVV-RA,
-  RVV allocation, 부분 rewrite, spill 수집, backend 반환, clone/analysis/TM 정리,
+  RVV allocation, 부분 rewrite, `post_rvv_to_stack_slot_coloring`(추가 여섯 pass),
+  spill 수집, backend 반환, clone/analysis/TM 정리,
   query wall/CPU total.
 - `VPLAN-BACKEND-COST-TIMING`: native/profile 비용 준비, native IC, gate,
   query total, middle-end spill pricing, hybrid 비용·요약 준비.
@@ -180,27 +188,29 @@ Backend marker는 pass 경계를 측정하므로 allocation/rewrite 구간에는
 
 [README의 빌드 설정](README.md#build)에서 `clang;lld` 및 호스트/RISCV backend를
 설정한다. 아래 회귀 테스트는 `LLVM_INCLUDE_TESTS=ON`과 assertions가 활성화된
-`.cache/compiler-build`를 사용한다. 앱용 `LLVM_INCLUDE_TESTS=OFF` 빌드와 구분한다.
+`.cache/build`를 사용한다. 새 소스로 증분 빌드하면 같은 디렉터리의
+`bin/clang`, `bin/opt`, `bin/llc`가 교체된다.
 
 ```sh
-cmake --build .cache/compiler-build --target clang clang-resource-headers lld \
+cmake --build .cache/build --target clang clang-resource-headers lld \
   llvm-nm llvm-objdump llvm-extract llvm-dis llc opt FileCheck split-file not \
   VectorizeTests VPlanRATests \
   RISCVTests --parallel 2
-.cache/compiler-build/unittests/Transforms/Vectorize/VectorizeTests
-.cache/compiler-build/unittests/Target/RISCV/RISCVTests
-.cache/compiler-build/bin/llvm-lit -v llvm/test/Transforms/LoopVectorize/RISCV
-.cache/compiler-build/unittests/Transforms/Vectorize/VPlanRATests
-.cache/compiler-build/bin/llvm-lit -v llvm/test/CodeGen/RISCV/vplan-ra
+.cache/build/unittests/Transforms/Vectorize/VectorizeTests
+.cache/build/unittests/Target/RISCV/RISCVTests
+.cache/build/bin/llvm-lit -v llvm/test/Transforms/LoopVectorize/RISCV
+.cache/build/unittests/Transforms/Vectorize/VPlanRATests
+.cache/build/bin/llvm-lit -v llvm/test/CodeGen/RISCV/vplan-ra \
+  llvm/test/CodeGen/RISCV/rvv/stack-slot-coloring.mir
 ```
 
-313개 `dataset.sqlite` 전수 비교의 재현 스크립트·실행 수·평균 및 관측 차이는
-[RVV_SPILL_PROBE_VALIDATION.md](RVV_SPILL_PROBE_VALIDATION.md)에 기록한다.
+313개 `dataset.sqlite` 전수 비교의 실행 수·평균 및 관측 차이는
+[BACKEND_COST_MODEL_VALIDATION.md](BACKEND_COST_MODEL_VALIDATION.md)에 기록한다.
+재사용할 post-frame 기준은 `.cache/post-frame-reference/`에 보존한다.
 기준 compiler는 재실행하지 않고 저장된 자료를 비교한다. 과거 다른 DB의 203개
 결과와 population을 섞지 않는다.
 
 Probe suffix는 임의의 전체 LTO, module pass, 사용자 추가 pass를 재현하지 않는다.
 조기 spill 관측과 post-frame/최종 machine instruction 전체가 동일하다고 주장하지
 않는다. 관측 차이가 남으면 비용 모델이나 관측 지점을 임의로 바꾸지 않고 보고한다.
-이전 transport/gate 결과는 BACKEND_FEEDBACK_COMPARISON.md 및
-BACKEND_COST_MODEL_VALIDATION.md의 당시 commit 기준 결과와 구별해야 한다.
+이전 203개 DB의 transport/gate 검증과 이번 313개 DB 비교는 별개다.

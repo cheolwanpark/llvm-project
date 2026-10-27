@@ -21,7 +21,7 @@ for row in rows:
     assert a["candidate"] == row["candidate"]
     assert a["vf"] == row["vf"] and a["scalable"] == row["scalable"]
     assert a["schema"] == "rvv-vector-spill-v1"
-    assert a["stage"] == "post-rvv-ra-rewrite"
+    assert a["stage"] == "post-stack-slot-coloring"
     assert a["iteration_mapping"] and a["iteration_width"] >= ic
     assert row["body_quarters_denominator"] > 0
     assert row["model"] == "tti-real-vector-spill-v1"

@@ -49,7 +49,7 @@ struct VPlanBackendResult {
   bool IsEpilogue = false;
   uint64_t IterationWidth = 0;
   bool IterationMapping = false;
-  std::string Stage = "post-rvv-ra-rewrite";
+  std::string Stage = "post-stack-slot-coloring";
   std::vector<VPlanVectorSpillAccess> Spills;
   std::vector<VPlanFeedbackTiming> Timings;
 };
