@@ -73,20 +73,20 @@ protected:
 
 TEST_P(RISCVInstrInfoTest, SpillLoopMappingAndLifetime) {
   Function &F = MF->getFunction();
-  F.addFnAttr("vplan.ra.candidate", "owned:test");
-  F.addFnAttr("vplan.ra.vf", "4");
-  F.addFnAttr("vplan.ra.scalable", "1");
-  F.addFnAttr("vplan.ra.ic", "2");
-  F.addFnAttr("vplan.ra.role", "epilogue");
-  F.addFnAttr("vplan.ra.width", "16");
-  F.addFnAttr("vplan.ra.iteration-mapping", "1");
+  F.addFnAttr("vplan.backend.candidate", "owned:test");
+  F.addFnAttr("vplan.backend.vf", "4");
+  F.addFnAttr("vplan.backend.scalable", "1");
+  F.addFnAttr("vplan.backend.ic", "2");
+  F.addFnAttr("vplan.backend.role", "epilogue");
+  F.addFnAttr("vplan.backend.width", "16");
+  F.addFnAttr("vplan.backend.iteration-mapping", "1");
   auto *Entry = BasicBlock::Create(*Ctx, "entry", &F);
   auto *Body = BasicBlock::Create(*Ctx, "body", &F);
   UncondBrInst::Create(Body, Entry);
   auto *Backedge = UncondBrInst::Create(Body, Body);
-  auto *Tag =
-      MDNode::get(*Ctx, {MDString::get(*Ctx, "llvm.loop.vplan.candidate"),
-                         MDString::get(*Ctx, "owned:test")});
+  auto *Tag = MDNode::get(
+      *Ctx, {MDString::get(*Ctx, "llvm.loop.vplan.backend.candidate"),
+             MDString::get(*Ctx, "owned:test")});
   auto *LoopID = MDNode::getDistinct(*Ctx, {nullptr, Tag});
   LoopID->replaceOperandWith(0, LoopID);
   Backedge->setMetadata(LLVMContext::MD_loop, LoopID);
@@ -117,14 +117,14 @@ TEST_P(RISCVInstrInfoTest, SpillLoopMappingAndLifetime) {
   EXPECT_EQ(Result->IC, 2u);
   EXPECT_TRUE(Result->IsEpilogue);
   for (unsigned Mode = 0; Mode != 3; ++Mode) {
-    F.addFnAttr("vplan.ra.iteration-mapping", Mode == 0 ? "0" : "1");
-    F.addFnAttr("vplan.ra.candidate", Mode == 1 ? "wrong" : "owned:test");
-    F.addFnAttr("vplan.ra.role", Mode == 2 ? "unknown" : "epilogue");
+    F.addFnAttr("vplan.backend.iteration-mapping", Mode == 0 ? "0" : "1");
+    F.addFnAttr("vplan.backend.candidate", Mode == 1 ? "wrong" : "owned:test");
+    F.addFnAttr("vplan.backend.role", Mode == 2 ? "unknown" : "epilogue");
     auto Bad = vplan::collectVectorSpills(*MF);
     EXPECT_FALSE(bool(Bad));
     consumeError(Bad.takeError());
   }
-  F.addFnAttr("vplan.ra.role", "epilogue");
+  F.addFnAttr("vplan.backend.role", "epilogue");
   auto BeforeBackedge = Loop->begin();
   BuildMI(*Loop, BeforeBackedge, DebugLoc(), TII->get(RISCV::VL1RE8_V))
       .addReg(RISCV::V8, RegState::Define)

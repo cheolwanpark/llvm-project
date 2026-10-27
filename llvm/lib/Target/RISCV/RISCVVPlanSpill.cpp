@@ -28,7 +28,7 @@ StringRef candidate(const MachineLoop &L) {
     if (auto *N = dyn_cast_or_null<MDNode>(Op))
       if (N->getNumOperands() == 2)
         if (auto *K = dyn_cast<MDString>(N->getOperand(0)))
-          if (K->getString() == "llvm.loop.vplan.candidate")
+          if (K->getString() == "llvm.loop.vplan.backend.candidate")
             if (auto *V = dyn_cast<MDString>(N->getOperand(1)))
               return V->getString();
   return {};
@@ -166,14 +166,14 @@ Error llvm::vplan::collectVectorSpillAccess(
 Expected<VPlanBackendResult>
 llvm::vplan::collectVectorSpills(MachineFunction &MF) {
   const Function &F = MF.getFunction();
-  auto ID = F.getFnAttribute("vplan.ra.candidate").getValueAsString();
-  auto Role = F.getFnAttribute("vplan.ra.role").getValueAsString();
-  auto VF = attr(F, "vplan.ra.vf"), IC = attr(F, "vplan.ra.ic");
-  auto Width = attr(F, "vplan.ra.width");
+  auto ID = F.getFnAttribute("vplan.backend.candidate").getValueAsString();
+  auto Role = F.getFnAttribute("vplan.backend.role").getValueAsString();
+  auto VF = attr(F, "vplan.backend.vf"), IC = attr(F, "vplan.backend.ic");
+  auto Width = attr(F, "vplan.backend.width");
   if (ID.empty() || VF <= 0 || VF > UINT32_MAX || IC <= 0 || IC > UINT32_MAX ||
       (Role != "main" && Role != "epilogue"))
     return createStringError("invalid backend candidate identity");
-  if (attr(F, "vplan.ra.iteration-mapping") != 1 || Width <= 0)
+  if (attr(F, "vplan.backend.iteration-mapping") != 1 || Width <= 0)
     return createStringError("original scalar iteration mapping is unproven");
   MachineDominatorTree DT(MF);
   MachineLoopInfo LI(DT);
@@ -192,7 +192,7 @@ llvm::vplan::collectVectorSpills(MachineFunction &MF) {
                              "circular execution order");
   VPlanBackendResult Result;
   Result.Candidate = ID.str();
-  Result.VF = ElementCount::get(VF, attr(F, "vplan.ra.scalable") != 0);
+  Result.VF = ElementCount::get(VF, attr(F, "vplan.backend.scalable") != 0);
   Result.IC = IC;
   Result.IsEpilogue = Role == "epilogue";
   Result.IterationWidth = Width;
@@ -234,7 +234,7 @@ void RISCVVPlanSpill::getAnalysisUsage(AnalysisUsage &AU) const {
 bool RISCVVPlanSpill::runOnMachineFunction(MachineFunction &MF) {
   if (Timer)
     Timer->mark("post_rvv_to_stack_slot_coloring");
-  if (MF.getFunction().hasFnAttribute("vplan.ra.candidate")) {
+  if (MF.getFunction().hasFnAttribute("vplan.backend.candidate")) {
     if (Sink) {
       if (!*Sink)
         consumeError(Sink->takeError());

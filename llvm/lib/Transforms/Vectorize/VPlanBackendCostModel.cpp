@@ -3,6 +3,7 @@
 #include "VPlanBackendCostModel.h"
 #include "LoopVectorizationPlanner.h"
 #include "VPlan.h"
+#include "VPlanCostReport.h"
 #include "VPlanRegisterUsageBounds.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -10,6 +11,7 @@
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include <numeric>
 using namespace llvm;
 namespace {
@@ -73,9 +75,29 @@ bool VPExactCost::operator<=(VPExactCost B) const {
   return *this < B || *this == B;
 }
 
+void VPExactCost::print(raw_ostream &OS, unsigned Divisor) const {
+  if (!Valid) {
+    OS << "Invalid";
+    return;
+  }
+  assert(Divisor);
+  // Convert quarter units to model units without overflowing a 64-bit
+  // denominator or truncating the value used by the ranking comparison.
+  int64_t G = std::gcd(N, int64_t(4));
+  int64_t Num = N / G;
+  APInt Den = APInt(128, D) * APInt(128, 4 / G);
+  G = std::gcd(Num, int64_t(Divisor));
+  Num /= G;
+  Den *= APInt(128, Divisor / G);
+  OS << Num;
+  if (Den != 1)
+    OS << '/' << Den;
+}
+
 Expected<VPExactCost> llvm::priceVPlanVectorSpills(
     const VPlanBackendResult &O, const TargetTransformInfo &TTI,
-    LLVMContext &Context, unsigned Width, InstructionCost &RawCost) {
+    LLVMContext &Context, unsigned Width, InstructionCost &RawCost,
+    SmallVectorImpl<InstructionCost> *AccessCosts) {
   if (!O.IterationMapping || O.Stage != "post-stack-slot-coloring")
     return createStringError("invalid backend loop/iteration mapping");
   uint64_t Wobs = O.IterationWidth;
@@ -99,6 +121,8 @@ Expected<VPExactCost> llvm::priceVPlanVectorSpills(
     if (!Cost.isValid() || Cost < 0 ||
         AddOverflow(RawQuarters, Cost.getQuarterValue(), RawQuarters))
       return createStringError("invalid or overflowing vector spill cost");
+    if (AccessCosts)
+      AccessCosts->push_back(Cost);
   }
   RawCost =
       InstructionCost(RawQuarters / 4) + InstructionCost(RawQuarters % 4) / 4;
@@ -113,11 +137,13 @@ void VPlanBackendCostModel::fail(StringRef Reason) {
   Failed = true;
   Failure = Reason.str();
   Costs.clear();
-  printVPlanBackendFeedback(json::Object{{"model", "tti-real-vector-spill-v1"},
-                                         {"status", "native-fallback"},
-                                         {"function", F.getName()},
-                                         {"loop", LoopIndex},
-                                         {"reason", Failure}});
+  if (vplanBackendFeedbackOutputEnabled())
+    writeVPlanBackendFeedback(
+        json::Object{{"model", "tti-real-vector-spill-v1"},
+                     {"status", "native-fallback"},
+                     {"function", F.getName()},
+                     {"loop", LoopIndex},
+                     {"reason", Failure}});
 }
 const VPBackendCostEntry *VPlanBackendCostModel::lookup(const VPlan &Plan,
                                                         ElementCount VF,
@@ -140,50 +166,19 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
   Bound.applyInterleave(C.IC);
   Timer.mark("gate");
   bool Query = Bound.shouldQuery() || vplanBackendFeedbackForceAll();
-  json::Object Gate{{"known", Bound.Known},
-                    {"reason", Bound.Reason},
-                    {"would_skip", !Bound.shouldQuery()},
-                    {"force_all", vplanBackendFeedbackForceAll()},
-                    {"queried", Query},
-                    {"budget", 32}};
-  if (Bound.Known) {
-    Gate["peak_bound"] = Bound.Peak;
-    Gate["max_register_group"] = Bound.MaxRegisterGroup;
-    Gate["has_mask"] = Bound.HasMask;
-    Gate["usage_bound"] = Bound.Usage;
-    Gate["usage_before_ic"] = Bound.UsageBeforeIC;
-  }
-  if (!Bound.Recipe.empty())
-    Gate["recipe"] = Bound.Recipe;
-  if (Bound.Opcode)
-    Gate["opcode"] = *Bound.Opcode;
-  json::Object Row{{"model", "tti-real-vector-spill-v1"},
-                   {"candidate", C.ID},
-                   {"feedback_point", "middle-end-before-vf-selection"},
-                   {"function", F.getName()},
-                   {"loop", LoopIndex},
-                   {"plan", C.PlanIndex},
-                   {"tti_profile", TTI.getVPlanCostProfileName()},
-                   {"vf", C.VF.getKnownMinValue()},
-                   {"scalable", C.VF.isScalable()},
-                   {"ic", C.IC},
-                   {"role", C.IsEpilogue ? "epilogue" : "main"},
-                   {"vector_epilogue", C.EpilogueVF.isVector()},
-                   {"register_usage_bound", std::move(Gate)}};
   VPExactCost Spill;
   InstructionCost Raw;
   std::string Error;
+  std::optional<VPlanBackendResult> Observation;
+  SmallVector<InstructionCost> AccessCosts;
   if (!Native.isValid() || !Profile.isValid() || !Ev.isValid())
     Error = "invalid TTI candidate cost";
   else if (Query) {
-    Timer.mark("summary_preparation");
     auto O = Feedback.get(F, Header, C);
     Timer.mark("query_total");
-    if (!O) {
+    if (!O)
       Error = toString(O.takeError());
-      Row["status"] = "unavailable";
-      Row["reason"] = Error;
-    } else {
+    else {
       auto Wobs = O->IterationWidth;
       if (O->Candidate != C.ID || O->VF != C.VF || O->IC != C.IC ||
           O->IsEpilogue != C.IsEpilogue)
@@ -191,19 +186,17 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
       else if (!Wobs || Wobs % (uint64_t(Width) * C.IC))
         Error = "observed iteration width disagrees with requested IC";
       else {
-        auto S = priceVPlanVectorSpills(*O, TTI, F.getContext(), Width, Raw);
+        auto S = priceVPlanVectorSpills(
+            *O, TTI, F.getContext(), Width, Raw,
+            Report && Report->isDetailed() ? &AccessCosts : nullptr);
         if (!S)
           Error = toString(S.takeError());
         else
           Spill = *S;
       }
       Timer.mark("spill_pricing");
-      Row["observation"] = summarizeVPlanBackendResult(*O);
-      Row["status"] = "collected";
+      Observation = std::move(*O);
     }
-  } else {
-    Row["status"] = "skipped";
-    Row["reason"] = Bound.Reason;
   }
   VPExactCost Body = VPExactCost(Profile) - VPExactCost(Ev) + Spill;
   if (!Body.isValid() && Error.empty())
@@ -211,19 +204,66 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
   if (Error.empty()) {
     Costs.push_back(
         {&Plan, C.VF, C.IC, C.IsEpilogue, Native, Profile, Ev, Body});
-    Row["native_body_quarters"] = Native.getQuarterValue();
-    Row["profile_body_quarters"] = Profile.getQuarterValue();
-    Row["estimated_vector_spill_quarters"] = Ev.getQuarterValue();
-    Row["raw_vector_spill_quarters"] = Raw.getQuarterValue();
-    Row["tti_width"] = Width;
-    Row["normalized_vector_spill_quarters_numerator"] = Spill.numerator();
-    Row["normalized_vector_spill_quarters_denominator"] = Spill.denominator();
-    Row["body_quarters_numerator"] = Body.numerator();
-    Row["body_quarters_denominator"] = Body.denominator();
-  } else
-    Row["cost_failure"] = Error;
+    if (Report)
+      Report->backendCost(Costs.back(), Bound,
+                          Observation ? &*Observation : nullptr, AccessCosts,
+                          Width, TTI.getVPlanCostProfileName(), Raw, Spill);
+  }
+  // Serialization is entirely optional. The selection and text report use
+  // the owned C++ observation and the exact values computed above.
+  if (vplanBackendFeedbackOutputEnabled()) {
+    json::Object Gate{{"known", Bound.Known},
+                      {"reason", Bound.Reason},
+                      {"would_skip", !Bound.shouldQuery()},
+                      {"force_all", vplanBackendFeedbackForceAll()},
+                      {"queried", Query},
+                      {"budget", 32}};
+    if (Bound.Known) {
+      Gate["peak_bound"] = Bound.Peak;
+      Gate["max_register_group"] = Bound.MaxRegisterGroup;
+      Gate["has_mask"] = Bound.HasMask;
+      Gate["usage_bound"] = Bound.Usage;
+      Gate["usage_before_ic"] = Bound.UsageBeforeIC;
+    }
+    if (!Bound.Recipe.empty())
+      Gate["recipe"] = Bound.Recipe;
+    if (Bound.Opcode)
+      Gate["opcode"] = *Bound.Opcode;
+    json::Object Row{{"model", "tti-real-vector-spill-v1"},
+                     {"candidate", C.ID},
+                     {"feedback_point", "middle-end-before-vf-selection"},
+                     {"function", F.getName()},
+                     {"loop", LoopIndex},
+                     {"plan", C.PlanIndex},
+                     {"tti_profile", TTI.getVPlanCostProfileName()},
+                     {"vf", C.VF.getKnownMinValue()},
+                     {"scalable", C.VF.isScalable()},
+                     {"ic", C.IC},
+                     {"role", C.IsEpilogue ? "epilogue" : "main"},
+                     {"vector_epilogue", C.EpilogueVF.isVector()},
+                     {"register_usage_bound", std::move(Gate)}};
+    if (Observation) {
+      Row["status"] = "collected";
+      Row["observation"] = summarizeVPlanBackendResult(*Observation);
+    } else {
+      Row["status"] = Query ? "unavailable" : "skipped";
+      Row["reason"] = Query ? StringRef(Error) : Bound.Reason;
+    }
+    if (Error.empty()) {
+      Row["native_body_quarters"] = Native.getQuarterValue();
+      Row["profile_body_quarters"] = Profile.getQuarterValue();
+      Row["estimated_vector_spill_quarters"] = Ev.getQuarterValue();
+      Row["raw_vector_spill_quarters"] = Raw.getQuarterValue();
+      Row["tti_width"] = Width;
+      Row["normalized_vector_spill_quarters_numerator"] = Spill.numerator();
+      Row["normalized_vector_spill_quarters_denominator"] = Spill.denominator();
+      Row["body_quarters_numerator"] = Body.numerator();
+      Row["body_quarters_denominator"] = Body.denominator();
+    } else
+      Row["cost_failure"] = Error;
+    writeVPlanBackendFeedback(Row);
+  }
   Timer.mark("hybrid_cost_and_summary");
-  printVPlanBackendFeedback(Row);
   if (!Error.empty()) {
     fail(Error);
     return false;
@@ -252,7 +292,13 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
         return false;
       }
       Preparation.mark("native_cost");
-      unsigned IC = LVP.selectInterleaveCount(*Plan, VF, Native);
+      unsigned IC;
+      {
+        std::optional<SaveAndRestore<StringRef>> Phase;
+        if (Report)
+          Phase.emplace(Report->Phase, "backend-native-ic");
+        IC = LVP.selectInterleaveCount(*Plan, VF, Native);
+      }
       if (UserIC)
         IC = UserIC;
       IC = LVP.limitBackendIC(*Plan, IC);
@@ -345,7 +391,9 @@ bool VPlanBackendCostModel::prepareEpilogue(
 void VPlanBackendCostModel::selection(ElementCount VF, unsigned IC,
                                       ElementCount Epilogue,
                                       bool Emitted) const {
-  printVPlanBackendFeedback(
+  if (!vplanBackendFeedbackOutputEnabled())
+    return;
+  writeVPlanBackendFeedback(
       json::Object{{"model", "tti-real-vector-spill-v1"},
                    {"status", "selected"},
                    {"function", F.getName()},

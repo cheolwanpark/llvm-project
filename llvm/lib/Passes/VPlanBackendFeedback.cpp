@@ -12,21 +12,12 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Transforms/Scalar/InstSimplifyPass.h"
-#include "llvm/Transforms/Scalar/LoopSink.h"
-#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
-#include "llvm/Transforms/Vectorize/VPlanRA.h"
 
 using namespace llvm;
-
-static cl::opt<bool> LateCleanup(
-    "vplan-backend-feedback-late-cleanup", cl::Hidden, cl::init(false),
-    cl::desc("Run LoopSink, InstSimplify and SimplifyCFG in backend probes"));
 
 void PassBuilder::registerVPlanBackendFeedbackAnalysis(
     FunctionAnalysisManager &FAM) {
@@ -49,9 +40,6 @@ void PassBuilder::registerVPlanBackendFeedbackAnalysis(
         if (!Target->getTargetTriple().isRISCV())
           return createStringError(
               "backend feedback observer currently supports RISC-V");
-        if (vplanRAEnabled())
-          return createStringError(
-              "backend feedback cannot nest external RA replay");
         // Profile-dependent module analyses and instrumentation are not part
         // of this first function-local probe contract.
         if (F.getParent()->getProfileSummary(/*IsCS=*/false) ||
@@ -119,23 +107,8 @@ void PassBuilder::registerVPlanBackendFeedbackAnalysis(
         PB.addVectorPasses(Level, Cleanup, ThinOrFullLTOPhase::None,
                            /*AddVectorizer=*/false);
         Cleanup.run(*ProbeF, LocalFAM);
-        if (LateCleanup) {
-          // Use the same pass options as the normal post-vectorizer
-          // continuation. This experiment isolates these three passes; it
-          // does not reproduce intervening or later module/extension passes.
-          FunctionPassManager Late;
-          Late.addPass(LoopSinkPass());
-          Late.addPass(InstSimplifyPass());
-          Late.addPass(
-              SimplifyCFGPass(SimplifyCFGOptions()
-                                  .convertSwitchRangeToICmp(true)
-                                  .convertSwitchToArithmetic(true)
-                                  .speculateUnpredictables(true)
-                                  .hoistLoadsStoresWithCondFaulting(true)));
-          Late.run(*ProbeF, LocalFAM);
-        }
         Timer.mark("ir_suffix");
-        finalizeVPlanRAIterationMapping(*ProbeF, LocalFAM);
+        finalizeVPlanBackendIterationMapping(*ProbeF, LocalFAM);
         if (verifyModule(*Clone, &errs()))
           return createStringError("invalid candidate module");
 
@@ -159,7 +132,6 @@ void PassBuilder::registerVPlanBackendFeedbackAnalysis(
                             BackendPhases.end());
         json::Object Timing{{"candidate", Candidate.ID},
                             {"status", Result ? "collected" : "unavailable"},
-                            {"late_cleanup", bool(LateCleanup)},
                             {"query_wall_seconds", Total.getWallTime()},
                             {"query_cpu_seconds", Total.getProcessTime()}};
         for (const auto &P : Timer.Phases) {

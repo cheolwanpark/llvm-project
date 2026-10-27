@@ -2,17 +2,14 @@
 
 ## Scope and documentation
 
-This LLVM fork provides two separate workflows:
-
-- In-process VF selection: `BACKEND_FEEDBACK.md` describes the contract,
-  `TTI_PROFILE.md` describes fixed TTI corrections, and
-  `BACKEND_COST_MODEL_VALIDATION.md` records dated validation results.
-- External MIR/Python selection and replay: `MODEL.md`, `VPLAN_RA.md`, and
-  `PRINT_VPLANS.md` describe that separate workflow.
+This LLVM fork provides in-process VF selection. `BACKEND_FEEDBACK.md`
+describes its contract, fixed TTI corrections and cost reports; README covers
+usage, build and tests. `BACKEND_COST_MODEL_VALIDATION.md` records dated results.
+Preserve existing upstream LLVM options and behavior when cleaning up fork code.
 
 Keep README and these existing documents current instead of adding overlapping
-reports. Distinguish historical measurements from the current binary. Do not
-claim that deleted experiment logs are still available.
+reports. Distinguish historical measurements from the current binary and describe
+retained artifacts accurately.
 
 ## Build and cache layout
 
@@ -43,7 +40,8 @@ normalization, native-cost IC, gate, and main/epilogue policy unless the task
 explicitly changes them. Failed required candidates revert the whole original
 loop to native selection; never treat failure as zero spill. Do not silently
 add post-frame retries, benchmark-specific exceptions, or whole-MIR transport
-to the in-process path. Preserve the separate external MIR/RA workflow.
+to the in-process path. Keep the two cost-report options passive and discard
+attempted backend reports on whole-loop native fallback.
 
 ## Reference and dataset comparisons
 
@@ -78,16 +76,14 @@ For relevant compiler changes, build and run the affected checks:
 
 ```sh
 cmake --build .cache/build --target clang clang-resource-headers llc opt \
-  FileCheck split-file not VectorizeTests VPlanRATests RISCVTests --parallel 2
+  FileCheck split-file not VectorizeTests RISCVTests --parallel 2
 .cache/build/unittests/Transforms/Vectorize/VectorizeTests
-.cache/build/unittests/Transforms/Vectorize/VPlanRATests
 .cache/build/unittests/Target/RISCV/RISCVTests
-.cache/build/bin/llvm-lit -v llvm/test/Transforms/LoopVectorize/RISCV \
-  llvm/test/CodeGen/RISCV/vplan-ra \
+.cache/build/bin/llvm-lit -v llvm/test/Transforms/LoopVectorize \
   llvm/test/CodeGen/RISCV/rvv/stack-slot-coloring.mir
 ```
 
 Use opt-only probe tests to distinguish the feedback pipeline from normal final
 object codegen. Scale verification to the change; do not repeatedly run passed
-tests without a new reason. External `utils/` tests are relevant when changing
-that workflow; they are not evidence of compatibility with the new spill summary.
+tests without a new reason. Integrated compiler and reporting tests live in the
+LLVM unit/lit suites.

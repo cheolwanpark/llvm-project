@@ -19,6 +19,8 @@
 
 namespace llvm {
 class BasicBlock;
+class Loop;
+class ScalarEvolution;
 
 /// Identity is local to a planning invocation, not a persistent cache key.
 /// Geometry is explicit and local to this planning invocation.
@@ -39,7 +41,7 @@ struct VPlanBackendCandidate {
 };
 
 /// Explicit per-pass state for materializing a candidate on a disposable clone.
-/// It never changes command-line options or the external RA transport.
+/// It never changes command-line options during materialization.
 struct VPlanBackendProbe {
   const VPlanBackendCandidate &Candidate;
   BasicBlock *Header;
@@ -94,9 +96,12 @@ LLVM_ABI bool vplanBackendFeedbackTimingEnabled();
 LLVM_ABI json::Object summarizeVPlanBackendResult(const VPlanBackendResult &R);
 /// Diagnostic oracle: retain the gate's decision but query every candidate.
 LLVM_ABI bool vplanBackendFeedbackForceAll();
-/// Optional diagnostic JSONL/stderr output of the data stored in LV, after the
-/// synchronous query returns and before the original VF selection runs.
-LLVM_ABI void printVPlanBackendFeedback(const json::Object &Result);
+LLVM_ABI bool vplanBackendFeedbackOutputEnabled();
+/// Append diagnostics only when a JSONL destination was requested.
+LLVM_ABI void writeVPlanBackendFeedback(const json::Object &Result);
+LLVM_ABI void markVPlanBackendLoop(Loop &L, StringRef ID, ScalarEvolution &SE);
+LLVM_ABI void finalizeVPlanBackendIterationMapping(Function &F,
+                                                   FunctionAnalysisManager &AM);
 } // namespace llvm
 
 #endif

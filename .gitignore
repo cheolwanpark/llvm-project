@@ -93,7 +93,7 @@ pythonenv*
 # automodapi puts generated documentation files here.
 /lldb/docs/python_api/
 
-# External VPlan evaluation input.
+# Retained historical evaluation input.
 /results.sqlite
 /results.sqlite-journal
 /results.sqlite-wal
@@ -104,5 +104,3 @@ pythonenv*
 /search-dataset.sqlite*
 /validation-dataset.sqlite*
 /results.sqlite.old*
-/utils/vplan-tools/.venv/
-/utils/vplan-tools/.cache/

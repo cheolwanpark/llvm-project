@@ -1,71 +1,32 @@
-# In-process backend 비용을 이용한 VF 선택
+# Backend 비용 모델과 진단
 
-`-enable-vplan-backend-cost-model` (기본값 false)은 후보 비용 조회와 backend
-질의를 함께 활성화한다. 모델 ID는 `tti-real-vector-spill-v1`이다. 외부 Python
-모델이나 meta-compiler를 호출하지 않는다. 기존 외부 protocol 4와 Python 모델은
-별도 경로로 유지한다.
+`-vplan-backend`는 RISC-V RVV의 VPlan VF 선택에 backend 비용을 적용한다.
+모델 ID는 `tti-real-vector-spill-v1`이며 기본값은 OFF다. 옵션 목록·실행 예제·빌드와
+테스트 명령은 [README](README.md)에 있다. 비 RISC-V, RVV 없음, outer loop,
+reciprocal-throughput 이외 비용 모드는 native 선택을 유지한다.
 
-```sh
-.cache/build/bin/clang --target=riscv64-unknown-elf \
-  -march=rv64gcv -mcpu=xiangshan-kunminghu -mrvv-vector-bits=128 -O3 \
-  -mllvm -enable-vplan-backend-cost-model \
-  -mllvm -vplan-backend-feedback-output=.cache/feedback.jsonl \
-  kernel.c -S -o .cache/kernel.s
-```
-
-`opt`에서는 master flag를 직접 사용한다. 별도 driver 옵션은 없다.
-`-enable-vplan-backend-feedback` 이름은 호환성을 위해 남아 있지만 master를
-대신하지 않는다. Print/output/timing/force-all 옵션만으로는 질의하지 않는다.
-Master OFF에서는 비용 준비, pressure gate, clone, TTI profile scope를 실행하지
-않고 기존 VF/IC/epilogue/outside profitability 경로를 유지한다.
-
-## 비용과 선택
-
-각 후보의 native TTI 비용으로 기존 interleave heuristic을 먼저 실행하고,
-사용자 hint 및 legality 제한을 적용해 IC를 정한다. 그 IC로 probe하고 최종
-출력에도 같은 IC를 사용한다. 새 비용을 이용한 IC 재탐색은 없다.
+## 비용과 선택 정책
 
 ```text
 L  = 후보 TTI body (지원되는 XiangShan에서는 scoped profile)
-Ev = L에 포함된 estimated vector-register spill 성분
-Sv = 실제 반복 body의 vector spill/reload 비용 × Wtti / Wobs
+Ev = L에 포함된 estimated vector-register spill
+Sv = 관측된 vector spill/reload 비용 × Wtti / Wobs
 B  = L − Ev + Sv
 ```
 
-Scalar 기준과 scalar spill 추정은 native 정책을 유지한다. Ev는 기존 register
-pressure 정책과 register-limit override를 그대로 사용하며, 그 정책이 spill을
-추가하지 않았으면 0이다. 별도 spill penalty나 실제 machine body 전체 비용,
-주소 계산/configuration 비용은 추가하지 않는다.
+`Wtti`는 해당 VF의 예상 runtime 폭, `Wobs`는 검증된 관측 반복 폭이다.
+각 후보의 native 비용으로 IC를 정하고 사용자 hint와 legality 제한을 적용한다.
+그 IC로 probe하고 최종 출력에도 같은 IC를 사용한다. Scalar 기준과 scalar spill
+추정, VF 생성·순서·강제 VF·scalable tie-break·trip count/tail·outside-loop
+profitability는 native 정책을 유지한다. Ev는 기존 register-pressure 정책이
+계산한 값이며, 그 정책이 spill을 추가하지 않으면 0이다.
 
-`VPExactCost`는 quarter-cost 분자와 양의 분모를 유지한다. 비교 전에 float나
-정수로 절삭하지 않는다. 비용 산술 overflow는 loop 전체 native 복귀이며,
-비교 cross product는 128비트 정수로 계산한다. 기존 정수 비용 소비자에서는
-InstructionCost의 정수 변환 의미를 유지한다.
+`VPlanBackendCostModel`이 비용 준비, gate, 질의, 검증과 비용 테이블을 소유한다.
+`VPExactCost`는 quarter-cost 분자와 양의 분모를 유지하고 비교 전에 절삭하지
+않는다. Cross product는 128비트 정수로 계산하며 산술 overflow는 native fallback이다.
+기존 `InstructionCost` 소비자에서는 해당 타입의 변환 의미를 유지한다.
 
-VF 생성·순서·scalar 경쟁·강제 VF·scalable tie-break·trip count/tail 정책은
-기존 `computeBestVF()` 및 공통 비교 경로를 사용한다. 새 모듈
-`VPlanBackendCostModel.{h,cpp}`가 비용 준비, gate, 질의, 검증과 비용 테이블을
-소유한다. 원본 IR을 변환하기 전에 준비를 마친다. 실패한 후보를 비용 0으로
-처리하거나 일부 성공 비용만 최종 선택에 사용하지 않는다.
-
-## CPU와 scope
-
-[TTI_PROFILE.md](TTI_PROFILE.md)에 고정 보정식과 한계를 기록했다.
-함수별 effective subtarget의 tuning CPU가 정확히 `xiangshan-kunminghu`이고
-최소/최대 VLEN이 모두 128인 경우 별도 `XiangShanV2TTIImpl`을 선택한다.
-함수의 `target-cpu`, `tune-cpu`, `vscale_range`는 기존 subtarget 해석을 따른다.
-NanHu, 다른 CPU/VLEN, 불확정 VLEN에서는 native RISC-V TTI를 사용하되 실제
-vector spill 치환은 계속 지원한다.
-
-Thread-local RAII scope는 명시적인 후보 비용 및 spill 가격 조회에만 열린다.
-Scope 중첩은 이전 상태를 복원하며, clone의 최적화와 backend 실행은 명시적으로
-native scope에서 수행한다. Reciprocal-throughput 외 조회는 보정하지 않는다.
-비 RISC-V, RVV 없음, outer loop, code-size 모드는 기존 선택 경로를 사용한다.
-
-## Gate와 실제 spill 판별
-
-기존 `VPlanRegisterUsageBounds`의 지원 recipe/type 범위와 보수적 usage 상한을
-그대로 사용한다. 미지원 lowering은 unknown이다.
+### Pressure gate
 
 ```text
 Usage1  = (PeakBound + HasMask) × MaxRegisterGroup
@@ -73,41 +34,19 @@ UsageIC = Usage1 × IC
 query   = unknown OR UsageIC >= 32
 ```
 
-Overflow는 unknown이다. 32 미만이면 질의를 생략하고 Sv=0으로 둔다.
-`-vplan-backend-feedback-force-all`은 같은 would_skip을 기록하면서 실제 질의만
-강제한다. Scalar spill gate는 없다. Gate는 위 보수적 상한을 사용하며, 검증 범위는
-[검증 기록](BACKEND_COST_MODEL_VALIDATION.md)에 정리한다.
+`VPlanRegisterUsageBounds`가 지원하는 recipe/type의 보수적 상한을 사용한다.
+미지원 lowering과 overflow는 unknown이다. UsageIC가 32 미만이면 질의를 생략하고
+Sv=0으로 둔다. `-vplan-backend-force-all`은 gate의 `would_skip`을 유지하며 실제
+질의만 강제한다. Scalar spill은 이 gate의 대상이 아니다.
 
-가격 계산에는 유일한 candidate identity, 검증된 iteration mapping 및 단일 block
-innermost machine loop의 반복 경로에서 실제 spill-slot MMO와 physical vector data
-register가 확인되는 load/store만 포함한다. Backedge 뒤의 명령도 제외한다.
-Collector는 scalar 주소 operand가 virtual register 또는 frame index인 경우도
-해석할 수 있다. Vector data register의 미할당·subregister나 미지원 접근은 실패다. Scalar spill, 일반 whole-register memory, setup/exit/다른 loop spill은
-제외한다. Mapping 실패, 불완전 register 정보, 해석할 수 없는 vector spill은
-실패다. Observer는 address space와 whole-register 여부를 포함한 사실만 제공한다.
-현재 구현에서는 `StackSlotColoring` 직후 관측하므로 이 pass가 제거한 연속
-reload/store의 dead store를 비용에 포함하지 않는다. RVV RA 직후 버전의
-구조적 거부 조건은 제거했다. Collector 자체가 dead-store 제거를 수행하지 않는다.
-RVV RA 직후 버전과 post-frame 기준을 포함한 전수 비교는
-[검증 기록](BACKEND_COST_MODEL_VALIDATION.md)에 있다.
-
-새 `TTI::getSpillReloadCost`는 방향, 실제 접근 type, alignment, address space,
-whole-register 여부와 실제 group 크기를 받는다. 기본 구현은 memory-op 비용에
-위임한다. XiangShan/128 profile의 whole-register 명령은 group+1 (2/3/5/9)이다.
-Segment spill pseudo는 `lowerSegmentSpillReload()`와 공유하는 순수 helper의
-물리 register encoding 분할 규칙으로 접근을 해석한다. 명령 생성이나 frame
-lowering 없이 각 분할 접근의 크기·alignment·address space를 보존한다.
-Stack slot 전체 크기를 각 접근에 반복 적용하지 않는다. 기존 register-class spill/reload hook의 의미는 바꾸지 않는다.
-
-## Probe, epilogue, fallback
+## Probe와 fallback
 
 의존 구조는 `LLVMVectorize → analysis callback → LLVMPasses → TargetMachine →
-backend observer`이다. LLVMVectorize가 CodeGen이나 Passes에 직접 의존하지 않는다.
-후보별 함수 clone, fresh analysis, 독립 TargetMachine, 기존 vector pipeline suffix를
-재사용한다. 전역 command-line 값이나 외부 RA replay 상태를 바꾸지 않는다.
+backend observer`다. 후보별 함수 clone, fresh analysis, 독립 TargetMachine과 기존
+vector pipeline suffix를 사용한다. 전역 command-line 값은 변경하지 않는다.
 
 ```text
-clone → candidate materialization → 기존 IR suffix → iteration mapping 검증
+clone → candidate materialization → IR suffix → iteration mapping 검증
   → instruction selection / pre-RA 최적화·scheduling
   → RVV allocator → VirtRegRewriter(false)
   → InsertVSETVLI → DeadRegisterDefinitions → scalar allocator
@@ -115,102 +54,127 @@ clone → candidate materialization → 기존 IR suffix → iteration mapping �
   → vector spill collector → 종료
 ```
 
-Collector 고유 pass ID를 `addPassesToBackendObserver()`의 종료 대상으로 지정한다.
-Probe는 위 여섯 pass까지 실행하며 이후 MachineCopyPropagation, post-RA LICM,
-frame lowering은 실행하지 않는다. RegAllocScoring은 기본 설정에서 no-op이다.
-최종 object 생성의 정상 backend는 계속 전체 pipeline을 실행한다. 지원되는
-optimized RVV allocator(default/greedy/basic)와 정상 codegen pipeline을 요구하며,
-fast allocator, optnone, limited pipeline 등 종료 위치를 보장할 수 없는 구성은
-미지원이다. StackSlotColoring 비활성화도 명시적으로 거부한다. 실패 시 post-frame으로
-재질의하거나 관측 지점을 선택하는 옵션은 없다.
-**현재 수집·가격 계산은 vector spill 전용이다. Scalar allocation은 실행하지만
-scalar spill까지 지원한다는 뜻은 아니다. 이후 최적화와 frame lowering을 반영한
-scalar spill이 필요하면 관측 지점을 더 뒤로 옮기고 collector를 확장해야 한다.**
+Collector의 pass ID가 probe 종료 지점을 지정한다. Stage는
+`post-stack-slot-coloring`이다. 이후 copy propagation, post-RA LICM, frame lowering은
+일반 최종 codegen에서 실행된다. RegAllocScoring은 기본 설정에서 no-op이다.
+Optimized RVV allocator(default/greedy/basic)와 정상 pipeline을 요구한다.
+Fast allocator, optnone, limited pipeline, StackSlotColoring 비활성화와 profile 의존
+구성 등 종료 지점이나 재현을 보장할 수 없는 경우는 실패로 처리한다.
 
-요청은 VF/plan/IC/관측 역할을 포함한다. Epilogue 요청에는 선택된 main 형상도
-전달한다. Main probe는 실제 강제 epilogue를 함께 생성한다. 자동 epilogue는
-기존 main-후-epilogue 순서와 후보 필터를 사용하며, 비용 비교가 필요한 후보는
-해당 main 문맥에서 epilogue IC=1로 별도 관측한다. 강제 epilogue는 기존 비용
-비교 우회를 유지한다. 관측 ID는 요청한 역할의 loop에만 붙여 동일 ID loop 하나라는
-iteration mapping 계약을 유지한다.
+수집 대상은 유일한 candidate identity와 검증된 iteration mapping을 가진 단일
+block innermost machine loop의 반복 경로다. 실제 spill-slot MMO와 physical vector
+data register가 확인되는 load/store만 포함한다. Backedge 이후 명령, setup/exit/다른
+loop, scalar spill과 일반 whole-register memory는 제외한다. Scalar 주소 operand는
+virtual register나 frame index여도 해석할 수 있다. 미할당 vector register,
+subregister, 미지원 접근과 불완전 mapping은 실패다.
 
-초기 관측 폭은 VF의 예상 runtime 폭 × IC다. Cleanup 후 검증된 추가 iteration
-mapping 비율을 한 번만 곱한다. Wobs를 이용해 TTI body 폭으로 정규화한다.
-관측은 해당 planning invocation 안에서만 사용하며 다른 loop 변경 뒤 재사용하지 않는다.
+`TTI::getSpillReloadCost`는 방향, type, alignment, address space, whole-register
+여부와 register group을 받아 가격을 계산한다. 기본 구현은 `getMemoryOpCost`에
+위임한다. Segment spill은 실제 lowering과 공유하는 물리 register 분할 helper로
+접근을 해석하며 각 접근의 크기·alignment·address space를 보존한다.
+**수집과 가격 계산은 vector spill 전용이며, 실제 scalar spill과 최종 frame 주소
+비용은 모델에 포함하지 않는다.**
 
-Provider unavailable, clone/형상/mapping 실패, 미지원 spill, 비용 overflow,
-필요한 epilogue 비용 실패는 그 원본 loop의 비용 테이블과 ProfitableVFs를 버리고
-scope 밖에서 native 선택을 다시 실행한다. 강제 VF/IC/epilogue 요청은 유지한다.
-LLVM fatal error/assertion까지 복구하는 예외 격리는 제공하지 않는다.
+요청은 plan/VF/IC/역할을 포함한다. Main probe는 강제 epilogue를 함께 생성한다.
+자동 epilogue는 기존 main-후-epilogue 순서와 후보 필터를 유지하며, 비교가 필요한
+후보를 선택된 main 문맥에서 epilogue IC=1로 관측한다. 강제 epilogue는 기존 비용
+비교 우회를 유지한다. 관측 ID는 요청한 역할의 loop 하나에만 붙인다.
+초기 관측 폭은 Wtti × IC이며, IR suffix 후 검증된 추가 iteration mapping 비율을
+한 번 곱한다. 관측 결과는 해당 planning invocation에서만 사용한다.
 
-최종 빌드·회귀·데이터셋 수치와 검증 불가 항목은
-[BACKEND_COST_MODEL_VALIDATION.md](BACKEND_COST_MODEL_VALIDATION.md)에 기록했다.
+Provider unavailable, clone/형상/mapping 실패, 미지원 spill, overflow 또는 필요한
+epilogue 비용 실패 시 원본 loop의 backend 비용과 ProfitableVFs를 버리고 native
+선택을 다시 실행한다. 강제 VF/IC/epilogue 요청은 유지한다. 실패를 spill 0으로
+간주하지 않으며 일부 성공 비용만 적용하지 않는다. LLVM fatal error/assertion의
+예외 격리는 제공하지 않는다. Probe suffix는 임의의 LTO·module pass·사용자 추가
+pass를 재현하지 않으며, 최종 machine instruction 전체와의 동등성을 보장하지 않는다.
 
-## 진단과 재현
+## XiangShan TTI 보정
 
-기존 JSONL/stderr 출력에는 candidate/VF/IC/role, model/profile,
-native/profile/estimated-vector-spill/raw-vector-spill quarter 비용,
-정확 body 분자/분모, TTI 폭, IC 이전/이후 bound, would_skip/queried를 기록한다.
-선택 행은 status=selected, loop fallback 행은 status=native-fallback과 reason을
-기록한다. Candidate 행의 collected는 raw facts 수신을 뜻하며 cost_failure가 있으면
-성공한 비용으로 사용하지 않는다. JSONL은 append 방식이므로 새 경로를 사용한다.
+함수별 effective tuning CPU가 `xiangshan-kunminghu`이고 최소/최대 VLEN이 모두
+128일 때 `XiangShanV2TTIImpl`을 선택한다. `target-cpu`, `tune-cpu`, `vscale_range`는
+기존 subtarget 해석을 따른다. 다른 CPU/VLEN에서는 native RISC-V TTI를 사용한다.
+`VPlanCostProfileScope`는 thread-local RAII로 후보 body와 spill의 reciprocal-throughput
+질의에만 적용된다. Planning, scalar 기준, clone 최적화와 codegen은 native scope다.
+보정식은 고정되어 있으며 benchmark 이름이나 측정 cycle을 입력으로 사용하지 않는다.
 
-Provider와 TargetMachine hook은 `Expected<VPlanBackendResult>`를 반환한다.
-`rvv-vector-spill-v1` 요약의 stage는 `post-stack-slot-coloring`이며 candidate/VF/IC/역할,
-검증된 반복 폭과 vector 접근 목록만 담는다. 접근은 load 방향, 최소 bytes,
-scalable 여부, alignment, address space, whole-register 여부, register group 및
-`segment_lowering` 여부를 기록한다. 소유권 있는 값만 전달하며 clone의 Type,
-MachineFunction, MachineInstr 또는 문자열 포인터는 반환하지 않는다.
-TTI 가격 조회와 정확한 정규화는 middle-end에서 수행한다.
+아래 표의 **L은 위 비용식의 body L과 별개로**, legalized type의 `getLMULCost`다.
+Fractional-LMUL clamp와 DLen 동작을 포함한다. K는 legalization multiplier,
+E는 memory hook의 element/field 수이며 candidate VF를 뜻하지 않는다.
 
-In-process 경로의 전체 MIR 문자열, operand 문자열, dependency JSON,
-ReachingDefInfo 기반 VL·stride 추론, scalar/configuration 비용 관측은 제거했다.
-전체 MIR 출력 복원 옵션은 없다. 외부 `riscv-vplan-analytics`는 별도 경로로 유지한다.
-기존 `utils/` Python 도구의 새 요약 호환성은 이번 변경 범위가 아니며 해당 suite는
-완료 조건으로 실행하지 않는다.
+| Hook / operation | Native → 보정 | 적용 범위 |
+|---|---|---|
+| slide up/down VI/VX | L → L(L+1)/2+1 | immediate/scalar forms |
+| gather VI | L → L²+1 | VV/EI16은 native |
+| FP divide VV/VF/reverse VF | L → L×{8,10,15}, VF는 +1 | SEW 16/32/64 |
+| FP sqrt | L → L×{7,10,17} | SEW 16/32/64 |
+| signed integer divide/remainder VV | L×TCC_Expensive → L×{11,13,17,25} | SEW 8/16/32/64 |
+| narrowing VNSRL_WI | L → max(1,ceil(2×destination-bits/group-bits))+1 | scalable group 64 bits, fixed group real VLEN |
+| generic FP arithmetic | 2×opcode cost → opcode cost | 보정된 divide에도 적용 |
+| uniform arithmetic operand | opcode cost → opcode cost+1 before K | 원래 hook facts에서 어느 한 operand가 uniform |
+| contiguous vector memory | Cost+BaseCost → Cost+BaseCost+K | legalized vector memory op마다 적용 |
+| strided vector memory | E×TCC_Basic → E×TCC_Basic+2 | element 흐름과 transfer |
+| gather/scatter | E×TCC_Basic → E×TCC_Basic+1 | element 흐름과 transfer |
+| segment/interleaved fast path | E×TCC_Basic → E×(8 load / 4 store)+1 | 다른 fallback branch는 native |
+| whole-register spill/reload | memory-op default → group+1 | group 1/2/4/8의 가격 2/3/5/9 |
 
-`-time-vplan-backend-feedback`은 stderr에 다음 진단을 기록한다.
-Timing OFF에는 clock 조회나 backend marker pass를 활성화하지 않는다.
+Signed/unsigned IR divide는 signed-opcode hook을 공유하지만 직접 unsigned machine
+opcode와 VX 질의는 보정하지 않는다. Uniform operand의 상수 materialization 비용은
+별도로 남는다. VNSRL_WI 이외 widening/narrowing, reductions, scalar hooks, shuffle
+fallbacks, masking, legalization과 다른 memory fallback은 native다. 따라서 이 TTI
+보정값이 개별 emitted MIR 명령열 비용과 정확히 일치한다고 보장하지 않는다.
 
-- `VPLAN-BACKEND-FEEDBACK-TIMING`: clone, target/analysis 준비, materialization,
-  IR suffix, iteration mapping/verification, backend pipeline 구성, pre-RVV-RA,
-  RVV allocation, 부분 rewrite, `post_rvv_to_stack_slot_coloring`(추가 여섯 pass),
-  spill 수집, backend 반환, clone/analysis/TM 정리,
-  query wall/CPU total.
-- `VPLAN-BACKEND-COST-TIMING`: native/profile 비용 준비, native IC, gate,
-  query total, middle-end spill pricing, hybrid 비용·요약 준비.
+## 비용 출력
 
-Backend marker는 pass 경계를 측정하므로 allocation/rewrite 구간에는 해당 pass에
-필요한 분석 실행도 포함된다. `backend_total`, `query_total`, `query_*_seconds`는
-하위 구간을 포함하므로 세부 구간과 중복 합산하지 않는다. 실패한 관측의 실행된 backend 단계는
-`VPLAN-BACKEND-FAILED-TIMING`에 기록하며, 실행하지 못한 단계의 측정값은 생략한다. Timing 진단 실행은 일반 compiler wall 평균에 섞지 않는다.
+`-print-vplans`는 요약을, `-print-detailed-vplans`는 요약과 계산 상세를 stderr에
+출력한다. 두 옵션을 함께 사용하면 원본 loop당 상세 보고 하나를 출력한다.
 
+| 상태 | 출력 |
+|---|---|
+| Master OFF 또는 native fallback | Native LLVM 비용과 선택 결과 |
+| Backend 적용 | 정확한 backend body/ranking 비용과 feedback |
+| Gate 생략 | Sv=0을 적용한 backend 비용; 관측된 zero spill과 구분 |
 
-[README의 빌드 설정](README.md#build)에서 `clang;lld` 및 호스트/RISCV backend를
-설정한다. 아래 회귀 테스트는 `LLVM_INCLUDE_TESTS=ON`과 assertions가 활성화된
-`.cache/build`를 사용한다. 새 소스로 증분 빌드하면 같은 디렉터리의
-`bin/clang`, `bin/opt`, `bin/llc`가 교체된다.
+보고는 기존 TTI 질의와 probe 결과를 관찰하며 추가 질의나 후보 compile을 하지
+않는다. 내부 clone은 별도 비용 보고를 출력하지 않는다. Main/필요한 epilogue에서
+fallback이 발생하면 시도 중인 backend 보고를 폐기하고 native 보고를 출력한다.
 
-```sh
-cmake --build .cache/build --target clang clang-resource-headers lld \
-  llvm-nm llvm-objdump llvm-extract llvm-dis llc opt FileCheck split-file not \
-  VectorizeTests VPlanRATests \
-  RISCVTests --parallel 2
-.cache/build/unittests/Transforms/Vectorize/VectorizeTests
-.cache/build/unittests/Target/RISCV/RISCVTests
-.cache/build/bin/llvm-lit -v llvm/test/Transforms/LoopVectorize/RISCV
-.cache/build/unittests/Transforms/Vectorize/VPlanRATests
-.cache/build/bin/llvm-lit -v llvm/test/CodeGen/RISCV/vplan-ra \
-  llvm/test/CodeGen/RISCV/rvv/stack-slot-coloring.mir
-```
+요약 표는 main/epilogue, plan, VF, 예상 폭, body cost, score와 비교 종류,
+incumbent/scalar 비교 결과와 이유를 담는다. `fN`은 fixed VF, `sN`은 scalable VF다.
+Scalar baseline, 최종 main/epilogue 선택, IC와 emission 결과도 표시한다.
+`not-evaluated`는 강제 선택 등으로 계산을 생략했다는 뜻이다. Backend body와 score는
+분수를 보존하며 cost-per-lane은 폭으로, whole-loop는 trip-count/tail 정책으로 계산한다.
 
-313개 `dataset.sqlite` 전수 비교의 실행 수·평균 및 관측 차이는
-[BACKEND_COST_MODEL_VALIDATION.md](BACKEND_COST_MODEL_VALIDATION.md)에 기록한다.
-재사용할 post-frame 기준은 `.cache/post-frame-reference/`에 보존한다.
-기준 compiler는 재실행하지 않고 저장된 자료를 비교한다. 과거 다른 DB의 203개
-결과와 population을 섞지 않는다.
+`backend-cost` 행에는 `phase/plan/vf/ic`, `model/profile`,
+`queried/would_skip/force_all`과 `body_cost`가 나온다. 상세 `backend-calculation`은
+native body, L, Ev, raw vector spill, Wtti, Wobs, Sv, B와 gate bound를 보여준다.
+관측된 각 spill에는 방향, 최소 bytes/scalability, group, alignment, address space,
+whole-register/segment-lowering 여부와 TTI 가격이 나온다. Gate 생략이면
+`Wobs=not-observed`, `spill_source=gate-skip`이다. Recipe 평가 단계는 native body,
+profile body, native IC와 native selection context를 구분한다.
 
-Probe suffix는 임의의 전체 LTO, module pass, 사용자 추가 pass를 재현하지 않는다.
-조기 spill 관측과 post-frame/최종 machine instruction 전체가 동일하다고 주장하지
-않는다. 관측 차이가 남으면 비용 모델이나 관측 지점을 임의로 바꾸지 않고 보고한다.
-이전 203개 DB의 transport/gate 검증과 이번 313개 DB 비교는 별개다.
+## JSONL과 시간 진단
+
+`-vplan-backend-jsonl=FILE`은 candidate·selected·native-fallback 행을 append한다.
+Candidate 행에는 identity/VF/IC/role, model/profile, native/profile/estimated/raw 비용,
+정확한 정규화 및 body 분자/분모, TTI 폭과 gate 판단을 기록한다. `collected`는 facts
+수신을 뜻하며 `cost_failure`가 있으면 선택에 사용하지 않는다. Fallback 행은 reason을
+포함한다. JSONL quarter-cost 분자를 **4 × 분모**로 나누면 텍스트의 model unit과 같다.
+
+Provider는 소유권 있는 `VPlanBackendResult`를 반환한다. `rvv-vector-spill-v1`
+요약은 candidate/VF/IC/role, stage, 검증된 반복 폭과 vector 접근 목록을 담는다.
+Clone의 Type/MachineFunction/MachineInstr/문자열 포인터는 반환하지 않는다.
+선택과 텍스트 보고는 C++ 값을 사용하고 JSONL 목적지가 있을 때만 직렬화한다.
+
+`-vplan-backend-time`은 stderr에 다음 시간을 기록한다.
+
+- `VPLAN-BACKEND-FEEDBACK-TIMING`: clone, target/analysis, materialization, IR suffix,
+  mapping/verification, backend 구성·allocation·rewrite·StackSlotColoring·수집,
+  정리와 query wall/CPU total.
+- `VPLAN-BACKEND-COST-TIMING`: native/profile 비용, native IC, gate, query,
+  spill pricing과 hybrid 비용·요약 준비.
+- `VPLAN-BACKEND-FAILED-TIMING`: 실패 전 실행된 backend 단계만 기록.
+
+Timing OFF는 clock 조회나 marker pass를 활성화하지 않는다. Pass 경계 측정에는
+필요한 analysis 실행도 포함된다. Total은 하위 구간을 포함하므로 중복 합산하지
+않으며, 진단 실행은 일반 compiler wall 평균과 분리한다.

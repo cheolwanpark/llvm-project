@@ -1,6 +1,6 @@
 ; Real register pressure exercises the spill observer on a materialized clone.
 ; RUN: rm -f %t.jsonl
-; RUN: opt -codegen-opt-level=2 -mtriple=riscv64 -mcpu=generic-rv64 -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -riscv-v-register-bit-width-lmul=8 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -enable-vplan-backend-cost-model -vplan-backend-feedback-force-all -vplan-backend-feedback-output=%t.jsonl -verify-machineinstrs %s -disable-output
+; RUN: opt -codegen-opt-level=2 -mtriple=riscv64 -mcpu=generic-rv64 -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -riscv-v-register-bit-width-lmul=8 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -vplan-backend -vplan-backend-force-all -vplan-backend-jsonl=%t.jsonl -verify-machineinstrs %s -disable-output
 ; RUN: %python %S/Inputs/check-real-vector-spills.py %t.jsonl
 
 define void @pressure(ptr noalias %a, ptr noalias %out, i64 %n) vscale_range(2,2) {

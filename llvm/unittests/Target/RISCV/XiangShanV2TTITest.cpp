@@ -180,9 +180,9 @@ public:
 TEST_F(XiangShanV2TTITest, EpilogueObservationsAndTransactionalFallback) {
   auto &Opts = cl::getRegisteredOptions();
   auto &Enable =
-      *static_cast<cl::opt<bool> *>(Opts["enable-vplan-backend-cost-model"]);
+      *static_cast<cl::opt<bool> *>(Opts["vplan-backend"]);
   auto &ForceAll =
-      *static_cast<cl::opt<bool> *>(Opts["vplan-backend-feedback-force-all"]);
+      *static_cast<cl::opt<bool> *>(Opts["vplan-backend-force-all"]);
   auto &IC = *static_cast<cl::opt<unsigned> *>(Opts["force-vector-interleave"]);
   SaveAndRestore<bool> SaveEnable(Enable.getValue());
   SaveAndRestore<bool> SaveForceAll(ForceAll.getValue(), true);

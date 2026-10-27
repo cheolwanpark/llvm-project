@@ -1,9 +1,0 @@
-[project]
-name = "vplan-tools"
-version = "1.0.0"
-description = "RTL port-demand model, selection intervals and verified VF evaluation"
-requires-python = ">=3.12"
-dependencies = []
-
-[tool.uv]
-package = false

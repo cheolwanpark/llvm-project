@@ -12,6 +12,7 @@
 #include "VPlan.h"
 #include "VPlanCFG.h"
 #include "VPlanHelpers.h"
+#include "VPlanRegisterUsageBounds.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Module.h"
@@ -61,7 +62,10 @@ VPlanCostReport::VPlanCostReport(const Loop &L,
   OS << '\n';
 }
 
-VPlanCostReport::~VPlanCostReport() { print(errs()); }
+VPlanCostReport::~VPlanCostReport() {
+  if (!Discarded)
+    print(errs());
+}
 
 static void printIDs(raw_ostream &OS, ArrayRef<bool> IDs) {
   ListSeparator Sep;
@@ -99,14 +103,20 @@ void VPlanCostReport::print(raw_ostream &OS) const {
        << " | ";
     printVF(OS, C.VF);
     OS << " | " << C.EstimatedWidth << " | ";
-    if (C.BodyCost)
+    if (C.ExactBodyCost)
+      C.ExactBodyCost->print(OS);
+    else if (C.BodyCost)
       OS << *C.BodyCost;
     else
       OS << "not-evaluated";
     OS << " | ";
-    if (C.Score) {
-      OS << *C.Score;
-      if (C.ScoreKind == "cost-per-lane" && C.Score->isValid())
+    if (C.ExactScore || C.Score) {
+      if (C.ExactScore)
+        C.ExactScore->print(OS, C.ScoreKind == "cost-per-lane" ? C.ScoreDivisor
+                                                               : 1);
+      else
+        OS << *C.Score;
+      if (!C.ExactScore && C.ScoreKind == "cost-per-lane" && C.Score->isValid())
         OS << '/' << C.ScoreDivisor;
     } else
       OS << "not-evaluated";
@@ -116,6 +126,8 @@ void VPlanCostReport::print(raw_ostream &OS) const {
     PrintComparison(C.Scalar);
     OS << " | " << (C.Reason.empty() ? "-" : C.Reason) << '\n';
   }
+  for (const auto &C : Candidates)
+    OS << C.BackendSummary;
   if (Candidates.empty())
     OS << "    none\n";
   for (const auto &[Text, Count] : Diagnostics) {
@@ -155,6 +167,8 @@ void VPlanCostReport::print(raw_ostream &OS) const {
      << '\n';
   if (Detailed) {
     OS << "  details:\n";
+    for (const auto &C : Candidates)
+      OS << C.BackendDetails;
     for (auto [ID, P] : enumerate(Plans)) {
       OS << "  plan=" << ID << '\n' << P->Snapshot;
       SmallVector<ElementCount> VFs;
@@ -301,6 +315,89 @@ void VPlanCostReport::comparisonScore(InstructionCost Score,
       B.HasTail = C.HasTail;
     }
   }
+}
+
+void VPlanCostReport::comparisonScore(VPExactCost Score,
+                                      VPExactCost IncumbentScore,
+                                      StringRef Kind, unsigned Divisor,
+                                      unsigned IncumbentDivisor) {
+  if (!Comparing)
+    return;
+  auto &C = Candidates[*Comparing];
+  C.ExactScore = Score;
+  C.ScoreKind = Kind.str();
+  C.ScoreDivisor = Divisor;
+  if (ComparedIncumbent) {
+    auto &B = Candidates[*ComparedIncumbent];
+    if (!B.ExactScore && !B.Score) {
+      B.ExactScore = IncumbentScore;
+      B.ScoreKind = Kind.str();
+      B.ScoreDivisor = IncumbentDivisor;
+      B.MaxTripCount = C.MaxTripCount;
+      B.HasTail = C.HasTail;
+    }
+  }
+}
+
+void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
+                                  const VPRegisterUsageBound &Bound,
+                                  const VPlanBackendResult *Observation,
+                                  ArrayRef<InstructionCost> AccessCosts,
+                                  unsigned Width, StringRef ProfileName,
+                                  InstructionCost Raw, VPExactCost Spill) {
+  auto &C = candidate(*Cost.Plan, Cost.VF, Cost.IsEpilogue);
+  C.ExactBodyCost = Cost.Body;
+  raw_string_ostream OS(C.BackendSummary);
+  OS << "  backend-cost phase=" << (Cost.IsEpilogue ? "epilogue" : "main")
+     << " plan=" << C.PlanID << " vf=";
+  printVF(OS, Cost.VF);
+  OS << " ic=" << Cost.IC
+     << " model=tti-real-vector-spill-v1 profile=" << ProfileName
+     << " queried=" << bool(Observation)
+     << " would_skip=" << !Bound.shouldQuery()
+     << " force_all=" << vplanBackendFeedbackForceAll() << " body_cost=";
+  Cost.Body.print(OS);
+  OS << '\n';
+  if (!Detailed)
+    return;
+  raw_string_ostream DS(C.BackendDetails);
+  DS << "    backend-calculation phase="
+     << (Cost.IsEpilogue ? "epilogue" : "main") << " plan=" << C.PlanID
+     << " vf=";
+  printVF(DS, Cost.VF);
+  DS << " ic=" << Cost.IC << " native=" << Cost.Native << " L=" << Cost.Profile
+     << " Ev=" << Cost.EstimatedVectorSpill << " raw_vector_spill=" << Raw
+     << " Wtti=" << Width << " Wobs=";
+  if (Observation)
+    DS << Observation->IterationWidth;
+  else
+    DS << "not-observed";
+  DS << " Sv=";
+  Spill.print(DS);
+  DS << " B=L-Ev+Sv=";
+  Cost.Body.print(DS);
+  DS << " scalar_baseline=native ic_policy=native-cost\n"
+     << "      gate known=" << Bound.Known << " reason=" << Bound.Reason;
+  if (Bound.Known)
+    DS << " peak=" << Bound.Peak << " max_group=" << Bound.MaxRegisterGroup
+       << " has_mask=" << Bound.HasMask
+       << " usage_before_ic=" << Bound.UsageBeforeIC << " usage=" << Bound.Usage
+       << " budget=32";
+  DS << '\n';
+  if (!Observation) {
+    DS << "      spill_source=gate-skip Sv=0 (not measured)\n";
+    return;
+  }
+  DS << "      spill_source=observed stage=" << Observation->Stage
+     << " iteration_mapping=" << Observation->IterationMapping << '\n';
+  assert(AccessCosts.size() == Observation->Spills.size());
+  for (auto [A, Price] : zip(Observation->Spills, AccessCosts))
+    DS << "      vector-spill direction=" << (A.IsLoad ? "load" : "store")
+       << " bytes=" << A.MinBytes << " scalable=" << A.Scalable
+       << " group=" << A.RegisterGroup << " alignment=" << A.Alignment
+       << " address_space=" << A.AddressSpace
+       << " whole_register=" << A.WholeRegister
+       << " segment_lowering=" << A.FromSegment << " cost=" << Price << '\n';
 }
 
 void VPlanCostReport::comparisonResult(bool Result, StringRef Reason) {

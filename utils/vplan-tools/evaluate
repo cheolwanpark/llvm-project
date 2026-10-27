@@ -1,7 +1,0 @@
-#!/usr/bin/env python3
-"""Evaluate the single hardcoded machine model against measured VF choices."""
-from evaluation import main
-from vplan_tools import cli
-
-if __name__ == '__main__':
-    cli(main)

@@ -8,6 +8,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
@@ -16,24 +20,17 @@
 using namespace llvm;
 
 static cl::opt<bool> EnableBackendCostModel(
-    "enable-vplan-backend-cost-model", cl::Hidden, cl::init(false),
+    "vplan-backend", cl::Hidden, cl::init(false),
     cl::desc("Select VF using scoped TTI and actual vector spill costs"));
-static cl::opt<bool>
-    EnableFeedback("enable-vplan-backend-feedback", cl::Hidden,
-                   cl::desc("Legacy compatibility flag (requires "
-                            "enable-vplan-backend-cost-model)"));
 static cl::opt<std::string> FeedbackOutput(
-    "vplan-backend-feedback-output", cl::Hidden,
+    "vplan-backend-jsonl", cl::Hidden,
     cl::desc("Append candidate feedback as JSONL (diagnostic only)"));
-static cl::opt<bool> PrintFeedback(
-    "print-vplan-backend-feedback", cl::Hidden,
-    cl::desc("Print received backend facts in LV before VF selection"));
 static cl::opt<bool> ForceAllFeedback(
-    "vplan-backend-feedback-force-all", cl::Hidden,
+    "vplan-backend-force-all", cl::Hidden,
     cl::desc("Query every candidate, retaining the register-bound decision"));
 
 static cl::opt<bool>
-    TimeFeedback("time-vplan-backend-feedback", cl::Hidden,
+    TimeFeedback("vplan-backend-time", cl::Hidden,
                  cl::desc("Print per-candidate spill probe phase timings"));
 bool llvm::vplanBackendFeedbackTimingEnabled() { return TimeFeedback; }
 
@@ -62,14 +59,15 @@ json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R) {
 
 AnalysisKey VPlanBackendFeedbackAnalysis::Key;
 
+bool llvm::vplanBackendFeedbackOutputEnabled() {
+  return !FeedbackOutput.empty();
+}
+
 bool llvm::vplanBackendFeedbackEnabled() { return EnableBackendCostModel; }
 
 bool llvm::vplanBackendFeedbackForceAll() { return ForceAllFeedback; }
 
-void llvm::printVPlanBackendFeedback(const json::Object &Result) {
-  if (PrintFeedback)
-    errs() << "VPLAN-BACKEND-FEEDBACK: " << json::Value(json::Object(Result))
-           << '\n';
+void llvm::writeVPlanBackendFeedback(const json::Object &Result) {
   if (FeedbackOutput.empty())
     return;
   std::error_code EC;
@@ -81,4 +79,161 @@ void llvm::printVPlanBackendFeedback(const json::Object &Result) {
   OS.close();
   if (OS.has_error())
     reportFatalUsageError("failed to write VPlan backend feedback");
+}
+
+static MDNode *tag(LLVMContext &C, StringRef Key, StringRef Value) {
+  return MDNode::get(C, {MDString::get(C, Key), MDString::get(C, Value)});
+}
+// An affine step is a positive constant, optionally multiplied by vscale.
+static std::pair<uint64_t, bool> stepFactor(const SCEV *S) {
+  if (isa<SCEVVScale>(S))
+    return {1, true};
+  if (auto *C = dyn_cast<SCEVConstant>(S))
+    return C->getAPInt().isStrictlyPositive() &&
+                   C->getAPInt().getActiveBits() <= 32
+               ? std::make_pair(C->getAPInt().getZExtValue(), false)
+               : std::make_pair(uint64_t(0), false);
+  if (auto *M = dyn_cast<SCEVMulExpr>(S)) {
+    uint64_t Factor = 1;
+    bool Scalable = false;
+    for (const SCEV *Op : M->operands()) {
+      auto Part = stepFactor(Op);
+      if (!Part.first || (Scalable && Part.second) ||
+          Factor > UINT32_MAX / Part.first)
+        return {0, false};
+      Factor *= Part.first;
+      Scalable |= Part.second;
+    }
+    return {Factor, Scalable};
+  }
+  return {0, false};
+}
+void llvm::markVPlanBackendLoop(Loop &L, StringRef ID, ScalarEvolution &SE) {
+  auto &C = L.getHeader()->getContext();
+  SmallVector<Metadata *> Ops{nullptr};
+  if (auto *Old = L.getLoopID())
+    for (const auto &Op : drop_begin(Old->operands())) {
+      auto *N = dyn_cast_or_null<MDNode>(Op);
+      if (N && N->getNumOperands())
+        if (auto *S = dyn_cast<MDString>(N->getOperand(0)))
+          if (S->getString().starts_with("llvm.loop.vplan."))
+            continue;
+      Ops.push_back(Op);
+    }
+  Ops.push_back(tag(C, "llvm.loop.vplan.backend.candidate", ID));
+  auto *MD = MDNode::getDistinct(C, Ops);
+  MD->replaceOperandWith(0, MD);
+  L.setLoopID(MD);
+  // Affine integer IVs give a stable, cost-free normalization witness.
+  for (auto &Phi : L.getHeader()->phis()) {
+    if (!Phi.getType()->isIntegerTy())
+      continue;
+    auto *AR = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(&Phi));
+    if (!AR || AR->getLoop() != &L || !AR->isAffine())
+      continue;
+    auto Step = stepFactor(AR->getStepRecurrence(SE));
+    if (!Step.first)
+      continue;
+    Phi.setMetadata("vplan.backend.induction",
+                    MDNode::get(C, {ConstantAsMetadata::get(ConstantInt::get(
+                                        Type::getInt64Ty(C), Step.first)),
+                                    ConstantAsMetadata::get(ConstantInt::get(
+                                        Type::getInt1Ty(C), Step.second))}));
+    return;
+  }
+}
+
+void llvm::finalizeVPlanBackendIterationMapping(Function &F,
+                                                FunctionAnalysisManager &AM) {
+  if (!F.hasFnAttribute("vplan.backend.candidate"))
+    return;
+  F.addFnAttr("vplan.backend.iteration-mapping", "0");
+  auto &LI = AM.getResult<LoopAnalysis>(F);
+  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+  StringRef ID = F.getFnAttribute("vplan.backend.candidate").getValueAsString();
+  Loop *Selected = nullptr;
+  for (auto *L : LI.getLoopsInPreorder()) {
+    auto *MD = L->getLoopID();
+    if (!MD)
+      continue;
+    for (const auto &Op : drop_begin(MD->operands())) {
+      auto *N = dyn_cast_or_null<MDNode>(Op);
+      if (!N || N->getNumOperands() != 2)
+        continue;
+      auto *Key = dyn_cast<MDString>(N->getOperand(0));
+      auto *Value = dyn_cast<MDString>(N->getOperand(1));
+      if (!Key || !Value ||
+          Key->getString() != "llvm.loop.vplan.backend.candidate" ||
+          Value->getString() != ID)
+        continue;
+      if (Selected)
+        return;
+      Selected = L;
+    }
+  }
+  if (!Selected || !Selected->isInnermost())
+    return;
+  uint64_t Ratio = 0;
+  for (auto &Phi : Selected->getHeader()->phis()) {
+    auto *MD = Phi.getMetadata("vplan.backend.induction");
+    if (!MD || MD->getNumOperands() != 2)
+      continue;
+    auto *Base = mdconst::dyn_extract<ConstantInt>(MD->getOperand(0));
+    auto *AR = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(&Phi));
+    if (!Base || !AR || AR->getLoop() != Selected || !AR->isAffine())
+      continue;
+    auto Step = stepFactor(AR->getStepRecurrence(SE));
+    auto *Scalable = mdconst::dyn_extract<ConstantInt>(MD->getOperand(1));
+    if (!Step.first || !Scalable)
+      continue;
+    uint64_t B = Base->getZExtValue(), S = Step.first;
+    if (Scalable->isOne() != Step.second) {
+      // A fixed vscale may have been folded since the witness was recorded.
+      // Compare both steps in scalar iterations, including the original step,
+      // so folding vscale alone does not increase the observed width.
+      unsigned VScale = F.getVScaleValue();
+      uint64_t &ScalableFactor = Scalable->isOne() ? B : S;
+      if (!VScale || ScalableFactor > UINT64_MAX / VScale)
+        continue;
+      ScalableFactor *= VScale;
+    }
+    if (B && S % B == 0)
+      Ratio = S / B;
+  }
+  // EVL loops advance by the returned VL, not an affine constant. Prove one
+  // get.vector.length operation and an IV increment by that exact value.
+  if (!Ratio && Selected->getNumBlocks() == 1) {
+    IntrinsicInst *VL = nullptr;
+    bool Multiple = false;
+    for (auto &I : *Selected->getHeader())
+      if (auto *II = dyn_cast<IntrinsicInst>(&I))
+        if (II->getIntrinsicID() == Intrinsic::experimental_get_vector_length) {
+          if (VL)
+            Multiple = true;
+          VL = II;
+        }
+    if (VL && !Multiple)
+      for (auto &Phi : Selected->getHeader()->phis()) {
+        auto *Next = dyn_cast<BinaryOperator>(
+            Phi.getIncomingValueForBlock(Selected->getLoopLatch()));
+        if (!Next || Next->getOpcode() != Instruction::Add)
+          continue;
+        Value *Increment = Next->getOperand(0) == &Phi   ? Next->getOperand(1)
+                           : Next->getOperand(1) == &Phi ? Next->getOperand(0)
+                                                         : nullptr;
+        if (auto *Cast = dyn_cast_or_null<ZExtInst>(Increment))
+          Increment = Cast->getOperand(0);
+        if (Increment == VL)
+          Ratio = 1;
+      }
+  }
+  uint64_t Width = 0;
+  if (!Ratio ||
+      F.getFnAttribute("vplan.backend.width")
+          .getValueAsString()
+          .getAsInteger(10, Width) ||
+      Width > UINT32_MAX / Ratio)
+    return;
+  F.addFnAttr("vplan.backend.width", std::to_string(Width * Ratio));
+  F.addFnAttr("vplan.backend.iteration-mapping", "1");
 }

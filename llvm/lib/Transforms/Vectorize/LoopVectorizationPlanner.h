@@ -634,7 +634,6 @@ struct FixedScalableVFPair {
 /// including the maximum VFs.
 class VPlanCostReport;
 
-class VPlanRAContext;
 struct VPlanBackendProbe;
 class VFSelectionContext {
   /// \return True if maximizing vector bandwidth is enabled by the target or
@@ -716,7 +715,6 @@ class VFSelectionContext {
 
 public:
   VPlanCostReport *CostReport = nullptr;
-  VPlanRAContext *RA = nullptr;
   VPlanBackendProbe *BackendProbe = nullptr;
   VPlanBackendCostModel *BackendCosts = nullptr;
 
@@ -921,9 +919,7 @@ public:
     ProfitableVFs.clear();
     ReportProfitablePlans.clear();
   }
-  void registerRACandidates();
   ArrayRef<VPlanPtr> getPlans() const { return VPlans; }
-  std::pair<VectorizationFactor, VPlan *> selectRARequested();
 
   /// Return the VPlan for \p VF. At the moment, there is always a single VPlan
   /// for each VF.

@@ -11,6 +11,7 @@ class VPlan;
 class TargetTransformInfo;
 class LoopVectorizationPlanner;
 struct VFSelectionContext;
+class VPlanCostReport;
 /// Exact rational in quarter-cost units. Checked arithmetic never silently
 /// saturates or rounds a ranking score. Conversion is only for legacy clients.
 class LLVM_ABI_FOR_TEST VPExactCost {
@@ -33,6 +34,7 @@ public:
   VPExactCost operator*(unsigned B) const;
   bool operator<(VPExactCost B) const;
   bool operator<=(VPExactCost B) const;
+  void print(raw_ostream &OS, unsigned Divisor = 1) const;
   bool operator==(VPExactCost B) const;
 };
 struct VPBackendCostEntry {
@@ -53,14 +55,15 @@ class VPlanBackendCostModel {
   BasicBlock &Header;
   unsigned LoopIndex = 0, Invocation = 0;
   bool InterleaveOnly = false, VectorizeOnly = false;
+  VPlanCostReport *Report;
   bool Failed = false;
   std::string Failure;
 
 public:
   VPlanBackendCostModel(const VPlanBackendFeedback &Feedback,
                         const TargetTransformInfo &TTI, Function &F,
-                        BasicBlock &Header)
-      : Feedback(Feedback), TTI(TTI), F(F), Header(Header) {}
+                        BasicBlock &Header, VPlanCostReport *Report = nullptr)
+      : Feedback(Feedback), TTI(TTI), F(F), Header(Header), Report(Report) {}
   bool prepare(LoopVectorizationPlanner &LVP, VFSelectionContext &Config,
                unsigned UserIC, unsigned Invocation, unsigned LoopIndex,
                bool InterleaveOnlyWhenForced, bool VectorizeOnlyWhenForced,
@@ -83,6 +86,7 @@ public:
 LLVM_ABI_FOR_TEST Expected<VPExactCost>
 priceVPlanVectorSpills(const VPlanBackendResult &Observation,
                        const TargetTransformInfo &TTI, LLVMContext &Context,
-                       unsigned Width, InstructionCost &RawCost);
+                       unsigned Width, InstructionCost &RawCost,
+                       SmallVectorImpl<InstructionCost> *AccessCosts = nullptr);
 } // namespace llvm
 #endif

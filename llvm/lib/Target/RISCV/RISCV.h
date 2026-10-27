@@ -26,9 +26,6 @@ class RISCVRegisterBankInfo;
 class RISCVSubtarget;
 class RISCVTargetMachine;
 
-FunctionPass *createRISCVVPlanAnalyticsPass();
-void initializeRISCVVPlanAnalyticsPass(PassRegistry &);
-bool vplanAnalyticsEnabled();
 
 class RISCVCodeGenPreparePass
     : public OptionalPassInfoMixin<RISCVCodeGenPreparePass> {

@@ -183,3 +183,18 @@ TEST(VPlanBackendCost, ValidateSpillFactsAndEmptyMapping) {
     consumeError(Bad.takeError());
   }
 }
+
+TEST(VPlanBackendCost, ExactReportUnitsAndLargeDenominators) {
+  auto Text = [](VPExactCost C, unsigned Divisor = 1) {
+    std::string S;
+    raw_string_ostream OS(S);
+    C.print(OS, Divisor);
+    return S;
+  };
+  EXPECT_EQ(Text(VPExactCost::ratio(1, 3)), "1/12");
+  EXPECT_EQ(Text(VPExactCost::ratio(7, 3), 2), "7/24");
+  EXPECT_EQ(Text(VPExactCost::ratio(24, 1), 3), "2");
+  EXPECT_EQ(Text(VPExactCost::ratio(0, 1)), "0");
+  EXPECT_EQ(Text(VPExactCost::ratio(1, INT64_MAX)), "1/36893488147419103228");
+  EXPECT_EQ(Text(VPExactCost::ratio(1, 0)), "Invalid");
+}

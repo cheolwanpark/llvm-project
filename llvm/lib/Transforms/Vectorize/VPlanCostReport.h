@@ -10,6 +10,7 @@
 #ifndef LLVM_TRANSFORMS_VECTORIZE_VPLANCOSTREPORT_H
 #define LLVM_TRANSFORMS_VECTORIZE_VPLANCOSTREPORT_H
 
+#include "VPlanBackendCostModel.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -25,7 +26,8 @@ class Instruction;
 class Loop;
 class VPlan;
 class VPRecipeBase;
-class VFSelectionContext;
+struct VFSelectionContext;
+struct VPRegisterUsageBound;
 
 /// A passive, per-loop observer. All values passed here must come from the
 /// actual costing path. In particular, rendering must never query TTI or the
@@ -51,6 +53,8 @@ class VPlanCostReport {
     ElementCount VF;
     bool Epilogue;
     std::optional<InstructionCost> BodyCost, Score;
+    std::optional<VPExactCost> ExactBodyCost, ExactScore;
+    std::string BackendSummary, BackendDetails;
     unsigned EstimatedWidth;
     CandidateRecord(unsigned PlanID, ElementCount VF, bool Epilogue,
                     unsigned EstimatedWidth)
@@ -85,6 +89,7 @@ class VPlanCostReport {
   unsigned TuningVScale;
   bool Detailed;
   bool Emitted = false;
+  bool Discarded = false;
   unsigned DetailDepth = 0;
 
   CandidateRecord &candidate(const VPlan &Plan, ElementCount VF,
@@ -125,6 +130,14 @@ public:
   VPlanCostReport(const Loop &L, const VFSelectionContext &Config,
                   unsigned Invocation, unsigned LoopIndex, bool Detailed);
   ~VPlanCostReport();
+  /// Abandon a speculative report without emitting partial selection results.
+  void discard() { Discarded = true; }
+  void backendCost(const VPBackendCostEntry &Cost,
+                   const VPRegisterUsageBound &Bound,
+                   const VPlanBackendResult *Observation,
+                   ArrayRef<InstructionCost> AccessCosts, unsigned Width,
+                   StringRef ProfileName, InstructionCost Raw,
+                   VPExactCost Spill);
   unsigned registerPlan(const VPlan &Plan);
   unsigned planID(const VPlan &Plan) { return registerPlan(Plan); }
   void forgetPlan(const VPlan &Plan) { PlanIDs.erase(&Plan); }
@@ -140,6 +153,9 @@ public:
                        bool Scalar = false, bool Epilogue = false);
   void comparisonContext(unsigned MaxTripCount, bool HasTail);
   void comparisonScore(InstructionCost Score, InstructionCost IncumbentScore,
+                       StringRef Kind, unsigned Divisor = 1,
+                       unsigned IncumbentDivisor = 1);
+  void comparisonScore(VPExactCost Score, VPExactCost IncumbentScore,
                        StringRef Kind, unsigned Divisor = 1,
                        unsigned IncumbentDivisor = 1);
   void comparisonResult(bool Result, StringRef Reason);

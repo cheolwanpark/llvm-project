@@ -17,7 +17,6 @@
 #include "RISCVMachineScheduler.h"
 #include "RISCVTargetObjectFile.h"
 #include "RISCVTargetTransformInfo.h"
-#include "RISCVVPlanAnalytics.h"
 #include "RISCVVPlanSpill.h"
 #include "TargetInfo/RISCVTargetInfo.h"
 #include "XiangShanV2TargetTransformInfo.h"
@@ -41,12 +40,12 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Vectorize/LoopIdiomVectorize.h"
-#include "llvm/Transforms/Vectorize/VPlanRA.h"
 #include <optional>
 using namespace llvm;
 
@@ -159,7 +158,6 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
   initializeRISCVExpandAtomicPseudoPass(*PR);
   initializeRISCVRedundantCopyEliminationPass(*PR);
   initializeRISCVAsmPrinterPass(*PR);
-  initializeRISCVVPlanAnalyticsPass(*PR);
   initializeRISCVPromoteConstantPass(*PR);
 }
 
@@ -483,9 +481,9 @@ RISCVTargetMachine::getVPlanBackendFeedback(Module &M, bool Time) {
     // in a separate diagnostic record, without turning failure into spill=0.
     json::Object Timing;
     for (const auto &F : M)
-      if (F.hasFnAttribute("vplan.ra.candidate"))
+      if (F.hasFnAttribute("vplan.backend.candidate"))
         Timing["candidate"] =
-            F.getFnAttribute("vplan.ra.candidate").getValueAsString();
+            F.getFnAttribute("vplan.backend.candidate").getValueAsString();
     for (const auto &P : Timer.Phases) {
       Timing[P.Phase + "_wall_seconds"] = P.Wall;
       Timing[P.Phase + "_cpu_seconds"] = P.CPU;
@@ -652,10 +650,6 @@ void RISCVPassConfig::addPreSched2() {
   addPass(createKCFIPass());
   if (TM->getOptLevel() != CodeGenOptLevel::None)
     addPass(createRISCVLoadStoreOptPass());
-  // Observe frame-address materialization and segment spill/copy lowering,
-  // while RVV pseudos still retain their geometry.
-  if (vplanAnalyticsEnabled())
-    addPass(createRISCVVPlanAnalyticsPass());
 }
 
 void RISCVPassConfig::addPreEmitPass() {

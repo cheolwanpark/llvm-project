@@ -139,6 +139,7 @@
 #include "llvm/Support/InstructionCost.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/NativeFormatting.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/InjectTLIMappings.h"
@@ -150,7 +151,6 @@
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
 #include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
-#include "llvm/Transforms/Vectorize/VPlanRA.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -3163,7 +3163,7 @@ LoopVectorizationCostModel::computeMaxVF(ElementCount UserVF, unsigned UserIC) {
   }
 
   auto ExpectedTC = getSmallBestKnownTC(PSE, TheLoop);
-  if (!vplanRAEnabled() && ExpectedTC && ExpectedTC->isFixed() &&
+  if (ExpectedTC && ExpectedTC->isFixed() &&
       ExpectedTC->getFixedValue() <=
           TTI.getMinTripCountTailFoldingThreshold()) {
     if (MaxPowerOf2RuntimeVF > 0u) {
@@ -3793,7 +3793,7 @@ std::unique_ptr<VPlan> LoopVectorizationPlanner::selectBestEpiloguePlan(
 unsigned
 LoopVectorizationPlanner::selectInterleaveCount(VPlan &Plan, ElementCount VF,
                                                 InstructionCost LoopCost) {
-  if (Config.CostReport)
+  if (Config.CostReport && Config.CostReport->Phase != "backend-native-ic")
     Config.CostReport->Phase = "interleave-selection";
   VP_COST_REPORT(Config.CostReport, OS << "  interleave-selection plan="
                                        << Config.CostReport->planID(Plan)
@@ -6320,17 +6320,13 @@ LoopVectorizationPlanner::precomputeCosts(VPlan &Plan, ElementCount VF,
   return Cost;
 }
 
-// Transport the middle-end TTI configuration unit without rounding it.
-// An unavailable cost remains explicitly unknown in the candidate manifest.
-static json::Value quarterCost(InstructionCost Cost) {
-  if (!Cost.isValid() || Cost < 0)
-    return nullptr;
-  int64_t Whole = Cost.getValue();
-  return Whole * 4 + ((Cost - Whole) * 4).getValue();
-}
-
 InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
                                                VPRegisterUsage *RU) const {
+  std::optional<SaveAndRestore<StringRef>> ReportPhase;
+  if (Config.BackendCosts && Config.CostReport &&
+      Config.CostReport->Phase == "main-selection")
+    ReportPhase.emplace(Config.CostReport->Phase,
+                        "backend-native-selection-context");
   VPCostContext CostCtx(CM.TTI, *CM.TLI, Plan, CM, Config.CostKind, PSE,
                         OrigLoop);
   CostCtx.Report = Config.CostReport;
@@ -6396,6 +6392,11 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
 InstructionCost LoopVectorizationPlanner::backendCandidateCost(
     VPlan &Plan, ElementCount VF, bool Profile, InstructionCost &VectorSpill) {
   VPlanCostProfileScope Scope(Profile);
+  std::optional<SaveAndRestore<StringRef>> ReportPhase;
+  if (Config.CostReport)
+    ReportPhase.emplace(Config.CostReport->Phase, Profile
+                                                      ? "backend-profile-body"
+                                                      : "backend-native-body");
   VectorSpill = 0;
   SmallVector<VPRegisterUsage, 8> RU;
   if (Config.shouldConsiderRegPressureForVF(VF)) {
@@ -6410,53 +6411,6 @@ unsigned LoopVectorizationPlanner::limitBackendIC(VPlan &Plan,
   if (CM.maskPartialAliasing() || Legal->hasUncountableExitWithSideEffects())
     return 1;
   return IC;
-}
-
-void LoopVectorizationPlanner::registerRACandidates() {
-  if (!Config.RA)
-    return;
-  for (const auto &P : VPlans) {
-    Config.RA->registerPlan(*P);
-    SmallVector<ElementCount> VFs(P->vectorFactors());
-    for (unsigned I = 0; I < VFs.size(); ++I) {
-      ElementCount VF = VFs[I];
-      if (VF.isScalar())
-        continue;
-      json::Object MiddleEnd;
-      // Observe a real middle-end TTI query. Counts and placement of the
-      // eventual configurations belong to MIR; this is their shared TTI unit.
-      auto &Ctx = OrigLoop->getHeader()->getContext();
-      InstructionCost ConfigUnit = InstructionCost::getInvalid();
-      if (Config.CostKind == TargetTransformInfo::TCK_RecipThroughput &&
-          OrigLoop->getHeader()->getModule()->getTargetTriple().isRISCV()) {
-        Type *IntTy = Type::getInt64Ty(Ctx);
-        IntrinsicCostAttributes ICA(Intrinsic::riscv_vsetvlimax, IntTy,
-                                    {IntTy, IntTy});
-        ConfigUnit = CM.TTI.getIntrinsicInstrCost(ICA, Config.CostKind);
-      }
-      MiddleEnd = json::Object{
-          {"configuration_unit_quarters", quarterCost(ConfigUnit)},
-          {"configuration_source",
-           "TTI.getIntrinsicInstrCost(riscv_vsetvlimax)"},
-          {"configuration_scope", "per-observed-MIR-configuration"},
-          {"unit", "TTI-reciprocal-throughput-quarter"}};
-      Config.RA->recordCandidate(
-          *P, VF, estimateElementCount(VF, Config.getVScaleForTuning()),
-          std::move(MiddleEnd));
-    }
-  }
-}
-
-std::pair<VectorizationFactor, VPlan *>
-LoopVectorizationPlanner::selectRARequested() {
-  for (const auto &P : VPlans)
-    for (ElementCount VF : P->vectorFactors())
-      if (Config.RA->isRequested(*P, VF)) {
-        // Probe selection is a materialization request, not a cost decision.
-        return {VectorizationFactor(VF, InstructionCost::getInvalid(),
-                                    InstructionCost::getInvalid()), P.get()};
-      }
-  reportFatalUsageError("requested VPlan RA candidate was not regenerated");
 }
 
 std::pair<VectorizationFactor, VPlan *>
@@ -6802,15 +6756,11 @@ DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
       Config.BackendProbe &&
       Config.BackendProbe->Candidate.IsEpilogue ==
           (EpilogueVecKind == EpilogueVectorizationKind::Epilogue);
-  if (((Config.RA && Config.RA->probesThisLoop()) || ObserveBackendRole) &&
-      HeaderVPBB) {
+  if (ObserveBackendRole && HeaderVPBB) {
     if (auto *Generated =
             LI->getLoopFor(State.CFG.VPBB2IRBB.lookup(HeaderVPBB))) {
       SE.forgetLoop(Generated);
-      markVPlanRALoop(*Generated,
-                      Config.BackendProbe ? Config.BackendProbe->Candidate.ID
-                                          : getVPlanRAProbe(),
-                      SE);
+      markVPlanBackendLoop(*Generated, Config.BackendProbe->Candidate.ID, SE);
     }
   }
 
@@ -8658,10 +8608,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
 
   // Function containing loop
   Function *F = L->getHeader()->getParent();
-  std::unique_ptr<VPlanRAContext> RA;
-  if (vplanRAEnabled())
-    RA = std::make_unique<VPlanRAContext>(*F, ReportLoopIndex);
-
   // Looking at the diagnostic output is the only way to determine if a loop
   // was vectorized (other than looking at the IR or machine code), so it
   // is important to generate an optimization remark for each loop. Most of
@@ -8751,7 +8697,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // Check the loop for a trip count threshold: vectorize loops with a tiny trip
   // count by optimizing for size, to minimize overheads.
   auto ExpectedTC = getSmallBestKnownTC(PSE, L);
-  if (!vplanRAEnabled() && ExpectedTC && ExpectedTC->isFixed() &&
+  if (ExpectedTC && ExpectedTC->isFixed() &&
       ExpectedTC->getFixedValue() < TinyTripCountVectorThreshold) {
     LLVM_DEBUG(dbgs() << "LV: Found a loop with a very small trip count. "
                       << "This loop is worth vectorizing only if no scalar "
@@ -8823,7 +8769,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                                 GetBFI, F, &Hints, IAI, Config);
   std::unique_ptr<VPlanCostReport> CostReport;
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-  if (PrintVPlans || PrintDetailedVPlans) {
+  if (!BackendProbe && (PrintVPlans || PrintDetailedVPlans)) {
     CostReport = std::make_unique<VPlanCostReport>(
         *L, Config, ReportInvocation, ReportLoopIndex, PrintDetailedVPlans);
     Config.CostReport = CostReport.get();
@@ -8848,12 +8794,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   // Get user vectorization factor and interleave count.
   ElementCount UserVF = Hints.getWidth();
   unsigned UserIC = Hints.getInterleave();
-  if (vplanRAEnabled()) {
-    if (UserIC > 1 || hasForcedEpilogueVF())
-      reportFatalUsageError(
-          "backend selection requires IC=1 and no vector epilogue");
-    UserIC = 1;
-  }
   // Outer loops don't have LoopAccessInfo, so skip the safety check and reset
   // UserIC (interleaving is not supported for outer loops).
   if (!IsInnerLoop)
@@ -8865,33 +8805,39 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   LVP.plan(UserVF, UserIC);
   Config.BackendProbe = BackendProbe;
   std::unique_ptr<VPlanBackendCostModel> BackendCosts;
-  if (BackendFeedback && !RA && IsInnerLoop &&
+  std::unique_ptr<VPlanCostReport> NativeReport;
+  auto RestoreNativeReport = [&] {
+    if (NativeReport) {
+      CostReport->discard();
+      CostReport = std::move(NativeReport);
+      Config.CostReport = CostReport.get();
+    }
+  };
+  if (BackendFeedback && IsInnerLoop &&
       Config.CostKind == TTI::TCK_RecipThroughput &&
       F->getParent()->getTargetTriple().isRISCV() &&
       TTI->getRegisterBitWidth(TTI::RGK_ScalableVector).getKnownMinValue()) {
+    if (CostReport) {
+      NativeReport = std::move(CostReport);
+      CostReport = std::make_unique<VPlanCostReport>(
+          *L, Config, ReportInvocation, ReportLoopIndex,
+          NativeReport->isDetailed());
+      Config.CostReport = CostReport.get();
+    }
     BackendCosts = std::make_unique<VPlanBackendCostModel>(
-        *BackendFeedback, *TTI, *F, *L->getHeader());
+        *BackendFeedback, *TTI, *F, *L->getHeader(), Config.CostReport);
     if (BackendCosts->prepare(
             LVP, Config, UserIC, ReportInvocation, ReportLoopIndex,
             InterleaveOnlyWhenForced, VectorizeOnlyWhenForced,
             hasForcedEpilogueVF() ? ElementCount(EpilogueVectorizationForceVF)
                                   : ElementCount::getFixed(0)))
       Config.BackendCosts = BackendCosts.get();
+    else
+      RestoreNativeReport();
   }
-  if (RA) {
-    if (!IsInnerLoop)
-      reportFatalUsageError("VPlan RA currently supports inner loops only");
-    RA->setLoopInfo(CM.expectedCost(ElementCount::getFixed(1)),
-                    PSE.getSmallConstantMaxTripCount(),
-                    PSE.getSE()->getSmallConstantTripCount(L));
-    Config.RA = RA.get();
-    LVP.registerRACandidates();
-  }
-  if (RA && !RA->hasRequest())
-    return false;
   auto SelectPlan = [&]() -> std::pair<VectorizationFactor, VPlan *> {
     if (!BackendProbe)
-      return RA ? LVP.selectRARequested() : LVP.computeBestVF();
+      return LVP.computeBestVF();
     const auto &C = BackendProbe->Candidate;
     auto Plans = LVP.getPlans();
     unsigned Index = C.IsEpilogue ? C.MainPlanIndex : C.PlanIndex;
@@ -8913,6 +8859,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     return false;
   if (Config.BackendCosts && BackendCosts->failed()) {
     Config.BackendCosts = nullptr;
+    RestoreNativeReport();
     LVP.resetVFSelection();
     std::tie(VF, BestPlanPtr) = LVP.computeBestVF();
   }
@@ -8924,37 +8871,24 @@ bool LoopVectorizePass::processLoop(Loop *L) {
         LVP.selectBestEpiloguePlan(*BestPlanPtr, VF.Width, C->IC);
     if (BackendCosts->failed()) {
       Config.BackendCosts = nullptr;
+      RestoreNativeReport();
       PreparedEpilogue.reset();
       LVP.resetVFSelection();
       std::tie(VF, BestPlanPtr) = LVP.computeBestVF();
     }
   }
-  bool RAProbe = (RA && RA->probesThisLoop()) || BackendProbe;
-  if (RAProbe) {
-    F->addFnAttr("vplan.ra.candidate",
-                 BackendProbe ? BackendProbe->Candidate.ID : getVPlanRAProbe());
-    ElementCount ObservedVF =
-        BackendProbe ? BackendProbe->Candidate.VF : VF.Width;
-    unsigned ObservedIC = BackendProbe ? BackendProbe->Candidate.IC : 1;
-    if (BackendProbe) {
-      F->addFnAttr("vplan.ra.ic", std::to_string(ObservedIC));
-      F->addFnAttr("vplan.ra.role",
-                   BackendProbe->Candidate.IsEpilogue ? "epilogue" : "main");
-    }
-    F->addFnAttr("vplan.ra.vf", std::to_string(ObservedVF.getKnownMinValue()));
-    F->addFnAttr("vplan.ra.scalable", ObservedVF.isScalable() ? "1" : "0");
-    F->addFnAttr("vplan.ra.width",
+  if (NativeReport)
+    NativeReport->discard();
+  if (BackendProbe) {
+    const auto &C = BackendProbe->Candidate;
+    F->addFnAttr("vplan.backend.candidate", C.ID);
+    F->addFnAttr("vplan.backend.ic", std::to_string(C.IC));
+    F->addFnAttr("vplan.backend.role", C.IsEpilogue ? "epilogue" : "main");
+    F->addFnAttr("vplan.backend.vf", std::to_string(C.VF.getKnownMinValue()));
+    F->addFnAttr("vplan.backend.scalable", C.VF.isScalable() ? "1" : "0");
+    F->addFnAttr("vplan.backend.width",
                  std::to_string(estimateElementCount(
-                     ObservedVF * ObservedIC, Config.getVScaleForTuning())));
-    F->addFnAttr("vplan.ra.max-trip-count",
-                 std::to_string(PSE.getSmallConstantMaxTripCount()));
-    F->addFnAttr("vplan.ra.exact-trip-count",
-                 std::to_string(PSE.getSE()->getSmallConstantTripCount(L)));
-    F->addFnAttr("vplan.ra.scalar-tail",
-                 (BackendProbe ? BackendProbe->Candidate.ScalarTail
-                               : BestPlanPtr->hasScalarTail())
-                     ? "1"
-                     : "0");
+                     C.VF * C.IC, Config.getVScaleForTuning())));
   }
   unsigned IC = 1;
 
@@ -8966,7 +8900,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     return false;
   }
 
-  if (!RA && !BackendProbe && IsInnerLoop && ORE->allowExtraAnalysis(LV_NAME))
+  if (!BackendProbe && IsInnerLoop && ORE->allowExtraAnalysis(LV_NAME))
     LVP.emitInvalidCostRemarks(ORE);
 
   assert((IsInnerLoop || !CM.maskPartialAliasing()) &&
@@ -8982,7 +8916,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     else if (Config.BackendCosts && VF.Width.isVector())
       IC = Config.BackendCosts->lookup(*BestPlanPtr, VF.Width)->IC;
     else
-      IC = RA ? 1 : LVP.selectInterleaveCount(*BestPlanPtr, VF.Width, VF.Cost);
+      IC = LVP.selectInterleaveCount(*BestPlanPtr, VF.Width, VF.Cost);
 
     unsigned SelectedIC = std::max(IC, UserIC);
     //  Optimistically generate runtime checks if they are needed. Drop them if
@@ -8996,14 +8930,12 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       using namespace llvm::PatternMatch;
       if (Checks.getSCEVChecks().first &&
           match(Checks.getSCEVChecks().first, m_One())) {
-        if (RA) RA->failure("always-failing-scev-check");
         VP_COST_SUMMARY(Config.CostReport,
                         OS << "  rejection reason=always-failing-scev-check\n");
         return false;
       }
       if (Checks.getMemRuntimeChecks().first &&
           match(Checks.getMemRuntimeChecks().first, m_One())) {
-        if (RA) RA->failure("always-failing-memory-check");
         VP_COST_SUMMARY(
             Config.CostReport,
             OS << "  rejection reason=always-failing-memory-check\n");
@@ -9023,7 +8955,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       VP_COST_SUMMARY(
           Config.CostReport,
           OS << "  outside-loop-profitability bypass=forced-vectorization\n");
-    if (!ForceVectorization && !RA && !BackendProbe &&
+    if (!ForceVectorization && !BackendProbe &&
         !isOutsideLoopWorkProfitable(Checks, VF, L, PSE, CostCtx, *BestPlanPtr,
                                      SEL, Config.getVScaleForTuning())) {
       ORE->emit([&]() {
@@ -9138,9 +9070,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     if (Config.BackendCosts)
       Config.BackendCosts->selection(VF.Width, IC, ElementCount::getFixed(0),
                                      false);
-    if (RA && BestPlanPtr)
-      RA->selection(*BestPlanPtr, VF.Width, IC, ElementCount::getFixed(0),
-                    /*Emitted=*/false);
     VP_COST_SUMMARY(Config.CostReport,
                     OS << "  rejection vectorization_reason="
                        << VecDiagMsg.first
@@ -9216,7 +9145,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       EpiPlan = LVP.selectBestEpiloguePlan(BestPlan, VF.Width, IC);
   } else if (Config.BackendCosts)
     EpiPlan = std::move(PreparedEpilogue);
-  else if (!RA)
+  else
     EpiPlan = LVP.selectBestEpiloguePlan(BestPlan, VF.Width, IC);
   if (BackendProbe &&
       (EpiPlan ? EpiPlan->getSingleVF() : ElementCount::getFixed(0)) !=
@@ -9228,10 +9157,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     Config.BackendCosts->selection(
         VF.Width, IC,
         EpiPlan ? EpiPlan->getSingleVF() : ElementCount::getFixed(0), true);
-  if (RA)
-    RA->selection(BestPlan, VF.Width, IC,
-                  EpiPlan ? EpiPlan->getSingleVF() : ElementCount::getFixed(0),
-                  /*Emitted=*/true);
   bool HasBranchWeights =
       hasBranchWeightMD(*L->getLoopLatch()->getTerminator());
   if (EpiPlan) {
@@ -9410,10 +9335,9 @@ PreservedAnalyses LoopVectorizePass::run(Function &F,
   GetBFI = [&AM, &F]() -> BlockFrequencyInfo & {
     return AM.getResult<BlockFrequencyAnalysis>(F);
   };
-  BackendFeedback =
-      vplanBackendFeedbackEnabled() && !BackendProbe && !vplanRAEnabled()
-          ? &AM.getResult<VPlanBackendFeedbackAnalysis>(F)
-          : nullptr;
+  BackendFeedback = vplanBackendFeedbackEnabled() && !BackendProbe
+                        ? &AM.getResult<VPlanBackendFeedbackAnalysis>(F)
+                        : nullptr;
   LoopVectorizeResult Result = runImpl(F);
   if (!Result.MadeAnyChange)
     return PreservedAnalyses::all();

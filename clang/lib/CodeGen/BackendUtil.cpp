@@ -93,7 +93,6 @@
 #include "llvm/Transforms/Scalar/JumpThreading.h"
 #include "llvm/Transforms/Utils/Debugify.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
-#include "llvm/Transforms/Vectorize/VPlanRA.h"
 #include <limits>
 #include <memory>
 #include <optional>
@@ -842,24 +841,6 @@ void addLowerAllowCheckPass(const CodeGenOptions &CodeGenOpts,
 void EmitAssemblyHelper::RunOptimizationPipeline(
     BackendAction Action, std::unique_ptr<raw_pwrite_stream> &OS,
     std::unique_ptr<llvm::ToolOutputFile> &ThinLinkOS, BackendConsumer *BC) {
-  if (vplanRAEnabled())
-    initializeVPlanRA(CI.getVirtualFileSystem());
-  if (getVPlanPipelineStage() != VPlanPipelineStage::Full) {
-    if ((mapToLevel(CodeGenOpts) != OptimizationLevel::O2 &&
-         mapToLevel(CodeGenOpts) != OptimizationLevel::O3) ||
-        CodeGenOpts.OptimizeSize || !TargetTriple.isRISCV64() ||
-        CodeGenOpts.PrepareForLTO || CodeGenOpts.PrepareForThinLTO ||
-        CodeGenOpts.FatLTO || !CodeGenOpts.ThinLTOIndexFile.empty() ||
-        CodeGenOpts.DisableLLVMPasses || CodeGenOpts.EnableNewPMCodeGen ||
-        !LangOpts.Sanitize.empty() || CodeGenOpts.hasProfileIRInstr() ||
-        CodeGenOpts.hasProfileIRUse() || !CodeGenOpts.SampleProfileFile.empty())
-      reportFatalUsageError(
-          "VPlan meta compilation requires non-LTO RISCV64 -O2/-O3 "
-          "without profiling, sanitizers or new-PM codegen");
-    if (getVPlanPipelineStage() == VPlanPipelineStage::Prepare &&
-        Action != Backend_EmitBC && Action != Backend_EmitLL)
-      reportFatalUsageError("VPlan prepare requires -emit-llvm");
-  }
   std::optional<PGOOptions> PGOOpt;
 
   if (CodeGenOpts.hasProfileIRInstr())

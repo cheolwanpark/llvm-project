@@ -157,59 +157,6 @@
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/SLPVectorizer.h"
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
-#include "llvm/Transforms/Vectorize/VPlanRA.h"
-
-using namespace llvm;
-
-namespace {
-// Kept at module boundaries so every function is checkpointed before LV.
-class VPlanCheckpointPass : public PassInfoMixin<VPlanCheckpointPass> {
-  bool Resume;
-  OptimizationLevel Level;
-
-public:
-  VPlanCheckpointPass(bool Resume, OptimizationLevel Level)
-      : Resume(Resume), Level(Level) {}
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &) {
-    auto *Marker = M.getNamedMetadata("llvm.vplan.checkpoint");
-    if (Resume) {
-      if (!Marker || Marker->getNumOperands() != 1)
-        reportFatalUsageError("vplan resume requires a prepared checkpoint");
-      auto *Record = Marker->getOperand(0);
-      auto *Stored = Record->getNumOperands() == 1
-                         ? dyn_cast<MDString>(Record->getOperand(0))
-                         : nullptr;
-      if (!Stored ||
-          Stored->getString() != (Level == OptimizationLevel::O3 ? "O3" : "O2"))
-        reportFatalUsageError("VPlan checkpoint optimization level mismatch");
-      M.eraseNamedMetadata(Marker);
-    } else {
-      if (Marker)
-        reportFatalUsageError("module is already a VPlan checkpoint");
-      M.getOrInsertNamedMetadata("llvm.vplan.checkpoint")
-          ->addOperand(MDNode::get(
-              M.getContext(),
-              MDString::get(M.getContext(),
-                            Level == OptimizationLevel::O3 ? "O3" : "O2")));
-    }
-    return PreservedAnalyses::none();
-  }
-  static bool isRequired() { return true; }
-};
-class VPlanRAFinishPass : public PassInfoMixin<VPlanRAFinishPass> {
-public:
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
-    auto &FAM =
-        AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-    for (auto &F : M)
-      if (!F.isDeclaration())
-        finalizeVPlanRAIterationMapping(F, FAM);
-    finishVPlanRA(M);
-    return PreservedAnalyses::all();
-  }
-  static bool isRequired() { return true; }
-};
-} // namespace
 
 using namespace llvm;
 
@@ -1572,142 +1519,130 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
   ModulePassManager MPM;
 
   FunctionPassManager OptimizePM;
-  if (getVPlanPipelineStage() == VPlanPipelineStage::Resume) {
-    MPM.addPass(VPlanCheckpointPass(/*Resume=*/true, Level));
-    if (EnableGlobalAnalyses)
-      MPM.addPass(RecomputeGlobalsAAPass());
-  } else {
-    // Run partial inlining pass to partially inline functions that have
-    // large bodies.
-    if (RunPartialInlining)
-      MPM.addPass(PartialInlinerPass());
+  // Run partial inlining pass to partially inline functions that have
+  // large bodies.
+  if (RunPartialInlining)
+    MPM.addPass(PartialInlinerPass());
 
-    // Remove avail extern fns and globals definitions since we aren't compiling
-    // an object file for later LTO. For LTO we want to preserve these so they
-    // are eligible for inlining at link-time. Note if they are unreferenced they
-    // will be removed by GlobalDCE later, so this only impacts referenced
-    // available externally globals. Eventually they will be suppressed during
-    // codegen, but eliminating here enables more opportunity for GlobalDCE as it
-    // may make globals referenced by available external functions dead and saves
-    // running remaining passes on the eliminated functions. These should be
-    // preserved during prelinking for link-time inlining decisions.
-    if (!isLTOPreLink(LTOPhase))
-      MPM.addPass(EliminateAvailableExternallyPass());
+  // Remove avail extern fns and globals definitions since we aren't compiling
+  // an object file for later LTO. For LTO we want to preserve these so they
+  // are eligible for inlining at link-time. Note if they are unreferenced they
+  // will be removed by GlobalDCE later, so this only impacts referenced
+  // available externally globals. Eventually they will be suppressed during
+  // codegen, but eliminating here enables more opportunity for GlobalDCE as it
+  // may make globals referenced by available external functions dead and saves
+  // running remaining passes on the eliminated functions. These should be
+  // preserved during prelinking for link-time inlining decisions.
+  if (!isLTOPreLink(LTOPhase))
+    MPM.addPass(EliminateAvailableExternallyPass());
 
-    // Do RPO function attribute inference across the module to forward-propagate
-    // attributes where applicable.
-    // FIXME: Is this really an optimization rather than a canonicalization?
-    MPM.addPass(ReversePostOrderFunctionAttrsPass());
+  // Do RPO function attribute inference across the module to forward-propagate
+  // attributes where applicable.
+  // FIXME: Is this really an optimization rather than a canonicalization?
+  MPM.addPass(ReversePostOrderFunctionAttrsPass());
 
-    // Do a post inline PGO instrumentation and use pass. This is a context
-    // sensitive PGO pass. We don't want to do this in LTOPreLink phrase as
-    // cross-module inline has not been done yet. The context sensitive
-    // instrumentation is after all the inlines are done.
-    if (!isLTOPreLink(LTOPhase) && PGOOpt) {
-      if (PGOOpt->CSAction == PGOOptions::CSIRInstr)
-        addPGOInstrPasses(MPM, Level, /*RunProfileGen=*/true,
-                          /*IsCS=*/true, PGOOpt->AtomicCounterUpdate,
-                          PGOOpt->CSProfileGenFile, PGOOpt->ProfileRemappingFile);
-      else if (PGOOpt->CSAction == PGOOptions::CSIRUse)
-        addPGOInstrPasses(MPM, Level, /*RunProfileGen=*/false,
-                          /*IsCS=*/true, PGOOpt->AtomicCounterUpdate,
-                          PGOOpt->ProfileFile, PGOOpt->ProfileRemappingFile);
-    }
+  // Do a post inline PGO instrumentation and use pass. This is a context
+  // sensitive PGO pass. We don't want to do this in LTOPreLink phrase as
+  // cross-module inline has not been done yet. The context sensitive
+  // instrumentation is after all the inlines are done.
+  if (!isLTOPreLink(LTOPhase) && PGOOpt) {
+    if (PGOOpt->CSAction == PGOOptions::CSIRInstr)
+      addPGOInstrPasses(MPM, Level, /*RunProfileGen=*/true,
+                        /*IsCS=*/true, PGOOpt->AtomicCounterUpdate,
+                        PGOOpt->CSProfileGenFile, PGOOpt->ProfileRemappingFile);
+    else if (PGOOpt->CSAction == PGOOptions::CSIRUse)
+      addPGOInstrPasses(MPM, Level, /*RunProfileGen=*/false,
+                        /*IsCS=*/true, PGOOpt->AtomicCounterUpdate,
+                        PGOOpt->ProfileFile, PGOOpt->ProfileRemappingFile);
+  }
 
-    // Re-compute GlobalsAA here prior to function passes. This is particularly
-    // useful as the above will have inlined, DCE'ed, and function-attr
-    // propagated everything. We should at this point have a reasonably minimal
-    // and richly annotated call graph. By computing aliasing and mod/ref
-    // information for all local globals here, the late loop passes and notably
-    // the vectorizer will be able to use them to help recognize vectorizable
-    // memory operations.
-    if (EnableGlobalAnalyses)
-      MPM.addPass(RecomputeGlobalsAAPass());
+  // Re-compute GlobalsAA here prior to function passes. This is particularly
+  // useful as the above will have inlined, DCE'ed, and function-attr
+  // propagated everything. We should at this point have a reasonably minimal
+  // and richly annotated call graph. By computing aliasing and mod/ref
+  // information for all local globals here, the late loop passes and notably
+  // the vectorizer will be able to use them to help recognize vectorizable
+  // memory operations.
+  if (EnableGlobalAnalyses)
+    MPM.addPass(RecomputeGlobalsAAPass());
 
-    invokeOptimizerEarlyEPCallbacks(MPM, Level, LTOPhase);
+  invokeOptimizerEarlyEPCallbacks(MPM, Level, LTOPhase);
 
-    // Only drop unnecessary assumes post-inline and post-link, as otherwise
-    // additional uses of the affected value may be introduced through inlining
-    // and CSE.
-    if (!isLTOPreLink(LTOPhase))
-      OptimizePM.addPass(DropUnnecessaryAssumesPass());
+  // Only drop unnecessary assumes post-inline and post-link, as otherwise
+  // additional uses of the affected value may be introduced through inlining
+  // and CSE.
+  if (!isLTOPreLink(LTOPhase))
+    OptimizePM.addPass(DropUnnecessaryAssumesPass());
 
-    // Scheduling LoopVersioningLICM when inlining is over, because after that
-    // we may see more accurate aliasing. Reason to run this late is that too
-    // early versioning may prevent further inlining due to increase of code
-    // size. Other optimizations which runs later might get benefit of no-alias
-    // assumption in clone loop.
-    if (UseLoopVersioningLICM) {
-      OptimizePM.addPass(
-          createFunctionToLoopPassAdaptor(LoopVersioningLICMPass()));
-      // LoopVersioningLICM pass might increase new LICM opportunities.
-      OptimizePM.addPass(createFunctionToLoopPassAdaptor(
-          LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
-                   /*AllowSpeculation=*/true),
-          /*USeMemorySSA=*/true));
-    }
-
-    OptimizePM.addPass(Float2IntPass());
-    OptimizePM.addPass(LowerConstantIntrinsicsPass());
-
-    if (EnableMatrix) {
-      OptimizePM.addPass(LowerMatrixIntrinsicsPass());
-      OptimizePM.addPass(EarlyCSEPass());
-    }
-
-    // CHR pass should only be applied with the profile information.
-    // The check is to check the profile summary information in CHR.
-    if (EnableCHR && Level == OptimizationLevel::O3)
-      OptimizePM.addPass(ControlHeightReductionPass());
-
-    // FIXME: We need to run some loop optimizations to re-rotate loops after
-    // simplifycfg and others undo their rotation.
-
-    // Optimize the loop execution. These passes operate on entire loop nests
-    // rather than on each loop in an inside-out manner, and so they are actually
-    // function passes.
-
-    invokeVectorizerStartEPCallbacks(OptimizePM, Level);
-
-    LoopPassManager LPM;
-    // First rotate loops that may have been un-rotated by prior passes.
-    // Disable header duplication at -Oz.
-    LPM.addPass(LoopRotatePass(/*EnableLoopHeaderDuplication=*/true,
-                               isLTOPreLink(LTOPhase),
-                               /*CheckExitCount=*/true));
-    // Some loops may have become dead by now. Try to delete them.
-    // FIXME: see discussion in https://reviews.llvm.org/D112851,
-    //        this may need to be revisited once we run GVN before loop deletion
-    //        in the simplification pipeline.
-    LPM.addPass(LoopDeletionPass());
-
-    if (PTO.LoopInterchange)
-      LPM.addPass(LoopInterchangePass());
-
+  // Scheduling LoopVersioningLICM when inlining is over, because after that
+  // we may see more accurate aliasing. Reason to run this late is that too
+  // early versioning may prevent further inlining due to increase of code
+  // size. Other optimizations which runs later might get benefit of no-alias
+  // assumption in clone loop.
+  if (UseLoopVersioningLICM) {
     OptimizePM.addPass(
-        createFunctionToLoopPassAdaptor(std::move(LPM), /*UseMemorySSA=*/false));
-
-    // FIXME: This may not be the right place in the pipeline.
-    // We need to have the data to support the right place.
-    if (PTO.LoopFusion)
-      OptimizePM.addPass(LoopFusePass());
-
-    // Distribute loops to allow partial vectorization.  I.e. isolate dependences
-    // into separate loop that would otherwise inhibit vectorization.  This is
-    // currently only performed for loops marked with the metadata
-    // llvm.loop.distribute=true or when -enable-loop-distribute is specified.
-    OptimizePM.addPass(LoopDistributePass());
-
-    // Populates the VFABI attribute with the scalar-to-vector mappings
-    // from the TargetLibraryInfo.
-    OptimizePM.addPass(InjectTLIMappings());
+        createFunctionToLoopPassAdaptor(LoopVersioningLICMPass()));
+    // LoopVersioningLICM pass might increase new LICM opportunities.
+    OptimizePM.addPass(createFunctionToLoopPassAdaptor(
+        LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
+                 /*AllowSpeculation=*/true),
+        /*USeMemorySSA=*/true));
   }
-  if (getVPlanPipelineStage() == VPlanPipelineStage::Prepare) {
-    MPM.addPass(createModuleToFunctionPassAdaptor(std::move(OptimizePM),
-                                                PTO.EagerlyInvalidateAnalyses));
-    MPM.addPass(VPlanCheckpointPass(/*Resume=*/false, Level));
-    return MPM;
+
+  OptimizePM.addPass(Float2IntPass());
+  OptimizePM.addPass(LowerConstantIntrinsicsPass());
+
+  if (EnableMatrix) {
+    OptimizePM.addPass(LowerMatrixIntrinsicsPass());
+    OptimizePM.addPass(EarlyCSEPass());
   }
+
+  // CHR pass should only be applied with the profile information.
+  // The check is to check the profile summary information in CHR.
+  if (EnableCHR && Level == OptimizationLevel::O3)
+    OptimizePM.addPass(ControlHeightReductionPass());
+
+  // FIXME: We need to run some loop optimizations to re-rotate loops after
+  // simplifycfg and others undo their rotation.
+
+  // Optimize the loop execution. These passes operate on entire loop nests
+  // rather than on each loop in an inside-out manner, and so they are actually
+  // function passes.
+
+  invokeVectorizerStartEPCallbacks(OptimizePM, Level);
+
+  LoopPassManager LPM;
+  // First rotate loops that may have been un-rotated by prior passes.
+  // Disable header duplication at -Oz.
+  LPM.addPass(LoopRotatePass(/*EnableLoopHeaderDuplication=*/true,
+                             isLTOPreLink(LTOPhase),
+                             /*CheckExitCount=*/true));
+  // Some loops may have become dead by now. Try to delete them.
+  // FIXME: see discussion in https://reviews.llvm.org/D112851,
+  //        this may need to be revisited once we run GVN before loop deletion
+  //        in the simplification pipeline.
+  LPM.addPass(LoopDeletionPass());
+
+  if (PTO.LoopInterchange)
+    LPM.addPass(LoopInterchangePass());
+
+  OptimizePM.addPass(
+      createFunctionToLoopPassAdaptor(std::move(LPM), /*UseMemorySSA=*/false));
+
+  // FIXME: This may not be the right place in the pipeline.
+  // We need to have the data to support the right place.
+  if (PTO.LoopFusion)
+    OptimizePM.addPass(LoopFusePass());
+
+  // Distribute loops to allow partial vectorization.  I.e. isolate dependences
+  // into separate loop that would otherwise inhibit vectorization.  This is
+  // currently only performed for loops marked with the metadata
+  // llvm.loop.distribute=true or when -enable-loop-distribute is specified.
+  OptimizePM.addPass(LoopDistributePass());
+
+  // Populates the VFABI attribute with the scalar-to-vector mappings
+  // from the TargetLibraryInfo.
+  OptimizePM.addPass(InjectTLIMappings());
 
   addVectorPasses(Level, OptimizePM, LTOPhase);
 
@@ -1832,55 +1767,41 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
 ModulePassManager
 PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
                                            ThinOrFullLTOPhase Phase) {
-  if (getVPlanPipelineStage() != VPlanPipelineStage::Full &&
-      ((Level != OptimizationLevel::O2 && Level != OptimizationLevel::O3) ||
-       Phase != ThinOrFullLTOPhase::None))
-    reportFatalUsageError("VPlan checkpoint pipelines require non-LTO -O2/-O3");
-
   if (Level == OptimizationLevel::O0)
     return buildO0DefaultPipeline(Level, Phase);
 
   ModulePassManager MPM;
-  if (getVPlanPipelineStage() != VPlanPipelineStage::Resume) {
-    instructionCountersPass(MPM, /* IsPreOptimization */ true);
-    // Currently this pipeline is only invoked in an LTO pre link pass or when we
-    // are not running LTO. If that changes the below checks may need updating.
-    assert(isLTOPreLink(Phase) || Phase == ThinOrFullLTOPhase::None);
+  instructionCountersPass(MPM, /* IsPreOptimization */ true);
+  // Currently this pipeline is only invoked in an LTO pre link pass or when we
+  // are not running LTO. If that changes the below checks may need updating.
+  assert(isLTOPreLink(Phase) || Phase == ThinOrFullLTOPhase::None);
 
-    // If we are invoking this in non-LTO mode, remove any MemProf related
-    // attributes and metadata, as we don't know whether we are linking with
-    // a library containing the necessary interfaces.
-    if (Phase == ThinOrFullLTOPhase::None)
-      MPM.addPass(MemProfRemoveInfo());
+  // If we are invoking this in non-LTO mode, remove any MemProf related
+  // attributes and metadata, as we don't know whether we are linking with
+  // a library containing the necessary interfaces.
+  if (Phase == ThinOrFullLTOPhase::None)
+    MPM.addPass(MemProfRemoveInfo());
 
-    // Convert @llvm.global.annotations to !annotation metadata.
-    MPM.addPass(Annotation2MetadataPass());
+  // Convert @llvm.global.annotations to !annotation metadata.
+  MPM.addPass(Annotation2MetadataPass());
 
-    // Force any function attributes we want the rest of the pipeline to observe.
-    MPM.addPass(ForceFunctionAttrsPass());
+  // Force any function attributes we want the rest of the pipeline to observe.
+  MPM.addPass(ForceFunctionAttrsPass());
 
-    if (TriggerCrash)
-      MPM.addPass(createModuleToFunctionPassAdaptor(TriggerCrashFunctionPass()));
+  if (TriggerCrash)
+    MPM.addPass(createModuleToFunctionPassAdaptor(TriggerCrashFunctionPass()));
 
-    if (PGOOpt && PGOOpt->DebugInfoForProfiling)
-      MPM.addPass(createModuleToFunctionPassAdaptor(AddDiscriminatorsPass()));
+  if (PGOOpt && PGOOpt->DebugInfoForProfiling)
+    MPM.addPass(createModuleToFunctionPassAdaptor(AddDiscriminatorsPass()));
 
-    // Apply module pipeline start EP callback.
-    invokePipelineStartEPCallbacks(MPM, Level);
+  // Apply module pipeline start EP callback.
+  invokePipelineStartEPCallbacks(MPM, Level);
 
-    // Add the core simplification pipeline.
-    MPM.addPass(buildModuleSimplificationPipeline(Level, Phase));
-
-  }
+  // Add the core simplification pipeline.
+  MPM.addPass(buildModuleSimplificationPipeline(Level, Phase));
 
   // Now add the optimization pipeline.
   MPM.addPass(buildModuleOptimizationPipeline(Level, Phase));
-  if (getVPlanPipelineStage() == VPlanPipelineStage::Prepare)
-    return MPM;
-  if (vplanRAEnabled())
-    MPM.addPass(VPlanRAFinishPass());
-
-
   if (PGOOpt && PGOOpt->PseudoProbeForProfiling &&
       PGOOpt->Action == PGOOptions::SampleUse)
     MPM.addPass(PseudoProbeUpdatePass());

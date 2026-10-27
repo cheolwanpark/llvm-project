@@ -15,6 +15,7 @@
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
+#include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
 #include "gtest/gtest.h"
 
 using namespace llvm;
@@ -45,6 +46,13 @@ public:
 
   TypeSize getRegisterBitWidth(TTI::RegisterKind K) const override {
     return TypeSize::get(128, K == TTI::RGK_ScalableVector);
+  }
+
+  unsigned getEpilogueVectorizationMinVF() const override { return 2; }
+  bool preferEpilogueVectorization(ElementCount) const override { return true; }
+  InstructionCost getSpillReloadCost(const TTI::SpillReloadAccess &A,
+                                     TTI::TargetCostKind) const override {
+    return record("spill", 0, A.AccessType, InstructionCost(1));
   }
 
   InstructionCost
@@ -111,6 +119,8 @@ public:
   }
 };
 
+// A provider can fail before any observation, after partial success, or during
+// epilogue preparation. None of those attempts may leak into the native report.
 TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
   // The flags are private to LoopVectorize.cpp. Restore their values after each
   // run so this test does not change the configuration of other vectorizer
@@ -121,15 +131,29 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
   auto &Summary = *static_cast<cl::opt<bool> *>(Options["print-vplans"]);
   auto &Detailed =
       *static_cast<cl::opt<bool> *>(Options["print-detailed-vplans"]);
-  std::vector<std::string> ReferenceQueries;
-  std::string ReferenceIR;
-  for (unsigned Mode = 0; Mode != 4; ++Mode) {
-    SaveAndRestore<bool> SaveSummary(Summary.getValue(), Mode & 1);
-    SaveAndRestore<bool> SaveDetailed(Detailed.getValue(), Mode & 2);
-    LLVMContext Context;
-    SMDiagnostic Error;
-    auto M = parseAssemblyString(R"(
+  auto &Master =
+      *static_cast<cl::opt<bool> *>(Options["vplan-backend"]);
+  auto &ForceAll = *static_cast<cl::opt<bool> *>(
+      Options["vplan-backend-force-all"]);
+  auto &Epilogues =
+      *static_cast<cl::opt<bool> *>(Options["enable-epilogue-vectorization"]);
+  SaveAndRestore<bool> SaveForce(ForceAll.getValue(), true);
+  SaveAndRestore<bool> SaveEpilogues(Epilogues.getValue(), true);
+  std::string NativeReports[4], NativeIR;
+  // 0=native, 1=success, 2=first query fails, 3=second query fails,
+  // 4=epilogue fails after successful main selection.
+  for (unsigned Scenario = 0; Scenario != 5; ++Scenario) {
+    SaveAndRestore<bool> SaveMaster(Master.getValue(), Scenario != 0);
+    std::vector<std::string> ReferenceQueries, ReferenceProbes;
+    std::string ReferenceIR;
+    for (unsigned Mode = 0; Mode != 4; ++Mode) {
+      SaveAndRestore<bool> SaveSummary(Summary.getValue(), Mode & 1);
+      SaveAndRestore<bool> SaveDetailed(Detailed.getValue(), Mode & 2);
+      LLVMContext Context;
+      SMDiagnostic Error;
+      auto M = parseAssemblyString(R"(
       target datalayout = "e-p:64:64-i64:64-n8:16:32:64-S128"
+      target triple = "riscv64"
       define void @add(ptr noalias %a, ptr noalias %b, i64 %n) {
       entry:
         br label %loop
@@ -147,47 +171,95 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
         ret void
       }
     )",
-                                 Error, Context);
-    ASSERT_TRUE(M);
-    std::vector<std::string> Queries;
-    PassBuilder PB;
-    LoopAnalysisManager LAM;
-    FunctionAnalysisManager FAM;
-    CGSCCAnalysisManager CGAM;
-    ModuleAnalysisManager MAM;
-    FAM.registerPass([&] {
-      return TargetIRAnalysis([&](const Function &F) {
-        return TargetTransformInfo(
-            std::make_unique<RecordingTTI>(F.getDataLayout(), Queries));
+                                   Error, Context);
+      ASSERT_TRUE(M);
+      std::vector<std::string> Queries, Probes;
+      bool SawEpilogue = false;
+      PassBuilder PB;
+      LoopAnalysisManager LAM;
+      FunctionAnalysisManager FAM;
+      CGSCCAnalysisManager CGAM;
+      ModuleAnalysisManager MAM;
+      FAM.registerPass([&] {
+        return TargetIRAnalysis([&](const Function &F) {
+          return TargetTransformInfo(
+              std::make_unique<RecordingTTI>(F.getDataLayout(), Queries));
+        });
       });
-    });
-    PB.registerModuleAnalyses(MAM);
-    PB.registerCGSCCAnalyses(CGAM);
-    PB.registerFunctionAnalyses(FAM);
-    PB.registerLoopAnalyses(LAM);
-    PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-    FunctionPassManager FPM;
-    FPM.addPass(LoopVectorizePass());
-    ModulePassManager MPM;
-    MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
-    testing::internal::CaptureStderr();
-    MPM.run(*M, MAM);
-    std::string Report = testing::internal::GetCapturedStderr();
-    std::string IR;
-    raw_string_ostream OS(IR);
-    M->print(OS, nullptr);
-    EXPECT_NE(IR.find("vector.body"), std::string::npos);
-    ASSERT_FALSE(Queries.empty());
-    if (Mode == 0) {
-      ReferenceQueries = Queries;
-      ReferenceIR = IR;
-      EXPECT_TRUE(Report.empty());
-    } else {
-      EXPECT_EQ(ReferenceQueries, Queries) << "reporting mode " << Mode;
-      EXPECT_EQ(ReferenceIR, IR) << "reporting mode " << Mode;
-      EXPECT_NE(Report.find("cost-per-lane"), std::string::npos);
-      EXPECT_NE(Report.find("outcome=vectorization-emitted"),
-                std::string::npos);
+      FAM.registerPass([&] {
+        return VPlanBackendFeedbackAnalysis(
+            [&](const Function &, const BasicBlock &,
+                const VPlanBackendCandidate &C)
+                -> Expected<VPlanBackendResult> {
+              Probes.push_back(C.ID);
+              SawEpilogue |= C.IsEpilogue;
+              if (Scenario == 2 || (Scenario == 3 && Probes.size() == 2) ||
+                  (Scenario == 4 && C.IsEpilogue))
+                return createStringError("test provider failure");
+              VPlanBackendResult R;
+              R.Candidate = C.ID;
+              R.VF = C.VF;
+              R.IC = C.IC;
+              R.IsEpilogue = C.IsEpilogue;
+              R.IterationMapping = true;
+              // A cleanup width of three bodies exercises exact rational
+              // output.
+              R.IterationWidth = C.VF.getKnownMinValue() * C.IC * 3;
+              R.Spills.push_back({false, 8, true, 8, 0, true, 1, false});
+              return R;
+            });
+      });
+      PB.registerModuleAnalyses(MAM);
+      PB.registerCGSCCAnalyses(CGAM);
+      PB.registerFunctionAnalyses(FAM);
+      PB.registerLoopAnalyses(LAM);
+      PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+      FunctionPassManager FPM;
+      FPM.addPass(LoopVectorizePass());
+      ModulePassManager MPM;
+      MPM.addPass(createModuleToFunctionPassAdaptor(std::move(FPM)));
+      testing::internal::CaptureStderr();
+      MPM.run(*M, MAM);
+      std::string Report = testing::internal::GetCapturedStderr();
+      std::string IR;
+      raw_string_ostream OS(IR);
+      M->print(OS, nullptr);
+      EXPECT_NE(IR.find("vector.body"), std::string::npos);
+      ASSERT_FALSE(Queries.empty());
+      if (Mode == 0) {
+        ReferenceProbes = Probes;
+        ReferenceQueries = Queries;
+        ReferenceIR = IR;
+        EXPECT_TRUE(Report.empty());
+      } else {
+        EXPECT_EQ(ReferenceProbes, Probes) << "reporting mode " << Mode;
+        EXPECT_EQ(ReferenceQueries, Queries) << "reporting mode " << Mode;
+        EXPECT_EQ(ReferenceIR, IR) << "reporting mode " << Mode;
+        EXPECT_NE(Report.find("cost-per-lane"), std::string::npos);
+        EXPECT_NE(Report.find("outcome=vectorization-emitted"),
+                  std::string::npos);
+      }
+      if (Scenario == 0) {
+        NativeReports[Mode] = Report;
+        NativeIR = IR;
+        EXPECT_TRUE(Probes.empty());
+      } else {
+        EXPECT_FALSE(Probes.empty());
+        if (Scenario >= 3)
+          EXPECT_GE(Probes.size(), 2u);
+        if (Scenario == 4)
+          EXPECT_TRUE(SawEpilogue);
+        if (Scenario >= 2) {
+          EXPECT_EQ(NativeIR, IR);
+          EXPECT_EQ(NativeReports[Mode], Report);
+        } else if (Mode) {
+          EXPECT_NE(Report.find("model=tti-real-vector-spill-v1"),
+                    std::string::npos);
+          EXPECT_NE(Report.find("phase=epilogue"), std::string::npos);
+          if (Mode & 2)
+            EXPECT_NE(Report.find("B=L-Ev+Sv="), std::string::npos);
+        }
+      }
     }
   }
 }
