@@ -38,14 +38,16 @@ bool llvm::vplanBackendUseEstimatedSpill() {
 bool llvm::vplanBackendUseDefaultTTI() {
   return EnableBackendCostModel && !UseMIR && UseDefaultTTI;
 }
+bool llvm::vplanBackendRequestedDefaultTTI() { return UseDefaultTTI; }
+StringRef VPlanBackendMode::name() const {
+  if (MIR)
+    return EstimatedSpill ? "mir-me-spill-v1" : "mir-v1";
+  if (DefaultTTI)
+    return EstimatedSpill ? "llvm-v1" : "llvm-real-vector-spill-v1";
+  return EstimatedSpill ? "tti-v1" : "tti-real-vector-spill-v1";
+}
 StringRef llvm::vplanBackendModelName() {
-  if (vplanBackendUseMIR())
-    return vplanBackendUseEstimatedSpill() ? "mir-me-spill-v1" : "mir-v1";
-  if (vplanBackendUseDefaultTTI())
-    return vplanBackendUseEstimatedSpill() ? "llvm-v1"
-                                           : "llvm-real-vector-spill-v1";
-  return vplanBackendUseEstimatedSpill() ? "tti-v1"
-                                         : "tti-real-vector-spill-v1";
+  return VPlanBackendMode::requested().name();
 }
 static cl::opt<std::string> FeedbackOutput(
     "vplan-backend-jsonl", cl::Hidden,

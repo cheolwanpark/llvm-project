@@ -916,6 +916,8 @@ public:
                                        InstructionCost &VectorSpill,
                                        InstructionCost *TotalSpill = nullptr);
   unsigned limitBackendIC(VPlan &Plan, unsigned IC) const;
+  VPBackendPruningContext backendPruningContext();
+  StringRef candidateRejection(VPlan &Plan, ElementCount VF) const;
   void resetVFSelection() {
     ProfitableVFs.clear();
     ReportProfitablePlans.clear();

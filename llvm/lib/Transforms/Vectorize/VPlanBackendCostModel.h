@@ -11,7 +11,7 @@ class LLVMContext;
 class VPlan;
 class TargetTransformInfo;
 class LoopVectorizationPlanner;
-struct VFSelectionContext;
+class VFSelectionContext;
 class VPlanCostReport;
 /// Exact rational in quarter-cost units. Checked arithmetic never silently
 /// saturates or rounds a ranking score. Conversion is only for legacy clients.
@@ -39,6 +39,26 @@ public:
   void print(raw_ostream &OS, unsigned Divisor = 1) const;
   bool operator==(VPExactCost B) const;
 };
+/// The numeric objective shared by normal selection and lower-bound proofs.
+/// Callers retain all eligibility, forced-selection and tie-breaking policies.
+template <typename CostT>
+CostT vplanCostForTripCount(unsigned Width, CostT Body, CostT Scalar,
+                           unsigned TC, bool ScalarTail) {
+  if (ScalarTail)
+    return Body * (TC / Width) + Scalar * (TC % Width);
+  return Body * divideCeil(TC, Width);
+}
+
+struct VPBackendPruningContext {
+  bool Enabled = false;
+  bool VectorIncumbents = false;
+  VPExactCost Scalar;
+  unsigned MaxTripCount = 0;
+};
+LLVM_ABI_FOR_TEST bool vplanStrictlyCheaper(
+    VPExactCost A, unsigned WidthA, VPExactCost B, unsigned WidthB,
+    VPExactCost Scalar, unsigned MaxTripCount, bool ScalarTail);
+
 struct VPMIRCost {
   std::string Model, Revision;
   VPExactCost RawBody, RawSpill, Body, Spill;
@@ -59,7 +79,9 @@ struct VPBackendCostEntry {
 };
 /// All state belongs to one original loop. Preparation is transactional: on
 /// failure discard every score before native selection can observe the table.
-class VPlanBackendCostModel {
+class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
+  friend class VPlanBackendCostModelTestAccess;
+  enum class CandidateState { Pending, Exact, Pruned };
   struct PreparedCandidate {
     VPlan *Plan;
     VPlanBackendCandidate Candidate;
@@ -68,8 +90,18 @@ class VPlanBackendCostModel {
     unsigned Width;
     VPRegisterUsageBound Bound;
     bool Query;
+    CandidateState State = CandidateState::Pending;
+    VPExactCost LowerBound;
+    bool Eligible = false;
+    bool Queried = false;
+    std::string PruningBasis;
+    VPExactCost BasisCost;
+    unsigned BasisWidth = 0;
+    std::optional<VPlanBackendResult> Observation;
   };
   SmallVector<VPBackendCostEntry, 0> Costs;
+  SmallVector<PreparedCandidate, 0> Candidates;
+  VPBackendPruningContext Pruning;
   const VPlanBackendFeedback &Feedback;
   const TargetTransformInfo &TTI;
   Function &F;
@@ -80,21 +112,28 @@ class VPlanBackendCostModel {
   std::unique_ptr<TargetMIRInfo> MIRInfo;
   bool Failed = false;
   std::string Failure;
+  VPlanBackendMode Mode;
+  SmallVector<json::Object, 0> Rows;
 
   PreparedCandidate prepareCost(VPlan &Plan, VPlanBackendCandidate Candidate,
                                 InstructionCost Native, InstructionCost Profile,
                                 InstructionCost Ev, unsigned Width,
                                 InstructionCost EstimatedSpill = 0) const;
-  bool applyCost(const PreparedCandidate &Prepared,
+  bool applyCost(PreparedCandidate &Prepared,
                  std::optional<VPlanBackendProbeResult> Result,
                  VPlanFeedbackTimer &Timer);
-  bool addBatch(ArrayRef<PreparedCandidate> Candidates);
+  bool addBatch(ArrayRef<PreparedCandidate *> Wave);
+  bool prune(PreparedCandidate &P);
+  void reportPruned(const PreparedCandidate &P);
+  bool evaluatePrepared(unsigned Capacity);
 
 public:
   VPlanBackendCostModel(const VPlanBackendFeedback &Feedback,
                         const TargetTransformInfo &TTI, Function &F,
-                        BasicBlock &Header, VPlanCostReport *Report = nullptr)
-      : Feedback(Feedback), TTI(TTI), F(F), Header(Header), Report(Report) {}
+                        BasicBlock &Header, VPlanCostReport *Report = nullptr,
+                        VPlanBackendMode Mode = VPlanBackendMode::requested())
+      : Feedback(Feedback), TTI(TTI), F(F), Header(Header), Report(Report),
+        Mode(Mode) {}
   bool prepare(LoopVectorizationPlanner &LVP, VFSelectionContext &Config,
                unsigned UserIC, unsigned Invocation, unsigned LoopIndex,
                bool InterleaveOnlyWhenForced, bool VectorizeOnlyWhenForced,
@@ -108,7 +147,9 @@ public:
            InstructionCost EstimatedSpill = 0);
   const VPBackendCostEntry *lookup(const VPlan &Plan, ElementCount VF,
                                    bool Epilogue = false) const;
+  bool isPruned(const VPlan &Plan, ElementCount VF) const;
   void fail(StringRef Reason);
+  void commit(VPlanBackendMode Requested, StringRef Reason);
   void selection(ElementCount VF, unsigned IC, ElementCount Epilogue,
                  bool Emitted) const;
   bool failed() const { return Failed; }

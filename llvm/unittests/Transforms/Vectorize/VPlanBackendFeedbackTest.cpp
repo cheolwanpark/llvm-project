@@ -121,3 +121,23 @@ TEST(VPlanBackendFeedback, PoolOverlapBoundOrderingAndReuse) {
     EXPECT_EQ(Calls, 0u);
   }
 }
+
+TEST(VPlanBackendFeedback, CapacityDoesNotResetInvocationDiagnostics) {
+  LLVMContext Context;
+  Module M("test", Context);
+  auto *F = Function::Create(FunctionType::get(Type::getVoidTy(Context), false),
+                             GlobalValue::ExternalLinkage, "f", M);
+  unsigned Starts = 0, Capacity = 4;
+  VPlanBackendFeedback Service({}, [&](const Function &) { return Capacity; },
+                                {}, [&] { ++Starts; });
+  Service.beginInvocation();
+  EXPECT_EQ(Starts, 1u);
+  EXPECT_EQ(Service.batchCapacity(*F), 4u);
+  EXPECT_EQ(Service.batchCapacity(*F), 4u);
+  EXPECT_EQ(Starts, 1u);
+  Capacity = 1;
+  EXPECT_EQ(Service.batchCapacity(*F), 1u);
+  EXPECT_EQ(Starts, 1u);
+  Service.beginInvocation();
+  EXPECT_EQ(Starts, 2u);
+}

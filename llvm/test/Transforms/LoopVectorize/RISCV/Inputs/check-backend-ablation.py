@@ -138,7 +138,7 @@ for name, extra, cpu in [('fast', ['-riscv-rvv-regalloc=fast'], None),
                           ('unsupported', [], 'generic-rv64')]:
     baseline, _, _ = run(name + '-baseline', cpu=cpu)
     out, rows, stderr = run(name, ['-vplan-backend', '-use-mir',
-                                  '-print-detailed-vplans'] + extra, cpu=cpu)
+                                  '-print-detailed-vplans', '-use-default-tti=true'] + extra, cpu=cpu)
     assert out == baseline
     assert any(r['status'] == 'native-fallback' for r in rows), rows
     assert 'backend-cost phase=' not in stderr
@@ -155,5 +155,5 @@ wide_source.write_text(Path(source).read_text().replace('vscale_range(2,2)', 'vs
 wide_native, _, _ = run('vlen256-native', src=str(wide_source))
 wide_ir, wide_rows, _ = run('vlen256', ['-vplan-backend', '-use-mir'], src=str(wide_source))
 assert wide_ir == wide_native
-assert any(r['status'] == 'native-fallback' and r['reason'] == 'target has no MIR service model'
+assert any(r['status'] == 'native-fallback' and r['reason'].endswith('target has no MIR service model')
            for r in wide_rows)

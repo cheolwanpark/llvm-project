@@ -38,18 +38,18 @@
 ; EPILOGUE: vec.epilog
 ; RUN: rm -f %t.unsupported.jsonl
 ; Fast allocation cannot provide the guaranteed observation point.
-; RUN: opt -codegen-opt-level=2 -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -vplan-backend -vplan-backend-force-all -riscv-rvv-regalloc=fast -vplan-backend-jsonl=%t.unsupported.jsonl %s -S -o %t.unsupported.ll 2>%t.unsupported
+; RUN: opt -codegen-opt-level=2 -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -vplan-backend -vplan-backend-force-all -use-default-tti=true -riscv-rvv-regalloc=fast -vplan-backend-jsonl=%t.unsupported.jsonl %s -S -o %t.unsupported.ll 2>%t.unsupported
 ; RUN: diff %t.base.ll %t.unsupported.ll
 ; RUN: FileCheck %s --check-prefix=FAST-FAIL <%t.unsupported.jsonl
-; FAST-FAIL: "reason":"backend feedback requires optimized RVV allocation"
+; FAST-FAIL: "reason":"llvm-real-vector-spill-v1: backend feedback requires optimized RVV allocation"
 ; FAST-FAIL: "status":"native-fallback"
 
 ; RUN: rm -f %t.no-ssc.jsonl
 ; Disabling the required cleanup cannot masquerade as a post-coloring probe.
-; RUN: opt -codegen-opt-level=2 -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -vplan-backend -vplan-backend-force-all -disable-ssc -vplan-backend-jsonl=%t.no-ssc.jsonl %s -S -o %t.no-ssc.ll 2>%t.no-ssc
+; RUN: opt -codegen-opt-level=2 -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -vplan-backend -vplan-backend-force-all -use-default-tti=true -disable-ssc -vplan-backend-jsonl=%t.no-ssc.jsonl %s -S -o %t.no-ssc.ll 2>%t.no-ssc
 ; RUN: diff %t.base.ll %t.no-ssc.ll
 ; RUN: FileCheck %s --check-prefix=NO-SSC <%t.no-ssc.jsonl
-; NO-SSC: "reason":"backend feedback requires StackSlotColoring"
+; NO-SSC: "reason":"llvm-real-vector-spill-v1: backend feedback requires StackSlotColoring"
 ; NO-SSC: "status":"native-fallback"
 
 ; Diagnostic flags without the master must not query the provider or tune costs.

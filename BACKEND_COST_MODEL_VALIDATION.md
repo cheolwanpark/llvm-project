@@ -3,6 +3,58 @@
 측정 시점과 compiler identity를 구분한다. 사용법은 [README](README.md),
 비용·probe·TTI 계약은 [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md)에 있다.
 
+## 2026-10-28 — 하한 pruning과 설정 기반 fallback 검증
+
+`cddac322f4dc156d0f5ff429f951de15468e21a7` 기반 작업 트리에 `PLAN.md`의
+TTI real-spill 하한 pruning, 작은 VF 순서의 고정 wave, specific TTI estimated
+재시도를 구현했다. 기존 `.cache/build`의 Release/assertions/tests 설정과
+`.cache/compiler-build -> build` symlink를 재사용했고 reconfigure하지 않았다.
+아래 identity는 이 작업 트리에서 최종 빌드한 실행 파일이며 과거 측정 binary와 다르다.
+
+| 실행 파일 | SHA-256 |
+|---|---|
+| `.cache/build/bin/clang` | `02b440d63cf56ea2c08fcc66d7a2e6bc36f070f3b851087fdc8964b3906f28ab` |
+| `.cache/build/bin/opt` | `08dc360e348e06c6bee945a5dd2a4caf2400dfde7e036a15fc02f4a13fb6563c` |
+| `.cache/build/bin/llc` | `12bdeeaf725b332da25f798f8cbe440104435130d702f5e0018e878b925ce0f3` |
+
+`cmake --build .cache/build --target clang clang-resource-headers llc opt
+FileCheck split-file not VectorizeTests RISCVTests --parallel 2`가 성공했다.
+
+| 검증 | 결과 |
+|---|---|
+| Vectorize unit suite | 94/94 통과 |
+| RISC-V unit suite | 38/38 통과 |
+| 전체 `llvm/test/Transforms/LoopVectorize` 및 `rvv/stack-slot-coloring.mir` | 985 통과, 377 unsupported, 실패 0 |
+| 원본 mlas replay 보조 smoke | 일반 real-spill: scalar 하한 pruning, force-all: mapping 실패 후 estimated scalar 성공 |
+
+새 scheduler unit test는 실제 scheduler와 mock provider를 연결한다. 뒤쪽 gate 비용의
+선행 확정, eligibility, epilogue 가능 시 scalar-only 제한, exact 비용 보존, 비단조 비용,
+동률, 유리수/known-TC/tail 수식, 증명 overflow, 1/2/4 wave 한도, 불필요한 speculative
+실패 소비와 성공 사실 보존, 필요한 실패와 malformed batch를 검사한다. 기존 reporting
+integration test는 main/epilogue 실패 후 재시도, estimated scalar 성공, estimated 실패 후
+native, MIR service 부재와 raw default-TTI, profile scope 복원, report ON/OFF의 TTI 질의·
+probe·IR 일치 및 실패 보고 폐기를 검사한다.
+
+`RISCV/backend-pruning.ll`은 cache나 개인 DB 없이 작은 dot4와 24-iteration loop로
+scalar/gate 기반 생략을 검증한다. Epilogue가 가능한 scalar-tail 변형은 vector
+incumbent만으로 생략하지 않는다. Unroll을 켠 force-all의 mapping 실패는 그대로
+유지하고 specific estimated로 재선택한다. 실제 opt 경로에서 MIR 두 모드·raw default-TTI
+true/false·미지원 CPU/VLEN·forced VF·scalable-always·master OFF와 보고 수동성도
+검사한다. Worker 1/2/4의 IR, 최종 모델과 선택용 비용은 같으며 speculative 관측 JSON
+전체의 byte equality는 요구하지 않는다. 기존 compatibility/warning 테스트도 통과했다.
+
+보조 smoke는 보관된 `mlas/mlas-qgemm-dot4` raw bitcode를 현재 opt의 `default<O3>`로
+실행했다. 원본 파일/DB는 수정하지 않았다. 전체 7개 loop의 94개 vector 후보가 scalar
+기준으로 pruning되었고, 그중 `bench_kernel`은 10개 후보를 생략해 VF=1, IC=1,
+미방출을 선택했다. Force-all에서는 기존 `original scalar iteration mapping is unproven`
+실패 후 `tti-v1`로 재시도해 동일하게 scalar를 선택했다. 직접 estimated 요청도 scalar다.
+CI는 이 보조 자료에 의존하지 않는다.
+
+빌드·unit/lit 로그, 최종 replay 명령·관측 및 binary identity는
+`.cache/plan-implementation-20261028/`에 보관한다. 전체 dataset, 과거 post-frame
+baseline, RTL cycles 또는 compile-time speedup은 측정하지 않았다. 아래의 과거
+cycles/시간 기록은 유지하며 이번 binary의 성능 측정으로 해석하지 않는다.
+
 ## 2026-10-27 — LLVM 내부 body/spill ablation 기본 검증
 
 `cf0330d4664acb831a3c17be8c84c4e671834e25` 기반 작업 트리에 세 ablation 옵션과

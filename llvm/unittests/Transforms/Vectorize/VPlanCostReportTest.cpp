@@ -28,7 +28,7 @@ namespace {
 class RecordingTTI : public TargetTransformInfoImplCRTPBase<RecordingTTI> {
   using Base = TargetTransformInfoImplCRTPBase<RecordingTTI>;
   std::vector<std::string> &Queries;
-  bool FailLaterProfile;
+  bool FailLaterProfile, Specific, ExpensiveProfile;
 
   InstructionCost record(StringRef Name, unsigned Opcode, Type *Ty,
                          InstructionCost Cost) const {
@@ -37,6 +37,9 @@ class RecordingTTI : public TargetTransformInfoImplCRTPBase<RecordingTTI> {
         cast<VectorType>(Ty)->getElementCount().getKnownMinValue() >= 4 &&
         Name == "arithmetic")
       Cost = InstructionCost::getInvalid();
+    if (ExpensiveProfile && VPlanCostProfileScope::active() && Ty &&
+        isa<VectorType>(Ty) && Name == "arithmetic")
+      Cost = 10000;
     std::string Text;
     raw_string_ostream OS(Text);
     OS << Name << ' ' << Opcode << ' ';
@@ -49,8 +52,14 @@ class RecordingTTI : public TargetTransformInfoImplCRTPBase<RecordingTTI> {
 
 public:
   RecordingTTI(const DataLayout &DL, std::vector<std::string> &Queries,
-               bool FailLaterProfile = false)
-      : Base(DL), Queries(Queries), FailLaterProfile(FailLaterProfile) {}
+               bool FailLaterProfile = false, bool Specific = false,
+               bool ExpensiveProfile = false)
+      : Base(DL), Queries(Queries), FailLaterProfile(FailLaterProfile),
+        Specific(Specific), ExpensiveProfile(ExpensiveProfile) {}
+
+  StringRef getVPlanCostProfileName() const override {
+    return Specific ? "test-specific" : "native";
+  }
 
   TypeSize getRegisterBitWidth(TTI::RegisterKind K) const override {
     return TypeSize::get(128, K == TTI::RGK_ScalableVector);
@@ -144,15 +153,30 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
       *static_cast<cl::opt<bool> *>(Options["vplan-backend-force-all"]);
   auto &Epilogues =
       *static_cast<cl::opt<bool> *>(Options["enable-epilogue-vectorization"]);
+  auto &Estimated =
+      *static_cast<cl::opt<bool> *>(Options["use-estimated-spill"]);
+  auto &MIR = *static_cast<cl::opt<bool> *>(Options["use-mir"]);
+  auto &Default = *static_cast<cl::opt<bool> *>(Options["use-default-tti"]);
   SaveAndRestore<bool> SaveForce(ForceAll.getValue(), true);
   SaveAndRestore<bool> SaveEpilogues(Epilogues.getValue(), true);
   for (bool Batch : {false, true}) {
     std::string NativeReports[4], NativeIR;
     // 0=native, 1=success, 2=first query fails, 3=second query fails,
     // 4=epilogue fails after successful main selection,
-    // 5=first query fails before a later profile preparation error.
-    for (unsigned Scenario = 0; Scenario != 6; ++Scenario) {
+    // 5=preparation fails before any query; 6=first failure -> estimated,
+    // 7=epilogue failure -> estimated; 8=estimated scalar is success,
+    // 9=both preparations fail; 10=requested estimated fails (no retry),
+    // 11=MIR service absent -> estimated; 12=MIR + raw default -> native,
+    // 13=real spill + raw default -> native despite specific capability.
+    for (unsigned Scenario = 0; Scenario != 14; ++Scenario) {
       SaveAndRestore<bool> SaveMaster(Master.getValue(), Scenario != 0);
+      SaveAndRestore<bool> SaveEstimated(Estimated.getValue(), Scenario == 10);
+      SaveAndRestore<bool> SaveMIR(MIR.getValue(), Scenario == 11 || Scenario == 12);
+      SaveAndRestore<bool> SaveDefault(Default.getValue(), Scenario >= 12);
+      bool NativeFallback = (Scenario >= 2 && Scenario <= 5) || Scenario == 9 ||
+                            Scenario == 10 || Scenario >= 12;
+      bool EstimatedFallback = Scenario == 6 || Scenario == 7 || Scenario == 8 ||
+                               Scenario == 11;
       std::vector<std::string> ReferenceQueries, ReferenceProbes;
       std::string ReferenceIR;
       for (unsigned Mode = 0; Mode != 4; ++Mode) {
@@ -192,7 +216,9 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
         FAM.registerPass([&] {
           return TargetIRAnalysis([&](const Function &F) {
             return TargetTransformInfo(std::make_unique<RecordingTTI>(
-                F.getDataLayout(), Queries, Scenario == 5));
+                F.getDataLayout(), Queries,
+                Scenario == 5 || Scenario == 9 || Scenario == 10,
+                Scenario >= 6, Scenario == 8));
           });
         });
         FAM.registerPass([&] {
@@ -205,9 +231,10 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
                   auto Query = [&]() -> Expected<VPlanBackendResult> {
                     Probes.push_back(C.ID);
                     SawEpilogue |= C.IsEpilogue;
-                    if (Scenario == 2 || Scenario == 5 ||
+                    if (Scenario == 2 || Scenario == 5 || Scenario == 6 ||
+                        Scenario == 8 || Scenario == 13 ||
                         (Scenario == 3 && Probes.size() == 2) ||
-                        (Scenario == 4 && C.IsEpilogue))
+                        ((Scenario == 4 || Scenario == 7) && C.IsEpilogue))
                       return createStringError("test provider failure");
                     VPlanBackendResult R;
                     R.Candidate = C.ID;
@@ -225,7 +252,7 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
                 }
                 return Results;
               },
-              [&](const Function &) { return Batch; });
+              [&](const Function &) { return Batch ? 4u : 1u; });
         });
         PB.registerModuleAnalyses(MAM);
         PB.registerCGSCCAnalyses(CGAM);
@@ -242,7 +269,9 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
         std::string IR;
         raw_string_ostream OS(IR);
         M->print(OS, nullptr);
-        EXPECT_NE(IR.find("vector.body"), std::string::npos);
+        EXPECT_FALSE(VPlanCostProfileScope::active());
+        if (Scenario != 8)
+          EXPECT_NE(IR.find("vector.body"), std::string::npos);
         ASSERT_FALSE(Queries.empty());
         if (Mode == 0) {
           ReferenceProbes = Probes;
@@ -254,24 +283,37 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
           EXPECT_EQ(ReferenceQueries, Queries) << "reporting mode " << Mode;
           EXPECT_EQ(ReferenceIR, IR) << "reporting mode " << Mode;
           EXPECT_NE(Report.find("cost-per-lane"), std::string::npos);
-          EXPECT_NE(Report.find("outcome=vectorization-emitted"),
-                    std::string::npos);
+          if (Scenario != 8)
+            EXPECT_NE(Report.find("outcome=vectorization-emitted"),
+                      std::string::npos);
         }
         if (Scenario == 0) {
           NativeReports[Mode] = Report;
           NativeIR = IR;
           EXPECT_TRUE(Probes.empty());
         } else {
-          EXPECT_FALSE(Probes.empty());
+          if (Scenario == 5 || (Scenario >= 9 && Scenario <= 12))
+            EXPECT_TRUE(Probes.empty());
+          else
+            EXPECT_FALSE(Probes.empty());
           if (Scenario == 3 || Scenario == 4)
             EXPECT_GE(Probes.size(), 2u);
-          if (Scenario == 4)
+          if (Scenario == 4 || Scenario == 7)
             EXPECT_TRUE(SawEpilogue);
-          if (Scenario == 5)
-            EXPECT_EQ(Probes.size(), 1u);
-          if (Scenario >= 2) {
+          if (Scenario == 6 || Scenario == 8 || Scenario == 13)
+            EXPECT_LE(Probes.size(), Batch ? 4u : 1u);
+          if (NativeFallback) {
             EXPECT_EQ(NativeIR, IR);
             EXPECT_EQ(NativeReports[Mode], Report);
+          } else if (Mode && EstimatedFallback) {
+            EXPECT_NE(Report.find("effective_model=tti-v1"), std::string::npos);
+            EXPECT_EQ(Report.find(" model=tti-real-vector-spill-v1"),
+                      std::string::npos);
+            EXPECT_NE(Report.find("model=tti-v1"), std::string::npos);
+            if (Mode & 2)
+              EXPECT_NE(Report.find("B=L="), std::string::npos);
+            if (Scenario == 8)
+              EXPECT_NE(Report.find(" vf=f1\n"), std::string::npos);
           } else if (Mode) {
             EXPECT_NE(Report.find("model=tti-real-vector-spill-v1"),
                       std::string::npos);

@@ -26,7 +26,7 @@ class Instruction;
 class Loop;
 class VPlan;
 class VPRecipeBase;
-struct VFSelectionContext;
+class VFSelectionContext;
 struct VPRegisterUsageBound;
 
 /// A passive, per-loop observer. All values passed here must come from the
@@ -137,7 +137,7 @@ public:
                    const VPlanBackendResult *Observation,
                    ArrayRef<InstructionCost> AccessCosts, unsigned Width,
                    StringRef ProfileName, InstructionCost Raw,
-                   VPExactCost Spill);
+                   VPExactCost Spill, VPlanBackendMode Mode);
   unsigned registerPlan(const VPlan &Plan);
   unsigned planID(const VPlan &Plan) { return registerPlan(Plan); }
   void forgetPlan(const VPlan &Plan) { PlanIDs.erase(&Plan); }

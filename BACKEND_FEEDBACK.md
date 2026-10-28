@@ -23,7 +23,8 @@ profitability는 native 정책을 유지한다. Ev는 기존 register-pressure �
 
 `VPlanBackendCostModel`이 비용 준비, gate, 질의, 검증과 비용 테이블을 소유한다.
 `VPExactCost`는 quarter-cost 분자와 양의 분모를 유지하고 비교 전에 절삭하지
-않는다. Cross product는 128비트 정수로 계산하며 산술 overflow는 native fallback이다.
+않는다. Cross product는 128비트 정수로 비교한다. 필요한 비용의 산술 overflow는
+아래 whole-loop fallback을 적용하고 pruning 증명의 overflow는 probe를 생략하지 않는다.
 기존 `InstructionCost` 소비자에서는 해당 타입의 변환 의미를 유지한다.
 
 ### Body/spill ablation과 MIR Info
@@ -57,7 +58,7 @@ feedback analysis service를 통해 Vectorize에 전달한다. Vectorize에는 C
 타겟 디렉터리에 MIR Info 구현과 factory 선택 조건을 추가한다. 다른 ISA는
 해당 타겟의 observer/pipeline 지원과 vectorizer의 대상 허용도 함께 확장해야 한다.
 미지원 대상은
-nullptr를 반환하여 native fallback하며 generic MIR 가격을 추정하지 않는다.
+nullptr를 반환하여 아래 설정 기반 fallback을 적용하며 generic MIR 가격을 추정하지 않는다.
 
 최초 구현은 `XiangShanV2MIRInfo`이며 XiangShan Kunminghu/VLEN=128을 지원한다.
 `llvm-cost-model`의 `rtl-service-sum-v1`, RTL revision
@@ -70,10 +71,11 @@ latency 배수, dependency/window penalty는 없다. Configuration은 body에 �
 service demand다. 별도 주소 계산은 `R - S`에 남는다. 두 값에 `Wtti / Wobs`를
 정확히 적용한 뒤 `R` 또는 `R - S + Et`를 사용한다. `Et`는 scoped XiangShan
 TTI의 전체 추정 spill이며 기존 vector-only `Ev`와 별도 보관한다.
-MIR에서는 `use-default-tti`를 무시하여 `Et`도 바뀌지 않는다.
+MIR 정상 계산에서는 `use-default-tti`를 무시하여 `Et`도 바뀌지 않는다.
+실패 목적지는 옵션의 존재 여부가 아닌 raw requested boolean 값을 존중한다.
 
 Native scalar 기준, native-cost IC, 후보 순서와 main/epilogue 정책은 동일하다.
-필수 관측이나 가격 계산 실패 시 전체 원본 loop가 native 선택으로 복귀한다.
+필수 관측이나 가격 계산 실패 시 전체 원본 loop에 아래 설정 기반 fallback을 적용한다.
 
 ### Pressure gate
 
@@ -86,7 +88,35 @@ query   = unknown OR UsageIC >= 32
 `VPlanRegisterUsageBounds`가 지원하는 recipe/type의 보수적 상한을 사용한다.
 미지원 lowering과 overflow는 unknown이다. UsageIC가 32 미만이면 질의를 생략하고
 Sv=0으로 둔다. `-vplan-backend-force-all`은 gate의 `would_skip`을 유지하며 실제
-질의만 강제한다. Scalar spill은 이 gate의 대상이 아니다.
+질의를 강제하며 아래 pruning도 우회한다. Scalar spill은 이 gate의 대상이 아니다.
+
+### 비용 하한 pruning
+
+비-MIR TTI real-spill 모드에서 `LB = L - Ev`이고 `B = LB + Sv`, `Sv >= 0`이다.
+모든 후보의 metadata/native IC/profile 비용과 gate-skip 확정 비용을 먼저 준비한다.
+Gate는 모델 정책으로 `Sv=0`을 적용한다. Query 후보의 LB는 확정 body나 관측된
+zero spill이 아니다. Scalar 기준은 native 비용이다.
+
+기존 수치 계산을 공유하여 unknown TC는 exact cross product, known TC는
+scalar tail일 때 `floor(TC/W)*B + (TC%W)*S`, tail folding일 때 `ceil(TC/W)*B`로
+비교한다. IC/관측 폭 정규화 후 IC를 다시 곱하지 않는다. 엄격히 싼 유효 기준이
+있어야 pruning하며 동률은 남긴다. 증명 overflow는 probe하고 실제 비용 실패와 구분한다.
+
+Epilogue가 기존 정책으로 확실히 OFF이면 scalar, gate-skip, 완료된 probe를
+기준으로 쓴다. 가능하거나 불명확하면 scalar보다 엄격히 비싼 후보만 생략한다.
+따라서 main에서 진 Exact 후보도 scalar보다 유리하면 기존 ProfitableVFs/epilogue
+선택에 남는다. Epilogue 지연 평가나 main 관측 재사용은 없다. 이 보수적인 정책은
+더 많은 probe와 필요한 실패를 만들 수 있다.
+
+강제 vectorization/VF/epilogue, outer/single-plan, scalable-always, mixed tail,
+opt-for-size 등 공통 수치 순위를 보장하지 못하는 문맥은 pruning하지 않는다.
+Incumbent eligibility는 실제 선택과 같은 `candidateRejection`을 사용한다.
+원래 ordinal/ID는 보존하며 중간 VF pruning은 더 큰 VF 탐색을 중단하지 않는다.
+MIR에는 이 하한을 적용하지 않고 TTI estimated는 probe하지 않는다.
+
+후보 상태는 `Pending`, `Exact`, `Pruned`뿐이다. 출처·queried·하한·증명 기준과
+소유권 있는 관측 사실은 별도 보관한다. Pruned는 명시적으로 선택에서 제외하며
+lookup miss를 통해 native 비용으로 복귀하지 않는다. 성공한 준비 뒤 Pending은 없다.
 
 ## Probe와 fallback
 
@@ -133,23 +163,31 @@ subregister, 미지원 접근과 불완전 mapping은 실패다.
 한 번 곱한다. 관측 결과는 해당 planning invocation에서만 사용한다.
 
 Provider unavailable, clone/형상/mapping 실패, 미지원 spill, overflow 또는 필요한
-epilogue 비용 실패 시 원본 loop의 backend 비용과 ProfitableVFs를 버리고 native
-선택을 다시 실행한다. 강제 VF/IC/epilogue 요청은 유지한다. 실패를 spill 0으로
+epilogue 비용 실패 시 원본 loop의 backend 비용·ProfitableVFs·epilogue clone·보고를
+버리고 새 객체로 전체 loop를 다시 선택한다. Probe 모드이고 raw
+`use-default-tti=false`이며 함수의 specific TTI profile이 지원되면 기존 TTI estimated
+builder로 한 번 재시도한다. 비용은 추정 vector/scalar spill을 포함한 `Lt`이고
+scalar 기준과 IC는 native다. MIR service나 provider query는 요구하지 않는다.
+Specific 미지원, raw default-TTI=true, requested TTI estimated 실패 또는 estimated
+재시도 실패는 native 선택으로 간다. Scalar/non-LV 선택도 성공이며 native로
+진행하지 않는다. 전역 옵션 변경이나 일부 후보만 대체하는 경로는 없다. 강제 VF/IC/epilogue 요청은 유지한다. 실패를 spill 0으로
 간주하지 않으며 일부 성공 비용만 적용하지 않는다. LLVM fatal error/assertion의
 예외 격리는 제공하지 않는다. Probe suffix는 임의의 LTO·module pass·사용자 추가
 pass를 재현하지 않으며, 최종 machine instruction 전체와의 동등성을 보장하지 않는다.
 
 ### 제한된 probe 병렬 실행
 
-`-vplan-backend-probe-threads=N`은 양의 정수이며 기본값은 1이다. 기본 경로는
-기존 후보별 준비 → probe → 반영과 첫 실패 시 중단을 유지한다. N>1의 일반
-경로만 한 원본 loop의 main 후보들을 준비하고, gate가 요구한 query들을 batch로
-실행한 뒤 기존 후보 순서로 반영한다. LVP·원본 TTI·분석·비용표·report는 기존
-컴파일 스레드에서만 접근한다. 자동 epilogue는 직렬이고 강제 epilogue는 기존대로
-main probe에 포함된다.
+`-vplan-backend-probe-threads=N`은 양의 정수이며 기본값은 1이다. N=1도 같은
+준비/고정 wave 경로를 쓴다. 모든 gate 비용을 먼저 확정한 뒤 tuning vscale을
+적용한 runtime VF 폭 오름차순, 같은 폭이면 원래 ordinal 순으로 최대 N개를
+보낸다. IC는 scheduling key가 아니다. 각 wave 전체 완료 뒤 같은 순서로 반영하고
+다음 wave를 만든다. 최종 VF 선택은 원래 plan/VF 순서다. LVP·원본 TTI·분석·
+비용표·report는 기존 컴파일 스레드에서만 접근한다. 자동 epilogue는 직렬이고
+강제 epilogue는 기존대로 main probe에 포함된다.
 
-구현 경계는 다음과 같다. Vectorize에는 scheduling이나 CodeGen 의존을 추가하지
-않고, 기존 feedback service를 batch query로 확장한다.
+Service의 `batchCapacity`는 compatibility/diagnostic 직렬화 시 1을 반환한다.
+`beginInvocation`만 진단 accounting을 초기화하며 capacity 조회는 초기화하지 않는다.
+Vectorize는 Passes 전역 옵션을 읽지 않는다. 구현 경계는 다음과 같다.
 
 | 구성 요소 | 역할과 실행 위치 |
 |---|---|
@@ -159,7 +197,7 @@ main probe에 포함된다.
 | `VPlanBackendProbePool` | lazy 생성한 제한된 pool을 재사용. 작업별 결과 슬롯을 채우고 batch 전체 완료를 기다림 |
 
 ```text
-기존 스레드: 후보 준비 / gate → getBatch → 후보 순서대로 applyCost → VF 선택
+기존 스레드: 전체 준비 / gate → 하한 확인 → wave → 재확인 / applyCost → VF 선택
                                   │
                      snapshot → 제한된 worker pool → 완료 대기
                                   │
@@ -181,17 +219,18 @@ snapshot의 ordinal로 찾고, module identifier와 context의 이름/ODR 설정
 공통 `runProbe`를 사용하므로 materialization·suffix·관측 종료 지점은 같다.
 각 작업은 native TTI scope에서 실행하고 작업 종료 시 thread-local 상태를 복원한다.
 
-준비 오류·관측 오류·pricing 오류는 후보 순서로 처리한다. 첫 실패 뒤에 미리
-실행된 결과는 선택이나 일반 candidate JSON에 반영하지 않는다. 모든 작업 종료
-후 결과를 해제하며 실패를 spill 0으로 사용하지 않는다. 따라서 진단의 논리적
-query 수는 기존과 같지만 실제 실행한 probe 수는 실패 loop에서 더 많을 수 있다.
-취소와 fatal error/assertion 격리는 제공하지 않는다.
+준비는 query 전에 완료하며 준비 실패 시 prefix도 실행하지 않는다. 각 wave 결과를
+소비하기 직전에 최신 Exact 비용으로 필요성을 다시 확인한다. 불필요해진 speculative
+실패는 안전하게 소비하고 fallback하지 않는다. 성공 관측은 보관하되 가격 계산이나
+incumbent 승격을 하지 않는다. 필요한 실패만 현재 시도를 실패시킨다. 모든 작업과
+결과를 회수·정리한 뒤 재시도하므로 늦은 worker 갱신은 없다. Wave 중첩·실행 중
+취소·fatal error/assertion 격리는 제공하지 않는다.
 
 개별 결과는 context와 독립된 관측 값·오류 문자열·diagnostic 문자열을 소유한다.
 Service는 반환 개수를 검증하고, snapshot과 결과 저장소는 모든 작업이 끝날
-때까지 유지한다. 늦은 준비 오류가 있어도 먼저 준비된 prefix의 query/pricing
-오류를 우선 처리한다. 사용하지 않을 결과의 오류도 안전하게 폐기하며, worker가
-직접 candidate JSON이나 비용 보고를 출력하지 않는다.
+때까지 유지한다. Worker는 직접 candidate JSON이나 비용 보고를 출력하지 않는다.
+N=1/2/4는 필요한 비용과 최종 선택을 보존하지만 speculative 관측 수와 JSON 행의
+관측 사실은 다를 수 있다. 같은 N의 순서는 결정적이다.
 
 Fork의 JSON과 두 비용 보고는 병렬 실행에서도 passive하며 기존 스레드에서
 출력한다. 강제 epilogue와 비용 보고를 함께 사용하면 기존 준비·보고 순서를
@@ -252,7 +291,8 @@ fallbacks, masking, legalization과 다른 memory fallback은 native다. 따라�
 
 보고는 기존 TTI 질의와 probe 결과를 관찰하며 추가 질의나 후보 compile을 하지
 않는다. 내부 clone은 별도 비용 보고를 출력하지 않는다. Main/필요한 epilogue에서
-fallback이 발생하면 시도 중인 backend 보고를 폐기하고 native 보고를 출력한다.
+실패 시 시도 중인 backend 보고를 폐기한다. 최종 성공한 estimated/backend 보고만
+출력하며 native까지 갔을 때 native 보고를 복구한다.
 
 요약 표는 main/epilogue, plan, VF, 예상 폭, body cost, score와 비교 종류,
 incumbent/scalar 비교 결과와 이유를 담는다. `fN`은 fixed VF, `sN`은 scalable VF다.
@@ -270,11 +310,15 @@ profile body, native IC와 native selection context를 구분한다.
 
 ## JSONL과 시간 진단
 
-`-vplan-backend-jsonl=FILE`은 candidate·selected·native-fallback 행을 append한다.
+`-vplan-backend-jsonl=FILE`은 최종 시도의 candidate·selected와
+estimated-fallback/native-fallback 행을 append한다.
 Candidate 행에는 identity/VF/IC/role, model/profile, native/profile/estimated/raw 비용,
 정확한 정규화 및 body 분자/분모, TTI 폭과 gate 판단을 기록한다. `collected`는 facts
-수신을 뜻하며 `cost_failure`가 있으면 선택에 사용하지 않는다. Fallback 행은 reason을
-포함한다. JSONL quarter-cost 분자를 **4 × 분모**로 나누면 텍스트의 model unit과 같다.
+수신을 뜻한다. `cost_source`는 gate/observation/estimated를 구분한다.
+Pruned 행은 LB·비교 기준 비용/폭·TC/tail·queried를 담고 exact body를 만들지 않는다.
+미관측 Pruned에는 observation/Wobs/observed spill도 없다. 실제 실행한 speculative
+성공의 관측은 보관할 수 있다. Selected/fallback 행은 requested/effective model을,
+fallback 행은 reason을 포함한다. JSONL quarter-cost 분자를 **4 × 분모**로 나누면 텍스트의 model unit과 같다.
 
 Provider는 소유권 있는 `VPlanBackendResult`를 반환한다. `rvv-vector-spill-v1`
 요약은 candidate/VF/IC/role, stage, 검증된 반복 폭과 vector 접근 목록을 담는다.
@@ -306,6 +350,7 @@ quarter-cost 분자·분모, 명령 순서와 대응하는 `mir_costs`의 rule/u
 TTI-only estimated 모드는 `estimated-spill-no-probe`, MIR 상세 report는
 `gate=bypassed-for-mir-body`로 구분한다. 상세 MIR report는 raw/정규화 R·S와 Et,
 실제 적용 수식 및 명령별 service demand를 출력한다. 모두 실제 비용 계산 결과를
-사용하며 추가 query/재계산을 하지 않는다. Whole-loop fallback에서는 기존처럼
-시도 중인 두 cost report를 폐기하고 native report를 복구한다. JSONL은 기존처럼
-실패 이전 후보 관측과 최종 fallback record를 함께 남긴다.
+사용하며 추가 query/재계산을 하지 않는다. 실패 시도의 두 cost report와 tentative
+candidate JSON은 폐기한다. 최종 성공 시도만 채택하고 native까지 갔다면 native
+보고와 짧은 fallback 이유만 남긴다. MIR 요청 후 TTI estimated가 성공하면 실제
+계산을 `Lt`로 표시하며 `native-fallback`으로 표시하지 않는다.

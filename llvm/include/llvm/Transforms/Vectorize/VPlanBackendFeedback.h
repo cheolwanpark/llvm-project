@@ -86,21 +86,30 @@ public:
   using Batch = SmallVector<VPlanBackendProbeResult>;
   using Query = std::function<Expected<Batch>(
       const Function &, const BasicBlock &, ArrayRef<VPlanBackendCandidate>)>;
-  using BatchPolicy = std::function<bool(const Function &)>;
+  using BatchPolicy = std::function<unsigned(const Function &)>;
+  using InvocationSetup = std::function<void()>;
 
   using MIRInfoProvider =
       std::function<std::unique_ptr<TargetMIRInfo>(const Function &)>;
   explicit VPlanBackendFeedback(Query Q = {}, BatchPolicy Policy = {},
-                                MIRInfoProvider MIRInfo = {})
+                                MIRInfoProvider MIRInfo = {},
+                                InvocationSetup Setup = {})
       : QueryCandidates(std::move(Q)), Policy(std::move(Policy)),
-        MIRInfo(std::move(MIRInfo)) {}
+        MIRInfo(std::move(MIRInfo)), Setup(std::move(Setup)) {}
   std::unique_ptr<TargetMIRInfo> getMIRInfo(const Function &F) const {
     return MIRInfo ? MIRInfo(F) : nullptr;
   }
 
-  /// Called once at the start of main-candidate preparation. The provider may
-  /// reset its per-loop serial-query diagnostic accounting here.
-  bool canBatch(const Function &F) const { return Policy && Policy(F); }
+  /// Reset per-invocation diagnostics independently of capacity queries.
+  void beginInvocation() const {
+    if (Setup)
+      Setup();
+  }
+  /// Effective capacity includes compatibility and diagnostic serialization.
+  /// This lookup does not reset diagnostic accounting between waves.
+  unsigned batchCapacity(const Function &F) const {
+    return Policy ? std::max(1u, Policy(F)) : 1;
+  }
 
   Expected<Batch> getBatch(const Function &F, const BasicBlock &Header,
                            ArrayRef<VPlanBackendCandidate> Candidates) const {
@@ -136,6 +145,7 @@ private:
   Query QueryCandidates;
   BatchPolicy Policy;
   MIRInfoProvider MIRInfo;
+  InvocationSetup Setup;
 };
 
 class VPlanBackendFeedbackAnalysis
@@ -145,17 +155,19 @@ class VPlanBackendFeedbackAnalysis
   VPlanBackendFeedback::Query Query;
   VPlanBackendFeedback::BatchPolicy Policy;
   VPlanBackendFeedback::MIRInfoProvider MIRInfo;
+  VPlanBackendFeedback::InvocationSetup Setup;
 
 public:
   using Result = VPlanBackendFeedback;
   explicit VPlanBackendFeedbackAnalysis(
       VPlanBackendFeedback::Query Q = {},
       VPlanBackendFeedback::BatchPolicy Policy = {},
-      VPlanBackendFeedback::MIRInfoProvider MIRInfo = {})
+      VPlanBackendFeedback::MIRInfoProvider MIRInfo = {},
+      VPlanBackendFeedback::InvocationSetup Setup = {})
       : Query(std::move(Q)), Policy(std::move(Policy)),
-        MIRInfo(std::move(MIRInfo)) {}
+        MIRInfo(std::move(MIRInfo)), Setup(std::move(Setup)) {}
   Result run(Function &, FunctionAnalysisManager &) {
-    return Result(Query, Policy, MIRInfo);
+    return Result(Query, Policy, MIRInfo, Setup);
   }
 };
 
@@ -163,6 +175,17 @@ LLVM_ABI bool vplanBackendFeedbackEnabled();
 LLVM_ABI bool vplanBackendUseMIR();
 LLVM_ABI bool vplanBackendUseEstimatedSpill();
 LLVM_ABI bool vplanBackendUseDefaultTTI();
+/// The raw requested value also governs fallback from MIR modes.
+LLVM_ABI bool vplanBackendRequestedDefaultTTI();
+struct VPlanBackendMode {
+  bool MIR = false, EstimatedSpill = false, DefaultTTI = false;
+  LLVM_ABI StringRef name() const;
+  bool needsProbe() const { return MIR || !EstimatedSpill; }
+  static VPlanBackendMode requested() {
+    return {vplanBackendUseMIR(), vplanBackendUseEstimatedSpill(),
+            vplanBackendUseDefaultTTI()};
+  }
+};
 LLVM_ABI StringRef vplanBackendModelName();
 LLVM_ABI bool vplanBackendFeedbackTimingEnabled();
 LLVM_ABI json::Object summarizeVPlanBackendResult(const VPlanBackendResult &R);

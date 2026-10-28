@@ -344,14 +344,15 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
                                   const VPlanBackendResult *Observation,
                                   ArrayRef<InstructionCost> AccessCosts,
                                   unsigned Width, StringRef ProfileName,
-                                  InstructionCost Raw, VPExactCost Spill) {
+                                  InstructionCost Raw, VPExactCost Spill,
+                                  VPlanBackendMode Mode) {
   auto &C = candidate(*Cost.Plan, Cost.VF, Cost.IsEpilogue);
   C.ExactBodyCost = Cost.Body;
   raw_string_ostream OS(C.BackendSummary);
   OS << "  backend-cost phase=" << (Cost.IsEpilogue ? "epilogue" : "main")
      << " plan=" << C.PlanID << " vf=";
   printVF(OS, Cost.VF);
-  OS << " ic=" << Cost.IC << " model=" << vplanBackendModelName()
+  OS << " ic=" << Cost.IC << " model=" << Mode.name()
      << " profile=" << ProfileName << " queried=" << bool(Observation)
      << " would_skip=" << !Bound.shouldQuery()
      << " force_all=" << vplanBackendFeedbackForceAll() << " body_cost=";
@@ -378,7 +379,7 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
     DS << " S=";
     M.Spill.print(DS);
     DS << " Et=" << Cost.EstimatedSpill
-       << (vplanBackendUseEstimatedSpill() ? " B=R-S+Et=" : " B=R=");
+       << (Mode.EstimatedSpill ? " B=R-S+Et=" : " B=R=");
     Cost.Body.print(DS);
     DS << " spill_scope=scalar-and-vector gate=bypassed-for-mir-body"
           " scalar_baseline=native ic_policy=native-cost\n";
@@ -393,7 +394,7 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
     }
     return;
   }
-  if (vplanBackendUseEstimatedSpill()) {
+  if (Mode.EstimatedSpill) {
     DS << " ic=" << Cost.IC << " native=" << Cost.Native
        << " L=" << Cost.Profile
        << " estimated_total_spill=" << Cost.EstimatedSpill << " B=L=";

@@ -37,7 +37,7 @@ for scenario, options in [
         ('force', ['-vplan-backend', '-vplan-backend-force-all']),
         ('gate', ['-vplan-backend']),
         ('fallback', ['-vplan-backend', '-vplan-backend-force-all',
-                      '-riscv-rvv-regalloc=fast'])]:
+                      '-riscv-rvv-regalloc=fast', '-use-default-tti=true'])]:
     reference = None
     for mode, prints in enumerate([[], ['-print-vplans'], ['-print-detailed-vplans'],
                                   ['-print-vplans', '-print-detailed-vplans']]):

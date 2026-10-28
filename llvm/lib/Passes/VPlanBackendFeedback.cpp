@@ -363,9 +363,10 @@ public:
       : Target(Target), Pipeline(Pipeline), FileSystem(std::move(FileSystem)),
         Threads(ProbeThreads), Pool(Threads) {}
 
-  bool canBatch(const Function &F) {
-    SerialMainQueries = 0;
-    return Threads > 1 && serialReason(F).empty();
+  void beginInvocation() { SerialMainQueries = 0; }
+
+  unsigned batchCapacity(const Function &F) const {
+    return serialReason(F).empty() ? Threads : 1;
   }
 
   Expected<VPlanBackendFeedback::Batch>
@@ -420,9 +421,10 @@ void PassBuilder::registerVPlanBackendFeedbackAnalysis(
                    ArrayRef<VPlanBackendCandidate> Candidates) {
           return Provider->query(F, Header, Candidates);
         },
-        [Provider](const Function &F) { return Provider->canBatch(F); },
+        [Provider](const Function &F) { return Provider->batchCapacity(F); },
         [TM](const Function &F) {
           return TM ? TM->getTargetMIRInfo(F) : nullptr;
-        });
+        },
+        [Provider] { Provider->beginInvocation(); });
   });
 }

@@ -6418,6 +6418,48 @@ unsigned LoopVectorizationPlanner::limitBackendIC(VPlan &Plan,
   return IC;
 }
 
+StringRef LoopVectorizationPlanner::candidateRejection(VPlan &Plan,
+                                                     ElementCount VF) const {
+  if (Hints.getForce() == LoopVectorizeHints::FK_Enabled)
+    return {};
+  if (!willGenerateVectors(Plan, VF, TTI))
+    return "no-vector-instructions";
+  if (Config.OptForSize && hasReplicatorRegion(Plan))
+    return "replication-under-opt-for-size";
+  return {};
+}
+
+VPBackendPruningContext LoopVectorizationPlanner::backendPruningContext() {
+  VPBackendPruningContext R;
+  // These paths do not implement an ordinary numeric argmin. Do not infer
+  // dominance from pairwise costs when selection policy can override it.
+  if (VPlans.size() <= 1 || Hints.getWidth().isVector() ||
+      Hints.getForce() == LoopVectorizeHints::FK_Enabled ||
+      Hints.getInterleave() > 1 || hasForcedEpilogueVF() ||
+      Hints.isScalableVectorizationAlwaysPreferred() || Config.OptForSize ||
+      Config.CostKind != TTI::TCK_RecipThroughput ||
+      any_of(VPlans, [](const auto &P) { return P->isOuterLoop(); }))
+    return R;
+  // Selection uses the challenger's tail policy for both operands. A common
+  // tail policy is required to establish a transitive numerical ordering.
+  std::optional<bool> Tail;
+  for (const auto &P : VPlans)
+    for (auto VF : P->vectorFactors()) {
+      if (VF.isScalar() || !candidateRejection(*P, VF).empty())
+        continue;
+      if (Tail && *Tail != P->hasScalarTail())
+        return R;
+      Tail = P->hasScalarTail();
+    }
+  R.Scalar = VPExactCost(CM.expectedCost(ElementCount::getFixed(1)));
+  R.Enabled = R.Scalar.isValid();
+  R.MaxTripCount = PSE.getSmallConstantMaxTripCount();
+  // Only use existing, definitive OFF checks. Unknown means scalar-only.
+  R.VectorIncumbents = !EnableEpilogueVectorization || !CM.isEpilogueAllowed() ||
+                       CM.maskPartialAliasing();
+  return R;
+}
+
 std::pair<VectorizationFactor, VPlan *>
 LoopVectorizationPlanner::computeBestVF() {
   if (Config.CostReport)
@@ -6512,23 +6554,19 @@ LoopVectorizationPlanner::computeBestVF() {
       ElementCount VF = VFs[I];
       if (VF.isScalar())
         continue;
-      if (!ForceVectorization && !willGenerateVectors(*P, VF, TTI)) {
-        LLVM_DEBUG(
-            dbgs()
-            << "LV: Not considering vector loop of width " << VF
-            << " because it will not generate any vector instructions.\n");
-        if (Config.CostReport)
-          Config.CostReport->skip(*P, VF, "no-vector-instructions");
+      if (Config.BackendCosts && Config.BackendCosts->isPruned(*P, VF))
         continue;
-      }
-      if (Config.OptForSize && !ForceVectorization && hasReplicatorRegion(*P)) {
-        LLVM_DEBUG(
-            dbgs()
-            << "LV: Not considering vector loop of width " << VF
-            << " because it would cause replicated blocks to be generated,"
-            << " which isn't allowed when optimizing for size.\n");
+      if (auto Reason = candidateRejection(*P, VF); !Reason.empty()) {
+        LLVM_DEBUG({
+          dbgs() << "LV: Not considering vector loop of width " << VF;
+          if (Reason == "no-vector-instructions")
+            dbgs() << " because it will not generate any vector instructions.\n";
+          else
+            dbgs() << " because it would cause replicated blocks to be generated,"
+                      " which isn't allowed when optimizing for size.\n";
+        });
         if (Config.CostReport)
-          Config.CostReport->skip(*P, VF, "replication-under-opt-for-size");
+          Config.CostReport->skip(*P, VF, Reason);
         continue;
       }
 
@@ -8818,28 +8856,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       Config.CostReport = CostReport.get();
     }
   };
-  if (BackendFeedback && IsInnerLoop &&
-      Config.CostKind == TTI::TCK_RecipThroughput &&
-      F->getParent()->getTargetTriple().isRISCV() &&
-      TTI->getRegisterBitWidth(TTI::RGK_ScalableVector).getKnownMinValue()) {
-    if (CostReport) {
-      NativeReport = std::move(CostReport);
-      CostReport = std::make_unique<VPlanCostReport>(
-          *L, Config, ReportInvocation, ReportLoopIndex,
-          NativeReport->isDetailed());
-      Config.CostReport = CostReport.get();
-    }
-    BackendCosts = std::make_unique<VPlanBackendCostModel>(
-        *BackendFeedback, *TTI, *F, *L->getHeader(), Config.CostReport);
-    if (BackendCosts->prepare(
-            LVP, Config, UserIC, ReportInvocation, ReportLoopIndex,
-            InterleaveOnlyWhenForced, VectorizeOnlyWhenForced,
-            hasForcedEpilogueVF() ? ElementCount(EpilogueVectorizationForceVF)
-                                  : ElementCount::getFixed(0)))
-      Config.BackendCosts = BackendCosts.get();
-    else
-      RestoreNativeReport();
-  }
   auto SelectPlan = [&]() -> std::pair<VectorizationFactor, VPlan *> {
     if (!BackendProbe)
       return LVP.computeBestVF();
@@ -8859,29 +8875,75 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                                 InstructionCost::getInvalid()),
             Plans[Index].get()};
   };
-  auto [VF, BestPlanPtr] = SelectPlan();
-  if (BackendProbe && !BestPlanPtr)
-    return false;
-  if (Config.BackendCosts && BackendCosts->failed()) {
-    Config.BackendCosts = nullptr;
-    RestoreNativeReport();
-    LVP.resetVFSelection();
-    std::tie(VF, BestPlanPtr) = LVP.computeBestVF();
-  }
+  VectorizationFactor VF = VectorizationFactor::Disabled();
+  VPlan *BestPlanPtr = nullptr;
   std::unique_ptr<VPlan> PreparedEpilogue;
-  if (Config.BackendCosts && BestPlanPtr && VF.Width.isVector()) {
-    auto *C = Config.BackendCosts->lookup(*BestPlanPtr, VF.Width);
-    assert(C && "prepared main cost missing");
-    PreparedEpilogue =
-        LVP.selectBestEpiloguePlan(*BestPlanPtr, VF.Width, C->IC);
-    if (BackendCosts->failed()) {
-      Config.BackendCosts = nullptr;
-      RestoreNativeReport();
-      PreparedEpilogue.reset();
-      LVP.resetVFSelection();
+  const auto RequestedMode = VPlanBackendMode::requested();
+  std::string FallbackReason;
+  auto TrySelection = [&](VPlanBackendMode Mode) {
+    if (CostReport) {
+      if (!NativeReport)
+        NativeReport = std::move(CostReport);
+      else
+        CostReport->discard();
+      CostReport = std::make_unique<VPlanCostReport>(
+          *L, Config, ReportInvocation, ReportLoopIndex,
+          NativeReport->isDetailed());
+      Config.CostReport = CostReport.get();
+    }
+    BackendCosts = std::make_unique<VPlanBackendCostModel>(
+        *BackendFeedback, *TTI, *F, *L->getHeader(), Config.CostReport, Mode);
+    if (BackendCosts->prepare(
+            LVP, Config, UserIC, ReportInvocation, ReportLoopIndex,
+            InterleaveOnlyWhenForced, VectorizeOnlyWhenForced,
+            hasForcedEpilogueVF() ? ElementCount(EpilogueVectorizationForceVF)
+                                  : ElementCount::getFixed(0))) {
+      Config.BackendCosts = BackendCosts.get();
       std::tie(VF, BestPlanPtr) = LVP.computeBestVF();
+      if (!BackendCosts->failed() && BestPlanPtr && VF.Width.isVector()) {
+        auto *C = BackendCosts->lookup(*BestPlanPtr, VF.Width);
+        assert(C && "prepared main cost missing");
+        PreparedEpilogue =
+            LVP.selectBestEpiloguePlan(*BestPlanPtr, VF.Width, C->IC);
+      }
+      if (!BackendCosts->failed()) {
+        BackendCosts->commit(RequestedMode, FallbackReason);
+        return true; // Scalar selection is a successful model evaluation too.
+      }
+    }
+    if (!FallbackReason.empty())
+      FallbackReason += "; ";
+    FallbackReason += (Mode.name() + ": " + BackendCosts->failure()).str();
+    Config.BackendCosts = nullptr;
+    PreparedEpilogue.reset();
+    LVP.resetVFSelection();
+    BackendCosts.reset();
+    return false;
+  };
+  bool Selected = false;
+  if (BackendFeedback && IsInnerLoop &&
+      Config.CostKind == TTI::TCK_RecipThroughput &&
+      F->getParent()->getTargetTriple().isRISCV() &&
+      TTI->getRegisterBitWidth(TTI::RGK_ScalableVector).getKnownMinValue()) {
+    Selected = TrySelection(RequestedMode);
+    if (!Selected && RequestedMode.needsProbe() &&
+        !vplanBackendRequestedDefaultTTI() &&
+        TTI->getVPlanCostProfileName() != "native")
+      Selected = TrySelection({false, true, false});
+    if (!Selected) {
+      RestoreNativeReport();
+      if (vplanBackendFeedbackOutputEnabled())
+        writeVPlanBackendFeedback(json::Object{
+            {"model", "native"}, {"requested_model", RequestedMode.name()},
+            {"effective_model", "native"}, {"status", "native-fallback"},
+            {"function", F->getName()}, {"loop", ReportLoopIndex},
+            {"reason", FallbackReason}});
     }
   }
+  if (!Selected)
+    std::tie(VF, BestPlanPtr) = SelectPlan();
+  if (BackendProbe && !BestPlanPtr)
+    return false;
   if (NativeReport)
     NativeReport->discard();
   if (BackendProbe) {
