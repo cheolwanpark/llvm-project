@@ -5,6 +5,7 @@
 #include "VPlanRegisterUsageBounds.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/InstructionCost.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
 namespace llvm {
 class LLVMContext;
@@ -50,10 +51,9 @@ CostT vplanCostForTripCount(unsigned Width, CostT Body, CostT Scalar,
 }
 
 struct VPBackendPruningContext {
-  bool Enabled = false;
-  bool VectorIncumbents = false;
-  VPExactCost Scalar;
-  unsigned MaxTripCount = 0;
+  InstructionCost Scalar;
+  unsigned MaxTripCount;
+  bool UseScalar;
 };
 LLVM_ABI_FOR_TEST bool vplanStrictlyCheaper(
     VPExactCost A, unsigned WidthA, VPExactCost B, unsigned WidthB,
@@ -81,7 +81,6 @@ struct VPBackendCostEntry {
 /// failure discard every score before native selection can observe the table.
 class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
   friend class VPlanBackendCostModelTestAccess;
-  enum class CandidateState { Pending, Exact, Pruned };
   struct PreparedCandidate {
     VPlan *Plan;
     VPlanBackendCandidate Candidate;
@@ -90,18 +89,20 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
     unsigned Width;
     VPRegisterUsageBound Bound;
     bool Query;
-    CandidateState State = CandidateState::Pending;
-    VPExactCost LowerBound;
     bool Eligible = false;
-    bool Queried = false;
-    std::string PruningBasis;
-    VPExactCost BasisCost;
-    unsigned BasisWidth = 0;
-    std::optional<VPlanBackendResult> Observation;
   };
+  struct EvaluatedCost {
+    VPExactCost Spill;
+    std::optional<VPMIRCost> MIR;
+    InstructionCost Raw;
+    SmallVector<InstructionCost> AccessCosts;
+    std::string Error;
+  };
+  EvaluatedCost
+  evaluateObservation(const PreparedCandidate &P,
+                      const VPlanBackendProbeResult &Result) const;
   SmallVector<VPBackendCostEntry, 0> Costs;
-  SmallVector<PreparedCandidate, 0> Candidates;
-  VPBackendPruningContext Pruning;
+  SmallVector<std::pair<const VPlan *, ElementCount>> Pruned;
   const VPlanBackendFeedback &Feedback;
   const TargetTransformInfo &TTI;
   Function &F;
@@ -110,22 +111,21 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
   bool InterleaveOnly = false, VectorizeOnly = false;
   VPlanCostReport *Report;
   std::unique_ptr<TargetMIRInfo> MIRInfo;
-  bool Failed = false;
-  std::string Failure;
   VPlanBackendMode Mode;
   SmallVector<json::Object, 0> Rows;
+  bool Failed = false;
+  std::string Failure;
 
   PreparedCandidate prepareCost(VPlan &Plan, VPlanBackendCandidate Candidate,
                                 InstructionCost Native, InstructionCost Profile,
                                 InstructionCost Ev, unsigned Width,
                                 InstructionCost EstimatedSpill = 0) const;
-  bool applyCost(PreparedCandidate &Prepared,
+  bool applyCost(const PreparedCandidate &Prepared,
                  std::optional<VPlanBackendProbeResult> Result,
-                 VPlanFeedbackTimer &Timer);
-  bool addBatch(ArrayRef<PreparedCandidate *> Wave);
-  bool prune(PreparedCandidate &P);
-  void reportPruned(const PreparedCandidate &P);
-  bool evaluatePrepared(unsigned Capacity);
+                 VPlanFeedbackTimer &Timer,
+                 const EvaluatedCost *Evaluated = nullptr);
+  bool addBatch(ArrayRef<PreparedCandidate> Candidates,
+                std::optional<VPBackendPruningContext> Context = std::nullopt);
 
 public:
   VPlanBackendCostModel(const VPlanBackendFeedback &Feedback,
@@ -147,15 +147,17 @@ public:
            InstructionCost EstimatedSpill = 0);
   const VPBackendCostEntry *lookup(const VPlan &Plan, ElementCount VF,
                                    bool Epilogue = false) const;
-  bool isPruned(const VPlan &Plan, ElementCount VF) const;
   void fail(StringRef Reason);
   void commit(VPlanBackendMode Requested, StringRef Reason);
   void selection(ElementCount VF, unsigned IC, ElementCount Epilogue,
                  bool Emitted) const;
+  bool isPruned(const VPlan &P, ElementCount VF) const {
+    return llvm::is_contained(Pruned, std::make_pair(&P, VF));
+  }
   bool failed() const { return Failed; }
   StringRef failure() const { return Failure; }
 };
-/// Strict adapter for vector-spill facts; the observer never assigns prices.
+/// Strict adapter for the in-process facts; no cost rules live in the backend.
 LLVM_ABI_FOR_TEST Expected<VPExactCost>
 priceVPlanVectorSpills(const VPlanBackendResult &Observation,
                        const TargetTransformInfo &TTI, LLVMContext &Context,

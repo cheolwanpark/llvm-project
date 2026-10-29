@@ -6429,35 +6429,34 @@ StringRef LoopVectorizationPlanner::candidateRejection(VPlan &Plan,
   return {};
 }
 
-VPBackendPruningContext LoopVectorizationPlanner::backendPruningContext() {
-  VPBackendPruningContext R;
-  // These paths do not implement an ordinary numeric argmin. Do not infer
-  // dominance from pairwise costs when selection policy can override it.
-  if (VPlans.size() <= 1 || Hints.getWidth().isVector() ||
-      Hints.getForce() == LoopVectorizeHints::FK_Enabled ||
-      Hints.getInterleave() > 1 || hasForcedEpilogueVF() ||
-      Hints.isScalableVectorizationAlwaysPreferred() || Config.OptForSize ||
-      Config.CostKind != TTI::TCK_RecipThroughput ||
-      any_of(VPlans, [](const auto &P) { return P->isOuterLoop(); }))
-    return R;
-  // Selection uses the challenger's tail policy for both operands. A common
-  // tail policy is required to establish a transitive numerical ordering.
-  std::optional<bool> Tail;
-  for (const auto &P : VPlans)
-    for (auto VF : P->vectorFactors()) {
-      if (VF.isScalar() || !candidateRejection(*P, VF).empty())
+std::optional<VPBackendPruningContext>
+LoopVectorizationPlanner::backendPruningContext() {
+  if (EnableEpilogueVectorization || hasForcedEpilogueVF() ||
+      Hints.getWidth().isVector())
+    return std::nullopt;
+  std::optional<std::pair<bool, bool>> Policy;
+  for (const auto &Plan : VPlans)
+    for (ElementCount VF : Plan->vectorFactors()) {
+      if (VF.isScalar())
         continue;
-      if (Tail && *Tail != P->hasScalarTail())
-        return R;
-      Tail = P->hasScalarTail();
+      auto P = std::make_pair(VF.isScalable(), Plan->hasScalarTail());
+      if (Policy && *Policy != P)
+        return std::nullopt;
+      Policy = P;
     }
-  R.Scalar = VPExactCost(CM.expectedCost(ElementCount::getFixed(1)));
-  R.Enabled = R.Scalar.isValid();
-  R.MaxTripCount = PSE.getSmallConstantMaxTripCount();
-  // Only use existing, definitive OFF checks. Unknown means scalar-only.
-  R.VectorIncumbents = !EnableEpilogueVectorization || !CM.isEpilogueAllowed() ||
-                       CM.maskPartialAliasing();
-  return R;
+  auto Scalar = CM.expectedCost(ElementCount::getFixed(1));
+  if (!Scalar.isValid())
+    return std::nullopt;
+  return VPBackendPruningContext{Scalar, PSE.getSmallConstantMaxTripCount(),
+                                 Hints.getForce() !=
+                                     LoopVectorizeHints::FK_Enabled};
+}
+bool LoopVectorizationPlanner::backendPruningEligible(VPlan &Plan,
+                                                      ElementCount VF) {
+  if (Hints.getForce() == LoopVectorizeHints::FK_Enabled)
+    return true;
+  return willGenerateVectors(Plan, VF, TTI) &&
+         !(Config.OptForSize && hasReplicatorRegion(Plan));
 }
 
 std::pair<VectorizationFactor, VPlan *>
@@ -6554,8 +6553,11 @@ LoopVectorizationPlanner::computeBestVF() {
       ElementCount VF = VFs[I];
       if (VF.isScalar())
         continue;
-      if (Config.BackendCosts && Config.BackendCosts->isPruned(*P, VF))
+      if (Config.BackendCosts && Config.BackendCosts->isPruned(*P, VF)) {
+        if (Config.CostReport)
+          Config.CostReport->skip(*P, VF, "backend-lower-bound");
         continue;
+      }
       if (auto Reason = candidateRejection(*P, VF); !Reason.empty()) {
         LLVM_DEBUG({
           dbgs() << "LV: Not considering vector loop of width " << VF;

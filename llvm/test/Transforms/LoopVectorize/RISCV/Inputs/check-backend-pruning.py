@@ -10,6 +10,7 @@ root = Path(prefix)
 root.mkdir(parents=True, exist_ok=True)
 base = [opt, '-mtriple=riscv64', '-mcpu=xiangshan-kunminghu', '-mattr=+v',
         '-codegen-opt-level=3', '-passes=loop-vectorize',
+        '-scalable-vectorization=off',
         '-force-vector-interleave=1', '-riscv-v-register-bit-width-lmul=8',
         '-enable-epilogue-vectorization=false', '-verify-each',
         '-verify-machineinstrs']
@@ -52,6 +53,10 @@ def verify_pruned(rows):
 
         assert score(exact(r, 'basis'), r['basis_width']) < score(
             exact(r, 'lower_bound'), r['tti_width']), r
+        assert exact(r, 'score_lower_bound') == score(exact(r, 'lower_bound'), r['tti_width'])
+        assert r['score_kind'] == ('whole-loop' if tc else 'cost-per-lane')
+        assert r['execution'] in ('not-started', 'cancelled', 'completed')
+        assert r['queried'] == (r['execution'] != 'not-started')
 
 
 def used(rows):
@@ -85,16 +90,14 @@ for workers in (1, 2, 4):
         if report:
             assert 'backend-pruned candidate=' in text
 
-# Explicit scalar-tail policy leaves epilogues possible. Only scalar can prune,
-# so the main-losing vector candidates are still priced and retained.
+# Epilogues possible disable automatic pruning under the baseline policy.
 epilogue_source = root / 'epilogue.ll'
 epilogue_source.write_text(Path(source).read_text().replace('%next, 24', '%next, 40'))
 _, rows, _ = run('epilogue-possible', ['-vplan-backend',
     '-enable-epilogue-vectorization=true', '-tail-folding-policy=dont-fold-tail',
     '-disable-loop-unrolling'], str(epilogue_source))
 verify_pruned(rows)
-assert any(r['status'] == 'pruned' and r['pruning_basis'] == 'scalar' for r in rows)
-assert all(r['pruning_basis'] == 'scalar' for r in rows if r['status'] == 'pruned')
+assert not any(r['status'] == 'pruned' for r in rows)
 assert any(r['status'] == 'collected' and r['function'] == 'gate' for r in rows)
 
 # Required failure at the actual mapping boundary: keep unrolling enabled.
@@ -111,12 +114,12 @@ assert 'B=L=' in text
 assert any(r['status'] == 'selected' and r['function'] == 'dot4' and r['vf'] == 1
            for r in forced_rows)
 
-# Force-all and forced VF bypass pruning; scalable-always policy is also outside
-# the numeric proof's supported scope. The latter may legitimately fall back.
+# Forced VF bypasses pruning; scalable-always uses the baseline eligibility policy.
 for name, extra in [('vf', ['-force-vector-width=4']),
                     ('scalable', ['-scalable-vectorization=always'])]:
     _, rows, _ = run(name, ['-vplan-backend', '-disable-loop-unrolling'] + extra)
-    assert not any(r['status'] == 'pruned' for r in rows)
+    if name == 'vf':
+        assert not any(r['status'] == 'pruned' for r in rows)
 
 # Both MIR modes bypass lower-bound pruning and use the raw requested default
 # boolean for fallback. Explicit false must behave like an omitted option.

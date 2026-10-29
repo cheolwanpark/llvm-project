@@ -157,3 +157,16 @@ wide_ir, wide_rows, _ = run('vlen256', ['-vplan-backend', '-use-mir'], src=str(w
 assert wide_ir == wide_native
 assert any(r['status'] == 'native-fallback' and r['reason'].endswith('target has no MIR service model')
            for r in wide_rows)
+
+# CFG reduction is never applied to either MIR body model, regardless of option.
+for estimated in (False, True):
+    flags = ['-vplan-backend', '-use-mir', '-vplan-backend-pruning-trace']
+    if estimated:
+        flags.append('-use-estimated-spill')
+    enabled, enabled_rows, text = run('mir-cfg-on-' + str(estimated), flags, pressure)
+    disabled, disabled_rows, _ = run('mir-cfg-off-' + str(estimated),
+        flags + ['-vplan-backend-prune-cfg=false'], pressure)
+    assert enabled == disabled and enabled_rows == disabled_rows
+    traces = [json.loads(line.split(': ', 1)[1]) for line in text.splitlines()
+              if line.startswith('VPLAN-BACKEND-PRUNING: ')]
+    assert traces and all(not r['applied'] and r['reason'] == 'mir-observation' for r in traces)

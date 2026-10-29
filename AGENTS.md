@@ -78,9 +78,10 @@ For relevant compiler changes, build and run the affected checks:
 
 ```sh
 cmake --build .cache/build --target clang clang-resource-headers llc opt \
-  FileCheck split-file not VectorizeTests RISCVTests --parallel 2
+  FileCheck split-file not count llvm-readobj VectorizeTests RISCVTests IRTests --parallel 2
 .cache/build/unittests/Transforms/Vectorize/VectorizeTests
 .cache/build/unittests/Target/RISCV/RISCVTests
+.cache/build/unittests/IR/IRTests --gtest_filter='PassManager.*:LegacyPassManager.*'
 .cache/build/bin/llvm-lit -v llvm/test/Transforms/LoopVectorize \
   llvm/test/CodeGen/RISCV/rvv/stack-slot-coloring.mir
 ```

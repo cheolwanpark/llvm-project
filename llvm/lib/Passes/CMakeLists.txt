@@ -5,6 +5,7 @@ add_llvm_component_library(LLVMPasses
   PassBuilderPipelines.cpp
   StandardInstrumentations.cpp
   VPlanBackendFeedback.cpp
+  VPlanBackendProbePruning.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm

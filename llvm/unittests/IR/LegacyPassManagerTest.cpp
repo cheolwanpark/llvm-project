@@ -31,6 +31,7 @@
 #include "llvm/IR/OptBisect.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/ScopedPassCancellation.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
@@ -654,3 +655,43 @@ INITIALIZE_PASS(FPass, "fp","fp", false, false)
 INITIALIZE_PASS_BEGIN(LPass, "lp","lp", false, false)
 INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_END(LPass, "lp","lp", false, false)
+
+namespace {
+struct CancellationBoundaryPass : FunctionPass {
+  static char ID;
+  PassCancellation &Cancel;
+  unsigned &Runs;
+  unsigned &Finalized;
+  CancellationBoundaryPass(PassCancellation &C, unsigned &R, unsigned &F)
+      : FunctionPass(ID), Cancel(C), Runs(R), Finalized(F) {}
+  bool runOnFunction(Function &) override {
+    ++Runs;
+    Cancel.Requested.store(true);
+    return false;
+  }
+  bool doFinalization(Module &) override {
+    ++Finalized;
+    return false;
+  }
+};
+char CancellationBoundaryPass::ID;
+} // namespace
+TEST(LegacyPassManager, DisposableCancellationFinalizesAndRestoresScope) {
+  LLVMContext C;
+  SMDiagnostic Error;
+  auto M = parseAssemblyString("define void @f() { ret void }", Error, C);
+  ASSERT_TRUE(M);
+  PassCancellation Cancel;
+  unsigned Runs = 0, Finalized = 0;
+  {
+    ScopedPassCancellation Scope(&Cancel);
+    legacy::PassManager PM;
+    PM.add(new CancellationBoundaryPass(Cancel, Runs, Finalized));
+    PM.add(new CancellationBoundaryPass(Cancel, Runs, Finalized));
+    PM.run(*M);
+  }
+  EXPECT_EQ(Runs, 1u);
+  EXPECT_EQ(Finalized, 2u);
+  EXPECT_TRUE(Cancel.Observed);
+  EXPECT_FALSE(ScopedPassCancellation::check());
+}

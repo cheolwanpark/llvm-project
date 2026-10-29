@@ -163,11 +163,12 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
     std::string NativeReports[4], NativeIR;
     // 0=native, 1=success, 2=first query fails, 3=second query fails,
     // 4=epilogue fails after successful main selection,
-    // 5=preparation fails before any query; 6=first failure -> estimated,
-    // 7=epilogue failure -> estimated; 8=estimated scalar is success,
-    // 9=both preparations fail; 10=requested estimated fails (no retry),
-    // 11=MIR service absent -> estimated; 12=MIR + raw default -> native,
-    // 13=real spill + raw default -> native despite specific capability.
+    // 5=preparation fails (a prepared prefix may run); 6=first failure ->
+    // estimated, 7=epilogue failure -> estimated; 8=estimated scalar is
+    // success, 9=both preparations fail; 10=requested estimated fails (no
+    // retry), 11=MIR service absent -> estimated; 12=MIR + raw default ->
+    // native, 13=real spill + raw default -> native despite specific
+    // capability.
     for (unsigned Scenario = 0; Scenario != 14; ++Scenario) {
       SaveAndRestore<bool> SaveMaster(Master.getValue(), Scenario != 0);
       SaveAndRestore<bool> SaveEstimated(Estimated.getValue(), Scenario == 10);
@@ -252,7 +253,7 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
                 }
                 return Results;
               },
-              [&](const Function &) { return Batch ? 4u : 1u; });
+              [&](const Function &) { return Batch; });
         });
         PB.registerModuleAnalyses(MAM);
         PB.registerCGSCCAnalyses(CGAM);
@@ -292,9 +293,9 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
           NativeIR = IR;
           EXPECT_TRUE(Probes.empty());
         } else {
-          if (Scenario == 5 || (Scenario >= 9 && Scenario <= 12))
+          if (Scenario >= 10 && Scenario <= 12)
             EXPECT_TRUE(Probes.empty());
-          else
+          else if (Scenario != 5 && Scenario != 9)
             EXPECT_FALSE(Probes.empty());
           if (Scenario == 3 || Scenario == 4)
             EXPECT_GE(Probes.size(), 2u);

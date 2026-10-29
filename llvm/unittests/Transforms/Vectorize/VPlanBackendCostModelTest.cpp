@@ -276,35 +276,41 @@ TEST(VPlanBackendCost, StrictLowerBoundObjectives) {
   EXPECT_FALSE(vplanStrictlyCheaper(C(1), 0, C(100), 4, C(4), 0, true));
 }
 
-// Drive the production scheduler and pricing adapter with synthetic prepared
-// costs. No alternate scheduler or selection algorithm lives in this test.
+TEST(VPlanBackendCost, SharedTripCountBodyAndTailCosts) {
+  EXPECT_EQ(vplanCostForTripCount(4, InstructionCost(3), InstructionCost(2), 10,
+                                  true),
+            InstructionCost(10));
+  EXPECT_EQ(vplanCostForTripCount(4, InstructionCost(3), InstructionCost(2), 10,
+                                  false),
+            InstructionCost(9));
+  EXPECT_EQ(vplanCostForTripCount(4, VPExactCost::ratio(1, 2),
+                                  VPExactCost(InstructionCost(2)), 10, true),
+            VPExactCost::ratio(17, 1));
+  EXPECT_FALSE(vplanCostForTripCount(4, VPExactCost::ratio(INT64_MAX, 1),
+                                     VPExactCost(InstructionCost(2)), 10, false)
+                   .isValid());
+}
+
 namespace llvm {
 class VPlanBackendCostModelTestAccess {
 public:
-  static void configure(VPlanBackendCostModel &M, bool VectorIncumbents,
-                        InstructionCost Scalar = 100, unsigned TC = 0) {
-    M.Pruning = {true, VectorIncumbents, VPExactCost(Scalar), TC};
+  using Prepared = VPlanBackendCostModel::PreparedCandidate;
+  static Prepared candidate(VPlan &Plan, unsigned VF, InstructionCost Body,
+                            bool Query = true, bool Eligible = true) {
+    VPlanBackendCandidate C{"vf" + std::to_string(VF),
+                            0,
+                            ElementCount::getFixed(VF),
+                            true,
+                            false,
+                            false};
+    return {&Plan, C, Body, Body, 0, 0, VF, {}, Query, Eligible};
   }
-  static void add(VPlanBackendCostModel &M, VPlan &Plan, unsigned VF,
-                  InstructionCost Body, bool Query = true, bool Eligible = true,
-                  bool Scalable = false) {
-    VPlanBackendCandidate C{"vf" + std::to_string(VF), 0,
-                            ElementCount::get(VF, Scalable), true, false, false};
-    VPlanBackendCostModel::PreparedCandidate P{
-        &Plan, C, Body, Body, 0, 0, VF, {}, Query};
-    P.LowerBound = VPExactCost(Body);
-    P.Eligible = Eligible;
-    M.Candidates.push_back(std::move(P));
-  }
-  static bool run(VPlanBackendCostModel &M, unsigned Capacity) {
-    return M.evaluatePrepared(Capacity);
-  }
-  static bool observed(const VPlanBackendCostModel &M, unsigned I) {
-    return M.Candidates[I].Observation.has_value();
+  static bool run(VPlanBackendCostModel &M, ArrayRef<Prepared> Cs,
+                  std::optional<VPBackendPruningContext> Context) {
+    return M.addBatch(Cs, Context);
   }
 };
 } // namespace llvm
-
 namespace {
 class BackendSchedulerTest : public testing::Test {
 protected:
@@ -319,29 +325,35 @@ protected:
   }();
   VPlan Plan{Header, Type::getInt32Ty(Context)};
   TargetTransformInfo TTI{std::make_unique<TestTTI>()};
-  SmallVector<SmallVector<unsigned>> Waves;
+  SmallVector<unsigned> Started;
   unsigned FailVF = 0;
   bool Malformed = false;
   VPlanBackendFeedback Feedback{[&](const Function &, const BasicBlock &,
                                    ArrayRef<VPlanBackendCandidate> Cs)
                                    -> Expected<VPlanBackendFeedback::Batch> {
-    Waves.emplace_back();
     VPlanBackendFeedback::Batch Results;
     for (const auto &C : Cs) {
-      Waves.back().push_back(C.VF.getKnownMinValue());
+      Started.push_back(C.VF.getKnownMinValue());
+      if (C.Control)
+        C.Control->Started = true;
       if (C.VF.getKnownMinValue() == FailVF) {
         Results.emplace_back(createStringError("injected required failure"));
-        continue;
+      } else {
+        VPlanBackendResult O;
+        O.Candidate = C.ID;
+        O.VF = C.VF;
+        O.IC = C.IC;
+        O.IsEpilogue = C.IsEpilogue;
+        O.IterationMapping = true;
+        O.IterationWidth = C.VF.getKnownMinValue();
+        Results.emplace_back(std::move(O));
       }
-      VPlanBackendResult O;
-      O.Candidate = C.ID;
-      O.VF = C.VF;
-      O.IC = C.IC;
-      O.IsEpilogue = C.IsEpilogue;
-      O.IterationMapping = true;
-      O.IterationWidth = C.VF.getKnownMinValue();
-      Results.emplace_back(std::move(O));
     }
+    // Publish high-ranked failures before the low-ranked winner, modeling
+    // out-of-order physical completion. Only final dominance resolves errors.
+    for (unsigned I = Cs.size(); I; --I)
+      if (Cs[I - 1].Control && Cs[I - 1].Control->Completed)
+        Cs[I - 1].Control->Completed(Results[I - 1]);
     if (Malformed)
       Results.clear();
     return Results;
@@ -349,100 +361,51 @@ protected:
   using Access = VPlanBackendCostModelTestAccess;
 };
 } // namespace
-
 TEST_F(BackendSchedulerTest, LateGateAndIneligibleGate) {
   for (bool Eligible : {true, false}) {
-    Waves.clear();
+    Started.clear();
     VPlanBackendCostModel Costs(Feedback, TTI, *F, *Header);
-    Access::configure(Costs, true);
-    Access::add(Costs, Plan, 4, 20);
-    Access::add(Costs, Plan, 8, 8, false, Eligible);
-    ASSERT_TRUE(Access::run(Costs, 1));
-    EXPECT_EQ(Waves.empty(), Eligible);
+    SmallVector<Access::Prepared, 0> Cs{
+        Access::candidate(Plan, 4, 20),
+        Access::candidate(Plan, 8, 8, false, Eligible)};
+    ASSERT_TRUE(Access::run(Costs, Cs, VPBackendPruningContext{100, 0, true}));
+    EXPECT_EQ(Started.empty(), Eligible);
     EXPECT_EQ(Costs.isPruned(Plan, ElementCount::getFixed(4)), Eligible);
-    EXPECT_EQ(Costs.lookup(Plan, ElementCount::getFixed(4)) == nullptr, Eligible);
     ASSERT_NE(Costs.lookup(Plan, ElementCount::getFixed(8)), nullptr);
   }
 }
-
-TEST_F(BackendSchedulerTest, ScalarOnlyProtectsEpilogueAndExactLosers) {
-  for (bool VectorIncumbents : {true, false}) {
-    Waves.clear();
-    VPlanBackendCostModel Costs(Feedback, TTI, *F, *Header);
-    Access::configure(Costs, VectorIncumbents, 4, 20);
-    Access::add(Costs, Plan, 4, 8);
-    Access::add(Costs, Plan, 16, 16, false);
-    Access::add(Costs, Plan, 8, 100);
-    ASSERT_TRUE(Access::run(Costs, 1));
-    EXPECT_EQ(Costs.isPruned(Plan, ElementCount::getFixed(4)), VectorIncumbents);
-    EXPECT_TRUE(Costs.isPruned(Plan, ElementCount::getFixed(8)));
-    EXPECT_EQ(Costs.lookup(Plan, ElementCount::getFixed(4)) != nullptr,
-              !VectorIncumbents);
-  }
-}
-
-TEST_F(BackendSchedulerTest, FixedWavesDiscardOnlyUnneededFailures) {
-  for (unsigned Capacity : {1u, 2u, 4u}) {
-    Waves.clear();
-    FailVF = 4;
-    VPlanBackendCostModel Costs(Feedback, TTI, *F, *Header);
-    Access::configure(Costs, true);
-    // Original enumeration is deliberately different from scheduling order.
-    Access::add(Costs, Plan, 8, 4);
-    Access::add(Costs, Plan, 4, 20);
-    Access::add(Costs, Plan, 2, 2);
-    Access::add(Costs, Plan, 16, 20);
-    ASSERT_TRUE(Access::run(Costs, Capacity));
-    EXPECT_FALSE(Costs.failed());
-    EXPECT_TRUE(Costs.isPruned(Plan, ElementCount::getFixed(4)));
-    EXPECT_TRUE(Costs.isPruned(Plan, ElementCount::getFixed(16)));
-    ASSERT_NE(Costs.lookup(Plan, ElementCount::getFixed(2)), nullptr);
-    ASSERT_NE(Costs.lookup(Plan, ElementCount::getFixed(8)), nullptr);
-    for (const auto &Wave : Waves)
-      EXPECT_LE(Wave.size(), Capacity);
-    EXPECT_EQ(Waves.front().front(), 2u);
-    EXPECT_EQ(Access::observed(Costs, 3), Capacity == 4);
-  }
+TEST_F(BackendSchedulerTest, CostOrderTiesAndDeferredDominatedFailure) {
+  FailVF = 4;
   VPlanBackendCostModel Costs(Feedback, TTI, *F, *Header);
-  Access::configure(Costs, false); // Epilogue can need f4: failure is required.
-  Access::add(Costs, Plan, 2, 2);
-  Access::add(Costs, Plan, 4, 20);
-  EXPECT_FALSE(Access::run(Costs, 2));
-  EXPECT_TRUE(Costs.failed());
-  EXPECT_EQ(Costs.lookup(Plan, ElementCount::getFixed(2)), nullptr);
+  SmallVector<Access::Prepared, 0> Cs{Access::candidate(Plan, 4, 20),
+                                      Access::candidate(Plan, 8, 4),
+                                      Access::candidate(Plan, 2, 1)};
+  ASSERT_TRUE(Access::run(Costs, Cs, VPBackendPruningContext{100, 0, true}));
+  ASSERT_EQ(Started.size(), 3u);
+  EXPECT_EQ(Started[0], 8u);
+  EXPECT_EQ(Started[1], 2u);
+  EXPECT_TRUE(Costs.isPruned(Plan, ElementCount::getFixed(4)));
+  EXPECT_NE(Costs.lookup(Plan, ElementCount::getFixed(8)), nullptr);
+  EXPECT_NE(Costs.lookup(Plan, ElementCount::getFixed(2)), nullptr);
 }
-
-TEST_F(BackendSchedulerTest, SpeculativeSuccessDoesNotBecomeIncumbent) {
-  for (unsigned Capacity : {1u, 4u}) {
-    Waves.clear();
+TEST_F(BackendSchedulerTest, RequiredFailureAndMalformedBatchDiscardCosts) {
+  for (bool BadBatch : {false, true}) {
+    Malformed = BadBatch;
+    FailVF = BadBatch ? 0 : 4;
     VPlanBackendCostModel Costs(Feedback, TTI, *F, *Header);
-    Access::configure(Costs, true);
-    Access::add(Costs, Plan, 2, 2);
-    Access::add(Costs, Plan, 4, 8);
-    Access::add(Costs, Plan, 8, 8); // Ties f2, so remains exact.
-    ASSERT_TRUE(Access::run(Costs, Capacity));
-    EXPECT_TRUE(Costs.isPruned(Plan, ElementCount::getFixed(4)));
-    EXPECT_EQ(Access::observed(Costs, 1), Capacity == 4);
-    ASSERT_NE(Costs.lookup(Plan, ElementCount::getFixed(8)), nullptr);
+    SmallVector<Access::Prepared, 0> Cs{Access::candidate(Plan, 2, 2),
+                                        Access::candidate(Plan, 4, 20)};
+    EXPECT_FALSE(Access::run(Costs, Cs, std::nullopt));
+    EXPECT_EQ(Costs.lookup(Plan, ElementCount::getFixed(2)), nullptr);
+    EXPECT_TRUE(Costs.failed());
   }
 }
-
-TEST_F(BackendSchedulerTest, MalformedBatchIsRequiredFailure) {
-  Malformed = true;
-  VPlanBackendCostModel Costs(Feedback, TTI, *F, *Header);
-  Access::configure(Costs, false);
-  Access::add(Costs, Plan, 2, 2);
-  Access::add(Costs, Plan, 4, 4);
-  EXPECT_FALSE(Access::run(Costs, 2));
-  EXPECT_EQ(Costs.failure(), "backend feedback batch size mismatch");
-}
-
 TEST_F(BackendSchedulerTest, EstimatedModeNeverCallsProvider) {
   VPlanBackendCostModel Costs(Feedback, TTI, *F, *Header, nullptr,
                               {false, true, false});
-  Access::add(Costs, Plan, 4, 500, false);
-  ASSERT_TRUE(Access::run(Costs, 4));
-  EXPECT_TRUE(Waves.empty());
+  SmallVector<Access::Prepared, 0> Cs{Access::candidate(Plan, 4, 500, false)};
+  ASSERT_TRUE(Access::run(Costs, Cs, std::nullopt));
+  EXPECT_TRUE(Started.empty());
   ASSERT_NE(Costs.lookup(Plan, ElementCount::getFixed(4)), nullptr);
   EXPECT_EQ(Costs.lookup(Plan, ElementCount::getFixed(4))->Body,
             VPExactCost(InstructionCost(500)));

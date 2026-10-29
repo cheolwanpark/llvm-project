@@ -1,9 +1,13 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #include "../lib/Passes/VPlanBackendProbe.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/SourceMgr.h"
 #include "gtest/gtest.h"
 #include <condition_variable>
 #include <mutex>
@@ -122,21 +126,92 @@ TEST(VPlanBackendFeedback, PoolOverlapBoundOrderingAndReuse) {
   }
 }
 
-TEST(VPlanBackendFeedback, CapacityDoesNotResetInvocationDiagnostics) {
+TEST(VPlanBackendFeedback, CompletionCanCancelAndReuseWorker) {
+  if (!LLVM_ENABLE_THREADS)
+    GTEST_SKIP() << "requires two workers";
+  VPlanBackendProbePool Pool(2);
+  PassCancellation Cancel;
+  std::mutex Mutex;
+  std::condition_variable CV;
+  bool Requested = false;
+  auto Caller = llvm::this_thread::get_id();
+  auto Results = Pool.run(
+      3,
+      [&](unsigned I) -> VPlanBackendProbeResult {
+        if (I == 1) {
+          std::unique_lock<std::mutex> Lock(Mutex);
+          CV.wait(Lock, [&] { return Requested; });
+          ScopedPassCancellation Scope(&Cancel);
+          EXPECT_TRUE(ScopedPassCancellation::check());
+          VPlanBackendProbeResult R(createStringError("cancelled"));
+          R.Cancelled = true;
+          return R;
+        }
+        EXPECT_FALSE(ScopedPassCancellation::check());
+        VPlanBackendResult R;
+        R.Candidate = std::to_string(I);
+        return {std::move(R)};
+      },
+      [&](unsigned I, const VPlanBackendProbeResult &) {
+        EXPECT_EQ(llvm::this_thread::get_id(), Caller);
+        if (I == 0) {
+          std::lock_guard<std::mutex> Lock(Mutex);
+          Cancel.Requested.store(true);
+          Requested = true;
+          CV.notify_all();
+        }
+      });
+  EXPECT_TRUE(Results[1].Cancelled);
+  EXPECT_EQ(Results[2].Observation->Candidate, "2");
+  EXPECT_FALSE(ScopedPassCancellation::check());
+}
+
+TEST(VPlanBackendFeedback, ObservedLoopRequiresUniqueMarker) {
+  LLVMContext C;
+  SMDiagnostic Error;
+  auto M = parseAssemblyString(R"(
+    define void @f(i1 %stop) "vplan.backend.candidate"="candidate" {
+    entry: br label %loop
+    loop: br i1 %stop, label %exit, label %loop, !llvm.loop !0
+    exit: ret void
+    }
+    !0 = distinct !{!0, !1}
+    !1 = !{!"llvm.loop.vplan.backend.candidate", !"candidate"}
+  )",
+                               Error, C);
+  ASSERT_TRUE(M);
+  Function &F = *M->getFunction("f");
+  DominatorTree DT(F);
+  LoopInfo LI(DT);
+  auto *L = LI.getLoopsInPreorder().front();
+  EXPECT_EQ(findVPlanBackendObservedLoop(F, LI).Selected, L);
+  auto *Marker = L->getLoopID()->getOperand(1).get();
+  auto *Duplicate = MDNode::getDistinct(C, {nullptr, Marker, Marker});
+  Duplicate->replaceOperandWith(0, Duplicate);
+  L->setLoopID(Duplicate);
+  auto Ambiguous = findVPlanBackendObservedLoop(F, LI);
+  EXPECT_FALSE(Ambiguous.Selected);
+  EXPECT_EQ(Ambiguous.Reason, "ambiguous-observed-loop");
+  F.addFnAttr("vplan.backend.candidate", "missing");
+  EXPECT_EQ(findVPlanBackendObservedLoop(F, LI).Reason,
+            "missing-observed-loop");
+}
+TEST(VPlanBackendFeedback, BatchPolicyDoesNotResetInvocationDiagnostics) {
   LLVMContext Context;
   Module M("test", Context);
   auto *F = Function::Create(FunctionType::get(Type::getVoidTy(Context), false),
                              GlobalValue::ExternalLinkage, "f", M);
-  unsigned Starts = 0, Capacity = 4;
-  VPlanBackendFeedback Service({}, [&](const Function &) { return Capacity; },
-                                {}, [&] { ++Starts; });
+  unsigned Starts = 0;
+  bool Enabled = true;
+  VPlanBackendFeedback Service(
+      {}, [&](const Function &) { return Enabled; }, {}, [&] { ++Starts; });
   Service.beginInvocation();
   EXPECT_EQ(Starts, 1u);
-  EXPECT_EQ(Service.batchCapacity(*F), 4u);
-  EXPECT_EQ(Service.batchCapacity(*F), 4u);
+  EXPECT_EQ(Service.canBatch(*F), true);
+  EXPECT_EQ(Service.canBatch(*F), true);
   EXPECT_EQ(Starts, 1u);
-  Capacity = 1;
-  EXPECT_EQ(Service.batchCapacity(*F), 1u);
+  Enabled = false;
+  EXPECT_EQ(Service.canBatch(*F), false);
   EXPECT_EQ(Starts, 1u);
   Service.beginInvocation();
   EXPECT_EQ(Starts, 2u);

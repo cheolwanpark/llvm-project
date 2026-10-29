@@ -102,21 +102,7 @@ scalar tail일 때 `floor(TC/W)*B + (TC%W)*S`, tail folding일 때 `ceil(TC/W)*B
 비교한다. IC/관측 폭 정규화 후 IC를 다시 곱하지 않는다. 엄격히 싼 유효 기준이
 있어야 pruning하며 동률은 남긴다. 증명 overflow는 probe하고 실제 비용 실패와 구분한다.
 
-Epilogue가 기존 정책으로 확실히 OFF이면 scalar, gate-skip, 완료된 probe를
-기준으로 쓴다. 가능하거나 불명확하면 scalar보다 엄격히 비싼 후보만 생략한다.
-따라서 main에서 진 Exact 후보도 scalar보다 유리하면 기존 ProfitableVFs/epilogue
-선택에 남는다. Epilogue 지연 평가나 main 관측 재사용은 없다. 이 보수적인 정책은
-더 많은 probe와 필요한 실패를 만들 수 있다.
-
-강제 vectorization/VF/epilogue, outer/single-plan, scalable-always, mixed tail,
-opt-for-size 등 공통 수치 순위를 보장하지 못하는 문맥은 pruning하지 않는다.
-Incumbent eligibility는 실제 선택과 같은 `candidateRejection`을 사용한다.
-원래 ordinal/ID는 보존하며 중간 VF pruning은 더 큰 VF 탐색을 중단하지 않는다.
-MIR에는 이 하한을 적용하지 않고 TTI estimated는 probe하지 않는다.
-
-후보 상태는 `Pending`, `Exact`, `Pruned`뿐이다. 출처·queried·하한·증명 기준과
-소유권 있는 관측 사실은 별도 보관한다. Pruned는 명시적으로 선택에서 제외하며
-lookup miss를 통해 native 비용으로 복귀하지 않는다. 성공한 준비 뒤 Pending은 없다.
+자동 pruning은 vector epilogue OFF, main/epilogue VF 비강제, 후보의 fixed/scalable 및 scalar-tail 정책 일치 조건에서 적용한다. Scalar, gate-skip, 완료 probe의 엄격히 싼 유효 비용을 기준으로 사용하며 강제 vectorization에서는 scalar 기준을 사용하지 않는다. MIR에는 이 하한을 적용하지 않고 TTI estimated는 probe하지 않는다. Pruned 후보는 선택에서 명시적으로 제외한다. 자세한 CFG·취소 계약은 아래 Probe pruning 절을 따른다.
 
 ## Probe와 fallback
 
@@ -126,7 +112,7 @@ backend observer`다. 기본 직렬 경로는 후보별 함수 clone을 사용�
 사용하며 전역 command-line 값은 변경하지 않는다.
 
 ```text
-clone → candidate materialization → IR suffix → iteration mapping 검증
+clone → candidate materialization → guarded vector-spill CFG reduction → IR suffix → iteration mapping 검증
   → instruction selection / pre-RA 최적화·scheduling
   → RVV allocator → VirtRegRewriter(false)
   → InsertVSETVLI → DeadRegisterDefinitions → scalar allocator
@@ -177,33 +163,9 @@ pass를 재현하지 않으며, 최종 machine instruction 전체와의 동등�
 
 ### 제한된 probe 병렬 실행
 
-`-vplan-backend-probe-threads=N`은 양의 정수이며 기본값은 1이다. N=1도 같은
-준비/고정 wave 경로를 쓴다. 모든 gate 비용을 먼저 확정한 뒤 tuning vscale을
-적용한 runtime VF 폭 오름차순, 같은 폭이면 원래 ordinal 순으로 최대 N개를
-보낸다. IC는 scheduling key가 아니다. 각 wave 전체 완료 뒤 같은 순서로 반영하고
-다음 wave를 만든다. 최종 VF 선택은 원래 plan/VF 순서다. LVP·원본 TTI·분석·
-비용표·report는 기존 컴파일 스레드에서만 접근한다. 자동 epilogue는 직렬이고
-강제 epilogue는 기존대로 main probe에 포함된다.
+`-vplan-backend-probe-threads=N`은 양의 정수이며 기본값은 1이다. Pruning 가능한 TTI real-spill 후보는 `(L-Ev)/Wtti` 순서로 실행한다. Provider는 완료 콜백을 기존 compiler thread에서 실행하고 빈 worker를 즉시 채운다. 최종 비용과 선택은 원래 후보 순서를 따른다. Pruning 미적용·N=1은 후보별 직렬 실행이며, N>1은 일반 batch를 사용한다. MIR에는 CFG 축소·candidate pruning·취소를 적용하지 않는다. 자동 epilogue는 직렬이며 강제 epilogue는 기존대로 main probe에 포함된다.
 
-Service의 `batchCapacity`는 compatibility/diagnostic 직렬화 시 1을 반환한다.
-`beginInvocation`만 진단 accounting을 초기화하며 capacity 조회는 초기화하지 않는다.
-Vectorize는 Passes 전역 옵션을 읽지 않는다. 구현 경계는 다음과 같다.
-
-| 구성 요소 | 역할과 실행 위치 |
-|---|---|
-| `VPlanBackendCostModel::prepareCost` / `addBatch` / `applyCost` | 기존 스레드에서 후보·TTI 비용·gate를 준비하고, 완료된 관측을 pricing과 선택에 반영 |
-| `VPlanBackendFeedback::getBatch` | 후보 순서와 개수가 같은 개별 결과를 반환하는 service 경계. 기존 `get`은 단일 후보 adapter |
-| Passes의 `FeedbackProvider` / `ProbeSnapshot` | 기존 스레드에서 실행 정책·target 설정·snapshot을 준비하고, worker에서 독립 IR과 backend pipeline 실행 |
-| `VPlanBackendProbePool` | lazy 생성한 제한된 pool을 재사용. 작업별 결과 슬롯을 채우고 batch 전체 완료를 기다림 |
-
-```text
-기존 스레드: 전체 준비 / gate → 하한 확인 → wave → 재확인 / applyCost → VF 선택
-                                  │
-                     snapshot → 제한된 worker pool → 완료 대기
-                                  │
-                    독립 context/module → materialize → IR suffix
-                           → backend / spill observation
-```
+Service의 `canBatch`는 호환성·진단 직렬화를 반영하며 `beginInvocation`만 진단 accounting을 초기화한다. 완료 콜백은 관측 검증과 pricing을 한 번 수행하고 최종 반영에 재사용한다. 원본 분석·TTI·비용표·report는 compiler thread에서만 접근한다.
 
 Provider는 현재 clone 정책과 use-list order를 보존한 메모리 bitcode snapshot을
 batch마다 만든다. 함수·header를 snapshot에서 다시 찾고 작업마다 별도
@@ -219,18 +181,13 @@ snapshot의 ordinal로 찾고, module identifier와 context의 이름/ODR 설정
 공통 `runProbe`를 사용하므로 materialization·suffix·관측 종료 지점은 같다.
 각 작업은 native TTI scope에서 실행하고 작업 종료 시 thread-local 상태를 복원한다.
 
-준비는 query 전에 완료하며 준비 실패 시 prefix도 실행하지 않는다. 각 wave 결과를
-소비하기 직전에 최신 Exact 비용으로 필요성을 다시 확인한다. 불필요해진 speculative
-실패는 안전하게 소비하고 fallback하지 않는다. 성공 관측은 보관하되 가격 계산이나
-incumbent 승격을 하지 않는다. 필요한 실패만 현재 시도를 실패시킨다. 모든 작업과
-결과를 회수·정리한 뒤 재시도하므로 늦은 worker 갱신은 없다. Wave 중첩·실행 중
-취소·fatal error/assertion 격리는 제공하지 않는다.
+Batch의 준비 오류가 있으면 준비된 prefix는 pruning 없이 처리하고 필요한 실패를 판정한다. Pruning 경로는 최종 dominance까지 실패를 유예하고 proven loser만 무시한다. 협력 취소는 IR 단계 사이와 완료된 legacy pass 경계에서 확인한다. On-demand 분석은 완료하며 정상 finalization 후 모든 작업을 회수한다. 이후에만 현재 시도를 폐기하고 설정된 estimated/native 재시도를 시작한다. Fatal error/assertion 격리는 제공하지 않는다.
 
 개별 결과는 context와 독립된 관측 값·오류 문자열·diagnostic 문자열을 소유한다.
 Service는 반환 개수를 검증하고, snapshot과 결과 저장소는 모든 작업이 끝날
 때까지 유지한다. Worker는 직접 candidate JSON이나 비용 보고를 출력하지 않는다.
 N=1/2/4는 필요한 비용과 최종 선택을 보존하지만 speculative 관측 수와 JSON 행의
-관측 사실은 다를 수 있다. 같은 N의 순서는 결정적이다.
+관측 사실은 다를 수 있다. 물리적 실행 상태는 scheduling에 따라 달라질 수 있다.
 
 Fork의 JSON과 두 비용 보고는 병렬 실행에서도 passive하며 기존 스레드에서
 출력한다. 강제 epilogue와 비용 보고를 함께 사용하면 기존 준비·보고 순서를
@@ -354,3 +311,46 @@ TTI-only estimated 모드는 `estimated-spill-no-probe`, MIR 상세 report는
 candidate JSON은 폐기한다. 최종 성공 시도만 채택하고 native까지 갔다면 native
 보고와 짧은 fallback 이유만 남긴다. MIR 요청 후 TTI estimated가 성공하면 실제
 계산을 `Lt`로 표시하며 `native-fallback`으로 표시하지 않는다.
+
+## Probe pruning
+
+Private vector-spill CFG reduction defaults ON with the master model (never for MIR) and is controlled only
+by `-vplan-backend-prune-cfg` (`false` disables it). It runs after materialization
+and before the suffix, using the unique observation marker shared with iteration
+mapping and diagnostics. Missing/ambiguous markers leave the probe unchanged.
+The observed header's forward/backward closures are computed independently and
+their union retained; shared exits do not pull in unrelated predecessors.
+Exclusive paths may return early only using existing, available return values.
+Vector/aggregate/target-extension ABI, vector live-out/live-through, surrounding
+vector cycles, EH/indirect control, retained SSA definitions, unknown/ambiguous
+return outcomes and exact infeasible switch guards constrain applicability.
+There is no general proof that shortened probes retain identical global allocation.
+
+Candidate pruning has no command-line toggle. It applies automatically to
+compatible main-candidate batches: vector epilogues OFF, main/epilogue VF not
+forced, uniform fixed/scalable and scalar-tail policies. `force-all` bypasses it.
+It uses exact `(L-Ev)/Wtti` dispatch order; known-trip-count comparisons share
+the planner's body/tail arithmetic. Only a strictly smaller eligible completed,
+gate-skip or permitted scalar score rejects a zero-spill lower bound. Forced
+vectorization excludes scalar as an incumbent; ties remain required queries.
+
+The cost model owns candidate state and pricing. The provider owns isolated IR
+and scheduling. Completion callbacks run on the compiler thread after worker IR
+cleanup, validate and price observations once, and reuse those values for final
+cost application. Free workers are refilled without waiting for a whole wave.
+Cancellation is checked before cloning, between major IR stages and at completed
+legacy pass boundaries. On-demand analyses finish, normal finalization runs, and
+all tasks join before batch state is released; threads are never forcibly killed.
+
+Failures are deferred until final dominance is known. Only proven losers may
+have their failures ignored. Surviving required failures and preparation errors
+retain whole-loop configured estimated/native fallback and discard attempted backend cost reports.
+Pruned candidates never receive fabricated zero-spill observations. Logical
+results are applied in original candidate order; physical execution status may
+vary. JSONL records `pruned`, exact score bounds, and `not-started`, `cancelled`
+or `completed`. Text reports mark `backend-lower-bound`. CFG trace/dump and both
+cost reports remain passive. The timing phase is `probe_pruning`.
+
+The automatic candidate bound applies to both tuned and default TTI real-spill models. MIR models do not prune; estimated-only models never probe. Existing ablation formulas and configured whole-loop estimated retries remain supported.
+
+JSONL retains body-unit `lower_bound_quarters_*`, proof basis and requested/effective model fields. Added `score_lower_bound_quarters_*` encode the normalized comparison score, with `score_kind` and physical `execution` status. Cost reports remain transactional and passive.

@@ -17,6 +17,7 @@ if that attempt fails.
 | Option | Meaning |
 |---|---|
 | `-vplan-backend` | Enable backend costs; default false. |
+| `-vplan-backend-prune-cfg=false` | Disable CFG reduction for private vector-spill probes (default ON). |
 | `-vplan-backend-probe-threads=N` | Bound concurrent main-candidate probes; positive integer, default `1`. |
 | `-use-mir` | Use target MIR service demand for the body; default false. |
 | `-use-estimated-spill` | Keep TTI estimates, or replace all MIR spill demand with tuned TTI estimates; default false. |
@@ -90,20 +91,7 @@ not numerically identical to the sibling project's full post-frame models.
 
 ### Pruning and fallback
 
-In TTI real-spill modes, `L - Ev` is a lower bound because observed spill cost
-is nonnegative. Preparation computes every candidate and all gate-skip costs
-before any probe. A candidate is pruned only when an eligible exact cost is
-strictly cheaper than its lower bound under the existing trip-count/tail
-objective. Equality is retained. Exact rational comparisons never round a proof.
-
-When vector epilogues are definitely disabled, scalar, gate-skip, and completed
-probe costs can establish the bound. When epilogues are possible or uncertain,
-only scalar can establish it, preserving all potentially profitable epilogue
-candidates. Forced selection, scalable-always policy, mixed tail policies, and
-other unsupported comparison contexts do not prune. An overflowing proof simply
-requires a probe; an invalid required cost fails the selection attempt.
-`-vplan-backend-force-all` bypasses both the gate and pruning. MIR modes do not
-use this lower bound; TTI estimated modes never probe.
+In both TTI real-spill modes, automatic lower-bound pruning follows the common policy described below. Epilogue vectorization must be disabled; the former scalar-only pruning with epilogues possible is removed.
 
 | Required evaluation fails | Whole-loop destination |
 |---|---|
@@ -123,9 +111,7 @@ identify requested/effective models and the fallback reason.
 With `-mllvm -vplan-backend-probe-threads=4`, independent main-candidate
 probes can run on up to four workers. Preparation, spill pricing and selection
 stay on the compiler thread. Each batch snapshots the current loop context;
-workers use separate LLVM contexts, target machines and analyses. All capacities, including the default `1`, use fixed waves of at most N queries,
-ordered by runtime VF width and then original ordinal. Every wave finishes before
-its results are applied in that order or the next wave is dispatched. Final VF
+workers use separate LLVM contexts, target machines and analyses. Compatible real-spill batches run in stable zero-spill cost order. Completed probes immediately refill free workers and may cooperatively cancel proven losers. Final VF
 selection retains the original plan/VF order.
 Automatic epilogue queries remain serial; forced epilogues remain part of main
 probes. Query eligibility and the fallback destination follow the policies above.
@@ -139,15 +125,7 @@ probes. Query eligibility and the fallback destination follow the policies above
 
 The limit applies to probes inside one compiler process. It does not parallelize
 application builds or translation units. Empty batches do no backend work, and
-a single query stays on the compiler thread. Tasks finish before results are
-applied in scheduling order. Necessity is rechecked before consuming each result;
-an unnecessary speculative failure does not cause fallback. Successful speculative
-observations remain available as facts, without being priced or becoming new
-incumbents. Candidates have three states: Pending, Exact, and Pruned. Exact costs
-are retained even when they lose main selection; Pruned candidates cannot enter
-selection through a native-cost lookup miss. Required failure discards the whole
-attempt. Capacities 1/2/4 preserve required costs and selection; speculative counts
-and observations can differ.
+a single query stays on the compiler thread. All tasks finish and private IR is destroyed before the batch returns or a fallback attempt starts. Results apply in original candidate order; only proven losers may have failures ignored. Physical execution states can vary across workers.
 
 JSON and both cost-report options support parallel probes. Cost reports combined
 with a forced epilogue use the serial path to preserve preparation and reporting
@@ -170,6 +148,43 @@ use a separate frontend/opt/backend/assemble pipeline. See the
 [parallel execution contract](BACKEND_FEEDBACK.md#제한된-probe-병렬-실행) for module
 boundaries, ownership and diagnostic compatibility.
 
+## Probe pruning
+
+With `-vplan-backend`, private vector-spill probe CFG reduction is enabled by default. MIR observations never apply CFG reduction.
+`-vplan-backend-prune-cfg=false` disables only this transformation. After candidate
+materialization and before the IR suffix, it retains the observed header's CFG
+ancestors and descendants and shortens eligible exclusive paths using existing
+return values. ABI, SSA, returns, vector lifetime and surrounding-cycle guards
+limit applicability. This is an empirical probe reduction: it does not prove
+identical global register allocation for arbitrary programs.
+
+Cost-bound candidate pruning and cooperative cancellation are automatic, with no
+separate switch. They apply when vector epilogues are disabled, main/epilogue VFs
+are not forced, and all candidates share fixed/scalable and scalar-tail policies.
+The latter is an automatic compatibility check, not a user option. Existing
+LLVM epilogue defaults are unchanged, so use
+`-enable-epilogue-vectorization=false` to satisfy that condition.
+`-vplan-backend-force-all` retains its diagnostic meaning and bypasses candidate
+pruning/cancellation; the CFG switch still controls probe reduction independently.
+
+Queries run in stable zero-spill cost order. Eligible completed costs, gate-skip
+costs and permitted scalar selection bound other queries. Only strictly losing
+candidates are removed; ties are measured. Dominated failures no longer require
+native fallback, so final VF or scalar selection can change. A surviving required
+failure still discards all backend costs for the loop.
+
+`-vplan-backend-pruning-trace` reports CFG applicability and sizes;
+`-vplan-backend-pruning-dump-ir` dumps `before`, `after` and `suffix` stages.
+Both are passive. Timing includes `probe_pruning`. JSONL uses `status=pruned`
+and `execution=not-started/cancelled/completed`; physical execution states may
+vary with scheduling while logical results retain original candidate order.
+See [the contract](BACKEND_FEEDBACK.md#probe-pruning) for ownership and failure rules.
+
+
+The automatic candidate bound applies to both tuned and default TTI real-spill models. MIR models do not prune; estimated-only models never probe. Existing ablation formulas and configured whole-loop estimated retries remain supported.
+
+JSONL retains body-unit `lower_bound_quarters_*`, proof basis and requested/effective model fields. Added `score_lower_bound_quarters_*` encode the normalized comparison score, with `score_kind` and physical `execution` status. Cost reports remain transactional and passive.
+
 ## Build
 
 Reuse `.cache/build` for the Release/assertions/tests-enabled build. Keep the
@@ -180,7 +195,7 @@ configure `.cache/build` directly only for a fresh build.
 ```sh
 cmake --build .cache/build --target clang clang-resource-headers llc opt \
   FileCheck split-file not count llvm-config llvm-readobj \
-  VectorizeTests RISCVTests --parallel 2
+  VectorizeTests RISCVTests IRTests --parallel 2
 ```
 
 Fresh configuration:

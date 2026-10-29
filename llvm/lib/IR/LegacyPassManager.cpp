@@ -27,6 +27,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/ScopedPassCancellation.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
@@ -353,6 +354,8 @@ void FunctionPassManagerImpl::releaseMemoryOnTheFly() {
 // Execute all the passes managed by this top level manager.
 // Return true if any function is modified by a pass.
 bool FunctionPassManagerImpl::run(Function &F) {
+  // On-demand analyses must finish before returning to their requesting pass.
+  ScopedPassCancellation Suspend(nullptr);
   bool Changed = false;
 
   initializeAllAnalysisInfo();
@@ -530,6 +533,8 @@ bool PassManagerImpl::run(Module &M) {
 
   initializeAllAnalysisInfo();
   for (unsigned Index = 0; Index < getNumContainedManagers(); ++Index) {
+    if (ScopedPassCancellation::check())
+      break;
     Changed |= getContainedManager(Index)->runOnModule(M);
     M.getContext().yield();
   }
@@ -1370,6 +1375,8 @@ bool FPPassManager::runOnFunction(Function &F) {
   llvm::TimeTraceScope FunctionScope("OptFunction", Name);
   SmallString<0> BeforeStr, AfterStr;
   for (unsigned Index = 0; Index < getNumContainedPasses(); ++Index) {
+    if (ScopedPassCancellation::check())
+      break;
     FunctionPass *FP = getContainedPass(Index);
     bool LocalChanged = false;
 
@@ -1466,8 +1473,11 @@ bool FPPassManager::runOnFunction(Function &F) {
 bool FPPassManager::runOnModule(Module &M) {
   bool Changed = false;
 
-  for (Function &F : M)
+  for (Function &F : M) {
+    if (ScopedPassCancellation::check())
+      break;
     Changed |= runOnFunction(F);
+  }
 
   return Changed;
 }
@@ -1521,6 +1531,8 @@ MPPassManager::runOnModule(Module &M) {
 
   SmallString<0> BeforeStr, AfterStr;
   for (unsigned Index = 0; Index < getNumContainedPasses(); ++Index) {
+    if (ScopedPassCancellation::check())
+      break;
     ModulePass *MP = getContainedPass(Index);
     bool LocalChanged = false;
 

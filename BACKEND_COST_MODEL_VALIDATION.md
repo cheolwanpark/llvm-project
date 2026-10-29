@@ -3,6 +3,81 @@
 측정 시점과 compiler identity를 구분한다. 사용법은 [README](README.md),
 비용·probe·TTI 계약은 [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md)에 있다.
 
+## 2026-10-29 — Ablation 브랜치에 기준 pruning 통합
+
+`fcb9c3c3c`와 기준 브랜치 `0715e6803`의 merge 작업 트리에서 검증했다.
+기준의 CFG 기본 ON·비용순 실행·완료 콜백·협력 취소와 적용 조건을 채택했다.
+기존 ablation 6개 모델 및 specific TTI estimated → native 재시도는 보존했다.
+CFG 축소는 vector-spill probe에만 적용하며 MIR에는 적용하지 않는다.
+Candidate pruning은 default/tuned TTI real-spill에만 적용한다. 기존 body 하한·증명
+근거·모델 필드의 의미를 유지하고 normalized score 및 execution 필드를 추가했다.
+
+기존 cache를 재사용했다. Build compiler의 버전이 바뀌어 호환되지 않은 PCH 5개만
+무효화했고, 처음 2 jobs로 빌드하다 사용자의 요청으로 **32 jobs**로 이어 완료했다.
+Compiler/test targets와 sweep용 llvm-extract·llvm-dis·lld까지 빌드했다.
+Vectorize **95/95**, RISCV **38/38**, 관련 legacy PM **7/7** unit이 통과했다.
+보고 unit의 mock은 bool batch 정책과 준비 prefix 실행에 맞췄다.
+전체 LoopVectorize 및 StackSlotColoring lit는 최초 **986 passed / 377 unsupported /
+1 failed**였고, 이전 mixed fixed/scalable pruning을 가정하던 검사를 uniform fixed
+후보로 명시한 뒤 해당 1개를 재검사하여 통과했다. 최종 미해결 실패는 없다.
+MIR CFG ON/OFF 동일성, 보고 수동성, callback 취소와 worker 재사용, 늦게 완료된
+승자로 dominated 실패를 무시하는 경로 및 하한 필드 단위를 검사했다.
+
+전체 dataset·성능·RTL 실행은 측정하지 않았다. 이 checkout에는 DB가 없어 상대
+checkout의 313-input DB와 portable reference manifest·보존 소스를 읽기 전용으로
+사용했다. 선정한 12개 입력의 source bytes·언어·effective flags를 확인하고 IC=1,
+epilogue OFF, LMUL=8을 유지했다. Master OFF 및 6개 모델, 두 real-spill 모델의
+worker=4·CFG OFF를 합쳐 **132/132 object 생성**이 성공했다. 정상 fallback은
+사유와 effective model을 확인했다. 두 real-spill 모델의 worker 1/4는 최종 선택과
+allocated sections·정규화 relocations가 모두 일치했다. 역사적 compiler는 실행하지 않았다.
+
+추가로 `/work/scripts/gen-cost-model-sweep.sh`의 기본 LLVM 경로가 이 checkout의
+`.cache/build/bin`임을 확인했다. 경로/adapter unit 5개 및 실제 `hpcc/stream-triad`
+1개·6개 모델의 ELF 생성이 모두 성공했다. 도구 경로·SHA256, builder에 전달한
+`--llvm`, 6개 ELF hash를 독립 확인했다. Scripts 소스는 수정하지 않았다.
+이 추가 smoke의 입력은 현재 loop-benchmarks corpus이며 위 보존 DB 입력과 구분한다.
+
+기록은 `.cache/integration-sync-20261029/`의 build 로그, `unit-*.log`, `lit.log`,
+`lit-pruning-recheck.log`, `smoke-runs.json`, `smoke-summary.json`, `sweep-check.json`,
+`sweep-smoke/metadata/manifest.json`, `identity.json`에 있다. Identity는 merge 이전
+HEAD 문자열과 병합한 코드 hash 및 실제 binary SHA256을 함께 기록한다. Version의
+commit 문자열만으로 이전 binary로 해석하면 안 된다. 이번 Clang SHA256은
+`7eca065c4ba19b66792a5ed5d3f9137bd52aa32c9492a52545a3285238711d13`이다.
+Build cache·compatibility symlink·상대 checkout의 post-frame reference를 보존했다.
+
+## 2026-10-29 — 기준 브랜치 `0715e6803`의 기록: CFG 기본 ON 및 자동 candidate pruning
+
+이 절은 `/work/llvm-baware-integration`에서 검증한 기준 브랜치의 역사적 기록이며, ablation 병합 binary의 결과가 아니다.
+
+`cf0330d46` 기반 작업 트리에 pruning 브랜치의 기능을 통합했다.
+`-vplan-backend-prune-cfg`는 기본 ON이며 `false`로 CFG 축소만 끈다.
+비용 하한 후보 제거·협력 취소는 별도 flag 없이 기존 지원 조건에서 자동 적용하고,
+`force-all`은 모든 후보를 측정한다. Master와 epilogue의 기존 기본값은 유지한다.
+
+관측 루프 탐색과 known-trip-count 비용 산술을 기존 경로와 공통화했다.
+관측 검증·spill pricing은 완료 시 한 번 계산해 최종 반영에 재사용하며,
+일반/pruning batch의 후보 상태와 결과 반영을 통합했다. CFG 변환은 Passes의
+전용 구현으로 분리하고 직렬·병렬 probe의 취소/완료 처리도 공통화했다.
+
+기존 Release/assertions 캐시에서 지정 compiler/test targets 및 IRTests를
+`--parallel 2`로 빌드했다. 최종 Vectorize unit **88개**, RISCV unit **34개**,
+legacy PM unit **7개**가 통과했다. LoopVectorize 전체와 StackSlotColoring lit는
+**985 passed / 377 unsupported / 0 failed**다. 신규 검사는 marker 누락·중복,
+공통 body/tail 산술과 overflow, CFG 기본값·OFF, 자동 pruning, 보고 수동성,
+workers 1/2/4 및 취소 cleanup을 포함한다. 기존 비용 보고 검사는 `pruned` 후보에
+측정 비용 대신 `backend-lower-bound`가 표시되는 새 계약에 맞췄다.
+
+최종 Clang의 RISC-V object smoke는 기본 설정·CFG OFF·master OFF 3회 성공했다.
+수정 전 현재 바이너리에서 보관한 `backend-feedback.ll` fixture와 최종
+`force-all + CFG=false`의 IR·candidate JSONL은 byte 동일하다.
+`git diff --check`도 통과했다. 전체 dataset, compile-time 성능 및 target runtime은
+재측정하지 않았다. 과거 측정은 아래 각 절의 당시 binary 결과다.
+
+이번 기록은 `.cache/pruning-integration/`의 `build-final.log`, `unit-*.log`,
+`lit-final.log`, `before/`, `after/`, `identity-smoke.json`에 있다. 마지막 파일은
+최종 clang/opt SHA256과 smoke 명령을 기록한다. 기존 build·compatibility symlink와
+post-frame reference를 보존했다.
+
 ## 2026-10-28 — 하한 pruning과 설정 기반 fallback 검증
 
 `cddac322f4dc156d0f5ff429f951de15468e21a7` 기반 작업 트리에 `PLAN.md`의

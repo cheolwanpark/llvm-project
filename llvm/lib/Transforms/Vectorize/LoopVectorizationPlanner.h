@@ -916,7 +916,6 @@ public:
                                        InstructionCost &VectorSpill,
                                        InstructionCost *TotalSpill = nullptr);
   unsigned limitBackendIC(VPlan &Plan, unsigned IC) const;
-  VPBackendPruningContext backendPruningContext();
   StringRef candidateRejection(VPlan &Plan, ElementCount VF) const;
   void resetVFSelection() {
     ProfitableVFs.clear();
@@ -927,6 +926,11 @@ public:
   /// Return the VPlan for \p VF. At the moment, there is always a single VPlan
   /// for each VF.
   VPlan &getPlanFor(ElementCount VF) const;
+
+  /// Return the selection context when cost-bound pruning is supported.
+  std::optional<VPBackendPruningContext> backendPruningContext();
+  /// Whether the candidate may supply a bound for rejecting other candidates.
+  bool backendPruningEligible(VPlan &Plan, ElementCount VF);
 
   /// Compute and return the most profitable vectorization factor and the
   /// corresponding best VPlan. Also collect all profitable VFs in

@@ -16,14 +16,33 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/ScopedPassCancellation.h"
 #include "llvm/Support/TypeSize.h"
 #include "llvm/Support/VPlanBackendResult.h"
 #include <functional>
+#include <memory>
 
 namespace llvm {
 class BasicBlock;
 class Loop;
 class ScalarEvolution;
+class LoopInfo;
+
+struct VPlanBackendProbeResult;
+/// Completion runs on the calling compiler thread, after worker cleanup.
+struct VPlanBackendProbeControl {
+  PassCancellation Cancellation;
+  bool Started = false; // Worker-owned until completion.
+  std::function<void(const VPlanBackendProbeResult &)> Completed;
+};
+
+/// Exactly one matching observation marker is required, even on the same loop.
+struct VPlanBackendObservedLoop {
+  Loop *Selected;
+  StringRef Reason;
+};
+LLVM_ABI VPlanBackendObservedLoop findVPlanBackendObservedLoop(Function &F,
+                                                               LoopInfo &LI);
 
 /// Identity is local to a planning invocation, not a persistent cache key.
 /// Geometry is explicit and local to this planning invocation.
@@ -41,7 +60,8 @@ struct VPlanBackendCandidate {
   ElementCount MainVF = ElementCount::getFixed(1);
   unsigned MainIC = 1;
   ElementCount EpilogueVF = ElementCount::getFixed(0);
-  VPlanBackendObservationOptions Observation;
+  VPlanBackendObservationOptions Observation{};
+  std::shared_ptr<VPlanBackendProbeControl> Control{};
 };
 
 /// Explicit per-pass state for materializing a candidate on a disposable clone.
@@ -60,6 +80,7 @@ struct VPlanBackendProbeResult {
   std::optional<VPlanBackendResult> Observation;
   std::string Failure;
   std::string Diagnostics;
+  bool Cancelled = false;
 
   VPlanBackendProbeResult(Expected<VPlanBackendResult> Result,
                           std::string Diagnostics = {})
@@ -86,7 +107,7 @@ public:
   using Batch = SmallVector<VPlanBackendProbeResult>;
   using Query = std::function<Expected<Batch>(
       const Function &, const BasicBlock &, ArrayRef<VPlanBackendCandidate>)>;
-  using BatchPolicy = std::function<unsigned(const Function &)>;
+  using BatchPolicy = std::function<bool(const Function &)>;
   using InvocationSetup = std::function<void()>;
 
   using MIRInfoProvider =
@@ -105,11 +126,7 @@ public:
     if (Setup)
       Setup();
   }
-  /// Effective capacity includes compatibility and diagnostic serialization.
-  /// This lookup does not reset diagnostic accounting between waves.
-  unsigned batchCapacity(const Function &F) const {
-    return Policy ? std::max(1u, Policy(F)) : 1;
-  }
+  bool canBatch(const Function &F) const { return Policy && Policy(F); }
 
   Expected<Batch> getBatch(const Function &F, const BasicBlock &Header,
                            ArrayRef<VPlanBackendCandidate> Candidates) const {
