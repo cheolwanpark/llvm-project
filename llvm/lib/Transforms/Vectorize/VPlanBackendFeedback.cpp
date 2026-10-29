@@ -143,16 +143,15 @@ void llvm::markVPlanBackendLoop(Loop &L, StringRef ID, ScalarEvolution &SE) {
   }
 }
 
-void llvm::finalizeVPlanBackendIterationMapping(Function &F,
-                                                FunctionAnalysisManager &AM) {
+// Count matching markers, even repeated markers on the same loop, so both
+// pruning and passive diagnostics require exactly one observation identity.
+VPlanBackendObservedLoop llvm::findVPlanBackendObservedLoop(Function &F,
+                                                            LoopInfo &LI) {
   if (!F.hasFnAttribute("vplan.backend.candidate"))
-    return;
-  F.addFnAttr("vplan.backend.iteration-mapping", "0");
-  auto &LI = AM.getResult<LoopAnalysis>(F);
-  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+    return {nullptr, "missing-observed-loop"};
   StringRef ID = F.getFnAttribute("vplan.backend.candidate").getValueAsString();
   Loop *Selected = nullptr;
-  for (auto *L : LI.getLoopsInPreorder()) {
+  for (Loop *L : LI.getLoopsInPreorder()) {
     auto *MD = L->getLoopID();
     if (!MD)
       continue;
@@ -167,10 +166,21 @@ void llvm::finalizeVPlanBackendIterationMapping(Function &F,
           Value->getString() != ID)
         continue;
       if (Selected)
-        return;
+        return {nullptr, "ambiguous-observed-loop"};
       Selected = L;
     }
   }
+  return {Selected, Selected ? "" : "missing-observed-loop"};
+}
+
+void llvm::finalizeVPlanBackendIterationMapping(Function &F,
+                                                FunctionAnalysisManager &AM) {
+  if (!F.hasFnAttribute("vplan.backend.candidate"))
+    return;
+  F.addFnAttr("vplan.backend.iteration-mapping", "0");
+  auto &LI = AM.getResult<LoopAnalysis>(F);
+  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+  auto [Selected, Reason] = findVPlanBackendObservedLoop(F, LI);
   if (!Selected || !Selected->isInnermost())
     return;
   uint64_t Ratio = 0;

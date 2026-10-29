@@ -3,6 +3,37 @@
 측정 시점과 compiler identity를 구분한다. 사용법은 [README](README.md),
 비용·probe·TTI 계약은 [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md)에 있다.
 
+## 2026-10-29 — Integration: CFG 기본 ON 및 자동 candidate pruning
+
+`cf0330d46` 기반 작업 트리에 pruning 브랜치의 기능을 통합했다.
+`-vplan-backend-prune-cfg`는 기본 ON이며 `false`로 CFG 축소만 끈다.
+비용 하한 후보 제거·협력 취소는 별도 flag 없이 기존 지원 조건에서 자동 적용하고,
+`force-all`은 모든 후보를 측정한다. Master와 epilogue의 기존 기본값은 유지한다.
+
+관측 루프 탐색과 known-trip-count 비용 산술을 기존 경로와 공통화했다.
+관측 검증·spill pricing은 완료 시 한 번 계산해 최종 반영에 재사용하며,
+일반/pruning batch의 후보 상태와 결과 반영을 통합했다. CFG 변환은 Passes의
+전용 구현으로 분리하고 직렬·병렬 probe의 취소/완료 처리도 공통화했다.
+
+기존 Release/assertions 캐시에서 지정 compiler/test targets 및 IRTests를
+`--parallel 2`로 빌드했다. 최종 Vectorize unit **88개**, RISCV unit **34개**,
+legacy PM unit **7개**가 통과했다. LoopVectorize 전체와 StackSlotColoring lit는
+**985 passed / 377 unsupported / 0 failed**다. 신규 검사는 marker 누락·중복,
+공통 body/tail 산술과 overflow, CFG 기본값·OFF, 자동 pruning, 보고 수동성,
+workers 1/2/4 및 취소 cleanup을 포함한다. 기존 비용 보고 검사는 `pruned` 후보에
+측정 비용 대신 `backend-lower-bound`가 표시되는 새 계약에 맞췄다.
+
+최종 Clang의 RISC-V object smoke는 기본 설정·CFG OFF·master OFF 3회 성공했다.
+수정 전 현재 바이너리에서 보관한 `backend-feedback.ll` fixture와 최종
+`force-all + CFG=false`의 IR·candidate JSONL은 byte 동일하다.
+`git diff --check`도 통과했다. 전체 dataset, compile-time 성능 및 target runtime은
+재측정하지 않았다. 과거 측정은 아래 각 절의 당시 binary 결과다.
+
+이번 기록은 `.cache/pruning-integration/`의 `build-final.log`, `unit-*.log`,
+`lit-final.log`, `before/`, `after/`, `identity-smoke.json`에 있다. 마지막 파일은
+최종 clang/opt SHA256과 smoke 명령을 기록한다. 기존 build·compatibility symlink와
+post-frame reference를 보존했다.
+
 ## 2026-10-27 — 제한된 probe 병렬 실행
 
 ### 조건과 측정 방법

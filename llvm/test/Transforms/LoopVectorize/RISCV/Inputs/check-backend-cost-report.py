@@ -66,6 +66,15 @@ for scenario, options in [
                     section = next(s for s in sections if
                                    f" function={row['function']} loop={row['loop']} " in s.splitlines()[0])
                     vf = ('s' if row['scalable'] else 'f') + str(row['vf'])
+                    if row['status'] == 'pruned':
+                        table = next(line for line in section.splitlines()
+                                     if line.lstrip().startswith(row['role'] + ' | ')
+                                     and f' | {vf} | ' in line)
+                        assert 'backend-lower-bound' in table
+                        assert not any(line.startswith('  backend-cost ')
+                                       and f' vf={vf} ' in line
+                                       for line in section.splitlines())
+                        continue
                     line = next(line for line in section.splitlines()
                                 if line.startswith('  backend-cost ')
                                 and f"phase={row['role']} " in line
@@ -107,7 +116,7 @@ if spills:
     rows = observations['gate']
     selected = next(r for r in rows if r['status'] == 'selected')
     assert selected['vf'] == 2 and selected['scalable']
-    candidates = [r for r in rows if 'candidate' in r]
+    candidates = [r for r in rows if 'candidate' in r and r['status'] != 'pruned']
     assert all(r['tti_profile'] == 'native' for r in candidates)
     assert all(r['native_body_quarters'] == r['profile_body_quarters'] for r in candidates)
     chosen = next(r for r in candidates if r['vf'] == 2)

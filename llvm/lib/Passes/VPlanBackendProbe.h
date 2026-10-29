@@ -20,7 +20,9 @@ public:
     assert(Threads);
   }
   VPlanBackendFeedback::Batch
-  run(unsigned Count, function_ref<VPlanBackendProbeResult(unsigned)> Probe);
+  run(unsigned Count, function_ref<VPlanBackendProbeResult(unsigned)> Probe,
+      function_ref<void(unsigned, const VPlanBackendProbeResult &)> Completed =
+          nullptr);
 };
 } // namespace llvm
 #endif

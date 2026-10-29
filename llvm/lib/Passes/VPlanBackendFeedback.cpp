@@ -8,11 +8,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "VPlanBackendProbe.h"
+#include "VPlanBackendProbePruning.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/OptBisect.h"
@@ -28,26 +31,63 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
+#include <condition_variable>
+#include <mutex>
 
 using namespace llvm;
 
 VPlanBackendFeedback::Batch VPlanBackendProbePool::run(
-    unsigned Count, function_ref<VPlanBackendProbeResult(unsigned)> Probe) {
+    unsigned Count, function_ref<VPlanBackendProbeResult(unsigned)> Probe,
+    function_ref<void(unsigned, const VPlanBackendProbeResult &)> Completed) {
   SmallVector<std::optional<VPlanBackendProbeResult>> Slots(Count);
   auto Run = [&](unsigned I) {
     VPlanCostProfileScope NativeScope(false);
     Slots[I].emplace(Probe(I));
   };
-  if (Count > 1 && Threads > 1) {
+  if (LLVM_ENABLE_THREADS && Count > 1 && Threads > 1) {
     if (!Pool)
       Pool = std::make_unique<DefaultThreadPool>(hardware_concurrency(Threads));
+    std::mutex Mutex;
+    std::condition_variable CV;
+    SmallVector<unsigned> Ready;
     ThreadPoolTaskGroup Group(*Pool);
-    for (unsigned I = 0; I != Count; ++I)
-      Group.async([&, I] { Run(I); });
+    unsigned Next = 0, Active = 0;
+    auto Fill = [&] {
+      while (Next < Count && Active < Threads) {
+        unsigned I = Next++;
+        ++Active;
+        Group.async([&, I] {
+          Run(I);
+          {
+            std::lock_guard<std::mutex> Lock(Mutex);
+            Ready.push_back(I);
+          }
+          CV.notify_one();
+        });
+      }
+    };
+    Fill();
+    while (Active) {
+      SmallVector<unsigned> Finished;
+      {
+        std::unique_lock<std::mutex> Lock(Mutex);
+        CV.wait(Lock, [&] { return !Ready.empty(); });
+        Finished.swap(Ready);
+      }
+      for (unsigned I : Finished) {
+        --Active;
+        if (Completed)
+          Completed(I, *Slots[I]);
+      }
+      Fill();
+    }
     Group.wait();
   } else {
-    for (unsigned I = 0; I != Count; ++I)
+    for (unsigned I = 0; I != Count; ++I) {
       Run(I);
+      if (Completed)
+        Completed(I, *Slots[I]);
+    }
   }
   VPlanBackendFeedback::Batch Results;
   Results.reserve(Count);
@@ -174,6 +214,8 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
          const ProbePipeline &Pipeline,
          IntrusiveRefCntPtr<vfs::FileSystem> FileSystem,
          VPlanFeedbackTimer &Timer, raw_ostream &Diagnostics) {
+  if (ScopedPassCancellation::check())
+    return createStringError("backend probe cancelled");
   std::unique_ptr<TargetMachine> TM(Target.TheTarget.createTargetMachine(
       Target.TargetTriple, Target.CPU, Target.Features, Target.Options,
       Target.Relocation, Target.CodeModel, Target.OptLevel));
@@ -204,6 +246,37 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
     return createStringError(
         Probe.Error.empty() ? "candidate was not materialized" : Probe.Error);
 
+  if (ScopedPassCancellation::check())
+    return createStringError("backend probe cancelled");
+  auto DumpPruningIR = [&](StringRef Stage) {
+    if (PruningDumpIR) {
+      Diagnostics << "VPLAN-BACKEND-PRUNING-IR: " << Candidate.ID << " "
+                  << Stage << '\n';
+      // Include intrinsic declarations and metadata definitions so a captured
+      // stage can be verified or lowered independently during the experiment.
+      M.print(Diagnostics, nullptr);
+      Diagnostics << "VPLAN-BACKEND-PRUNING-IR-END\n";
+    }
+  };
+  ProbeIRSize BeforePruning, AfterPruning;
+  if (PruningTrace)
+    BeforePruning = getProbeIRSize(F, FAM);
+  DumpPruningIR("before");
+  PruningResult Pruning = PruneLoopRegions ? pruneLoopRegions(F, FAM)
+                                           : PruningResult{0, "disabled"};
+  unsigned Removed = Pruning.Removed;
+  if (Removed) {
+    FAM.invalidate(F, PreservedAnalyses::none());
+    if (verifyFunction(F, &Diagnostics))
+      return createStringError("invalid pruned candidate function");
+  }
+  DumpPruningIR("after");
+  if (PruningTrace)
+    AfterPruning = getProbeIRSize(F, FAM);
+  Timer.mark("probe_pruning");
+
+  if (ScopedPassCancellation::check())
+    return createStringError("backend probe cancelled");
   // This is the same explicit post-LV continuation for both execution modes.
   auto Level = Target.OptLevel == CodeGenOptLevel::Aggressive
                    ? OptimizationLevel::O3
@@ -211,7 +284,34 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   FunctionPassManager Cleanup;
   Pipeline.BuildSuffix(PB, Level, Cleanup);
   Cleanup.run(F, FAM);
+  DumpPruningIR("suffix");
+  if (PruningTrace) {
+    ProbeIRSize SuffixSize = getProbeIRSize(F, FAM);
+    Diagnostics << "VPLAN-BACKEND-PRUNING: "
+                << json::Value(json::Object{
+                       {"candidate", Candidate.ID},
+                       {"function", F.getName()},
+                       {"enabled", bool(PruneLoopRegions)},
+                       {"reason", Pruning.Reason},
+                       {"applied", Removed != 0},
+                       {"before", BeforePruning.Instructions},
+                       {"before_blocks", BeforePruning.Blocks},
+                       {"before_loop", BeforePruning.LoopInstructions},
+                       {"before_loop_blocks", BeforePruning.LoopBlocks},
+                       {"removed", Removed},
+                       {"after", AfterPruning.Instructions},
+                       {"after_blocks", AfterPruning.Blocks},
+                       {"after_loop", AfterPruning.LoopInstructions},
+                       {"after_loop_blocks", AfterPruning.LoopBlocks},
+                       {"suffix", SuffixSize.Instructions},
+                       {"suffix_blocks", SuffixSize.Blocks},
+                       {"suffix_loop", SuffixSize.LoopInstructions},
+                       {"suffix_loop_blocks", SuffixSize.LoopBlocks}})
+                << '\n';
+  }
   Timer.mark("ir_suffix");
+  if (ScopedPassCancellation::check())
+    return createStringError("backend probe cancelled");
   finalizeVPlanBackendIterationMapping(F, FAM);
   if (verifyModule(M, &Diagnostics))
     return createStringError("invalid candidate module");
@@ -347,6 +447,22 @@ struct ProbeSnapshot {
   }
 };
 
+// Both ownership paths finish destroying their private IR before publication.
+VPlanBackendProbeResult
+runControlledProbe(const VPlanBackendCandidate &C,
+                   function_ref<VPlanBackendProbeResult()> Run) {
+  ScopedPassCancellation Scope(C.Control ? &C.Control->Cancellation : nullptr);
+  auto R = [&]() -> VPlanBackendProbeResult {
+    if (ScopedPassCancellation::check())
+      return {createStringError("backend probe cancelled")};
+    if (C.Control)
+      C.Control->Started = true;
+    return Run();
+  }();
+  R.Cancelled = C.Control && C.Control->Cancellation.Observed;
+  return R;
+}
+
 class FeedbackProvider {
   TargetMachine *Target;
   ProbePipeline Pipeline;
@@ -384,20 +500,35 @@ public:
         Warned = true;
       }
     }
+    auto Completed = [&](unsigned I, const VPlanBackendProbeResult &R) {
+      const auto &C = Candidates[I];
+      if (C.Control && C.Control->Completed)
+        C.Control->Completed(R);
+    };
     if (Candidates.size() < 2 || Threads == 1 || !Reason.empty()) {
       VPlanBackendFeedback::Batch Results;
-      for (const auto &C : Candidates)
-        Results.emplace_back(
-            runSerial(F, Header, C, Target, Pipeline, FileSystem));
+      for (unsigned I = 0; I < Candidates.size(); ++I) {
+        const auto &C = Candidates[I];
+        Results.push_back(
+            runControlledProbe(C, [&]() -> VPlanBackendProbeResult {
+              return {runSerial(F, Header, C, Target, Pipeline, FileSystem)};
+            }));
+        Completed(I, Results.back());
+      }
       return Results;
     }
     if (auto E = checkInput(Target, F))
       return std::move(E);
     ProbeTarget Settings(*Target);
     ProbeSnapshot Snapshot(F, Header);
-    return Pool.run(Candidates.size(), [&](unsigned I) {
-      return Snapshot.run(Candidates[I], Settings, Pipeline);
-    });
+    return Pool.run(
+        Candidates.size(),
+        [&](unsigned I) {
+          return runControlledProbe(Candidates[I], [&] {
+            return Snapshot.run(Candidates[I], Settings, Pipeline);
+          });
+        },
+        Completed);
   }
 };
 } // namespace

@@ -198,3 +198,19 @@ TEST(VPlanBackendCost, ExactReportUnitsAndLargeDenominators) {
   EXPECT_EQ(Text(VPExactCost::ratio(1, INT64_MAX)), "1/36893488147419103228");
   EXPECT_EQ(Text(VPExactCost::ratio(1, 0)), "Invalid");
 }
+
+TEST(VPlanBackendCost, SharedTripCountBodyAndTailCosts) {
+  EXPECT_EQ(getVPlanCostForTripCount(10, 4, true, InstructionCost(3),
+                                     InstructionCost(2)),
+            InstructionCost(10));
+  EXPECT_EQ(getVPlanCostForTripCount(10, 4, false, InstructionCost(3),
+                                     InstructionCost(2)),
+            InstructionCost(9));
+  EXPECT_EQ(getVPlanCostForTripCount(10, 4, true, VPExactCost::ratio(1, 2),
+                                     InstructionCost(2)),
+            VPExactCost::ratio(17, 1));
+  EXPECT_FALSE(getVPlanCostForTripCount(10, 4, false,
+                                        VPExactCost::ratio(INT64_MAX, 1),
+                                        InstructionCost(2))
+                   .isValid());
+}

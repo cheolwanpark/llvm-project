@@ -47,7 +47,7 @@ backend observer`다. 기본 직렬 경로는 후보별 함수 clone을 사용�
 사용하며 전역 command-line 값은 변경하지 않는다.
 
 ```text
-clone → candidate materialization → IR suffix → iteration mapping 검증
+clone → candidate materialization → guarded CFG reduction → IR suffix → iteration mapping 검증
   → instruction selection / pre-RA 최적화·scheduling
   → RVV allocator → VirtRegRewriter(false)
   → InsertVSETVLI → DeadRegisterDefinitions → scalar allocator
@@ -83,8 +83,8 @@ subregister, 미지원 접근과 불완전 mapping은 실패다.
 초기 관측 폭은 Wtti × IC이며, IR suffix 후 검증된 추가 iteration mapping 비율을
 한 번 곱한다. 관측 결과는 해당 planning invocation에서만 사용한다.
 
-Provider unavailable, clone/형상/mapping 실패, 미지원 spill, overflow 또는 필요한
-epilogue 비용 실패 시 원본 loop의 backend 비용과 ProfitableVFs를 버리고 native
+필수 후보의 provider unavailable, clone/형상/mapping 실패, 미지원 spill, overflow
+또는 필요한 epilogue 비용 실패 시 원본 loop의 backend 비용과 ProfitableVFs를 버리고 native
 선택을 다시 실행한다. 강제 VF/IC/epilogue 요청은 유지한다. 실패를 spill 0으로
 간주하지 않으며 일부 성공 비용만 적용하지 않는다. LLVM fatal error/assertion의
 예외 격리는 제공하지 않는다. Probe suffix는 임의의 LTO·module pass·사용자 추가
@@ -92,10 +92,11 @@ pass를 재현하지 않으며, 최종 machine instruction 전체와의 동등�
 
 ### 제한된 probe 병렬 실행
 
-`-vplan-backend-probe-threads=N`은 양의 정수이며 기본값은 1이다. 기본 경로는
-기존 후보별 준비 → probe → 반영과 첫 실패 시 중단을 유지한다. N>1의 일반
-경로만 한 원본 loop의 main 후보들을 준비하고, gate가 요구한 query들을 batch로
-실행한 뒤 기존 후보 순서로 반영한다. LVP·원본 TTI·분석·비용표·report는 기존
+`-vplan-backend-probe-threads=N`은 양의 정수이며 기본값은 1이다. N=1에서
+cost-bound pruning 미적용 시 후보별 준비 → probe → 반영과 첫 필수 실패 시
+중단을 유지한다. Pruning 적용 시 worker 수와 무관하게, 또는 N>1의 일반
+경로에서 한 원본 loop의 main 후보들을 준비하고 gate가 요구한 query들을
+batch로 실행한 뒤 기존 후보 순서로 반영한다. LVP·원본 TTI·분석·비용표·report는 기존
 컴파일 스레드에서만 접근한다. 자동 epilogue는 직렬이고 강제 epilogue는 기존대로
 main probe에 포함된다.
 
@@ -132,11 +133,11 @@ snapshot의 ordinal로 찾고, module identifier와 context의 이름/ODR 설정
 공통 `runProbe`를 사용하므로 materialization·suffix·관측 종료 지점은 같다.
 각 작업은 native TTI scope에서 실행하고 작업 종료 시 thread-local 상태를 복원한다.
 
-준비 오류·관측 오류·pricing 오류는 후보 순서로 처리한다. 첫 실패 뒤에 미리
-실행된 결과는 선택이나 일반 candidate JSON에 반영하지 않는다. 모든 작업 종료
+Cost-bound pruning 미적용 시 준비 오류·관측 오류·pricing 오류는 후보 순서로
+처리한다. 첫 실패 뒤에 미리 실행된 결과는 선택이나 일반 candidate JSON에 반영하지 않는다. 모든 작업 종료
 후 결과를 해제하며 실패를 spill 0으로 사용하지 않는다. 따라서 진단의 논리적
 query 수는 기존과 같지만 실제 실행한 probe 수는 실패 loop에서 더 많을 수 있다.
-취소와 fatal error/assertion 격리는 제공하지 않는다.
+Cost-bound pruning 경로만 협력 취소를 지원한다. Fatal error/assertion 격리는 제공하지 않는다.
 
 개별 결과는 context와 독립된 관측 값·오류 문자열·diagnostic 문자열을 소유한다.
 Service는 반환 개수를 검증하고, snapshot과 결과 저장소는 모든 작업이 끝날
@@ -234,7 +235,7 @@ Clone의 Type/MachineFunction/MachineInstr/문자열 포인터는 반환하지 �
 
 `-vplan-backend-time`은 stderr에 다음 시간을 기록한다.
 
-- `VPLAN-BACKEND-FEEDBACK-TIMING`: clone, target/analysis, materialization, IR suffix,
+- `VPLAN-BACKEND-FEEDBACK-TIMING`: clone, target/analysis, materialization, probe pruning, IR suffix,
   mapping/verification, backend 구성·allocation·rewrite·StackSlotColoring·수집,
   정리와 query wall/CPU total.
 - `VPLAN-BACKEND-COST-TIMING`: native/profile 비용, native IC, gate, query,
@@ -244,3 +245,42 @@ Clone의 Type/MachineFunction/MachineInstr/문자열 포인터는 반환하지 �
 Timing OFF는 clock 조회나 marker pass를 활성화하지 않는다. Pass 경계 측정에는
 필요한 analysis 실행도 포함된다. Total은 하위 구간을 포함하므로 중복 합산하지
 않으며, 진단 실행은 일반 compiler wall 평균과 분리한다.
+
+## Probe pruning
+
+Private CFG reduction defaults ON with the master model and is controlled only
+by `-vplan-backend-prune-cfg` (`false` disables it). It runs after materialization
+and before the suffix, using the unique observation marker shared with iteration
+mapping and diagnostics. Missing/ambiguous markers leave the probe unchanged.
+The observed header's forward/backward closures are computed independently and
+their union retained; shared exits do not pull in unrelated predecessors.
+Exclusive paths may return early only using existing, available return values.
+Vector/aggregate/target-extension ABI, vector live-out/live-through, surrounding
+vector cycles, EH/indirect control, retained SSA definitions, unknown/ambiguous
+return outcomes and exact infeasible switch guards constrain applicability.
+There is no general proof that shortened probes retain identical global allocation.
+
+Candidate pruning has no command-line toggle. It applies automatically to
+compatible main-candidate batches: vector epilogues OFF, main/epilogue VF not
+forced, uniform fixed/scalable and scalar-tail policies. `force-all` bypasses it.
+It uses exact `(L-Ev)/Wtti` dispatch order; known-trip-count comparisons share
+the planner's body/tail arithmetic. Only a strictly smaller eligible completed,
+gate-skip or permitted scalar score rejects a zero-spill lower bound. Forced
+vectorization excludes scalar as an incumbent; ties remain required queries.
+
+The cost model owns candidate state and pricing. The provider owns isolated IR
+and scheduling. Completion callbacks run on the compiler thread after worker IR
+cleanup, validate and price observations once, and reuse those values for final
+cost application. Free workers are refilled without waiting for a whole wave.
+Cancellation is checked before cloning, between major IR stages and at completed
+legacy pass boundaries. On-demand analyses finish, normal finalization runs, and
+all tasks join before batch state is released; threads are never forcibly killed.
+
+Failures are deferred until final dominance is known. Only proven losers may
+have their failures ignored. Surviving required failures and preparation errors
+retain whole-loop native fallback and discard attempted backend cost reports.
+Pruned candidates never receive fabricated zero-spill observations. Logical
+results are applied in original candidate order; physical execution status may
+vary. JSONL records `pruned`, exact score bounds, and `not-started`, `cancelled`
+or `completed`. Text reports mark `backend-lower-bound`. CFG trace/dump and both
+cost reports remain passive. The timing phase is `probe_pruning`.

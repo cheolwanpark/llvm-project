@@ -5,6 +5,7 @@
 #include "VPlanRegisterUsageBounds.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/InstructionCost.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
 namespace llvm {
 class LLVMContext;
@@ -38,6 +39,18 @@ public:
   void print(raw_ostream &OS, unsigned Divisor = 1) const;
   bool operator==(VPExactCost B) const;
 };
+/// Shared body/tail arithmetic; ranking policy stays with the planner.
+template <typename CostT>
+CostT getVPlanCostForTripCount(unsigned TC, unsigned Width, bool HasTail,
+                               CostT Body, InstructionCost Scalar) {
+  return HasTail ? Body * (TC / Width) + CostT(Scalar) * (TC % Width)
+                 : Body * divideCeil(TC, Width);
+}
+struct VPBackendPruningContext {
+  InstructionCost Scalar;
+  unsigned MaxTripCount;
+  bool UseScalar;
+};
 struct VPBackendCostEntry {
   const VPlan *Plan;
   ElementCount VF;
@@ -57,7 +70,17 @@ class VPlanBackendCostModel {
     VPRegisterUsageBound Bound;
     bool Query;
   };
+  struct EvaluatedCost {
+    VPExactCost Spill;
+    InstructionCost Raw;
+    SmallVector<InstructionCost> AccessCosts;
+    std::string Error;
+  };
+  EvaluatedCost
+  evaluateObservation(const PreparedCandidate &P,
+                      const VPlanBackendProbeResult &Result) const;
   SmallVector<VPBackendCostEntry> Costs;
+  SmallVector<std::pair<const VPlan *, ElementCount>> Pruned;
   const VPlanBackendFeedback &Feedback;
   const TargetTransformInfo &TTI;
   Function &F;
@@ -73,8 +96,11 @@ class VPlanBackendCostModel {
                                 InstructionCost Ev, unsigned Width) const;
   bool applyCost(const PreparedCandidate &Prepared,
                  std::optional<VPlanBackendProbeResult> Result,
-                 VPlanFeedbackTimer &Timer);
-  bool addBatch(ArrayRef<PreparedCandidate> Candidates);
+                 VPlanFeedbackTimer &Timer,
+                 const EvaluatedCost *Evaluated = nullptr);
+  bool addBatch(ArrayRef<PreparedCandidate> Candidates,
+                LoopVectorizationPlanner *LVP = nullptr,
+                std::optional<VPBackendPruningContext> Context = std::nullopt);
 
 public:
   VPlanBackendCostModel(const VPlanBackendFeedback &Feedback,
@@ -96,6 +122,9 @@ public:
   void fail(StringRef Reason);
   void selection(ElementCount VF, unsigned IC, ElementCount Epilogue,
                  bool Emitted) const;
+  bool isPruned(const VPlan &P, ElementCount VF) const {
+    return llvm::is_contained(Pruned, std::make_pair(&P, VF));
+  }
   bool failed() const { return Failed; }
   StringRef failure() const { return Failure; }
 };

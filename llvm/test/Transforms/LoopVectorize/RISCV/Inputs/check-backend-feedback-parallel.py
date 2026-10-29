@@ -35,6 +35,10 @@ def run(name, source, flags, threads, report=None, enabled=True):
     (root / (name + ".stderr")).write_text(proc.stderr)
     assert proc.returncode == 0, (args, proc.stderr)
     rows = [json.loads(line) for line in feedback.read_text().splitlines()] if feedback.exists() else []
+    # Physical cancellation timing can vary; logical results stay ordered.
+    for row in rows:
+        if row["status"] == "pruned":
+            row.pop("execution")
     return output.read_text(), rows, proc.stderr
 
 

@@ -5494,8 +5494,8 @@ LoopVectorizationCostModel::getInstructionCost(Instruction *I,
       return observeVPlanCost(Config.CostReport, "getShuffleCost",
                               TTI.getShuffleCost(TargetTransformInfo::SK_Splice,
                                                  cast<VectorType>(VectorTy),
-                                                 cast<VectorType>(VectorTy),
-                                                 {}, Config.CostKind, -1));
+                                                 cast<VectorType>(VectorTy), {},
+                                                 Config.CostKind, -1));
     }
 
     // Phi nodes in non-header blocks (not inductions, reductions, etc.) are
@@ -6413,6 +6413,36 @@ unsigned LoopVectorizationPlanner::limitBackendIC(VPlan &Plan,
   return IC;
 }
 
+std::optional<VPBackendPruningContext>
+LoopVectorizationPlanner::backendPruningContext() {
+  if (EnableEpilogueVectorization || hasForcedEpilogueVF() ||
+      Hints.getWidth().isVector())
+    return std::nullopt;
+  std::optional<std::pair<bool, bool>> Policy;
+  for (const auto &Plan : VPlans)
+    for (ElementCount VF : Plan->vectorFactors()) {
+      if (VF.isScalar())
+        continue;
+      auto P = std::make_pair(VF.isScalable(), Plan->hasScalarTail());
+      if (Policy && *Policy != P)
+        return std::nullopt;
+      Policy = P;
+    }
+  auto Scalar = CM.expectedCost(ElementCount::getFixed(1));
+  if (!Scalar.isValid())
+    return std::nullopt;
+  return VPBackendPruningContext{Scalar, PSE.getSmallConstantMaxTripCount(),
+                                 Hints.getForce() !=
+                                     LoopVectorizeHints::FK_Enabled};
+}
+bool LoopVectorizationPlanner::backendPruningEligible(VPlan &Plan,
+                                                      ElementCount VF) {
+  if (Hints.getForce() == LoopVectorizeHints::FK_Enabled)
+    return true;
+  return willGenerateVectors(Plan, VF, TTI) &&
+         !(Config.OptForSize && hasReplicatorRegion(Plan));
+}
+
 std::pair<VectorizationFactor, VPlan *>
 LoopVectorizationPlanner::computeBestVF() {
   if (Config.CostReport)
@@ -6529,6 +6559,11 @@ LoopVectorizationPlanner::computeBestVF() {
 
       InstructionCost Cost =
           cost(*P, VF, ConsiderRegPressure ? &RUs[I] : nullptr);
+      if (Config.BackendCosts && Config.BackendCosts->isPruned(*P, VF)) {
+        if (Config.CostReport)
+          Config.CostReport->skip(*P, VF, "backend-lower-bound");
+        continue;
+      }
       const VPBackendCostEntry *BackendCost =
           Config.BackendCosts ? Config.BackendCosts->lookup(*P, VF) : nullptr;
       if (BackendCost)

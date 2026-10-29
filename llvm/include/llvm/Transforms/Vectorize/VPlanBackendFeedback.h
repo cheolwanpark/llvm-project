@@ -15,14 +15,33 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
+#include "llvm/Support/ScopedPassCancellation.h"
 #include "llvm/Support/TypeSize.h"
 #include "llvm/Support/VPlanBackendResult.h"
 #include <functional>
+#include <memory>
 
 namespace llvm {
 class BasicBlock;
 class Loop;
+class LoopInfo;
 class ScalarEvolution;
+
+struct VPlanBackendProbeResult;
+/// Completion runs on the calling compiler thread, after worker cleanup.
+struct VPlanBackendProbeControl {
+  PassCancellation Cancellation;
+  bool Started = false; // Worker-owned until completion.
+  std::function<void(const VPlanBackendProbeResult &)> Completed;
+};
+
+/// Exactly one matching observation marker is required, even on the same loop.
+struct VPlanBackendObservedLoop {
+  Loop *Selected;
+  StringRef Reason;
+};
+LLVM_ABI VPlanBackendObservedLoop findVPlanBackendObservedLoop(Function &F,
+                                                               LoopInfo &LI);
 
 /// Identity is local to a planning invocation, not a persistent cache key.
 /// Geometry is explicit and local to this planning invocation.
@@ -40,6 +59,7 @@ struct VPlanBackendCandidate {
   ElementCount MainVF = ElementCount::getFixed(1);
   unsigned MainIC = 1;
   ElementCount EpilogueVF = ElementCount::getFixed(0);
+  std::shared_ptr<VPlanBackendProbeControl> Control;
 };
 
 /// Explicit per-pass state for materializing a candidate on a disposable clone.
@@ -58,6 +78,7 @@ struct VPlanBackendProbeResult {
   std::optional<VPlanBackendResult> Observation;
   std::string Failure;
   std::string Diagnostics;
+  bool Cancelled = false;
 
   VPlanBackendProbeResult(Expected<VPlanBackendResult> Result,
                           std::string Diagnostics = {})

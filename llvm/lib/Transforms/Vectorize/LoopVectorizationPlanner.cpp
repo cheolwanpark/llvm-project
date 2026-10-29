@@ -775,29 +775,10 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
                           : "unknown-trip-count-cross-products");
     }
 
-    auto GetCostForTC = [MaxTripCount, HasTail](unsigned VF, CostT VectorCost,
-                                                CostT ScalarCost) {
-      // If the trip count is a known (possibly small) constant, the trip count
-      // will be rounded up to an integer number of iterations under
-      // FoldTailByMasking. The total cost in that case will be
-      // VecCost*ceil(TripCount/VF). When not folding the tail, the total
-      // cost will be VecCost*floor(TC/VF) + ScalarCost*(TC%VF). There will be
-      // some extra overheads, but for the purpose of comparing the costs of
-      // different VFs we can use this to compare the total loop-body cost
-      // expected after vectorization.
-      if (HasTail) {
-        CostT VectorTerm = VectorCost * (MaxTripCount / VF);
-        CostT ScalarTerm = ScalarCost * (MaxTripCount % VF);
-
-        return VectorTerm + ScalarTerm;
-      }
-      CostT VectorTerm = VectorCost * divideCeil(MaxTripCount, VF);
-
-      return VectorTerm;
-    };
-
-    auto RTCostA = GetCostForTC(EstimatedWidthA, CostA, A.ScalarCost);
-    auto RTCostB = GetCostForTC(EstimatedWidthB, CostB, B.ScalarCost);
+    auto RTCostA = getVPlanCostForTripCount(MaxTripCount, EstimatedWidthA,
+                                            HasTail, CostA, A.ScalarCost);
+    auto RTCostB = getVPlanCostForTripCount(MaxTripCount, EstimatedWidthB,
+                                            HasTail, CostB, B.ScalarCost);
     if constexpr (std::is_same_v<CostT, VPExactCost>)
       if (!RTCostA.isValid() || !RTCostB.isValid())
         Config.BackendCosts->fail("exact trip-count comparison overflow");

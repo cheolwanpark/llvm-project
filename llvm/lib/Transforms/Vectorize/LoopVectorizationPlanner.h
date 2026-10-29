@@ -925,6 +925,11 @@ public:
   /// for each VF.
   VPlan &getPlanFor(ElementCount VF) const;
 
+  /// Return the selection context when cost-bound pruning is supported.
+  std::optional<VPBackendPruningContext> backendPruningContext();
+  /// Whether the candidate may supply a bound for rejecting other candidates.
+  bool backendPruningEligible(VPlan &Plan, ElementCount VF);
+
   /// Compute and return the most profitable vectorization factor and the
   /// corresponding best VPlan. Also collect all profitable VFs in
   /// ProfitableVFs.

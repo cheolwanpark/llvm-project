@@ -137,6 +137,7 @@ void VPlanBackendCostModel::fail(StringRef Reason) {
   Failed = true;
   Failure = Reason.str();
   Costs.clear();
+  Pruned.clear();
   if (vplanBackendFeedbackOutputEnabled())
     writeVPlanBackendFeedback(
         json::Object{{"model", "tti-real-vector-spill-v1"},
@@ -181,26 +182,166 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
   return applyCost(Prepared, std::move(Result), Timer);
 }
 
-bool VPlanBackendCostModel::addBatch(ArrayRef<PreparedCandidate> Candidates) {
-  SmallVector<VPlanBackendCandidate> Queries;
+VPlanBackendCostModel::EvaluatedCost VPlanBackendCostModel::evaluateObservation(
+    const PreparedCandidate &P, const VPlanBackendProbeResult &Result) const {
+  EvaluatedCost E;
+  if (!Result.Observation) {
+    E.Error = Result.Failure;
+    return E;
+  }
+  const auto &O = *Result.Observation;
+  const auto &C = P.Candidate;
+  if (O.Candidate != C.ID || O.VF != C.VF || O.IC != C.IC ||
+      O.IsEpilogue != C.IsEpilogue)
+    E.Error = "backend observation identity mismatch";
+  else if (!O.IterationWidth || O.IterationWidth % (uint64_t(P.Width) * C.IC))
+    E.Error = "observed iteration width disagrees with requested IC";
+  else {
+    auto Spill = priceVPlanVectorSpills(
+        O, TTI, F.getContext(), P.Width, E.Raw,
+        Report && Report->isDetailed() ? &E.AccessCosts : nullptr);
+    if (!Spill)
+      E.Error = toString(Spill.takeError());
+    else
+      E.Spill = *Spill;
+  }
+  return E;
+}
+
+bool VPlanBackendCostModel::addBatch(
+    ArrayRef<PreparedCandidate> Candidates, LoopVectorizationPlanner *LVP,
+    std::optional<VPBackendPruningContext> Context) {
+  if (Candidates.empty())
+    return true;
   for (const auto &P : Candidates)
-    if (P.Query)
-      Queries.push_back(P.Candidate);
+    if (P.Candidate.ScalarTail != Candidates.front().Candidate.ScalarTail ||
+        P.Candidate.VF.isScalable() !=
+            Candidates.front().Candidate.VF.isScalable() ||
+        !(VPExactCost(P.Profile) - VPExactCost(P.Ev)).isValid())
+      Context.reset();
+  auto Score = [&](VPExactCost Body, unsigned Width) {
+    if (Context->MaxTripCount)
+      return getVPlanCostForTripCount(Context->MaxTripCount, Width,
+                                      Candidates.front().Candidate.ScalarTail,
+                                      Body, Context->Scalar);
+    int64_t Den;
+    if (MulOverflow(Body.denominator(), int64_t(Width), Den))
+      return VPExactCost::ratio(-1, 1);
+    return VPExactCost::ratio(Body.numerator(), Den);
+  };
+  struct CandidateState {
+    VPExactCost Lower, Rank;
+    bool Eligible = false, Dominated = false;
+    std::shared_ptr<VPlanBackendProbeControl> Control;
+    std::optional<EvaluatedCost> Evaluated;
+    std::optional<VPlanBackendProbeResult> Result;
+  };
+  SmallVector<CandidateState, 0> States(Candidates.size());
+  std::optional<VPExactCost> Best;
+  if (Context && Context->UseScalar) {
+    auto S = Score(VPExactCost(Context->Scalar), 1);
+    if (S.isValid())
+      Best = S;
+  }
+  if (Context)
+    for (unsigned I = 0; I < Candidates.size(); ++I) {
+      const auto &P = Candidates[I];
+      auto &S = States[I];
+      auto B = VPExactCost(P.Profile) - VPExactCost(P.Ev);
+      S.Lower = Score(B, P.Width);
+      S.Rank = VPExactCost::ratio(B.numerator(), P.Width);
+      S.Eligible = LVP->backendPruningEligible(*P.Plan, P.Candidate.VF);
+      S.Control = std::make_shared<VPlanBackendProbeControl>();
+      if (!P.Query && S.Eligible && S.Lower.isValid() &&
+          (!Best || S.Lower < *Best))
+        Best = S.Lower;
+    }
+  auto Reject = [&] {
+    if (!Best)
+      return;
+    for (unsigned I = 0; I < Candidates.size(); ++I) {
+      auto &S = States[I];
+      if (Candidates[I].Query && S.Lower.isValid() && *Best < S.Lower) {
+        S.Dominated = true;
+        S.Control->Cancellation.Requested.store(true,
+                                                std::memory_order_relaxed);
+      }
+    }
+  };
+  Reject();
+  SmallVector<unsigned> Order;
+  for (unsigned I = 0; I < Candidates.size(); ++I)
+    if (Candidates[I].Query && !States[I].Dominated)
+      Order.push_back(I);
+  if (Context)
+    llvm::stable_sort(Order, [&](unsigned A, unsigned B) {
+      return States[A].Rank < States[B].Rank;
+    });
+  SmallVector<VPlanBackendCandidate> Queries;
+  for (unsigned I : Order) {
+    auto &S = States[I];
+    if (Context)
+      S.Control->Completed = [&, I](const VPlanBackendProbeResult &R) {
+        auto &S = States[I];
+        if (S.Dominated || R.Cancelled)
+          return;
+        S.Evaluated = evaluateObservation(Candidates[I], R);
+        if (!S.Evaluated->Error.empty() || !S.Eligible)
+          return;
+        const auto &P = Candidates[I];
+        auto Cost = Score(VPExactCost(P.Profile) - VPExactCost(P.Ev) +
+                              S.Evaluated->Spill,
+                          P.Width);
+        if (Cost.isValid() && (!Best || Cost < *Best)) {
+          Best = Cost;
+          Reject();
+        }
+      };
+    auto C = Candidates[I].Candidate;
+    C.Control = S.Control;
+    Queries.push_back(std::move(C));
+  }
   auto Results = Feedback.getBatch(F, Header, Queries);
   std::string BatchFailure;
   if (!Results)
     BatchFailure = toString(Results.takeError());
-  unsigned QueryIndex = 0;
+  for (unsigned J = 0; J < Order.size(); ++J) {
+    auto &S = States[Order[J]];
+    if (BatchFailure.empty())
+      S.Result = std::move((*Results)[J]);
+    else
+      S.Result.emplace(createStringError(BatchFailure));
+  }
   VPlanFeedbackTimer Timer(false);
-  for (const auto &P : Candidates) {
-    std::optional<VPlanBackendProbeResult> Result;
-    if (P.Query) {
-      if (!BatchFailure.empty())
-        Result.emplace(createStringError(BatchFailure));
-      else
-        Result = std::move((*Results)[QueryIndex++]);
+  for (unsigned I = 0; I < Candidates.size(); ++I) {
+    const auto &P = Candidates[I];
+    auto &S = States[I];
+    if (S.Dominated) {
+      Pruned.emplace_back(P.Plan, P.Candidate.VF);
+      if (vplanBackendFeedbackOutputEnabled())
+        writeVPlanBackendFeedback(json::Object{
+            {"model", "tti-real-vector-spill-v1"},
+            {"candidate", P.Candidate.ID},
+            {"function", F.getName()},
+            {"loop", LoopIndex},
+            {"plan", P.Candidate.PlanIndex},
+            {"vf", P.Candidate.VF.getKnownMinValue()},
+            {"scalable", P.Candidate.VF.isScalable()},
+            {"ic", P.Candidate.IC},
+            {"role", "main"},
+            {"score_kind",
+             Context->MaxTripCount ? "whole-loop" : "cost-per-lane"},
+            {"status", "pruned"},
+            {"reason", "backend-lower-bound"},
+            {"execution", !S.Control->Started   ? "not-started"
+                          : S.Result->Cancelled ? "cancelled"
+                                                : "completed"},
+            {"lower_bound_quarters_numerator", S.Lower.numerator()},
+            {"lower_bound_quarters_denominator", S.Lower.denominator()}});
+      continue;
     }
-    if (!applyCost(P, std::move(Result), Timer))
+    if (!applyCost(P, std::move(S.Result), Timer,
+                   S.Evaluated ? &*S.Evaluated : nullptr))
       return false;
   }
   return true;
@@ -208,7 +349,7 @@ bool VPlanBackendCostModel::addBatch(ArrayRef<PreparedCandidate> Candidates) {
 
 bool VPlanBackendCostModel::applyCost(
     const PreparedCandidate &P, std::optional<VPlanBackendProbeResult> Result,
-    VPlanFeedbackTimer &Timer) {
+    VPlanFeedbackTimer &Timer, const EvaluatedCost *Evaluated) {
   const auto &C = P.Candidate;
   const auto &Bound = P.Bound;
   auto Native = P.Native, Profile = P.Profile, Ev = P.Ev;
@@ -224,29 +365,15 @@ bool VPlanBackendCostModel::applyCost(
   else if (Query) {
     assert(Result && "missing required backend query result");
     errs() << Result->Diagnostics;
-    auto O = Result->takeResult();
-    if (!O)
-      Error = toString(O.takeError());
-    else {
-      auto Wobs = O->IterationWidth;
-      if (O->Candidate != C.ID || O->VF != C.VF || O->IC != C.IC ||
-          O->IsEpilogue != C.IsEpilogue)
-        Error = "backend observation identity mismatch";
-      else if (!Wobs || Wobs % (uint64_t(Width) * C.IC))
-        Error = "observed iteration width disagrees with requested IC";
-      else {
-        auto S = priceVPlanVectorSpills(
-            *O, TTI, F.getContext(), Width, Raw,
-            Report && Report->isDetailed() ? &AccessCosts : nullptr);
-        if (!S)
-          Error = toString(S.takeError());
-        else
-          Spill = *S;
-      }
-      Timer.mark("spill_pricing");
-      Observation = std::move(*O);
-    }
+    auto E = Evaluated ? *Evaluated : evaluateObservation(P, *Result);
+    Error = std::move(E.Error);
+    Spill = E.Spill;
+    Raw = E.Raw;
+    AccessCosts = std::move(E.AccessCosts);
+    Observation = std::move(Result->Observation);
+    Timer.mark("spill_pricing");
   }
+
   VPExactCost Body = VPExactCost(Profile) - VPExactCost(Ev) + Spill;
   if (!Body.isValid() && Error.empty())
     Error = "invalid or overflowing hybrid cost";
@@ -329,7 +456,9 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
   this->Invocation = Invocation;
   InterleaveOnly = InterleaveOnlyWhenForced;
   VectorizeOnly = VectorizeOnlyWhenForced;
-  const bool Batch = Feedback.canBatch(F);
+  auto Pruning = !vplanBackendFeedbackForceAll() ? LVP.backendPruningContext()
+                                                 : std::nullopt;
+  const bool Batch = Feedback.canBatch(F) || Pruning.has_value();
   SmallVector<PreparedCandidate> Pending;
   std::string PreparationError;
   auto Prepare = [&]() -> bool {
@@ -399,7 +528,8 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
   bool Prepared = Prepare();
   // Earlier query/pricing failures take precedence over a later preparation
   // error. Only the successfully prepared prefix can have work dispatched.
-  if (Batch && !addBatch(Pending))
+  if (Batch && !addBatch(Pending, &LVP,
+                         PreparationError.empty() ? Pruning : std::nullopt))
     return false;
   if (!PreparationError.empty())
     fail(PreparationError);

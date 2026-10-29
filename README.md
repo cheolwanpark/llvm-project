@@ -16,6 +16,7 @@ selection.
 | Option | Meaning |
 |---|---|
 | `-vplan-backend` | Enable backend costs; default false. |
+| `-vplan-backend-prune-cfg=false` | Disable private-probe CFG reduction (default enabled). |
 | `-vplan-backend-probe-threads=N` | Bound concurrent main-candidate probes; positive integer, default `1`. |
 | `-vplan-backend-force-all` | Query every candidate; default false applies the pressure gate. |
 | `-vplan-backend-jsonl=FILE` | Append candidate and selection/fallback diagnostics as JSONL. |
@@ -46,9 +47,11 @@ With `-mllvm -vplan-backend-probe-threads=4`, independent main-candidate
 probes can run on up to four workers. Preparation, spill pricing and selection
 stay on the compiler thread. Each batch snapshots the current loop context;
 workers use separate LLVM contexts, target machines and analyses. The default
-`1` retains the existing serial clone path and stops at the first failure.
+`1` uses serial clones. With cost-bound pruning, failures are deferred until
+dominance is resolved; otherwise it stops at the first required failure.
 Automatic epilogue queries remain serial; forced epilogues remain part of main
-probes. The gate and whole-loop native fallback are unchanged.
+probes. The pressure gate is unchanged. A surviving required failure returns the
+whole loop to native selection.
 
 ```sh
 .cache/build/bin/clang --target=riscv64-unknown-elf \
@@ -84,6 +87,38 @@ use a separate frontend/opt/backend/assemble pipeline. See the
 [parallel execution contract](BACKEND_FEEDBACK.md#제한된-probe-병렬-실행) for module
 boundaries, ownership and diagnostic compatibility.
 
+## Probe pruning
+
+With `-vplan-backend`, private probe CFG reduction is enabled by default.
+`-vplan-backend-prune-cfg=false` disables only this transformation. After candidate
+materialization and before the IR suffix, it retains the observed header's CFG
+ancestors and descendants and shortens eligible exclusive paths using existing
+return values. ABI, SSA, returns, vector lifetime and surrounding-cycle guards
+limit applicability. This is an empirical probe reduction: it does not prove
+identical global register allocation for arbitrary programs.
+
+Cost-bound candidate pruning and cooperative cancellation are automatic, with no
+separate switch. They apply when vector epilogues are disabled, main/epilogue VFs
+are not forced, and all candidates share fixed/scalable and scalar-tail policies.
+The latter is an automatic compatibility check, not a user option. Existing
+LLVM epilogue defaults are unchanged, so use
+`-enable-epilogue-vectorization=false` to satisfy that condition.
+`-vplan-backend-force-all` retains its diagnostic meaning and bypasses candidate
+pruning/cancellation; the CFG switch still controls probe reduction independently.
+
+Queries run in stable zero-spill cost order. Eligible completed costs, gate-skip
+costs and permitted scalar selection bound other queries. Only strictly losing
+candidates are removed; ties are measured. Dominated failures no longer require
+native fallback, so final VF or scalar selection can change. A surviving required
+failure still discards all backend costs for the loop.
+
+`-vplan-backend-pruning-trace` reports CFG applicability and sizes;
+`-vplan-backend-pruning-dump-ir` dumps `before`, `after` and `suffix` stages.
+Both are passive. Timing includes `probe_pruning`. JSONL uses `status=pruned`
+and `execution=not-started/cancelled/completed`; physical execution states may
+vary with scheduling while logical results retain original candidate order.
+See [the contract](BACKEND_FEEDBACK.md#probe-pruning) for ownership and failure rules.
+
 ## Build
 
 Reuse `.cache/build` for the Release/assertions/tests-enabled build. Keep the
@@ -93,7 +128,7 @@ configure `.cache/build` directly only for a fresh build.
 
 ```sh
 cmake --build .cache/build --target clang clang-resource-headers llc opt \
-  FileCheck split-file not VectorizeTests RISCVTests --parallel 2
+  FileCheck split-file not count VectorizeTests RISCVTests IRTests --parallel 2
 ```
 
 Fresh configuration:
@@ -118,6 +153,7 @@ libc/sysroot.
 ```sh
 .cache/build/unittests/Transforms/Vectorize/VectorizeTests
 .cache/build/unittests/Target/RISCV/RISCVTests
+.cache/build/unittests/IR/IRTests --gtest_filter='PassManager.*:LegacyPassManager.*'
 .cache/build/bin/llvm-lit -v llvm/test/Transforms/LoopVectorize \
   llvm/test/CodeGen/RISCV/rvv/stack-slot-coloring.mir
 ```
