@@ -138,13 +138,7 @@ void VPlanBackendCostModel::fail(StringRef Reason) {
   Failure = Reason.str();
   Costs.clear();
   Pruned.clear();
-  if (vplanBackendFeedbackOutputEnabled())
-    writeVPlanBackendFeedback(
-        json::Object{{"model", "tti-real-vector-spill-v1"},
-                     {"status", "native-fallback"},
-                     {"function", F.getName()},
-                     {"loop", LoopIndex},
-                     {"reason", Failure}});
+  Rows.clear();
 }
 const VPBackendCostEntry *VPlanBackendCostModel::lookup(const VPlan &Plan,
                                                         ElementCount VF,
@@ -159,6 +153,8 @@ const VPBackendCostEntry *VPlanBackendCostModel::lookup(const VPlan &Plan,
 VPlanBackendCostModel::PreparedCandidate VPlanBackendCostModel::prepareCost(
     VPlan &Plan, VPlanBackendCandidate C, InstructionCost Native,
     InstructionCost Profile, InstructionCost Ev, unsigned Width) const {
+  if (Mode == VPBackendSpillMode::Estimated)
+    return {&Plan, std::move(C), Native, Profile, Ev, Width, {}, false};
   auto Bound = computeVPlanRegisterUsageBound(Plan, C.VF, TTI);
   Bound.applyInterleave(C.IC);
   bool Query = Bound.shouldQuery() || vplanBackendFeedbackForceAll();
@@ -319,7 +315,7 @@ bool VPlanBackendCostModel::addBatch(
     if (S.Dominated) {
       Pruned.emplace_back(P.Plan, P.Candidate.VF);
       if (vplanBackendFeedbackOutputEnabled())
-        writeVPlanBackendFeedback(json::Object{
+        Rows.push_back(json::Object{
             {"model", "tti-real-vector-spill-v1"},
             {"candidate", P.Candidate.ID},
             {"function", F.getName()},
@@ -374,16 +370,18 @@ bool VPlanBackendCostModel::applyCost(
     Timer.mark("spill_pricing");
   }
 
-  VPExactCost Body = VPExactCost(Profile) - VPExactCost(Ev) + Spill;
+  VPExactCost Body = VPExactCost(Profile);
+  if (Mode == VPBackendSpillMode::Observed)
+    Body = Body - VPExactCost(Ev) + Spill;
   if (!Body.isValid() && Error.empty())
     Error = "invalid or overflowing hybrid cost";
   if (Error.empty()) {
     Costs.push_back(
         {P.Plan, C.VF, C.IC, C.IsEpilogue, Native, Profile, Ev, Body});
     if (Report)
-      Report->backendCost(Costs.back(), Bound,
-                          Observation ? &*Observation : nullptr, AccessCosts,
-                          Width, TTI.getVPlanCostProfileName(), Raw, Spill);
+      Report->backendCost(
+          Costs.back(), Bound, Observation ? &*Observation : nullptr,
+          AccessCosts, Width, TTI.getVPlanCostProfileName(), Raw, Spill, Mode);
   }
   // Serialization is entirely optional. The selection and text report use
   // the owned C++ observation and the exact values computed above.
@@ -405,7 +403,7 @@ bool VPlanBackendCostModel::applyCost(
       Gate["recipe"] = Bound.Recipe;
     if (Bound.Opcode)
       Gate["opcode"] = *Bound.Opcode;
-    json::Object Row{{"model", "tti-real-vector-spill-v1"},
+    json::Object Row{{"model", modelName()},
                      {"candidate", C.ID},
                      {"feedback_point", "middle-end-before-vf-selection"},
                      {"function", F.getName()},
@@ -423,7 +421,10 @@ bool VPlanBackendCostModel::applyCost(
       Row["observation"] = summarizeVPlanBackendResult(*Observation);
     } else {
       Row["status"] = Query ? "unavailable" : "skipped";
-      Row["reason"] = Query ? StringRef(Error) : Bound.Reason;
+      Row["reason"] = Query ? StringRef(Error)
+                      : Mode == VPBackendSpillMode::Estimated
+                          ? "estimated-spill-no-probe"
+                          : Bound.Reason;
     }
     if (Error.empty()) {
       Row["native_body_quarters"] = Native.getQuarterValue();
@@ -437,7 +438,13 @@ bool VPlanBackendCostModel::applyCost(
       Row["body_quarters_denominator"] = Body.denominator();
     } else
       Row["cost_failure"] = Error;
-    writeVPlanBackendFeedback(Row);
+    if (Mode == VPBackendSpillMode::Estimated) {
+      Row["cost_source"] = "estimated";
+      Row.erase("raw_vector_spill_quarters");
+      Row.erase("normalized_vector_spill_quarters_numerator");
+      Row.erase("normalized_vector_spill_quarters_denominator");
+    }
+    Rows.push_back(std::move(Row));
   }
   Timer.mark("hybrid_cost_and_summary");
   if (!Error.empty()) {
@@ -456,9 +463,12 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
   this->Invocation = Invocation;
   InterleaveOnly = InterleaveOnlyWhenForced;
   VectorizeOnly = VectorizeOnlyWhenForced;
-  auto Pruning = !vplanBackendFeedbackForceAll() ? LVP.backendPruningContext()
-                                                 : std::nullopt;
-  const bool Batch = Feedback.canBatch(F) || Pruning.has_value();
+  auto Pruning =
+      Mode == VPBackendSpillMode::Observed && !vplanBackendFeedbackForceAll()
+          ? LVP.backendPruningContext()
+          : std::nullopt;
+  const bool Batch = Mode == VPBackendSpillMode::Observed &&
+                     (Feedback.canBatch(F) || Pruning.has_value());
   SmallVector<PreparedCandidate> Pending;
   std::string PreparationError;
   auto Prepare = [&]() -> bool {
@@ -581,13 +591,20 @@ bool VPlanBackendCostModel::prepareEpilogue(
               (VF.isScalable() ? Config.getVScaleForTuning().value_or(1) : 1)));
 }
 
+void VPlanBackendCostModel::commit() {
+  assert(!Failed);
+  for (const auto &Row : Rows)
+    writeVPlanBackendFeedback(Row);
+  Rows.clear();
+}
+
 void VPlanBackendCostModel::selection(ElementCount VF, unsigned IC,
                                       ElementCount Epilogue,
                                       bool Emitted) const {
   if (!vplanBackendFeedbackOutputEnabled())
     return;
   writeVPlanBackendFeedback(
-      json::Object{{"model", "tti-real-vector-spill-v1"},
+      json::Object{{"model", modelName()},
                    {"status", "selected"},
                    {"function", F.getName()},
                    {"loop", LoopIndex},

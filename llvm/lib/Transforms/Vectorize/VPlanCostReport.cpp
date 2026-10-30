@@ -344,7 +344,9 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
                                   const VPlanBackendResult *Observation,
                                   ArrayRef<InstructionCost> AccessCosts,
                                   unsigned Width, StringRef ProfileName,
-                                  InstructionCost Raw, VPExactCost Spill) {
+                                  InstructionCost Raw, VPExactCost Spill,
+                                  VPBackendSpillMode Mode) {
+  bool Estimated = Mode == VPBackendSpillMode::Estimated;
   auto &C = candidate(*Cost.Plan, Cost.VF, Cost.IsEpilogue);
   C.ExactBodyCost = Cost.Body;
   raw_string_ostream OS(C.BackendSummary);
@@ -352,8 +354,8 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
      << " plan=" << C.PlanID << " vf=";
   printVF(OS, Cost.VF);
   OS << " ic=" << Cost.IC
-     << " model=tti-real-vector-spill-v1 profile=" << ProfileName
-     << " queried=" << bool(Observation)
+     << " model=" << (Estimated ? "tti-v1" : "tti-real-vector-spill-v1")
+     << " profile=" << ProfileName << " queried=" << bool(Observation)
      << " would_skip=" << !Bound.shouldQuery()
      << " force_all=" << vplanBackendFeedbackForceAll() << " body_cost=";
   Cost.Body.print(OS);
@@ -365,6 +367,13 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
      << (Cost.IsEpilogue ? "epilogue" : "main") << " plan=" << C.PlanID
      << " vf=";
   printVF(DS, Cost.VF);
+  if (Estimated) {
+    DS << " ic=" << Cost.IC << " native=" << Cost.Native
+       << " B=L=" << Cost.Profile
+       << " scalar_baseline=native ic_policy=native-cost\n"
+       << "      spill_source=estimated\n";
+    return;
+  }
   DS << " ic=" << Cost.IC << " native=" << Cost.Native << " L=" << Cost.Profile
      << " Ev=" << Cost.EstimatedVectorSpill << " raw_vector_spill=" << Raw
      << " Wtti=" << Width << " Wobs=";

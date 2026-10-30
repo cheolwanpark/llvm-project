@@ -29,6 +29,7 @@ class RecordingTTI : public TargetTransformInfoImplCRTPBase<RecordingTTI> {
   using Base = TargetTransformInfoImplCRTPBase<RecordingTTI>;
   std::vector<std::string> &Queries;
   bool FailLaterProfile;
+  bool Specific, ExpensiveProfile;
 
   InstructionCost record(StringRef Name, unsigned Opcode, Type *Ty,
                          InstructionCost Cost) const {
@@ -37,6 +38,9 @@ class RecordingTTI : public TargetTransformInfoImplCRTPBase<RecordingTTI> {
         cast<VectorType>(Ty)->getElementCount().getKnownMinValue() >= 4 &&
         Name == "arithmetic")
       Cost = InstructionCost::getInvalid();
+    if (ExpensiveProfile && VPlanCostProfileScope::active() && Ty &&
+        isa<VectorType>(Ty))
+      Cost = 1000000;
     std::string Text;
     raw_string_ostream OS(Text);
     OS << Name << ' ' << Opcode << ' ';
@@ -49,8 +53,14 @@ class RecordingTTI : public TargetTransformInfoImplCRTPBase<RecordingTTI> {
 
 public:
   RecordingTTI(const DataLayout &DL, std::vector<std::string> &Queries,
-               bool FailLaterProfile = false)
-      : Base(DL), Queries(Queries), FailLaterProfile(FailLaterProfile) {}
+               bool FailLaterProfile = false, bool Specific = false,
+               bool ExpensiveProfile = false)
+      : Base(DL), Queries(Queries), FailLaterProfile(FailLaterProfile),
+        Specific(Specific), ExpensiveProfile(ExpensiveProfile) {}
+
+  StringRef getVPlanCostProfileName() const override {
+    return Specific ? "test-specific" : "native";
+  }
 
   TypeSize getRegisterBitWidth(TTI::RegisterKind K) const override {
     return TypeSize::get(128, K == TTI::RGK_ScalableVector);
@@ -128,7 +138,7 @@ public:
 };
 
 // A provider can fail before any observation, after partial success, or during
-// epilogue preparation. None of those attempts may leak into the native report.
+// epilogue preparation. Failed attempts must not leak into the final report.
 TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
   // The flags are private to LoopVectorize.cpp. Restore their values after each
   // run so this test does not change the configuration of other vectorizer
@@ -146,12 +156,15 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
       *static_cast<cl::opt<bool> *>(Options["enable-epilogue-vectorization"]);
   SaveAndRestore<bool> SaveForce(ForceAll.getValue(), true);
   SaveAndRestore<bool> SaveEpilogues(Epilogues.getValue(), true);
-  for (bool Batch : {false, true}) {
+  for (auto [Specific, Batch] :
+       {std::pair{false, false}, std::pair{false, true}, std::pair{true, false},
+        std::pair{true, true}}) {
     std::string NativeReports[4], NativeIR;
     // 0=native, 1=success, 2=first query fails, 3=second query fails,
     // 4=epilogue fails after successful main selection,
-    // 5=first query fails before a later profile preparation error.
-    for (unsigned Scenario = 0; Scenario != 6; ++Scenario) {
+    // 5=first query fails before a later profile preparation error,
+    // 6=estimated retry selects scalar.
+    for (unsigned Scenario = 0; Scenario != 7; ++Scenario) {
       SaveAndRestore<bool> SaveMaster(Master.getValue(), Scenario != 0);
       std::vector<std::string> ReferenceQueries, ReferenceProbes;
       std::string ReferenceIR;
@@ -192,7 +205,8 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
         FAM.registerPass([&] {
           return TargetIRAnalysis([&](const Function &F) {
             return TargetTransformInfo(std::make_unique<RecordingTTI>(
-                F.getDataLayout(), Queries, Scenario == 5));
+                F.getDataLayout(), Queries, Scenario == 5, Specific,
+                Specific && Scenario == 6));
           });
         });
         FAM.registerPass([&] {
@@ -205,7 +219,7 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
                   auto Query = [&]() -> Expected<VPlanBackendResult> {
                     Probes.push_back(C.ID);
                     SawEpilogue |= C.IsEpilogue;
-                    if (Scenario == 2 || Scenario == 5 ||
+                    if (Scenario == 2 || Scenario == 5 || Scenario == 6 ||
                         (Scenario == 3 && Probes.size() == 2) ||
                         (Scenario == 4 && C.IsEpilogue))
                       return createStringError("test provider failure");
@@ -215,8 +229,8 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
                     R.IC = C.IC;
                     R.IsEpilogue = C.IsEpilogue;
                     R.IterationMapping = true;
-                    // A cleanup width of three bodies exercises exact rational
-                    // output.
+                    // A cleanup width of three bodies exercises exact
+                    // rational output.
                     R.IterationWidth = C.VF.getKnownMinValue() * C.IC * 3;
                     R.Spills.push_back({false, 8, true, 8, 0, true, 1, false});
                     return R;
@@ -242,7 +256,8 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
         std::string IR;
         raw_string_ostream OS(IR);
         M->print(OS, nullptr);
-        EXPECT_NE(IR.find("vector.body"), std::string::npos);
+        bool ScalarRetry = Specific && Scenario == 6;
+        EXPECT_EQ(IR.find("vector.body") == std::string::npos, ScalarRetry);
         ASSERT_FALSE(Queries.empty());
         if (Mode == 0) {
           ReferenceProbes = Probes;
@@ -254,8 +269,9 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
           EXPECT_EQ(ReferenceQueries, Queries) << "reporting mode " << Mode;
           EXPECT_EQ(ReferenceIR, IR) << "reporting mode " << Mode;
           EXPECT_NE(Report.find("cost-per-lane"), std::string::npos);
-          EXPECT_NE(Report.find("outcome=vectorization-emitted"),
-                    std::string::npos);
+          if (!ScalarRetry)
+            EXPECT_NE(Report.find("outcome=vectorization-emitted"),
+                      std::string::npos);
         }
         if (Scenario == 0) {
           NativeReports[Mode] = Report;
@@ -263,6 +279,9 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
           EXPECT_TRUE(Probes.empty());
         } else {
           EXPECT_FALSE(Probes.empty());
+          // Retrying with TTI must never query a candidate again.
+          for (const auto &Probe : Probes)
+            EXPECT_EQ(llvm::count(Probes, Probe), 1);
           if (Scenario == 3 || Scenario == 4)
             EXPECT_GE(Probes.size(), 2u);
           if (Scenario == 4)
@@ -270,8 +289,21 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
           if (Scenario == 5)
             EXPECT_EQ(Probes.size(), 1u);
           if (Scenario >= 2) {
-            EXPECT_EQ(NativeIR, IR);
-            EXPECT_EQ(NativeReports[Mode], Report);
+            if (!ScalarRetry)
+              EXPECT_EQ(NativeIR, IR);
+            if (Specific && Scenario != 5) {
+              if (Mode) {
+                EXPECT_NE(Report.find("model=tti-v1"), std::string::npos);
+                EXPECT_EQ(Report.find("model=tti-real-vector-spill-v1"),
+                          std::string::npos);
+                if (Mode & 2) {
+                  EXPECT_NE(Report.find("B=L="), std::string::npos);
+                  EXPECT_EQ(Report.find("spill_source=observed"),
+                            std::string::npos);
+                }
+              }
+            } else
+              EXPECT_EQ(NativeReports[Mode], Report);
           } else if (Mode) {
             EXPECT_NE(Report.find("model=tti-real-vector-spill-v1"),
                       std::string::npos);

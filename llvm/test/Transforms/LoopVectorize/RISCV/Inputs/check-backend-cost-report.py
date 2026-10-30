@@ -51,9 +51,31 @@ for scenario, options in [
             assert not rows
             native_reports.append(report)
         elif scenario == 'fallback':
-            assert ir == outputs['native']
-            assert report == native_reports[mode], ('fallback report leaked attempted costs', mode)
-            assert any(r['status'] == 'native-fallback' for r in rows)
+            if spills:  # Generic TTI has no specific profile to retry.
+                assert ir == outputs['native']
+                assert report == native_reports[mode]
+                assert any(r['status'] == 'native-fallback' for r in rows)
+                assert not any('candidate' in r for r in rows)
+            else:
+                assert any(r['status'] == 'estimated-fallback' for r in rows)
+                candidates = [r for r in rows if 'candidate' in r]
+                assert candidates and all(r['model'] == 'tti-v1' for r in candidates)
+                for r in candidates:
+                    assert r['cost_source'] == 'estimated'
+                    assert not r['register_usage_bound']['queried']
+                    assert 'observation' not in r
+                    assert 'raw_vector_spill_quarters' not in r
+                    assert r['body_quarters_denominator'] == 1
+                    assert r['body_quarters_numerator'] == r['profile_body_quarters']
+                if mode:
+                    assert 'model=tti-real-vector-spill-v1' not in report
+                    if mode & 2:
+                        assert 'B=L=' in report and 'spill_source=estimated' in report
+                        assert 'B=L-Ev+Sv=' not in report
+            for workers in (2, 4):
+                other = run(f'fallback-{mode}-{workers}', options + prints +
+                            [f'-vplan-backend-probe-threads={workers}'])
+                assert other == (ir, report, rows)
         else:
             assert not any(r['status'] == 'native-fallback' for r in rows), rows
             candidates = [r for r in rows if 'candidate' in r]

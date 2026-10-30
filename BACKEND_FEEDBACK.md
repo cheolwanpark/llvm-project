@@ -1,7 +1,8 @@
 # Backend 비용 모델과 진단
 
 `-vplan-backend`는 RISC-V RVV의 VPlan VF 선택에 backend 비용을 적용한다.
-모델 ID는 `tti-real-vector-spill-v1`이며 기본값은 OFF다. 옵션 목록·실행 예제·빌드와
+기본 모델 ID는 `tti-real-vector-spill-v1`이며 기본값은 OFF다. 추정 fallback은
+`tti-v1`이다. 옵션 목록·실행 예제·빌드와
 테스트 명령은 [README](README.md)에 있다. 비 RISC-V, RVV 없음, outer loop,
 reciprocal-throughput 이외 비용 모드는 native 선택을 유지한다.
 
@@ -23,7 +24,8 @@ profitability는 native 정책을 유지한다. Ev는 기존 register-pressure �
 
 `VPlanBackendCostModel`이 비용 준비, gate, 질의, 검증과 비용 테이블을 소유한다.
 `VPExactCost`는 quarter-cost 분자와 양의 분모를 유지하고 비교 전에 절삭하지
-않는다. Cross product는 128비트 정수로 계산하며 산술 overflow는 native fallback이다.
+않는다. Cross product는 128비트 정수로 계산하며 산술 overflow는 아래
+whole-loop fallback을 적용한다.
 기존 `InstructionCost` 소비자에서는 해당 타입의 변환 의미를 유지한다.
 
 ### Pressure gate
@@ -84,8 +86,13 @@ subregister, 미지원 접근과 불완전 mapping은 실패다.
 한 번 곱한다. 관측 결과는 해당 planning invocation에서만 사용한다.
 
 필수 후보의 provider unavailable, clone/형상/mapping 실패, 미지원 spill, overflow
-또는 필요한 epilogue 비용 실패 시 원본 loop의 backend 비용과 ProfitableVFs를 버리고 native
-선택을 다시 실행한다. 강제 VF/IC/epilogue 요청은 유지한다. 실패를 spill 0으로
+또는 필요한 epilogue 비용 실패 시 원본 loop의 backend 비용과 ProfitableVFs를
+버리고 전체 loop를 다시 선택한다. Specific TTI profile이 지원되면 추정
+vector/scalar spill을 포함한 기존 profile body `L`로 한 번 재시도한다. 이 경로는
+probe/provider와 pruning을 사용하지 않으며 scalar 기준과 IC는 native다. Profile이
+`native`이거나 재시도가 실패하면 native 선택을 실행한다. Scalar 선택도 성공이다.
+강제 VF/IC/epilogue 요청은 유지한다. 실패한 시도의 비용·pruning 상태·준비된
+epilogue·보고를 모두 폐기하고 새 비용 객체로 재시도한다. 실패를 spill 0으로
 간주하지 않으며 일부 성공 비용만 적용하지 않는다. LLVM fatal error/assertion의
 예외 격리는 제공하지 않는다. Probe suffix는 임의의 LTO·module pass·사용자 추가
 pass를 재현하지 않으며, 최종 machine instruction 전체와의 동등성을 보장하지 않는다.
@@ -135,8 +142,9 @@ snapshot의 ordinal로 찾고, module identifier와 context의 이름/ODR 설정
 
 Cost-bound pruning 미적용 시 준비 오류·관측 오류·pricing 오류는 후보 순서로
 처리한다. 첫 실패 뒤에 미리 실행된 결과는 선택이나 일반 candidate JSON에 반영하지 않는다. 모든 작업 종료
-후 결과를 해제하며 실패를 spill 0으로 사용하지 않는다. 따라서 진단의 논리적
-query 수는 기존과 같지만 실제 실행한 probe 수는 실패 loop에서 더 많을 수 있다.
+후 결과를 해제하고 필요한 fallback을 시작하며 실패를 spill 0으로 사용하지 않는다.
+실패한 시도의 candidate JSON은 모두 폐기한다. 논리적 query 수보다 실제 실행한
+probe 수가 실패 loop에서 더 많을 수 있다.
 Cost-bound pruning 경로만 협력 취소를 지원한다. Fatal error/assertion 격리는 제공하지 않는다.
 
 개별 결과는 context와 독립된 관측 값·오류 문자열·diagnostic 문자열을 소유한다.
@@ -201,10 +209,13 @@ fallbacks, masking, legalization과 다른 memory fallback은 native다. 따라�
 | Master OFF 또는 native fallback | Native LLVM 비용과 선택 결과 |
 | Backend 적용 | 정확한 backend body/ranking 비용과 feedback |
 | Gate 생략 | Sv=0을 적용한 backend 비용; 관측된 zero spill과 구분 |
+| 추정 fallback 성공 | 보정 TTI body `L`과 선택 결과; 실제 spill 관측 없음 |
 
 보고는 기존 TTI 질의와 probe 결과를 관찰하며 추가 질의나 후보 compile을 하지
 않는다. 내부 clone은 별도 비용 보고를 출력하지 않는다. Main/필요한 epilogue에서
-fallback이 발생하면 시도 중인 backend 보고를 폐기하고 native 보고를 출력한다.
+fallback이 발생하면 실패한 시도의 보고를 폐기하고 최종 성공한 보고만 출력한다.
+추정 재시도는 `model=tti-v1`, `B=L`, `spill_source=estimated`로 표시한다.
+Native까지 복귀하면 기존 native 보고를 복구한다.
 
 요약 표는 main/epilogue, plan, VF, 예상 폭, body cost, score와 비교 종류,
 incumbent/scalar 비교 결과와 이유를 담는다. `fN`은 fixed VF, `sN`은 scalable VF다.
@@ -222,11 +233,14 @@ profile body, native IC와 native selection context를 구분한다.
 
 ## JSONL과 시간 진단
 
-`-vplan-backend-jsonl=FILE`은 candidate·selected·native-fallback 행을 append한다.
+`-vplan-backend-jsonl=FILE`은 candidate·selected·estimated-fallback·native-fallback
+행을 append한다.
 Candidate 행에는 identity/VF/IC/role, model/profile, native/profile/estimated/raw 비용,
 정확한 정규화 및 body 분자/분모, TTI 폭과 gate 판단을 기록한다. `collected`는 facts
-수신을 뜻하며 `cost_failure`가 있으면 선택에 사용하지 않는다. Fallback 행은 reason을
-포함한다. JSONL quarter-cost 분자를 **4 × 분모**로 나누면 텍스트의 model unit과 같다.
+수신을 뜻한다. Candidate/pruned 행은 비용 평가가 성공한 시도만 출력한다.
+추정 후보는 `cost_source=estimated`이며 실제 관측과 raw/normalized spill 필드를
+기록하지 않는다. Fallback 행은 requested/effective model과 reason을 포함한다.
+JSONL quarter-cost 분자를 **4 × 분모**로 나누면 텍스트의 model unit과 같다.
 
 Provider는 소유권 있는 `VPlanBackendResult`를 반환한다. `rvv-vector-spill-v1`
 요약은 candidate/VF/IC/role, stage, 검증된 반복 폭과 vector 접근 목록을 담는다.
@@ -278,7 +292,8 @@ all tasks join before batch state is released; threads are never forcibly killed
 
 Failures are deferred until final dominance is known. Only proven losers may
 have their failures ignored. Surviving required failures and preparation errors
-retain whole-loop native fallback and discard attempted backend cost reports.
+retry the whole loop with supported specific TTI estimated costs, then native
+selection if needed, and discard failed-attempt costs and reports.
 Pruned candidates never receive fabricated zero-spill observations. Logical
 results are applied in original candidate order; physical execution status may
 vary. JSONL records `pruned`, exact score bounds, and `not-started`, `cancelled`

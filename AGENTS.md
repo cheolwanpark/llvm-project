@@ -37,11 +37,12 @@ vector-spill-only; final scalar spill support would require revisiting both.
 
 Preserve the master flag, fixed XiangShan profile, `L - Ev + Sv`, exact rational
 normalization, native-cost IC, gate, and main/epilogue policy unless the task
-explicitly changes them. Failed required candidates revert the whole original
-loop to native selection; never treat failure as zero spill. Do not silently
-add post-frame retries, benchmark-specific exceptions, or whole-MIR transport
+explicitly changes them. Failed required candidates retry the whole original
+loop once with specific TTI estimated costs when supported, then use native
+selection if needed; never treat failure as zero spill. Do not silently add
+post-frame retries, benchmark-specific exceptions, or whole-MIR transport
 to the in-process path. Keep the two cost-report options passive and discard
-attempted backend reports on whole-loop native fallback.
+failed-attempt reports on whole-loop estimated/native fallback.
 
 ## Reference and dataset comparisons
 

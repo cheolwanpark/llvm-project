@@ -59,8 +59,10 @@ struct VPBackendCostEntry {
   InstructionCost Native, Profile, EstimatedVectorSpill;
   VPExactCost Body;
 };
+enum class VPBackendSpillMode { Observed, Estimated };
+
 /// All state belongs to one original loop. Preparation is transactional: on
-/// failure discard every score before native selection can observe the table.
+/// failure discard every score before another selection can observe the table.
 class VPlanBackendCostModel {
   struct PreparedCandidate {
     VPlan *Plan;
@@ -80,6 +82,8 @@ class VPlanBackendCostModel {
   evaluateObservation(const PreparedCandidate &P,
                       const VPlanBackendProbeResult &Result) const;
   SmallVector<VPBackendCostEntry> Costs;
+  SmallVector<json::Object> Rows;
+  VPBackendSpillMode Mode;
   SmallVector<std::pair<const VPlan *, ElementCount>> Pruned;
   const VPlanBackendFeedback &Feedback;
   const TargetTransformInfo &TTI;
@@ -105,8 +109,10 @@ class VPlanBackendCostModel {
 public:
   VPlanBackendCostModel(const VPlanBackendFeedback &Feedback,
                         const TargetTransformInfo &TTI, Function &F,
-                        BasicBlock &Header, VPlanCostReport *Report = nullptr)
-      : Feedback(Feedback), TTI(TTI), F(F), Header(Header), Report(Report) {}
+                        BasicBlock &Header, VPlanCostReport *Report = nullptr,
+                        VPBackendSpillMode Mode = VPBackendSpillMode::Observed)
+      : Mode(Mode), Feedback(Feedback), TTI(TTI), F(F), Header(Header),
+        Report(Report) {}
   bool prepare(LoopVectorizationPlanner &LVP, VFSelectionContext &Config,
                unsigned UserIC, unsigned Invocation, unsigned LoopIndex,
                bool InterleaveOnlyWhenForced, bool VectorizeOnlyWhenForced,
@@ -120,6 +126,11 @@ public:
   const VPBackendCostEntry *lookup(const VPlan &Plan, ElementCount VF,
                                    bool Epilogue = false) const;
   void fail(StringRef Reason);
+  void commit();
+  StringRef modelName() const {
+    return Mode == VPBackendSpillMode::Estimated ? "tti-v1"
+                                                 : "tti-real-vector-spill-v1";
+  }
   void selection(ElementCount VF, unsigned IC, ElementCount Epilogue,
                  bool Emitted) const;
   bool isPruned(const VPlan &P, ElementCount VF) const {

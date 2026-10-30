@@ -8848,28 +8848,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       Config.CostReport = CostReport.get();
     }
   };
-  if (BackendFeedback && IsInnerLoop &&
-      Config.CostKind == TTI::TCK_RecipThroughput &&
-      F->getParent()->getTargetTriple().isRISCV() &&
-      TTI->getRegisterBitWidth(TTI::RGK_ScalableVector).getKnownMinValue()) {
-    if (CostReport) {
-      NativeReport = std::move(CostReport);
-      CostReport = std::make_unique<VPlanCostReport>(
-          *L, Config, ReportInvocation, ReportLoopIndex,
-          NativeReport->isDetailed());
-      Config.CostReport = CostReport.get();
-    }
-    BackendCosts = std::make_unique<VPlanBackendCostModel>(
-        *BackendFeedback, *TTI, *F, *L->getHeader(), Config.CostReport);
-    if (BackendCosts->prepare(
-            LVP, Config, UserIC, ReportInvocation, ReportLoopIndex,
-            InterleaveOnlyWhenForced, VectorizeOnlyWhenForced,
-            hasForcedEpilogueVF() ? ElementCount(EpilogueVectorizationForceVF)
-                                  : ElementCount::getFixed(0)))
-      Config.BackendCosts = BackendCosts.get();
-    else
-      RestoreNativeReport();
-  }
   auto SelectPlan = [&]() -> std::pair<VectorizationFactor, VPlan *> {
     if (!BackendProbe)
       return LVP.computeBestVF();
@@ -8889,29 +8867,91 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                                 InstructionCost::getInvalid()),
             Plans[Index].get()};
   };
-  auto [VF, BestPlanPtr] = SelectPlan();
-  if (BackendProbe && !BestPlanPtr)
-    return false;
-  if (Config.BackendCosts && BackendCosts->failed()) {
-    Config.BackendCosts = nullptr;
-    RestoreNativeReport();
-    LVP.resetVFSelection();
-    std::tie(VF, BestPlanPtr) = LVP.computeBestVF();
-  }
+  VectorizationFactor VF = VectorizationFactor::Disabled();
+  VPlan *BestPlanPtr = nullptr;
   std::unique_ptr<VPlan> PreparedEpilogue;
-  if (Config.BackendCosts && BestPlanPtr && VF.Width.isVector()) {
-    auto *C = Config.BackendCosts->lookup(*BestPlanPtr, VF.Width);
-    assert(C && "prepared main cost missing");
-    PreparedEpilogue =
-        LVP.selectBestEpiloguePlan(*BestPlanPtr, VF.Width, C->IC);
-    if (BackendCosts->failed()) {
-      Config.BackendCosts = nullptr;
-      RestoreNativeReport();
-      PreparedEpilogue.reset();
-      LVP.resetVFSelection();
+  std::string FallbackReason;
+  auto TrySelection = [&](VPBackendSpillMode Mode) {
+    if (CostReport) {
+      if (!NativeReport)
+        NativeReport = std::move(CostReport);
+      else
+        CostReport->discard();
+      CostReport = std::make_unique<VPlanCostReport>(
+          *L, Config, ReportInvocation, ReportLoopIndex,
+          NativeReport->isDetailed());
+      Config.CostReport = CostReport.get();
+    }
+    BackendCosts = std::make_unique<VPlanBackendCostModel>(
+        *BackendFeedback, *TTI, *F, *L->getHeader(), Config.CostReport, Mode);
+    if (BackendCosts->prepare(
+            LVP, Config, UserIC, ReportInvocation, ReportLoopIndex,
+            InterleaveOnlyWhenForced, VectorizeOnlyWhenForced,
+            hasForcedEpilogueVF() ? ElementCount(EpilogueVectorizationForceVF)
+                                  : ElementCount::getFixed(0))) {
+      Config.BackendCosts = BackendCosts.get();
       std::tie(VF, BestPlanPtr) = LVP.computeBestVF();
+      if (!BackendCosts->failed() && BestPlanPtr && VF.Width.isVector()) {
+        auto *C = BackendCosts->lookup(*BestPlanPtr, VF.Width);
+        assert(C && "prepared main cost missing");
+        PreparedEpilogue =
+            LVP.selectBestEpiloguePlan(*BestPlanPtr, VF.Width, C->IC);
+      }
+      if (!BackendCosts->failed()) {
+        BackendCosts->commit();
+        if (!FallbackReason.empty()) {
+          if (vplanBackendFeedbackOutputEnabled())
+            writeVPlanBackendFeedback(
+                json::Object{{"model", BackendCosts->modelName()},
+                             {"requested_model", "tti-real-vector-spill-v1"},
+                             {"effective_model", BackendCosts->modelName()},
+                             {"status", "estimated-fallback"},
+                             {"function", F->getName()},
+                             {"loop", ReportLoopIndex},
+                             {"reason", FallbackReason}});
+          VP_COST_SUMMARY(
+              Config.CostReport,
+              OS << "  backend-fallback effective_model=tti-v1 reason="
+                 << FallbackReason << '\n');
+        }
+        return true; // Scalar selection is a successful model evaluation too.
+      }
+    }
+    if (!FallbackReason.empty())
+      FallbackReason += "; ";
+    FallbackReason +=
+        (BackendCosts->modelName() + ": " + BackendCosts->failure()).str();
+    Config.BackendCosts = nullptr;
+    PreparedEpilogue.reset();
+    LVP.resetVFSelection();
+    BackendCosts.reset();
+    return false;
+  };
+  bool Selected = false;
+  if (BackendFeedback && IsInnerLoop &&
+      Config.CostKind == TTI::TCK_RecipThroughput &&
+      F->getParent()->getTargetTriple().isRISCV() &&
+      TTI->getRegisterBitWidth(TTI::RGK_ScalableVector).getKnownMinValue()) {
+    Selected = TrySelection(VPBackendSpillMode::Observed);
+    if (!Selected && TTI->getVPlanCostProfileName() != "native")
+      Selected = TrySelection(VPBackendSpillMode::Estimated);
+    if (!Selected) {
+      RestoreNativeReport();
+      if (vplanBackendFeedbackOutputEnabled())
+        writeVPlanBackendFeedback(
+            json::Object{{"model", "native"},
+                         {"requested_model", "tti-real-vector-spill-v1"},
+                         {"effective_model", "native"},
+                         {"status", "native-fallback"},
+                         {"function", F->getName()},
+                         {"loop", ReportLoopIndex},
+                         {"reason", FallbackReason}});
     }
   }
+  if (!Selected)
+    std::tie(VF, BestPlanPtr) = SelectPlan();
+  if (BackendProbe && !BestPlanPtr)
+    return false;
   if (NativeReport)
     NativeReport->discard();
   if (BackendProbe) {

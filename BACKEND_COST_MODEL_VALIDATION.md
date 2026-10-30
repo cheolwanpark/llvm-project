@@ -3,6 +3,32 @@
 측정 시점과 compiler identity를 구분한다. 사용법은 [README](README.md),
 비용·probe·TTI 계약은 [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md)에 있다.
 
+## 2026-10-29 — 필요한 관측 실패 시 specific TTI 재시도
+
+`0715e6803` 기반 작업 트리에 whole-loop estimated fallback을 추가했다.
+필요한 관측/가격 계산이 실패하면 specific TTI profile 지원 시 기존 profile
+body `L`로 한 번 재선택하고, 미지원 또는 재시도 실패 시 native로 복귀한다.
+재시도는 probe와 pruning 없이 native scalar 기준·IC 및 기존 강제 요청을
+유지한다. Main/epilogue 시도와 실패 복구를 공통화했으며 실패 시도의 비용,
+pruning, epilogue 및 텍스트/JSONL 보고를 폐기한다.
+
+기존 캐시의 지정 compiler/test targets를 `--parallel 2`로 빌드했다.
+Vectorize unit **88개**, RISCV unit **34개**가 통과했다. Unit 검사는
+specific/native profile, 직렬/batch, 첫 실패·부분 성공·epilogue 실패,
+추정 비용 실패 후 native 복귀, 추정 모델의 scalar 선택 및 후보 재질의
+없음을 확인한다. 네 가지 보고 설정에서 IR·TTI 질의·probe 순서도 동일하다.
+
+기존 native-fallback 기대값을 새 estimated 정책에 맞췄다. 최종 binary에서
+LoopVectorize 전체와 StackSlotColoring lit는
+**985 passed / 377 unsupported / 0 failed**다.
+보고/CFG/pruning 검사는 workers 1/2/4, `B=L`, 관측 비용 누출 없음과
+specific profile 미지원 시 native 보고 복구를 포함한다.
+
+로그는 `.cache/tti-fallback/`의 `build.log`, `build-final.log`, `build-unit.log`,
+`unit-vectorize-final.log`, `unit-riscv.log`, `lit-final.log`에 있다.
+전체 dataset과 성능은 재측정하지 않았다. 아래 결과는 각 당시 binary의 기록이며
+이번 fallback 정책에 대한 dataset 결과로 해석하지 않는다.
+
 ## 2026-10-29 — Integration: CFG 기본 ON 및 자동 candidate pruning
 
 `cf0330d46` 기반 작업 트리에 pruning 브랜치의 기능을 통합했다.

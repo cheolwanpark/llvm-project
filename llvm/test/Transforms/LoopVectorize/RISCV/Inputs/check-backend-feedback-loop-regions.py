@@ -298,8 +298,9 @@ for label, extra in [('summary', ['-print-vplans']), ('detailed', ['-print-detai
     on = run(label + '-on', paths['maps'], True, force + extra)
     assert off[:2] == on[:2] and off[3] == on[3], label
     if label == 'failure':
-        assert any(r['status'] == 'native-fallback' for r in on[1])
-        assert 'backend-cost' not in on[3]
+        assert any(r['status'] == 'estimated-fallback' for r in on[1])
+        assert all(r['model'] == 'tti-v1' for r in on[1])
+        assert 'B=L=' in on[3] and 'B=L-Ev+Sv=' not in on[3]
     else:
         assert on[:3] == results['maps'][1][:3] and 'backend-cost' in on[3]
 

@@ -2,8 +2,8 @@
 
 This LLVM fork selects VPlan vectorization factors using TTI costs and observed
 vector spills. The model is OFF by default. IC and scalar costs retain native
-LLVM policy; a required candidate failure returns the whole loop to native
-selection.
+LLVM policy. A required candidate failure retries the whole loop with specific
+TTI estimated costs when supported, then falls back to native selection if needed.
 
 - [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md): cost model, probe contract, fixed
   XiangShan TTI corrections, and cost-report formats.
@@ -36,10 +36,18 @@ one detailed report per original loop.
   kernel.c -S -o .cache/kernel.s
 ```
 
-Print reports show native LLVM costs when the model is OFF or falls back, and
-exact backend costs when applied. Internal probe clones do not emit cost reports.
+Print reports show native LLVM costs when the model is OFF or falls back to native,
+and exact model costs when applied. Internal probe clones do not emit cost reports.
 The fixed XiangShan profile applies to `xiangshan-kunminghu` with exact VLEN=128;
 other RISC-V CPU/VLEN settings use native TTI with actual vector spill costs.
+
+If a required candidate fails, the whole loop is retried once with the supported
+specific TTI profile, including estimated vector/scalar spills (`B=L`). This retry
+uses no probes or candidate pruning; scalar costs, IC and forced requests retain
+native policy. Scalar selection is also a successful retry. Unsupported profiles
+or a failed retry return to native selection. Failed attempts discard all costs,
+pruning state, prepared epilogues and reports. JSONL distinguishes
+`estimated-fallback` from `native-fallback`; text reports show the final model.
 
 ### Parallel probes
 
@@ -50,8 +58,8 @@ workers use separate LLVM contexts, target machines and analyses. The default
 `1` uses serial clones. With cost-bound pruning, failures are deferred until
 dominance is resolved; otherwise it stops at the first required failure.
 Automatic epilogue queries remain serial; forced epilogues remain part of main
-probes. The pressure gate is unchanged. A surviving required failure returns the
-whole loop to native selection.
+probes. The pressure gate and whole-loop fallback policy are independent of the
+worker count. All workers finish before a retry starts.
 
 ```sh
 .cache/build/bin/clang --target=riscv64-unknown-elf \
@@ -108,9 +116,9 @@ pruning/cancellation; the CFG switch still controls probe reduction independentl
 
 Queries run in stable zero-spill cost order. Eligible completed costs, gate-skip
 costs and permitted scalar selection bound other queries. Only strictly losing
-candidates are removed; ties are measured. Dominated failures no longer require
-native fallback, so final VF or scalar selection can change. A surviving required
-failure still discards all backend costs for the loop.
+candidates are removed; ties are measured. Dominated failures do not trigger
+fallback. A surviving required failure discards the attempt and applies the
+whole-loop fallback policy above.
 
 `-vplan-backend-pruning-trace` reports CFG applicability and sizes;
 `-vplan-backend-pruning-dump-ir` dumps `before`, `after` and `suffix` stages.

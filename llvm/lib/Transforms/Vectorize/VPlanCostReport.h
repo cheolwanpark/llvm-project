@@ -137,7 +137,7 @@ public:
                    const VPlanBackendResult *Observation,
                    ArrayRef<InstructionCost> AccessCosts, unsigned Width,
                    StringRef ProfileName, InstructionCost Raw,
-                   VPExactCost Spill);
+                   VPExactCost Spill, VPBackendSpillMode Mode);
   unsigned registerPlan(const VPlan &Plan);
   unsigned planID(const VPlan &Plan) { return registerPlan(Plan); }
   void forgetPlan(const VPlan &Plan) { PlanIDs.erase(&Plan); }

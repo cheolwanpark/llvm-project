@@ -63,7 +63,8 @@ for source in ["backend-feedback-candidate-pruning.ll",
         assert not any(r["status"] == "pruned" for r in new_rows)
 
 _, rows = run("backend-feedback-spills.ll", True, 4, ["-disable-ssc"])
-assert any(r["status"] == "native-fallback" for r in rows)
+assert any(r["status"] == "estimated-fallback" for r in rows)
+assert all(r["model"] == "tti-v1" for r in rows)
 
 help_result = subprocess.run([opt, "--help-hidden"], capture_output=True,
                              text=True, timeout=120)
