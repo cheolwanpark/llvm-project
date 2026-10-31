@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 namespace llvm {
+enum class VPlanBackendCandidateKind : uint8_t { Vector, ScalarBaseline };
 enum class VPlanBackendObservationKind { VectorSpills, MIRBody };
 struct VPlanBackendObservationOptions {
   VPlanBackendObservationKind Kind = VPlanBackendObservationKind::VectorSpills;
@@ -62,6 +63,7 @@ struct VPlanBackendResult {
   ElementCount VF = ElementCount::getFixed(0);
   unsigned IC = 0;
   bool IsEpilogue = false;
+  VPlanBackendCandidateKind Kind = VPlanBackendCandidateKind::Vector;
   uint64_t IterationWidth = 0;
   bool IterationMapping = false;
   std::string Stage = "post-stack-slot-coloring";

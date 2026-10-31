@@ -576,6 +576,7 @@ struct VectorizationFactor {
   /// Cost of the scalar loop.
   InstructionCost ScalarCost;
   std::optional<VPExactCost> ExactCost;
+  std::optional<VPExactCost> ExactScalarCost;
 
   /// The minimum trip count required to make vectorization profitable, e.g. due
   /// to runtime checks.
@@ -870,6 +871,9 @@ class LoopVectorizationPlanner {
   OptimizationRemarkEmitter *ORE;
 
   SmallVector<VPlanPtr, 4> VPlans;
+  /// The original scalar VF=1 base, before candidate-specific lowering. Its
+  /// pressure estimate must also be available when the user forces a vector VF.
+  VPlanPtr ScalarPressurePlan;
 
   /// Profitable vector factors.
   SmallVector<VectorizationFactor, 8> ProfitableVFs;
@@ -915,6 +919,12 @@ public:
                                        bool Profile,
                                        InstructionCost &VectorSpill,
                                        InstructionCost *TotalSpill = nullptr);
+  /// Scalar IR baseline for this explicit backend selection attempt. Scope
+  /// only these queries; IC, planning and probe optimization stay native.
+  InstructionCost backendScalarCost(VPlanBackendMode Mode);
+  InstructionCost backendScalarSpillCost(VPlanBackendMode Mode);
+  InstructionCost backendSpillCost(VPlan &Plan, ElementCount VF,
+                                   VPlanBackendMode Mode);
   unsigned limitBackendIC(VPlan &Plan, unsigned IC) const;
   StringRef candidateRejection(VPlan &Plan, ElementCount VF) const;
   void resetVFSelection() {
@@ -927,8 +937,10 @@ public:
   /// for each VF.
   VPlan &getPlanFor(ElementCount VF) const;
 
-  /// Return the selection context when cost-bound pruning is supported.
-  std::optional<VPBackendPruningContext> backendPruningContext();
+  /// Return the pruning context using the scalar cost prepared for this TTI
+  /// attempt. Do not reprice the baseline during lower-bound preparation.
+  std::optional<VPBackendPruningContext>
+  backendPruningContext(InstructionCost Scalar);
   /// Whether the candidate may supply a bound for rejecting other candidates.
   bool backendPruningEligible(VPlan &Plan, ElementCount VF);
 

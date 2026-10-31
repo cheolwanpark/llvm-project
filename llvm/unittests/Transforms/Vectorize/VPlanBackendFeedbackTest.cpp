@@ -7,6 +7,7 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/SourceMgr.h"
 #include "gtest/gtest.h"
 #include <condition_variable>
@@ -61,6 +62,23 @@ TEST(VPlanBackendFeedback, EmptySingletonAndMalformedBatch) {
   ASSERT_FALSE(bool(Unavailable));
   EXPECT_EQ(toString(Unavailable.takeError()),
             "backend feedback provider unavailable");
+}
+
+TEST(VPlanBackendFeedback, ScalarObservationRole) {
+  VPlanBackendCandidate Candidate{"scalar", 0, ElementCount::getFixed(1),
+                                  true, false, false};
+  EXPECT_EQ(Candidate.Kind, VPlanBackendCandidateKind::Vector);
+  VPlanBackendResult Result;
+  EXPECT_EQ(Result.Kind, VPlanBackendCandidateKind::Vector);
+  Result.Candidate = Candidate.ID;
+  Result.Kind = VPlanBackendCandidateKind::ScalarBaseline;
+  Result.VF = ElementCount::getFixed(1);
+  Result.IC = 1;
+  Result.Stage = "post-frame-lowering";
+  Result.MIRBody.emplace();
+  auto Summary = summarizeVPlanBackendResult(Result);
+  EXPECT_EQ(Summary.getString("observation_role"), "scalar-baseline");
+  EXPECT_EQ(Summary.getString("schema"), "mir-body-observation-v1");
 }
 
 TEST(VPlanBackendFeedback, PoolOverlapBoundOrderingAndReuse) {
@@ -215,4 +233,66 @@ TEST(VPlanBackendFeedback, BatchPolicyDoesNotResetInvocationDiagnostics) {
   EXPECT_EQ(Starts, 1u);
   Service.beginInvocation();
   EXPECT_EQ(Starts, 2u);
+}
+
+TEST(VPlanBackendFeedback, ScalarIterationMappingRequiresAffineWitness) {
+  LLVMContext C;
+  SMDiagnostic Error;
+  auto M = parseAssemblyString(R"(
+    define void @f(i64 %n) "vplan.backend.candidate"="scalar"
+        "vplan.backend.width"="1" {
+    entry: br label %loop
+    loop:
+      %iv = phi i64 [ 0, %entry ], [ %next, %loop ], !vplan.backend.induction !2
+      %next = add nuw i64 %iv, 4
+      %stop = icmp eq i64 %next, %n
+      br i1 %stop, label %exit, label %loop, !llvm.loop !0
+    exit: ret void
+    }
+    !0 = distinct !{!0, !1}
+    !1 = !{!"llvm.loop.vplan.backend.candidate", !"scalar"}
+    !2 = !{i64 1, i1 false}
+  )",
+                               Error, C);
+  ASSERT_TRUE(M);
+  Function &F = *M->getFunction("f");
+  PassBuilder PB;
+  FunctionAnalysisManager FAM;
+  LoopAnalysisManager LAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerModuleAnalyses(MAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+  finalizeVPlanBackendIterationMapping(F, FAM);
+  EXPECT_EQ(F.getFnAttribute("vplan.backend.iteration-mapping")
+                .getValueAsString(),
+            "1");
+  EXPECT_EQ(F.getFnAttribute("vplan.backend.width").getValueAsString(), "4");
+
+  F.addFnAttr("vplan.backend.width", "4294967295");
+  finalizeVPlanBackendIterationMapping(F, FAM);
+  EXPECT_EQ(F.getFnAttribute("vplan.backend.iteration-mapping")
+                .getValueAsString(),
+            "0");
+
+  auto *Loop = FAM.getResult<LoopAnalysis>(F).getLoopsInPreorder().front();
+  auto &Phi = *Loop->getHeader()->phis().begin();
+  Phi.setMetadata("vplan.backend.induction", nullptr);
+  F.addFnAttr("vplan.backend.width", "1");
+  finalizeVPlanBackendIterationMapping(F, FAM);
+  EXPECT_EQ(F.getFnAttribute("vplan.backend.iteration-mapping")
+                .getValueAsString(),
+            "0");
+  EXPECT_EQ(F.getFnAttribute("vplan.backend.width").getValueAsString(), "1");
+
+  // A marker lost by loop removal/transformation cannot become a zero-cost
+  // scalar observation, even if an induction-like phi remains.
+  Loop->setLoopID(nullptr);
+  finalizeVPlanBackendIterationMapping(F, FAM);
+  EXPECT_EQ(F.getFnAttribute("vplan.backend.iteration-mapping")
+                .getValueAsString(),
+            "0");
 }

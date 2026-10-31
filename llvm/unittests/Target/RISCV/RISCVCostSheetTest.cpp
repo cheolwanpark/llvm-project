@@ -190,3 +190,99 @@ TEST(TargetCostSheets, SaturnAndK1ServiceCosts) {
   ASSERT_TRUE(bool(SC));
   EXPECT_EQ(SC->Numerator, 4);
 }
+
+TEST(SpacemitK1CostSheet, InstructionFormOccupancyTables) {
+  SpacemitK1CostSheet Sheet;
+  struct Row {
+    const char *Opcode;
+    unsigned SEW;
+    unsigned Costs[7];
+  };
+  const Row Rows[] = {
+      {"VSLIDEUP_VX", 8, {1, 1, 1, 2, 4, 8, 16}},
+      {"VSLIDEDOWN_VX", 8, {1, 1, 1, 3, 5, 9, 17}},
+      {"VSLIDEUP_VI", 8, {1, 1, 1, 3, 5, 9, 17}},
+      {"VSLIDEDOWN_VI", 8, {1, 1, 1, 3, 5, 9, 17}},
+      {"VSLIDE1UP_VX", 8, {1, 1, 1, 3, 5, 9, 17}},
+      {"VSLIDE1DOWN_VX", 8, {1, 1, 1, 3, 5, 9, 17}},
+      {"VFSLIDE1UP_VF", 16, {1, 1, 1, 3, 5, 9, 17}},
+      {"VFSLIDE1DOWN_VF", 16, {1, 1, 1, 3, 5, 9, 17}},
+      {"VRGATHER_VX", 8, {1, 1, 1, 2, 4, 8, 16}},
+      {"VRGATHER_VI", 8, {1, 1, 1, 2, 4, 8, 16}},
+      {"VRGATHER_VV", 8, {1, 1, 1, 4, 16, 64, 256}},
+      {"VRGATHEREI16_VV", 8, {1, 1, 2, 8, 32, 128, 256}},
+      {"VRGATHEREI16_VV", 16, {1, 1, 1, 4, 16, 64, 256}},
+      {"VRGATHEREI16_VV", 32, {1, 1, 1, 4, 16, 64, 256}},
+      {"VRGATHEREI16_VV", 64, {1, 1, 1, 4, 16, 64, 256}},
+      {"VCOMPRESS_VM", 8, {1, 1, 1, 3, 10, 36, 136}},
+      {"VREDSUM_VS", 8, {1, 1, 2, 2, 4, 10, 35}},
+      {"VREDAND_VS", 8, {1, 1, 2, 2, 4, 10, 35}},
+      {"VREDOR_VS", 8, {1, 1, 2, 2, 4, 10, 35}},
+      {"VREDXOR_VS", 8, {1, 1, 2, 2, 4, 10, 35}},
+      {"VREDMIN_VS", 8, {1, 1, 2, 2, 4, 10, 35}},
+      {"VREDMINU_VS", 8, {1, 1, 2, 2, 4, 10, 35}},
+      {"VREDMAX_VS", 8, {1, 1, 2, 2, 4, 10, 35}},
+      {"VREDMAXU_VS", 8, {1, 1, 2, 2, 4, 10, 35}},
+      {"VWREDSUM_VS", 8, {1, 1, 2, 2, 4, 10, 35}},
+      {"VWREDSUMU_VS", 8, {1, 1, 2, 2, 4, 10, 35}},
+      {"VFREDUSUM_VS", 16, {8, 8, 8, 8, 14, 20, 57}},
+      {"VFREDMIN_VS", 32, {8, 8, 8, 8, 14, 20, 57}},
+      {"VFREDMAX_VS", 64, {8, 8, 8, 8, 14, 20, 57}},
+      {"VFREDOSUM_VS", 16, {8, 8, 20, 24, 48, 96, 384}},
+      {"VFREDOSUM_VS", 32, {8, 8, 8, 12, 24, 48, 192}},
+      {"VFREDOSUM_VS", 64, {6, 6, 6, 6, 12, 24, 96}},
+      {"VFWREDOSUM_VS", 16, {11, 11, 27, 32, 64, 128, 512}},
+      {"VFWREDUSUM_VS", 16, {11, 11, 27, 32, 64, 128, 512}},
+      {"VFWREDOSUM_VS", 32, {11, 11, 11, 16, 32, 64, 256}},
+      {"VFWREDUSUM_VS", 32, {11, 11, 11, 16, 32, 64, 256}},
+  };
+  for (const auto &R : Rows) {
+    SCOPED_TRACE(R.Opcode);
+    for (unsigned I = 0; I != 7; ++I) {
+      unsigned G = 1u << I;
+      auto Q = op(R.Opcode, G, R.SEW);
+      // Preserve the common validator's LMUL/SEW and wide-EMUL decisions.
+      auto Valid = RISCVCostSheet(256).getInstructionCost(Q);
+      auto Cost = Sheet.getInstructionCost(Q);
+      if (!Valid) {
+        consumeError(Valid.takeError());
+        EXPECT_FALSE(bool(Cost));
+        if (!Cost)
+          consumeError(Cost.takeError());
+        continue;
+      }
+      ASSERT_TRUE(bool(Cost)) << (Cost ? "" : toString(Cost.takeError()));
+      EXPECT_EQ(Cost->Numerator, R.Costs[I]) << "LMUL8=" << G;
+      EXPECT_EQ(Cost->Denominator, 1);
+      EXPECT_FALSE(Cost->Unknown);
+      EXPECT_NE(Cost->Rule.find("schedule-"), std::string::npos);
+    }
+  }
+  EXPECT_EQ(Sheet.getRevision(), "llvm-x60-occupancy-v2");
+}
+
+TEST(SpacemitK1CostSheet, ExplicitIterativeFormsAndUnknownOpcodes) {
+  SpacemitK1CostSheet Sheet;
+  for (unsigned G : {1u, 2u, 4u, 8u, 16u, 32u, 64u})
+    for (unsigned SEW : {16u, 32u, 64u})
+      for (StringRef Name : {"VFDIV_VF", "VFRDIV_VF", "VFDIV_VV", "VFSQRT_V"}) {
+        if (32 * G < SEW)
+          continue;
+        auto Cost = Sheet.getInstructionCost(op(Name, G, SEW));
+        ASSERT_TRUE(bool(Cost));
+        unsigned Unit = Name.ends_with("_VF") ? (SEW == 64 ? 40 : 12)
+                                               : (SEW == 16 ? 12 : 40);
+        EXPECT_EQ(Cost->Numerator, Unit * std::max(1u, G / 8));
+        EXPECT_FALSE(Cost->Unknown);
+      }
+  for (StringRef Name : {"VSLIDE_UNREVIEWED", "VFRED_UNKNOWN", "VFDIV_UNKNOWN"}) {
+    auto Cost = Sheet.getInstructionCost(op(Name, 8, 32));
+    ASSERT_TRUE(bool(Cost));
+    EXPECT_TRUE(Cost->Unknown);
+    EXPECT_EQ(Cost->Numerator, 1);
+  }
+  auto Invalid = Sheet.getInstructionCost(op("VFWREDOSUM_VS", 8, 64));
+  EXPECT_FALSE(bool(Invalid));
+  if (!Invalid)
+    consumeError(Invalid.takeError());
+}

@@ -171,9 +171,13 @@ static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
   auto Role = F.getFnAttribute("vplan.backend.role").getValueAsString();
   auto VF = attr(F, "vplan.backend.vf"), IC = attr(F, "vplan.backend.ic");
   auto Width = attr(F, "vplan.backend.width");
+  bool Scalar = Role == "scalar-baseline";
   if (ID.empty() || VF <= 0 || VF > UINT32_MAX || IC <= 0 || IC > UINT32_MAX ||
-      (Role != "main" && Role != "epilogue"))
+      (Role != "main" && Role != "epilogue" && !Scalar))
     return createStringError("invalid backend candidate identity");
+  if (Scalar && (!MIR || VF != 1 || IC != 1 ||
+                 attr(F, "vplan.backend.scalable") != 0))
+    return createStringError("invalid scalar baseline observation identity");
   if (attr(F, "vplan.backend.iteration-mapping") != 1 || Width <= 0)
     return createStringError("original scalar iteration mapping is unproven");
   MachineDominatorTree DT(MF);
@@ -196,6 +200,8 @@ static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
   Result.VF = ElementCount::get(VF, attr(F, "vplan.backend.scalable") != 0);
   Result.IC = IC;
   Result.IsEpilogue = Role == "epilogue";
+  Result.Kind = Scalar ? VPlanBackendCandidateKind::ScalarBaseline
+                       : VPlanBackendCandidateKind::Vector;
   Result.IterationWidth = Width;
   Result.IterationMapping = true;
   if (MIR) {

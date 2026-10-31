@@ -77,7 +77,7 @@ for workers in (1, 2, 4):
         assert not any('fallback' in r['status'] for r in rows)
         dots = [r for r in rows if r['function'] == 'dot4']
         assert all(r['status'] == 'pruned' and r['pruning_basis'] == 'scalar'
-                   for r in dots if 'candidate' in r)
+                   for r in dots if 'candidate' in r and r.get('role') != 'scalar-baseline')
         assert any(r['status'] == 'selected' and r['vf'] == 1 for r in dots)
         gates = [r for r in rows if r['function'] == 'gate']
         assert any(r['status'] == 'skipped' and r['cost_source'] == 'gate' for r in gates)
@@ -144,7 +144,7 @@ for mir in (False, True):
             else:
                 assert all(r['model'] == 'tti-v1' for r in rows)
                 assert all(r['reason'] == 'estimated-spill-no-probe'
-                           for r in rows if 'candidate' in r)
+                           for r in rows if 'candidate' in r and r.get('role') != 'scalar-baseline')
                 assert ' B=L=' in text and ' B=R=' not in text
 
 # Other RVV CPUs and VLENs now select the executable generic MIR sheet.
@@ -155,7 +155,7 @@ for name, flags, src in [('cpu', ['-mcpu=generic-rv64'], basic),
     native, _, _ = run(name + '-native', flags, src)
     ir, rows, _ = run(name, flags + ['-vplan-backend', '-use-mir'], src)
     assert not any('fallback' in r['status'] for r in rows)
-    candidates = [r for r in rows if 'candidate' in r]
+    candidates = [r for r in rows if 'candidate' in r and r.get('role') != 'scalar-baseline']
     assert candidates and all(r['mir_model'] == 'riscv-generic-direct-v1' for r in candidates)
     assert any(r['status'] == 'selected' for r in rows)
 

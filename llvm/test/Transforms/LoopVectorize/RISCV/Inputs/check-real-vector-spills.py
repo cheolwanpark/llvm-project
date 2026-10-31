@@ -3,7 +3,7 @@ import sys
 from fractions import Fraction
 rows = [json.loads(line) for line in open(sys.argv[1])]
 assert not any(r['status'] == 'native-fallback' for r in rows), rows
-candidates = [r for r in rows if 'candidate' in r]
+candidates = [r for r in rows if 'candidate' in r and r.get('role') != 'scalar-baseline']
 assert candidates and all(r['status'] == 'collected' for r in candidates)
 spilling = [r for r in candidates if r['raw_vector_spill_quarters'] > 0]
 assert spilling, rows

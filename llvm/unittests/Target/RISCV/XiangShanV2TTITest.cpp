@@ -1,5 +1,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+#include "SpacemitK1TargetTransformInfo.h"
 #include "XiangShanV2TargetTransformInfo.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/AsmParser/Parser.h"
@@ -411,5 +412,235 @@ TEST_F(XiangShanV2TTITest, SaturnAndK1FactoryScopes) {
       EXPECT_EQ(TTI.getArithmeticInstrCost(Instruction::Add, Ty, K), 4);
     }
     EXPECT_EQ(TTI.getArithmeticInstrCost(Instruction::Add, Ty, K), Native);
+  }
+}
+
+TEST_F(XiangShanV2TTITest, ScalarPricesUseConfiguredProfileAndRestoreScope) {
+  using TTI = TargetTransformInfo;
+  const auto K = TTI::TCK_RecipThroughput;
+  auto *I64 = Type::getInt64Ty(C);
+  auto *F32 = Type::getFloatTy(C);
+  auto *F64 = Type::getDoubleTy(C);
+  TTI::OperandValueInfo PowerTwo{TTI::OK_UniformConstantValue,
+                                TTI::OP_PowerOf2};
+  for (StringRef CPU : {"xiangshan-kunminghu", "saturn-shuttle-v256d128",
+                        "spacemit-x60"}) {
+    SCOPED_TRACE(CPU.str());
+    bool XiangShan = CPU == "xiangshan-kunminghu";
+    bool Saturn = CPU == "saturn-shuttle-v256d128";
+    F->addFnAttr("tune-cpu", CPU);
+    unsigned VScale = XiangShan ? 2 : 4;
+    F->addFnAttr(Attribute::getWithVScaleRangeArgs(C, VScale, VScale));
+    auto Tuned = TM->getTargetTransformInfo(*F);
+    auto NativeDiv = Tuned.getArithmeticInstrCost(Instruction::UDiv, I64, K);
+    auto NativeStore = Tuned.getMemoryOpCost(Instruction::Store, F64, Align(8),
+                                            0, K);
+    IntrinsicCostAttributes Sqrt(Intrinsic::sqrt, F64,
+                                 ArrayRef<Type *>{F64});
+    auto NativeSqrt = Tuned.getIntrinsicInstrCost(Sqrt, K);
+    auto NativeCast = Tuned.getCastInstrCost(
+        Instruction::FPToSI, I64, F64, TTI::CastContextHint::None, K);
+    {
+      VPlanCostProfileScope Scope(true);
+      for (unsigned Opcode : {Instruction::Add, Instruction::Sub,
+                              Instruction::Mul, Instruction::And})
+        EXPECT_EQ(Tuned.getArithmeticInstrCost(Opcode, I64, K), 1);
+      const unsigned FPOpcodes[] = {Instruction::FAdd, Instruction::FSub,
+                                    Instruction::FMul, Instruction::FNeg};
+      for (unsigned Opcode : FPOpcodes)
+        EXPECT_EQ(Tuned.getArithmeticInstrCost(Opcode, F64, K), 1);
+      EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::UDiv, I64, K),
+                XiangShan ? 23 : Saturn ? 64 : 20);
+      EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::URem, I64, K),
+                XiangShan ? 23 : Saturn ? 64 : 20);
+      EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::FDiv, F32, K),
+                XiangShan ? 9 : Saturn ? 64 : 15);
+      EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::FDiv, F64, K),
+                XiangShan ? 14 : Saturn ? 64 : 22);
+      for (unsigned Opcode : {Instruction::UDiv, Instruction::URem})
+        for (Type *Ty : {Type::getInt32Ty(C), I64})
+          EXPECT_EQ(Tuned.getArithmeticInstrCost(Opcode, Ty, K, {}, PowerTwo),
+                    1);
+      EXPECT_EQ(Tuned.getMemoryOpCost(Instruction::Load, I64, Align(8), 0, K),
+                1);
+      EXPECT_EQ(Tuned.getMemoryOpCost(Instruction::Store, F64, Align(8), 0, K),
+                XiangShan ? 2 : 1);
+      EXPECT_EQ(Tuned.getIntrinsicInstrCost(Sqrt, K),
+                XiangShan ? 16 : Saturn ? 64 : 22);
+      IntrinsicCostAttributes FMA(Intrinsic::fma, F64,
+                                 ArrayRef<Type *>{F64, F64, F64});
+      EXPECT_EQ(Tuned.getIntrinsicInstrCost(FMA, K), 1);
+      EXPECT_EQ(Tuned.getCastInstrCost(Instruction::FPToSI, I64, F64,
+                                       TTI::CastContextHint::None, K),
+                1);
+      EXPECT_EQ(Tuned.getCastInstrCost(Instruction::FPExt, F64, F32,
+                                       TTI::CastContextHint::None, K),
+                1);
+      {
+        VPlanCostProfileScope NativeScope(false);
+        EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::UDiv, I64, K),
+                  NativeDiv);
+        EXPECT_EQ(Tuned.getIntrinsicInstrCost(Sqrt, K), NativeSqrt);
+        EXPECT_EQ(Tuned.getCastInstrCost(Instruction::FPToSI, I64, F64,
+                                         TTI::CastContextHint::None, K),
+                  NativeCast);
+      }
+      EXPECT_TRUE(VPlanCostProfileScope::active());
+    }
+    EXPECT_FALSE(VPlanCostProfileScope::active());
+    EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::UDiv, I64, K),
+              NativeDiv);
+    EXPECT_EQ(Tuned.getMemoryOpCost(Instruction::Store, F64, Align(8), 0, K),
+              NativeStore);
+  }
+}
+
+namespace {
+class ExposedK1TTI : public SpacemitK1TTIImpl {
+public:
+  using RISCVTTIImpl::getRISCVInstructionCost;
+  using SpacemitK1TTIImpl::SpacemitK1TTIImpl;
+};
+} // namespace
+TEST_F(XiangShanV2TTITest, K1OccupancyFormsMatchMIRSheet) {
+  F->addFnAttr("tune-cpu", "spacemit-x60");
+  F->addFnAttr(Attribute::getWithVScaleRangeArgs(C, 4, 4));
+  ExposedK1TTI TTI(static_cast<RISCVTargetMachine *>(TM.get()), *F);
+  VPlanCostProfileScope Scope(true);
+  auto K = TargetTransformInfo::TCK_RecipThroughput;
+  struct Operation {
+    unsigned Opcode;
+    const char *Name;
+    bool Floating;
+    bool Widening;
+  };
+  const Operation Ops[] = {
+      {RISCV::VSLIDEUP_VX, "VSLIDEUP_VX", false, false},
+      {RISCV::VSLIDEDOWN_VX, "VSLIDEDOWN_VX", false, false},
+      {RISCV::VSLIDEUP_VI, "VSLIDEUP_VI", false, false},
+      {RISCV::VSLIDEDOWN_VI, "VSLIDEDOWN_VI", false, false},
+      {RISCV::VSLIDE1UP_VX, "VSLIDE1UP_VX", false, false},
+      {RISCV::VSLIDE1DOWN_VX, "VSLIDE1DOWN_VX", false, false},
+      {RISCV::VFSLIDE1UP_VF, "VFSLIDE1UP_VF", true, false},
+      {RISCV::VFSLIDE1DOWN_VF, "VFSLIDE1DOWN_VF", true, false},
+      {RISCV::VRGATHER_VX, "VRGATHER_VX", false, false},
+      {RISCV::VRGATHER_VI, "VRGATHER_VI", false, false},
+      {RISCV::VRGATHER_VV, "VRGATHER_VV", false, false},
+      {RISCV::VRGATHEREI16_VV, "VRGATHEREI16_VV", false, false},
+      {RISCV::VCOMPRESS_VM, "VCOMPRESS_VM", false, false},
+      {RISCV::VREDSUM_VS, "VREDSUM_VS", false, false},
+      {RISCV::VWREDSUMU_VS, "VWREDSUMU_VS", false, true},
+      {RISCV::VFREDUSUM_VS, "VFREDUSUM_VS", true, false},
+      {RISCV::VFREDMIN_VS, "VFREDMIN_VS", true, false},
+      {RISCV::VFREDMAX_VS, "VFREDMAX_VS", true, false},
+      {RISCV::VFREDOSUM_VS, "VFREDOSUM_VS", true, false},
+      {RISCV::VFWREDOSUM_VS, "VFWREDOSUM_VS", true, true},
+      {RISCV::VFWREDUSUM_VS, "VFWREDUSUM_VS", true, true},
+      {RISCV::VFDIV_VF, "VFDIV_VF", true, false},
+      {RISCV::VFRDIV_VF, "VFRDIV_VF", true, false},
+      {RISCV::VFDIV_VV, "VFDIV_VV", true, false},
+      {RISCV::VFSQRT_V, "VFSQRT_V", true, false},
+  };
+  for (const auto &O : Ops) {
+    SCOPED_TRACE(O.Name);
+    for (unsigned SEW : {8u, 16u, 32u, 64u}) {
+      if ((O.Floating && SEW == 8) || (O.Widening && SEW == 64))
+        continue;
+      MVT Elem = O.Floating ? (SEW == 16 ? MVT::f16
+                               : SEW == 32 ? MVT::f32 : MVT::f64)
+                             : MVT::getIntegerVT(SEW);
+      for (unsigned G : {1u, 2u, 4u, 8u, 16u, 32u, 64u}) {
+        // A scalable MVT's vscale=1 minimum must contain a whole element.
+        if (G * 8 < SEW || (O.Widening && !O.Floating && G == 64))
+          continue;
+        MVT VT = MVT::getScalableVectorVT(Elem, G * 8 / SEW);
+        if (!VT.isValid())
+          continue;
+        VPlanMIRInstruction Q;
+        Q.BaseOpcode = O.Name;
+        Q.Vector = true;
+        Q.LMUL8 = G;
+        Q.SEW = SEW;
+        auto Price = SpacemitK1CostSheet().getInstructionCost(Q);
+        ASSERT_TRUE(bool(Price));
+        EXPECT_FALSE(Price->Unknown);
+        EXPECT_EQ(TTI.getRISCVInstructionCost({O.Opcode}, VT, K),
+                  InstructionCost(Price->Numerator) / Price->Denominator)
+            << "LMUL8=" << G << " SEW=" << SEW;
+      }
+    }
+  }
+}
+
+
+TEST_F(XiangShanV2TTITest, K1PublicExtendedReductionUsesWideningForms) {
+  F->addFnAttr("tune-cpu", "spacemit-x60");
+  F->addFnAttr("target-features", "+v,+zvfh");
+  F->addFnAttr(Attribute::getWithVScaleRangeArgs(C, 4, 4));
+  auto Public = TM->getTargetTransformInfo(*F);
+  ExposedK1TTI Direct(static_cast<RISCVTargetMachine *>(TM.get()), *F);
+  const auto K = TargetTransformInfo::TCK_RecipThroughput;
+  FastMathFlags Ordered, Unordered;
+  Unordered.setAllowReassoc();
+  for (unsigned Bits : {16u, 32u}) {
+    Type *Input = Bits == 16 ? Type::getHalfTy(C) : Type::getFloatTy(C);
+    Type *Result = Bits == 16 ? Type::getFloatTy(C) : Type::getDoubleTy(C);
+    for (unsigned G : {8u, 16u, 32u, 64u}) {
+      auto *Ty = ScalableVectorType::get(Input, G * 8 / Bits);
+      MVT VT = MVT::getScalableVectorVT(Bits == 16 ? MVT::f16 : MVT::f32,
+                                       G * 8 / Bits);
+      for (FastMathFlags Flags : {Ordered, Unordered}) {
+        auto Native = Public.getExtendedReductionCost(Instruction::FAdd, false,
+                                                       Result, Ty, Flags, K);
+        {
+          VPlanCostProfileScope Scope(true);
+          unsigned Reduction = Flags.allowReassoc() ? RISCV::VFWREDUSUM_VS
+                                                    : RISCV::VFWREDOSUM_VS;
+          auto Expected = Direct.getRISCVInstructionCost(
+              {RISCV::VFMV_S_F, Reduction, RISCV::VFMV_F_S}, VT, K);
+          EXPECT_EQ(Public.getExtendedReductionCost(Instruction::FAdd, false,
+                                                    Result, Ty, Flags, K),
+                    Expected);
+          // The public hook must not substitute the single-width FP table.
+          EXPECT_NE(Expected, Public.getArithmeticReductionCost(
+                                  Instruction::FAdd, Ty, Flags, K));
+          {
+            VPlanCostProfileScope NativeScope(false);
+            EXPECT_EQ(Public.getExtendedReductionCost(Instruction::FAdd, false,
+                                                      Result, Ty, Flags, K),
+                      Native);
+          }
+        }
+        EXPECT_EQ(Public.getExtendedReductionCost(Instruction::FAdd, false,
+                                                  Result, Ty, Flags, K),
+                  Native);
+      }
+    }
+  }
+  for (bool Unsigned : {false, true}) {
+    auto *Ty = ScalableVectorType::get(Type::getInt16Ty(C), 4);
+    Type *Result = Type::getInt32Ty(C);
+    auto Native = Public.getExtendedReductionCost(Instruction::Add, Unsigned,
+                                                   Result, Ty, std::nullopt, K);
+    {
+      VPlanCostProfileScope Scope(true);
+      auto Expected = Direct.getRISCVInstructionCost(
+          {RISCV::VMV_S_X,
+           Unsigned ? RISCV::VWREDSUMU_VS : RISCV::VWREDSUM_VS,
+           RISCV::VMV_X_S}, MVT::nxv4i16, K);
+      EXPECT_EQ(Public.getExtendedReductionCost(Instruction::Add, Unsigned,
+                                                Result, Ty, std::nullopt, K),
+                Expected);
+      // A non-2:1 pattern retains its inherited legalization and costing.
+      EXPECT_EQ(Public.getExtendedReductionCost(
+                    Instruction::Add, Unsigned, Type::getInt64Ty(C), Ty,
+                    std::nullopt, K),
+                Direct.RISCVTTIImpl::getExtendedReductionCost(
+                    Instruction::Add, Unsigned, Type::getInt64Ty(C), Ty,
+                    std::nullopt, K));
+    }
+    EXPECT_EQ(Public.getExtendedReductionCost(Instruction::Add, Unsigned,
+                                              Result, Ty, std::nullopt, K),
+              Native);
   }
 }

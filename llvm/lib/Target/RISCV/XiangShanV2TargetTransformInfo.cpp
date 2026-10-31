@@ -204,6 +204,13 @@ InstructionCost XiangShanV2TTIImpl::getArithmeticInstrCost(
     TTI::OperandValueInfo O1, TTI::OperandValueInfo O2,
     ArrayRef<const Value *> Args, const Instruction *I) const {
   if (active(Kind) && !Ty->isVectorTy()) {
+    // Preserve the native lowering simplification before pricing a divide.
+    if ((Opcode == Instruction::UDiv || Opcode == Instruction::URem) &&
+        O2.isConstant() && O2.isPowerOf2())
+      return getArithmeticInstrCost(Opcode == Instruction::UDiv
+                                        ? Instruction::LShr
+                                        : Instruction::And,
+                                    Ty, Kind, O1, O2.getNoProps());
     auto LT = getTypeLegalizationCost(Ty);
     StringRef Op;
     bool FP = Ty->isFloatingPointTy();

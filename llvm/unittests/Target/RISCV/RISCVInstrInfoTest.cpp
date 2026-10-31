@@ -9,6 +9,7 @@
 #include "RISCVInstrInfo.h"
 #include "RISCVSubtarget.h"
 #include "RISCVTargetMachine.h"
+#include "RISCVVPlanMIR.h"
 #include "RISCVVPlanSpill.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
@@ -148,6 +149,91 @@ TEST_P(RISCVInstrInfoTest, SpillLoopMappingAndLifetime) {
   EXPECT_EQ(Result->Candidate, "owned:test");
   EXPECT_EQ(Result->VF, ElementCount::getScalable(4));
   EXPECT_EQ(Result->Stage, "post-stack-slot-coloring");
+}
+
+TEST_P(RISCVInstrInfoTest, ScalarMIRIdentityAndSpillSlots) {
+  Function &F = MF->getFunction();
+  F.addFnAttr("vplan.backend.candidate", "owned:scalar-baseline");
+  F.addFnAttr("vplan.backend.vf", "1");
+  F.addFnAttr("vplan.backend.scalable", "0");
+  F.addFnAttr("vplan.backend.ic", "1");
+  F.addFnAttr("vplan.backend.role", "scalar-baseline");
+  F.addFnAttr("vplan.backend.width", "4");
+  F.addFnAttr("vplan.backend.iteration-mapping", "1");
+  auto *Entry = BasicBlock::Create(*Ctx, "entry", &F);
+  auto *Body = BasicBlock::Create(*Ctx, "body", &F);
+  UncondBrInst::Create(Body, Entry);
+  auto *Backedge = UncondBrInst::Create(Body, Body);
+  auto *Tag = MDNode::get(
+      *Ctx, {MDString::get(*Ctx, "llvm.loop.vplan.backend.candidate"),
+             MDString::get(*Ctx, "owned:scalar-baseline")});
+  auto *LoopID = MDNode::getDistinct(*Ctx, {nullptr, Tag});
+  LoopID->replaceOperandWith(0, LoopID);
+  Backedge->setMetadata(LLVMContext::MD_loop, LoopID);
+  auto *Setup = MF->CreateMachineBasicBlock(Entry);
+  auto *Loop = MF->CreateMachineBasicBlock(Body);
+  MF->push_back(Setup);
+  MF->push_back(Loop);
+  Setup->addSuccessor(Loop);
+  Loop->addSuccessor(Loop);
+  const auto &TII = *ST->getInstrInfo();
+  int SpillFI = MF->getFrameInfo().CreateSpillStackObject(8, Align(8));
+  int OrdinaryFI = MF->getFrameInfo().CreateStackObject(8, Align(8), false);
+  auto Load = [&](MachineBasicBlock &BB, int FI) {
+    return BuildMI(BB, BB.end(), DebugLoc(), TII.get(RISCV::LW), RISCV::X10)
+        .addReg(RISCV::X2)
+        .addImm(0)
+        .addMemOperand(MF->getMachineMemOperand(
+            MachinePointerInfo::getFixedStack(*MF, FI),
+            MachineMemOperand::MOLoad, 4, Align(4)));
+  };
+  Load(*Setup, SpillFI); // Context before the loop is retained but not priced.
+  Load(*Loop, SpillFI);
+  Load(*Loop, OrdinaryFI);
+  BuildMI(*Loop, Loop->end(), DebugLoc(), TII.get(RISCV::SW))
+      .addReg(RISCV::X10)
+      .addReg(RISCV::X2)
+      .addImm(0)
+      .addMemOperand(MF->getMachineMemOperand(
+          MachinePointerInfo::getFixedStack(*MF, SpillFI),
+          MachineMemOperand::MOStore, 4, Align(4)));
+  BuildMI(*Loop, Loop->end(), DebugLoc(), TII.get(RISCV::ADDI), RISCV::X10)
+      .addReg(RISCV::X10)
+      .addImm(1);
+  BuildMI(*Loop, Loop->end(), DebugLoc(), TII.get(RISCV::PseudoBR)).addMBB(Loop);
+  Load(*Loop, SpillFI); // Instructions after the observed backedge are excluded.
+  auto Result = vplan::collectMIRBody(*MF, false);
+  ASSERT_TRUE(bool(Result));
+  EXPECT_EQ(Result->Kind, VPlanBackendCandidateKind::ScalarBaseline);
+  EXPECT_EQ(Result->VF, ElementCount::getFixed(1));
+  EXPECT_EQ(Result->IC, 1u);
+  EXPECT_FALSE(Result->IsEpilogue);
+  EXPECT_EQ(Result->Stage, "post-frame-lowering");
+  EXPECT_EQ(Result->IterationWidth, 4u);
+  ASSERT_TRUE(Result->MIRBody);
+  ASSERT_EQ(Result->MIRBody->size(), 5u);
+  EXPECT_TRUE((*Result->MIRBody)[0].Spill);
+  EXPECT_FALSE((*Result->MIRBody)[1].Spill);
+  EXPECT_TRUE((*Result->MIRBody)[2].Spill);
+  EXPECT_FALSE((*Result->MIRBody)[3].Spill);
+  EXPECT_FALSE((*Result->MIRBody)[4].Spill);
+  EXPECT_TRUE(llvm::none_of(*Result->MIRBody,
+                            [](const auto &I) { return I.Vector; }));
+  auto WrongStage = vplan::collectVectorSpills(*MF);
+  EXPECT_FALSE(bool(WrongStage));
+  consumeError(WrongStage.takeError());
+  for (StringRef Attribute : {"vplan.backend.vf", "vplan.backend.ic",
+                              "vplan.backend.scalable"}) {
+    F.addFnAttr(Attribute, "2");
+    auto Bad = vplan::collectMIRBody(*MF, false);
+    EXPECT_FALSE(bool(Bad));
+    consumeError(Bad.takeError());
+    F.addFnAttr(Attribute, Attribute == "vplan.backend.scalable" ? "0" : "1");
+  }
+  F.addFnAttr("vplan.backend.iteration-mapping", "0");
+  auto Unmapped = vplan::collectMIRBody(*MF, false);
+  EXPECT_FALSE(bool(Unmapped));
+  consumeError(Unmapped.takeError());
 }
 
 TEST_P(RISCVInstrInfoTest, EarlyVectorSpillAccesses) {

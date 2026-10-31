@@ -83,11 +83,16 @@ static void printIDs(raw_ostream &OS, ArrayRef<bool> IDs) {
 
 void VPlanCostReport::print(raw_ostream &OS) const {
   OS << Header << "  scalar-baseline cost=";
-  if (ScalarBaseline)
+  if (ExactScalarBaseline)
+    ExactScalarBaseline->print(OS);
+  else if (ScalarBaseline)
     OS << *ScalarBaseline;
   else
     OS << "not-evaluated";
-  OS << "\n  candidates:\n"
+  if (!ScalarSource.empty())
+    OS << " source=" << ScalarSource;
+  OS << '\n' << ScalarDetails;
+  OS << "  candidates:\n"
         "    phase | plan | vf | estimated_width | body_cost | score | "
         "score_kind | vs_incumbent | vs_scalar | reason\n";
   auto PrintComparison = [&](const ComparisonRecord &C) {
@@ -339,6 +344,42 @@ void VPlanCostReport::comparisonScore(VPExactCost Score,
   }
 }
 
+void VPlanCostReport::backendScalarCost(
+    const VPBackendScalarCostEntry &Cost,
+    const VPlanBackendResult *Observation) {
+  ExactScalarBaseline = Cost.Body;
+  ScalarSource = Cost.Source;
+  raw_string_ostream OS(ScalarDetails);
+  OS << "  backend-scalar source=" << Cost.Source
+     << " profile=" << Cost.Profile << " revision=" << Cost.Revision
+     << " vf=f1 ic=1 cost=";
+  Cost.Body.print(OS);
+  OS << " quarters_numerator=" << Cost.Body.numerator()
+     << " quarters_denominator=" << Cost.Body.denominator();
+  if (Cost.MIR) {
+    const auto &M = *Cost.MIR;
+    OS << " cpu=" << M.CPU
+       << " nominal_vlen=" << M.NominalVLEN << " stage=" << Observation->Stage
+       << " Wobs=" << Cost.ObservedWidth << " R=";
+    M.Body.print(OS);
+    OS << " S=";
+    M.Spill.print(OS);
+    OS << " Et=" << Cost.EstimatedSpill << " unknown_instruction_count="
+       << count_if(M.Instructions, [](const MIRInstructionCost &I) {
+            return I.Unknown;
+          });
+  }
+  OS << '\n';
+  if (Detailed && Cost.MIR)
+    for (auto [MI, IC] : zip(*Observation->MIRBody, Cost.MIR->Instructions)) {
+      OS << "    scalar-mir-op " << MI.Opcode << " rule=" << IC.Rule
+         << " spill=" << MI.Spill << " unknown=" << IC.Unknown
+         << " cost=" << IC.Numerator << '/' << IC.Denominator << '\n';
+      if (!MI.Text.empty())
+        OS << "      " << MI.Text;
+    }
+}
+
 void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
                                   const VPRegisterUsageBound &Bound,
                                   const VPlanBackendResult *Observation,
@@ -384,7 +425,7 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
        << (Mode.EstimatedSpill ? " B=R-S+Et=" : " B=R=");
     Cost.Body.print(DS);
     DS << " spill_scope=scalar-and-vector gate=bypassed-for-mir-body"
-          " scalar_baseline=native ic_policy=native-cost\n";
+          " scalar_baseline=" << ScalarSource << " ic_policy=native-cost\n";
     for (auto [MI, IC] : zip(*Observation->MIRBody, M.Instructions)) {
       DS << "      mir-op " << MI.Opcode << " rule=" << IC.Rule
          << " spill=" << MI.Spill << " unknown=" << IC.Unknown;
@@ -400,7 +441,8 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
        << " L=" << Cost.Profile
        << " estimated_total_spill=" << Cost.EstimatedSpill << " B=L=";
     Cost.Body.print(DS);
-    DS << " probe=not-required scalar_baseline=native ic_policy=native-cost\n";
+    DS << " probe=not-required scalar_baseline=" << ScalarSource
+       << " ic_policy=native-cost\n";
     return;
   }
   DS << " ic=" << Cost.IC << " native=" << Cost.Native << " L=" << Cost.Profile
@@ -414,7 +456,7 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
   Spill.print(DS);
   DS << " B=L-Ev+Sv=";
   Cost.Body.print(DS);
-  DS << " scalar_baseline=native ic_policy=native-cost\n"
+  DS << " scalar_baseline=" << ScalarSource << " ic_policy=native-cost\n"
      << "      gate known=" << Bound.Known << " reason=" << Bound.Reason;
   if (Bound.Known)
     DS << " peak=" << Bound.Peak << " max_group=" << Bound.MaxRegisterGroup

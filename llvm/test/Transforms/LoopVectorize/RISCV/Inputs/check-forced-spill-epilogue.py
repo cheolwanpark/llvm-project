@@ -6,7 +6,7 @@ assert any(r.get('vector_epilogue') for r in rows), rows
 assert any(r['status'] == 'selected' and r['vf'] == 8 and r['ic'] == 4
            and r['epilogue_vf'] == 2 for r in rows), rows
 for r in rows:
-    if 'candidate' not in r:
+    if 'candidate' not in r or r.get('role') == 'scalar-baseline':
         continue
     assert r['status'] == 'collected', r
     o = r['observation']

@@ -2,7 +2,7 @@ import json
 import sys
 
 rows = [json.loads(line) for line in open(sys.argv[1])]
-rows = [r for r in rows if "candidate" in r]
+rows = [r for r in rows if "candidate" in r and r.get("role") != "scalar-baseline"]
 assert rows
 assert len({r["candidate"] for r in rows}) == len(rows)
 assert {r["function"] for r in rows} == {"kernel", "two_loops"}

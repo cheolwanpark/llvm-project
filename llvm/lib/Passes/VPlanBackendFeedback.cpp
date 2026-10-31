@@ -214,6 +214,11 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
          const ProbePipeline &Pipeline,
          IntrusiveRefCntPtr<vfs::FileSystem> FileSystem,
          VPlanFeedbackTimer &Timer, raw_ostream &Diagnostics) {
+  if (Candidate.Kind == VPlanBackendCandidateKind::ScalarBaseline &&
+      (Candidate.VF != ElementCount::getFixed(1) || Candidate.IC != 1 ||
+       Candidate.IsEpilogue || Candidate.EpilogueVF.isVector() ||
+       Candidate.Observation.Kind != VPlanBackendObservationKind::MIRBody))
+    return createStringError("invalid scalar baseline probe identity");
   if (ScopedPassCancellation::check())
     return createStringError("backend probe cancelled");
   std::unique_ptr<TargetMachine> TM(Target.TheTarget.createTargetMachine(
@@ -325,7 +330,8 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   if (!Result)
     return Result.takeError();
   if (Result->Candidate != Candidate.ID || Result->VF != Candidate.VF ||
-      Result->IC != Candidate.IC || Result->IsEpilogue != Candidate.IsEpilogue)
+      Result->IC != Candidate.IC || Result->IsEpilogue != Candidate.IsEpilogue ||
+      Result->Kind != Candidate.Kind)
     return createStringError("backend observation identity mismatch");
   return Result;
 }
@@ -495,7 +501,8 @@ public:
     std::string Reason = Threads > 1 ? serialReason(F) : std::string();
     if (!Reason.empty() && !Warned) {
       for (const auto &C : Candidates)
-        SerialMainQueries += !C.IsEpilogue;
+        SerialMainQueries += !C.IsEpilogue &&
+                             C.Kind == VPlanBackendCandidateKind::Vector;
       // No warning for an empty/gated loop or a single main query. The original
       // thread emits this once, when serial execution actually prevents
       // overlap.

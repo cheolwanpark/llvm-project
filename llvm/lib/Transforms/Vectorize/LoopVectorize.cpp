@@ -6411,6 +6411,33 @@ InstructionCost LoopVectorizationPlanner::backendCandidateCost(
   }
   return cost(Plan, VF, RU.empty() ? nullptr : &RU[0]);
 }
+
+InstructionCost
+LoopVectorizationPlanner::backendScalarCost(VPlanBackendMode Mode) {
+  assert(!Mode.MIR && "MIR attempts require an observed scalar baseline");
+  VPlanCostProfileScope Scope(!Mode.DefaultTTI);
+  return CM.expectedCost(ElementCount::getFixed(1));
+}
+
+InstructionCost
+LoopVectorizationPlanner::backendScalarSpillCost(VPlanBackendMode Mode) {
+  const auto VF = ElementCount::getFixed(1);
+  if (!Config.shouldConsiderRegPressureForVF(VF))
+    return 0;
+  if (!ScalarPressurePlan)
+    return InstructionCost::getInvalid();
+  return backendSpillCost(*ScalarPressurePlan, VF, Mode);
+}
+
+InstructionCost LoopVectorizationPlanner::backendSpillCost(
+    VPlan &Plan, ElementCount VF, VPlanBackendMode Mode) {
+  if (!Config.shouldConsiderRegPressureForVF(VF))
+    return 0;
+  VPlanCostProfileScope NativeScope(false);
+  auto RU = calculateRegisterUsageForPlan(Plan, {VF}, TTI, CM.ValuesToIgnore);
+  VPlanCostProfileScope PricingScope(!Mode.DefaultTTI);
+  return RU[0].spillCost(TTI, Config.CostKind, ForceTargetNumVectorRegs);
+}
 unsigned LoopVectorizationPlanner::limitBackendIC(VPlan &Plan,
                                                   unsigned IC) const {
   if (CM.maskPartialAliasing() || Legal->hasUncountableExitWithSideEffects())
@@ -6430,7 +6457,7 @@ StringRef LoopVectorizationPlanner::candidateRejection(VPlan &Plan,
 }
 
 std::optional<VPBackendPruningContext>
-LoopVectorizationPlanner::backendPruningContext() {
+LoopVectorizationPlanner::backendPruningContext(InstructionCost Scalar) {
   if (EnableEpilogueVectorization || hasForcedEpilogueVF() ||
       Hints.getWidth().isVector())
     return std::nullopt;
@@ -6444,7 +6471,6 @@ LoopVectorizationPlanner::backendPruningContext() {
         return std::nullopt;
       Policy = P;
     }
-  auto Scalar = CM.expectedCost(ElementCount::getFixed(1));
   if (!Scalar.isValid())
     return std::nullopt;
   return VPBackendPruningContext{Scalar, PSE.getSmallConstantMaxTripCount(),
@@ -6485,7 +6511,8 @@ LoopVectorizationPlanner::computeBestVF() {
     if (Config.BackendCosts && Result.Width.isVector()) {
       const auto *C = Config.BackendCosts->lookup(FirstPlan, Result.Width);
       Result.Cost = InstructionCost(C->Body);
-      Result.ScalarCost = CM.expectedCost(ElementCount::getFixed(1));
+      Result.ScalarCost = InstructionCost(Config.BackendCosts->scalarCost());
+      Result.ExactScalarCost = Config.BackendCosts->scalarCost();
       Result.ExactCost = C->Body;
     }
     return {Result, &FirstPlan};
@@ -6500,7 +6527,15 @@ LoopVectorizationPlanner::computeBestVF() {
     if (Config.CostReport)
       Config.CostReport->select(*VPlans[1], UserVF,
                                 "forced-main-and-epilogue-vf");
-    return {VectorizationFactor(UserVF, 0, 0), VPlans[1].get()};
+    VectorizationFactor Result(UserVF, 0, 0);
+    if (Config.BackendCosts) {
+      const auto *C = Config.BackendCosts->lookup(*VPlans[1], UserVF);
+      Result.Cost = InstructionCost(C->Body);
+      Result.ExactCost = C->Body;
+      Result.ExactScalarCost = Config.BackendCosts->scalarCost();
+      Result.ScalarCost = InstructionCost(*Result.ExactScalarCost);
+    }
+    return {Result, VPlans[1].get()};
   }
 
   LLVM_DEBUG(dbgs() << "LV: Computing best VF using cost kind: "
@@ -6518,9 +6553,15 @@ LoopVectorizationPlanner::computeBestVF() {
          "More than a single plan/VF w/o any plan having scalar VF");
 
   // TODO: Compute scalar cost using VPlan-based cost model.
-  InstructionCost ScalarCost = CM.expectedCost(ScalarVF);
+  InstructionCost ScalarCost =
+      Config.BackendCosts ? InstructionCost(Config.BackendCosts->scalarCost())
+                          : CM.expectedCost(ScalarVF);
   LLVM_DEBUG(dbgs() << "LV: Scalar loop costs: " << ScalarCost << ".\n");
   VectorizationFactor ScalarFactor(ScalarVF, ScalarCost, ScalarCost);
+  if (Config.BackendCosts) {
+    ScalarFactor.ExactCost = Config.BackendCosts->scalarCost();
+    ScalarFactor.ExactScalarCost = Config.BackendCosts->scalarCost();
+  }
   VectorizationFactor BestFactor = ScalarFactor;
 
   bool ForceVectorization = Hints.getForce() == LoopVectorizeHints::FK_Enabled;
@@ -6529,6 +6570,7 @@ LoopVectorizationPlanner::computeBestVF() {
     // Initialize cost to max so that VF = 2 is, at least, chosen during cost
     // evaluation.
     BestFactor.Cost = InstructionCost::getMax();
+    BestFactor.ExactCost.reset();
     VP_COST_SUMMARY(Config.CostReport,
                     OS << "  selection-override reason=forced-vectorization "
                           "real_scalar_cost="
@@ -6579,8 +6621,10 @@ LoopVectorizationPlanner::computeBestVF() {
       if (BackendCost)
         Cost = InstructionCost(BackendCost->Body);
       VectorizationFactor CurrentFactor(VF, Cost, ScalarCost);
-      if (BackendCost)
+      if (BackendCost) {
         CurrentFactor.ExactCost = BackendCost->Body;
+        CurrentFactor.ExactScalarCost = Config.BackendCosts->scalarCost();
+      }
 
       if (Config.CostReport)
         Config.CostReport->beginComparison(*P, VF, Cost, PlanForBestVF,
@@ -6606,7 +6650,9 @@ LoopVectorizationPlanner::computeBestVF() {
 
   VPlan &BestPlan = *PlanForBestVF;
 
-  assert((BestFactor.Width.isScalar() || BestFactor.ScalarCost > 0) &&
+  assert((BestFactor.Width.isScalar() || BestFactor.ScalarCost > 0 ||
+          (BestFactor.ExactScalarCost &&
+           VPExactCost(InstructionCost(0)) < *BestFactor.ExactScalarCost)) &&
          "when vectorizing, the scalar cost must be computed.");
 
   LLVM_DEBUG(dbgs() << "LV: Selecting VF: " << BestFactor.Width << ".\n");
@@ -7302,6 +7348,12 @@ VPlanPtr LoopVectorizationPlanner::tryToBuildVPlan1() {
 
   RUN_VPLAN_PASS(VPlanTransforms::createLoopRegions, *VPlan0,
                  getDebugLocFromInstOrOperands(Legal->getPrimaryInduction()));
+  if (IsInnerLoop && vplanBackendFeedbackEnabled()) {
+    // Keep the original scalar geometry before tail-fold masks, linearized
+    // predication or candidate-specific vector lowering can change pressure.
+    ScalarPressurePlan.reset(VPlan0->duplicate());
+    ScalarPressurePlan->addVF(ElementCount::getFixed(1));
+  }
   if (CM.foldTailByMasking())
     RUN_VPLAN_PASS(VPlanTransforms::foldTailByMasking, *VPlan0);
   RUN_VPLAN_PASS(VPlanTransforms::introduceMasksAndLinearize, *VPlan0);
@@ -8078,7 +8130,9 @@ static bool isOutsideLoopWorkProfitable(GeneratedRTChecks &Checks,
   // The scalar cost should only be 0 when vectorizing with a user specified
   // VF/IC. In those cases, runtime checks should always be generated.
   uint64_t ScalarC = VF.ScalarCost.getValue();
-  if (ScalarC == 0)
+  VPExactCost ExactScalar =
+      VF.ExactScalarCost.value_or(VPExactCost(VF.ScalarCost));
+  if (VF.ExactScalarCost ? ExactScalar == VPExactCost() : ScalarC == 0)
     return Decision(true, "user-vf-ic-without-scalar-baseline");
 
   InstructionCost TotalCost = RtC;
@@ -8128,13 +8182,26 @@ static bool isOutsideLoopWorkProfitable(GeneratedRTChecks &Checks,
   // Now we can compute the minimum required trip count TC as
   //   VF * (TotalCost + EpiC) / (ScalarC * VF - VecC) < TC
   //
-  // For now we assume the epilogue cost EpiC = 0 for simplicity. Note that
-  // the computations are performed on doubles, not integers and the result
-  // is rounded up, hence we get an upper estimate of the TC.
+  // For now we assume the epilogue cost EpiC = 0. Round the minimum TC up,
+  // retaining exact backend costs until the final integer quotient.
   unsigned IntVF = estimateElementCount(VF.Width, VScale);
-  uint64_t Div = ScalarC * IntVF - VF.Cost.getValue();
-  uint64_t MinTC1 =
-      Div == 0 ? 0 : divideCeil(TotalCost.getValue() * IntVF, Div);
+  uint64_t Div = 0, MinTC1;
+  VPExactCost ExactDiv;
+  if (VF.ExactScalarCost) {
+    ExactDiv = ExactScalar * IntVF -
+               VF.ExactCost.value_or(VPExactCost(VF.Cost));
+    if (!ExactDiv.isValid())
+      return Decision(false, "nonpositive-exact-vector-savings");
+    auto TC = ExactDiv == VPExactCost()
+                  ? std::optional<uint64_t>(0)
+                  : (VPExactCost(TotalCost) * IntVF).ceilDivide(ExactDiv);
+    if (!TC)
+      return Decision(false, "exact-runtime-check-cost-overflow");
+    MinTC1 = *TC;
+  } else {
+    Div = ScalarC * IntVF - VF.Cost.getValue();
+    MinTC1 = Div == 0 ? 0 : divideCeil(TotalCost.getValue() * IntVF, Div);
+  }
 
   // Second, compute a minimum iteration count so that the cost of the
   // runtime checks is only a fraction of the total scalar loop cost. This
@@ -8143,17 +8210,33 @@ static bool isOutsideLoopWorkProfitable(GeneratedRTChecks &Checks,
   // * TC. To bound the runtime check to be a fraction 1/X of the scalar
   // cost, compute
   //   RtC < ScalarC * TC * (1 / X)  ==>  RtC * X / ScalarC < TC
-  uint64_t MinTC2 = divideCeil(RtC.getValue() * 10, ScalarC);
+  uint64_t MinTC2;
+  if (VF.ExactScalarCost) {
+    auto TC = (VPExactCost(RtC) * 10).ceilDivide(ExactScalar);
+    if (!TC)
+      return Decision(false, "exact-scalar-runtime-check-cost-overflow");
+    MinTC2 = *TC;
+  } else
+    MinTC2 = divideCeil(RtC.getValue() * 10, ScalarC);
 
   // Now pick the larger minimum. If it is not a multiple of VF and an epilogue
   // is allowed, choose the next closest multiple of VF. This should partly
   // compensate for ignoring the epilogue cost.
   uint64_t MinTC = std::max(MinTC1, MinTC2);
+  if (VF.ExactScalarCost && MinTC > UINT32_MAX)
+    return Decision(false, "minimum-profitable-trip-count-overflow");
   if (SEL == CM_EpilogueAllowed)
     MinTC = alignTo(MinTC, IntVF);
+  if (VF.ExactScalarCost && MinTC > UINT32_MAX)
+    return Decision(false, "minimum-profitable-trip-count-overflow");
   VP_COST_REPORT(CostCtx.Report,
                  OS << "  outside-loop estimated_width=" << IntVF
-                    << " denominator=" << Div << " min_tc_1=" << MinTC1
+                    << " denominator=";
+                 if (VF.ExactScalarCost)
+                   ExactDiv.print(OS);
+                 else
+                   OS << Div;
+                 OS << " min_tc_1=" << MinTC1
                     << " min_tc_2=" << MinTC2
                     << " max_min_tc=" << std::max(MinTC1, MinTC2)
                     << " align_to_vf=" << (SEL == CM_EpilogueAllowed)
@@ -8631,6 +8714,32 @@ static void connectEpilogueVectorLoop(VPlan &EpiPlan, Loop *L,
 bool LoopVectorizePass::processLoop(Loop *L) {
   if (BackendProbe && L->getHeader() != BackendProbe->Header)
     return false;
+  if (BackendProbe && BackendProbe->Candidate.Kind ==
+                          VPlanBackendCandidateKind::ScalarBaseline) {
+    const auto &C = BackendProbe->Candidate;
+    if (C.VF != ElementCount::getFixed(1) || C.IC != 1 || C.IsEpilogue ||
+        C.Observation.Kind != VPlanBackendObservationKind::MIRBody ||
+        !L->isInnermost() || L->getNumBlocks() != 1 ||
+        L->getLoopLatch() != L->getHeader()) {
+      BackendProbe->Error = "invalid scalar baseline probe";
+      return false;
+    }
+    // Retain the original loop and its complete function context. The native
+    // post-LV suffix may unroll it; the induction witness proves the resulting
+    // width in original scalar iterations before the shared MIR observer runs.
+    Function &F = *L->getHeader()->getParent();
+    F.addFnAttr("vplan.backend.candidate", C.ID);
+    F.addFnAttr("vplan.backend.ic", "1");
+    F.addFnAttr("vplan.backend.role", "scalar-baseline");
+    F.addFnAttr("vplan.backend.vf", "1");
+    F.addFnAttr("vplan.backend.scalable", "0");
+    F.addFnAttr("vplan.backend.width", "1");
+    markVPlanBackendLoop(*L, C.ID, *SE);
+    BackendProbe->Emitted = true;
+    // Observation metadata does not change the CFG or the analyses. Returning
+    // false also keeps ShouldRunExtraVectorPasses at its native scalar value.
+    return false;
+  }
   assert((EnableVPlanNativePath || L->isInnermost()) &&
          "VPlan-native path is not enabled. Only process inner loops.");
 

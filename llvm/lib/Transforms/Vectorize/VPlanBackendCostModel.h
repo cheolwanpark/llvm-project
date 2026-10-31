@@ -22,7 +22,7 @@ class LLVM_ABI_FOR_TEST VPExactCost {
 
 public:
   VPExactCost() = default;
-  VPExactCost(InstructionCost C) : Valid(C.isValid()) {
+  VPExactCost(InstructionCost C) : Valid(C.isValid() && C >= 0) {
     if (Valid)
       N = C.getQuarterValue();
   }
@@ -35,6 +35,8 @@ public:
   VPExactCost operator-(VPExactCost B) const;
   VPExactCost operator*(unsigned B) const;
   VPExactCost normalize(unsigned Width, uint64_t ObservedWidth) const;
+  /// Ceiling of an exact nonnegative quotient; no legacy-cost truncation.
+  std::optional<uint64_t> ceilDivide(VPExactCost Divisor) const;
   bool operator<(VPExactCost B) const;
   bool operator<=(VPExactCost B) const;
   void print(raw_ostream &OS, unsigned Divisor = 1) const;
@@ -84,6 +86,13 @@ struct VPBackendCostEntry {
   InstructionCost EstimatedSpill;
   std::optional<VPMIRCost> MIR;
 };
+struct VPBackendScalarCostEntry {
+  VPExactCost Body;
+  InstructionCost EstimatedSpill = 0;
+  std::string Source, Profile, Revision;
+  std::optional<VPMIRCost> MIR;
+  uint64_t ObservedWidth = 0;
+};
 /// All state belongs to one original loop. Preparation is transactional: on
 /// failure discard every score before native selection can observe the table.
 class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
@@ -119,6 +128,7 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
   VPlanCostReport *Report;
   std::unique_ptr<TargetMIRInfo> MIRInfo;
   VPlanBackendMode Mode;
+  std::optional<VPBackendScalarCostEntry> ScalarEntry;
   SmallVector<json::Object, 0> Rows;
   bool Failed = false;
   std::string Failure;
@@ -133,8 +143,15 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
                  const EvaluatedCost *Evaluated = nullptr);
   bool addBatch(ArrayRef<PreparedCandidate> Candidates,
                 std::optional<VPBackendPruningContext> Context = std::nullopt);
+  bool prepareScalar(LoopVectorizationPlanner &LVP);
+  bool applyScalar(const VPlanBackendCandidate &Candidate,
+                   InstructionCost EstimatedSpill,
+                   VPlanBackendProbeResult Result);
 
 public:
+  VPExactCost scalarCost() const {
+    return ScalarEntry ? ScalarEntry->Body : VPExactCost::ratio(-1, 1);
+  }
   VPlanBackendCostModel(const VPlanBackendFeedback &Feedback,
                         const TargetTransformInfo &TTI, Function &F,
                         BasicBlock &Header, VPlanCostReport *Report = nullptr,

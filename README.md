@@ -2,11 +2,10 @@
 
 This LLVM fork selects VPlan vectorization factors using TTI costs and observed
 vector spills, with optional MIR body costs. The model is OFF by default.
-Candidate scalar/vector operations and estimated spills use the selected TTI.
-Scalar baselines, IC selection, probe optimization and final codegen retain native
-LLVM policy. A required probe failure retries the whole loop with specific TTI
-estimated costs when supported and requested, then falls back to native selection
-if that attempt fails.
+TTI modes price scalar baselines with the same TTI as vector candidates. MIR
+modes observe both scalar and vector bodies with the same post-frame sheet.
+IC selection, probe optimization and final codegen retain native LLVM policy. A
+required evaluation failure follows the whole-loop retry policy below.
 
 - [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md): cost model, probe contract,
   target-specific RISC-V CostSheets, and cost-report formats.
@@ -21,7 +20,7 @@ if that attempt fails.
 | `-vplan-backend-probe-threads=N` | Bound concurrent main-candidate probes; positive integer, default `1`. |
 | `-use-mir` | Use target MIR direct costs for the body; default false. |
 | `-use-estimated-spill` | Keep TTI estimates, or replace all MIR spill costs with the selected TTI estimates; default false. |
-| `-use-default-tti` | Use default RISC-V TTI for every TTI query, including MIR estimated spills; default false. |
+| `-use-default-tti` | Use native TTI for scalar/vector comparison costs in TTI modes and both estimated spill terms in MIR modes; default false. |
 | `-vplan-backend-force-all` | Bypass both the gate and lower-bound pruning for real-spill candidates; MIR always queries and TTI-only estimates never query. |
 | `-vplan-backend-jsonl=FILE` | Append candidate and selection/fallback diagnostics as JSONL. |
 | `-vplan-backend-time` | Print probe and cost-preparation timings to stderr. |
@@ -48,7 +47,7 @@ CPU/VLEN selects the target sheet and scoped TTI:
 | Effective tune CPU | Exact VLEN | CostSheet documentation |
 |---|---|---|
 | `xiangshan-kunminghu` | 128 | [XiangShan](costsheet/xiangshan.md) |
-| `saturn-shuttle-v256d128` (new tune-only CPU) | 256 | [Saturn](costsheet/saturn.md) |
+| `saturn-shuttle-v256d128` (tune-only CPU) | 256 | [Saturn](costsheet/saturn.md) |
 | `spacemit-x60` | 256 | [K1](costsheet/k1.md) |
 
 Other CPU/VLEN combinations retain native TTI and generic MIR pricing.
@@ -77,19 +76,13 @@ All three controls require `-vplan-backend`. LLVM accepts both `-use-mir` and
 | `-use-mir` | Observed MIR body | `mir-v1` |
 | `-use-mir -use-estimated-spill` | MIR body with selected TTI spill estimates | `mir-me-spill-v1` |
 
-The exact combination formulas and scalar/vector coverage are specified in
+The combination formulas and scalar/vector coverage are specified in
 [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md#bodyspill-ablation과-mir-info).
 Either MIR row accepts `-use-default-tti`; the MIR sheet remains CPU-selected.
-The raw `use-default-tti` boolean also controls the failure destination.
-
-MIR uses a separate post-frame-lowering observer, after RISC-V post-RA pseudo
-expansion and load/store optimization but before final scheduling/RVV pseudo
-expansion. It queries every required candidate even when the vector-spill gate
-would skip. TTI-only estimated modes require no backend query. Other modes retain
-the existing post-stack-slot-coloring observer and gate.
-
-Target-specific prices and spill units are specified once in
-[costsheet/rule.md](costsheet/rule.md) and its target documents.
+The flag selects both estimated spill terms in MIR-estimated mode; successful
+pure-MIR pricing and selection are unchanged by toggling it. Each MIR attempt
+shares one VF1/IC1 scalar observation across the vector candidates and bypasses
+the vector-spill gate. TTI-only estimated modes require no backend query.
 
 ```sh
 .cache/build/bin/clang --target=riscv64-unknown-elf \
@@ -100,8 +93,7 @@ Target-specific prices and spill units are specified once in
 
 ### Pruning and fallback
 
-Both TTI real-spill modes use the pruning policy below. Automatic candidate
-pruning requires vector epilogues to be disabled.
+Both TTI real-spill modes use the [pruning policy](#probe-pruning) below.
 
 | Required evaluation fails | Whole-loop destination |
 |---|---|
@@ -111,20 +103,19 @@ pruning requires vector epilogues to be disabled.
 | TTI estimated mode | Native, without retrying estimated |
 
 A scalar/non-vectorized result is a successful evaluation. Each attempt owns its
-costs, profitable candidates, epilogue clone and reports; none are reused after
-failure. Scalar baselines and IC remain native. The retry does not require MIR
+costs, scalar observations/exact values, profitable candidates, epilogue clone
+and reports; none are reused after failure. The retry prices both scalar and
+vector code with the supported tuned TTI; IC remains native. It does not require MIR
 cost sheets or backend observations and does not change global options. Reports
 identify requested/effective models and the fallback reason.
 
 ### Parallel probes
 
 With `-mllvm -vplan-backend-probe-threads=4`, independent main-candidate
-probes can run on up to four workers. Preparation, spill pricing and selection
-stay on the compiler thread. Each batch snapshots the current loop context;
-workers use separate LLVM contexts, target machines and analyses. Compatible real-spill batches run in stable zero-spill cost order. Completed probes immediately refill free workers and may cooperatively cancel proven losers. Final VF
-selection retains the original plan/VF order.
-Automatic epilogue queries remain serial; forced epilogues remain part of main
-probes. Query eligibility and the fallback destination follow the policies above.
+probes can run on up to four workers. Preparation, pricing and selection stay on
+the compiler thread, and selection retains the original plan/VF order. Scalar
+baseline and automatic epilogue queries remain serial; forced epilogues remain
+part of main probes.
 
 ```sh
 .cache/build/bin/clang --target=riscv64-unknown-elf \
@@ -133,25 +124,12 @@ probes. Query eligibility and the fallback destination follow the policies above
   kernel.c -c -o .cache/kernel.o
 ```
 
-The limit applies to probes inside one compiler process. It does not parallelize
-application builds or translation units. Empty batches do no backend work, and
-a single query stays on the compiler thread. All tasks finish and private IR is destroyed before the batch returns or a fallback attempt starts. Results apply in original candidate order; only proven losers may have failures ignored. Physical execution states can vary across workers.
-
-JSON and both cost-report options support parallel probes. Cost reports combined
-with a forced epilogue use the serial path to preserve preparation and reporting
-order. `-vplan-backend-time`, upstream debug/pass printing, pass timing/time
-tracing, optimization bisection, debug counters, optimization remarks and
-register allocator training logs/interactive channels use the serial path.
-A warning explains the reason once when more than one main probe is actually
-requested. A build without thread support also uses this warning and serial path.
-The master flag
-must be enabled; zero queries or a single main query do not produce this warning.
-Use external process timing for parallel comparisons: `-vplan-backend-time`
-retains its serial process-CPU interpretation.
-
-Worker count defaults to `1`. See the
-[parallel execution contract](BACKEND_FEEDBACK.md#제한된-probe-병렬-실행) for module
-boundaries, ownership and diagnostic compatibility.
+The limit applies inside one compiler process, independently of application build
+concurrency. Worker count defaults to `1`. JSON and cost reports support parallel
+probes; incompatible diagnostics use the serial path and warn when they prevent
+overlap. See the [parallel execution contract](BACKEND_FEEDBACK.md#제한된-probe-병렬-실행)
+for ownership, cancellation and diagnostic compatibility. Use external process
+timing for parallel comparisons; `-vplan-backend-time` uses the serial path.
 
 ## Probe pruning
 
@@ -185,9 +163,7 @@ vary with scheduling while logical results retain original candidate order.
 See [the contract](BACKEND_FEEDBACK.md#probe-pruning) for ownership and failure rules.
 
 The bound applies to default and tuned TTI real-spill modes. MIR modes always
-observe required candidates; estimated-only modes do not probe. JSONL includes
-body-unit `lower_bound_quarters_*`, normalized `score_lower_bound_quarters_*`,
-proof basis, `score_kind`, execution state and requested/effective model IDs.
+observe required candidates; estimated-only modes do not probe.
 
 ## Cost-model sweeps
 
@@ -260,3 +236,5 @@ cache and `.cache/post-frame-reference/`. Use this checkout's 313-input
 `dataset.sqlite` for requested reference comparisons, following AGENTS.md.
 Historical measurements describe their recorded compiler identities, not the
 current binary at the same path.
+Current verification results and the six-case, three-target diagnostic selections
+are recorded in [BACKEND_FEEDBACK](BACKEND_FEEDBACK.md#scalar-기준-통합과-k1-occupancy-v2-검증).

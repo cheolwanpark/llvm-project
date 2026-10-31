@@ -56,7 +56,7 @@ for scenario, options in [
             assert any(r['status'] == 'native-fallback' for r in rows)
         else:
             assert not any(r['status'] == 'native-fallback' for r in rows), rows
-            candidates = [r for r in rows if 'candidate' in r]
+            candidates = [r for r in rows if 'candidate' in r and r.get('role') != 'scalar-baseline']
             assert candidates
             if mode:
                 # Internal clone compilation must not create extra loop reports.
@@ -81,6 +81,17 @@ for scenario, options in [
                                 and f' vf={vf} ' in line)
                     body = Fraction(row['body_quarters_numerator'], 4 * row['body_quarters_denominator'])
                     assert Fraction(line.split(' body_cost=')[1]) == body, (line, row)
+                    scalar_lines = [s for s in section.splitlines()
+                                    if s.startswith('  backend-scalar source=')]
+                    assert len(scalar_lines) == 1, section
+                    scalar_line = scalar_lines[0]
+                    assert f"source={row['scalar_cost_source']} " in scalar_line
+                    assert f"profile={row['scalar_profile']} " in scalar_line
+                    scalar = Fraction(row['scalar_quarters_numerator'],
+                                      4 * row['scalar_quarters_denominator'])
+                    assert Fraction(scalar_line.split(' cost=')[1].split()[0]) == scalar
+                    assert f"quarters_numerator={row['scalar_quarters_numerator']} " in scalar_line
+                    assert f"quarters_denominator={row['scalar_quarters_denominator']}" in scalar_line
                     assert f" ic={row['ic']} " in line
                     assert f" queried={int(row['register_usage_bound']['queried'])} " in line
                     table = next(line.split(' | ') for line in section.splitlines()
@@ -116,7 +127,7 @@ if spills:
     rows = observations['gate']
     selected = next(r for r in rows if r['status'] == 'selected')
     assert selected['vf'] == 2 and selected['scalable']
-    candidates = [r for r in rows if 'candidate' in r and r['status'] != 'pruned']
+    candidates = [r for r in rows if 'candidate' in r and r.get('role') != 'scalar-baseline' and r['status'] != 'pruned']
     assert all(r['tti_profile'] == 'native' for r in candidates)
     assert all(r['native_body_quarters'] == r['profile_body_quarters'] for r in candidates)
     chosen = next(r for r in candidates if r['vf'] == 2)

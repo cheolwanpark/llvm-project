@@ -16,8 +16,9 @@ B  = L − Ev + Sv
 
 `Wtti`는 해당 VF의 예상 runtime 폭, `Wobs`는 검증된 관측 반복 폭이다.
 각 후보의 native 비용으로 IC를 정하고 사용자 hint와 legality 제한을 적용한다.
-그 IC로 probe하고 최종 출력에도 같은 IC를 사용한다. Scalar 기준, VF 생성·순서·강제 VF·scalable tie-break·trip count/tail·outside-loop
-profitability는 native 정책을 유지한다. Ev는 기존 register-pressure 정책이
+그 IC로 probe하고 최종 출력에도 같은 IC를 사용한다. Scalar 기준은 아래와 같이
+현재 선택 시도의 비용 출처를 따른다. VF 생성·순서·강제 VF·scalable tie-break와
+trip count/tail/outside-loop profitability 수식은 기존 정책을 유지한다. Ev는 기존 register-pressure 정책이
 계산한 값이며, 그 정책이 spill을 추가하지 않으면 0이다.
 
 `VPlanBackendCostModel`이 비용 준비, gate, 질의, 검증과 비용 테이블을 소유한다.
@@ -34,17 +35,18 @@ master가 OFF이면 효과가 없다. 실행 명령은 README의
 `Lt`는 타깃 profile TTI(미지원 시 native), `L0`는 default TTI의 body이며
 `Ev/Sv`도 각각 선택한 TTI로 가격화한다.
 
-| 추가 옵션 | 적용 body 비용 |
-|---|---|
-| 없음 | `Lt - Evt + Svt` |
-| `-use-estimated-spill` | `Lt` |
-| `-use-default-tti` | `L0 - Ev0 + Sv0` |
-| `-use-default-tti -use-estimated-spill` | `L0` |
-| `-use-mir` | `R` |
-| `-use-mir -use-estimated-spill` | `R - S + Et` |
+| 추가 옵션 | Vector body 비용 | Scalar 기준 |
+|---|---|---|
+| 없음 | `Lt - Evt + Svt` | tuned TTI scalar IR |
+| `-use-estimated-spill` | `Lt` | tuned TTI scalar IR |
+| `-use-default-tti` | `L0 - Ev0 + Sv0` | native TTI scalar IR |
+| `-use-default-tti -use-estimated-spill` | `L0` | native TTI scalar IR |
+| `-use-mir` | `R_vector` | `R_scalar` |
+| `-use-mir -use-estimated-spill` | `R_vector - S_vector + Et_vector` | `R_scalar - S_scalar + Et_scalar` |
 
 두 MIR 조합에도 `-use-default-tti`를 추가할 수 있다. `R/S`의 sheet는 유지하고
-`Et`만 default TTI를 사용한다. `R`, `S`, `Et`의 범위는 아래에서 정의한다.
+양쪽 `Et`만 default TTI를 사용한다. 정상 pure-MIR의 scalar/vector `R/S`와 선택은
+이 flag에 독립적이다. `R`, `S`, `Et`의 범위는 아래에서 정의한다.
 
 비-MIR real-spill 모드는 `L - Ev + Sv`를 사용하며 vector spill만 관측한다.
 `use-default-tti`는 MIR 여부와 관계없이 `RISCVTTIImpl`을 선택한다. 비-MIR body의
@@ -71,7 +73,7 @@ feedback analysis service를 통해 Vectorize에 전달한다. Vectorize에는 C
 특정 target에 대한 링크 의존을 추가하지 않는다. 새로운 target/profile은 해당
 타겟 디렉터리에 MIR Info 구현과 factory 선택 조건을 추가한다. 다른 ISA는
 해당 타겟의 observer/pipeline 지원과 vectorizer의 대상 허용도 함께 확장해야 한다.
-RVV가 없는 대상은 nullptr를 반환하여 아래 fallback을 적용한다.
+RVV가 없는 대상은 nullptr를 반환한다.
 
 TTI/MIR sheet 선택과 직접 가격표는
 [타깃별 CostSheet](#타깃별-costsheet)에 정의한다.
@@ -79,14 +81,33 @@ TTI/MIR sheet 선택과 직접 가격표는
 `R`은 전체 body, `S`는 spill-slot MMO가 있는 scalar/vector load/store의 직접
 비용이다. 별도 주소 계산은 `R-S`에 남는다. 두 값에 `Wtti/Wobs`를 정확히 적용한
 뒤 `R` 또는 `R-S+Et`를 사용한다. `Et`는 설정한 default/tuned TTI의 전체 추정
-spill이며 vector-only `Ev`와 별도 보관한다. MIR sheet와 TTI profile은 독립적으로
-보고한다. Raw requested boolean은 기존 fallback 목적지를 유지한다.
+spill이며 vector-only `Ev`와 별도 보관한다. Scalar `Et`는 원본 VF1 plan의 register
+usage와 기존 `VPRegisterUsage::spillCost()` 정책으로 계산한다. 이 scalar plan은
+tail-fold mask와 predication linearization 전에 원본 VF1 geometry를 보존한 snapshot이다.
+관측 `S_scalar`에서 추정 register 수를 만들지 않는다. 유효한 zero estimate는 실패와 구분한다. MIR sheet와
+TTI profile은 독립적으로 보고한다. Raw requested boolean은 기존 fallback 목적지를 유지한다.
 
 Estimated/real spill의 units와 target 가격은 [변환 규칙](costsheet/rule.md#spill--units--tti--costsheet)을 따른다.
 관측값은 register class·방향·group별로 묶으며 가격화 후 반복 폭을 한 번 정규화한다.
 
-Native scalar 기준, native-cost IC, 후보 순서와 main/epilogue 정책은 동일하다.
-필수 관측이나 가격 계산 실패 시 전체 원본 loop에 아래 설정 기반 fallback을 적용한다.
+### MIR scalar probe와 정확한 기준
+
+원본 loop별 MIR 시도에서 scalar baseline을 한 번 관측하고 vector VFs와 epilogue가
+공유한다. `ScalarBaseline`은 vector와 다른 candidate kind/ID이며 fixed VF=1, IC=1,
+non-scalable이다. 전체 함수를 clone하여 preceding-loop 문맥을 보존하고, 선택한 원본
+loop에는 LV vectorization/interleaving을 하지 않고 observation marker를 붙인다.
+그 뒤 vector probe와 같은 native post-LV suffix와 backend를 실행한다. 전역 CLI와
+최종 codegen 설정을 바꾸지 않는다. 비-MIR post-stack-slot-coloring collector는 계속
+vector-spill 전용이며 scalar 관측을 추가하지 않는다.
+
+Scalar도 innermost·single-block·identity·backedge와 affine induction witness 검증을
+통과해야 한다. Suffix unroll이 관측 폭을 바꾸면 원래 scalar iteration 하나로 정확히
+정규화한다. Loop 제거 또는 증명 불가능한 mapping은 실패이며 비용 0이 아니다.
+관측은 한 시도 안에서만 공유하고 persistent/cross-loop cache를 만들지 않는다.
+
+Known TC, scalar tail, epilogue와 최종 profitability는 exact scalar rational을
+사용하며 ranking 전에 integer/quarter-cost로 절삭하지 않는다. 강제 VF/IC 경로와
+pruning도 같은 기준을 사용한다. Native IC 계산은 이 tuned scope 밖이다.
 
 ### Pressure gate
 
@@ -96,6 +117,7 @@ UsageIC = Usage1 × IC
 query   = unknown OR UsageIC >= 32
 ```
 
+이 gate는 비-MIR real-spill 모드에만 적용한다.
 `VPlanRegisterUsageBounds`가 지원하는 recipe/type의 보수적 상한을 사용한다.
 미지원 lowering과 overflow는 unknown이다. UsageIC가 32 미만이면 질의를 생략하고
 Sv=0으로 둔다. `-vplan-backend-force-all`은 gate의 `would_skip`을 유지하며 실제
@@ -106,14 +128,15 @@ Sv=0으로 둔다. `-vplan-backend-force-all`은 gate의 `would_skip`을 유지�
 비-MIR TTI real-spill 모드에서 `LB = L - Ev`이고 `B = LB + Sv`, `Sv >= 0`이다.
 모든 후보의 metadata/native IC/profile 비용과 gate-skip 확정 비용을 먼저 준비한다.
 Gate는 모델 정책으로 `Sv=0`을 적용한다. Query 후보의 LB는 확정 body나 관측된
-zero spill이 아니다. Scalar 기준은 native 비용이다.
+zero spill이 아니다. Scalar 기준은 같은 선택 시도에서 이미 준비한 configured TTI
+비용을 재사용하며 pruning을 위해 다시 가격화하지 않는다.
 
 기존 수치 계산을 공유하여 unknown TC는 exact cross product, known TC는
-scalar tail일 때 `floor(TC/W)*B + (TC%W)*S`, tail folding일 때 `ceil(TC/W)*B`로
+scalar tail일 때 `floor(TC/W)*B + (TC%W)*C_scalar`, tail folding일 때 `ceil(TC/W)*B`로
 비교한다. IC/관측 폭 정규화 후 IC를 다시 곱하지 않는다. 엄격히 싼 유효 기준이
 있어야 pruning하며 동률은 남긴다. 증명 overflow는 probe하고 실제 비용 실패와 구분한다.
 
-자동 pruning은 vector epilogue OFF, main/epilogue VF 비강제, 후보의 fixed/scalable 및 scalar-tail 정책 일치 조건에서 적용한다. Scalar, gate-skip, 완료 probe의 엄격히 싼 유효 비용을 기준으로 사용하며 강제 vectorization에서는 scalar 기준을 사용하지 않는다. MIR에는 이 하한을 적용하지 않고 TTI estimated는 probe하지 않는다. Pruned 후보는 선택에서 명시적으로 제외한다. 자세한 CFG·취소 계약은 아래 Probe pruning 절을 따른다.
+자동 pruning은 vector epilogue OFF, main/epilogue VF 비강제, 후보의 fixed/scalable 및 scalar-tail 정책 일치 조건에서 적용한다. Scalar, gate-skip, 완료 probe의 엄격히 싼 유효 비용을 기준으로 사용하며 강제 vectorization에서는 scalar 기준을 사용하지 않는다. MIR에는 이 하한을 적용하지 않고 TTI estimated는 probe하지 않는다. Pruned 후보는 선택에서 명시적으로 제외하며 zero-spill 관측을 만들어 넣지 않는다. 자세한 CFG·취소 계약은 아래 Probe pruning 절을 따른다.
 
 ## Probe와 fallback
 
@@ -161,12 +184,13 @@ address space를 보존한다.
 초기 관측 폭은 Wtti × IC이며, IR suffix 후 검증된 추가 iteration mapping 비율을
 한 번 곱한다. 관측 결과는 해당 planning invocation에서만 사용한다.
 
-Provider unavailable, clone/형상/mapping 실패, 미지원 spill, overflow 또는 필요한
-epilogue 비용 실패 시 원본 loop의 backend 비용·ProfitableVFs·epilogue clone·보고를
+필수 scalar probe/가격/추정 실패를 포함한 provider unavailable, clone/형상/mapping
+실패, 미지원 spill, overflow 또는 필요한
+epilogue 비용 실패 시 원본 loop의 backend 비용·scalar 항목/exact 값·ProfitableVFs·epilogue clone·보고를
 버리고 새 객체로 전체 loop를 다시 선택한다. Probe 모드이고 raw
 `use-default-tti=false`이며 함수의 specific TTI profile이 지원되면 기존 TTI estimated
 builder로 한 번 재시도한다. 비용은 추정 vector/scalar spill을 포함한 `Lt`이고
-scalar 기준과 IC는 native다. MIR sheet나 provider query는 요구하지 않는다.
+scalar 기준도 같은 tuned TTI를 쓰고 IC는 native다. MIR sheet나 provider query는 요구하지 않는다.
 Specific 미지원, raw default-TTI=true, requested TTI estimated 실패 또는 estimated
 재시도 실패는 native 선택으로 간다. Scalar/non-LV 선택도 성공이며 native로
 진행하지 않는다. 전역 옵션 변경이나 일부 후보만 대체하는 경로는 없다. 강제 VF/IC/epilogue 요청은 유지한다. 실패를 spill 0으로
@@ -237,7 +261,7 @@ Threads 비활성 빌드도 같은 정책을 사용한다. 병렬 성능은 외�
 
 요약 표는 main/epilogue, plan, VF, 예상 폭, body cost, score와 비교 종류,
 incumbent/scalar 비교 결과와 이유를 담는다. `fN`은 fixed VF, `sN`은 scalable VF다.
-Scalar baseline, 최종 main/epilogue 선택, IC와 emission 결과도 표시한다.
+Scalar baseline의 source 및 exact cost, 최종 main/epilogue 선택, IC와 emission 결과도 표시한다.
 `not-evaluated`는 강제 선택 등으로 계산을 생략했다는 뜻이다. Backend body와 score는
 분수를 보존하며 cost-per-lane은 폭으로, whole-loop는 trip-count/tail 정책으로 계산한다.
 
@@ -254,10 +278,21 @@ profile body, native IC와 native selection context를 구분한다.
 
 `-vplan-backend-jsonl=FILE`은 최종 시도의 candidate·selected와
 estimated-fallback/native-fallback 행을 append한다.
+MIR scalar-baseline 행은 `role=scalar-baseline`을 사용하며 source, sheet revision, `R/S/Et`,
+관측 폭, exact 분자/분모와 unknown 수를 담는다. Vector candidate 집계에서 제외한다.
+`scalar_cost_source`는 `mir`/`mir-estimated-spill`, `scalar_profile`과 `scalar_revision`은
+실제로 선택한 sheet를 식별한다. `mir_body_quarters_*`, `mir_spill_quarters_*`는 정규화된
+`R/S`이고 `estimated_total_spill_quarters`는 `Et`다.
+TTI 모드는 vector 행에 scalar source `tti`, profile/revision과 `scalar_quarters_*`를
+함께 기록하며 별도 scalar probe 행을 만들지 않는다. Native revision은 `native-tti`,
+tuned profile의 revision provider가 없으면 `unavailable`로 표시한다. Text `backend-scalar`는 같은
+소유된 값으로 source/profile/revision, VF1/IC1, 비용과 MIR `R/S/Et/Wobs/unknown`을 출력한다.
 Candidate 행에는 identity/VF/IC/role, model/profile, native/profile/estimated/raw 비용,
 정확한 정규화 및 body 분자/분모, TTI 폭과 gate 판단을 기록한다. `collected`는 facts
 수신을 뜻한다. `cost_source`는 gate/observation/estimated를 구분한다.
-Pruned 행은 LB·비교 기준 비용/폭·TC/tail·queried를 담고 exact body를 만들지 않는다.
+Pruned 행은 body-unit `lower_bound_quarters_*`, 정규화한
+`score_lower_bound_quarters_*`, 비교 기준 비용/폭·TC/tail·queried를 담고 exact body를
+만들지 않는다.
 미관측 Pruned에는 observation/Wobs/observed spill도 없다. 실제 실행한 speculative
 성공의 관측은 보관할 수 있다. Selected/fallback 행은 requested/effective model을,
 fallback 행은 reason을 포함한다. JSONL quarter-cost 분자를 **4 × 분모**로 나누면 텍스트의 model unit과 같다.
@@ -287,7 +322,7 @@ JSON 후보 행에는 적용한 `use_mir`, `use_estimated_spill`, `use_default_t
 가격 입력을 보존한다. `mir_cost_schema=direct-instruction-cost-v1`, `mir_model`, `mir_revision`,
 `mir_cpu`, `mir_nominal_vlen`, 별도 `tti_profile`, 정규화된 MIR body/spill의
 quarter-cost 분자·분모, 명령 순서와 대응하는 `mir_costs`의 rule/unknown/numerator/denominator
-항 (`direct-instruction-cost-v1`)을 보고한다. MIR 값을 기존 vector-spill 필드로 위장하지 않는다.
+항과 `unknown_instruction_count`를 보고한다. MIR 값을 기존 vector-spill 필드로 위장하지 않는다.
 
 TTI-only estimated 모드는 `estimated-spill-no-probe`, MIR 상세 report는
 `gate=bypassed-for-mir-body`로 구분한다. 상세 MIR report는 raw/정규화 R·S와 Et,
@@ -311,68 +346,66 @@ vector cycles, EH/indirect control, retained SSA definitions, unknown/ambiguous
 return outcomes and exact infeasible switch guards constrain applicability.
 There is no general proof that shortened probes retain identical global allocation.
 
-Candidate pruning has no command-line toggle. It applies automatically to
-compatible main-candidate batches: vector epilogues OFF, main/epilogue VF not
-forced, uniform fixed/scalable and scalar-tail policies. `force-all` bypasses it.
-It uses exact `(L-Ev)/Wtti` dispatch order; known-trip-count comparisons share
-the planner's body/tail arithmetic. Only a strictly smaller eligible completed,
-gate-skip or permitted scalar score rejects a zero-spill lower bound. Forced
-vectorization excludes scalar as an incumbent; ties remain required queries.
+Cost-bound candidate pruning은 [비용 하한 pruning](#비용-하한-pruning), worker
+수명과 취소는 [병렬 실행 계약](#제한된-probe-병렬-실행)을 따른다.
+`-vplan-backend-pruning-trace`는 CFG 적용 여부와 크기를,
+`-vplan-backend-pruning-dump-ir`는 `before`, `after`, `suffix` IR을 출력한다.
+두 진단은 수동적이며 timing phase는 `probe_pruning`이다.
 
-The cost model owns candidate state and pricing. The provider owns isolated IR
-and scheduling. Completion callbacks run on the compiler thread after worker IR
-cleanup, validate and price observations once, and reuse those values for final
-cost application. Free workers are refilled without waiting for a whole wave.
-Cancellation is checked before cloning, between major IR stages and at completed
-legacy pass boundaries. On-demand analyses finish, normal finalization runs, and
-all tasks join before batch state is released; threads are never forcibly killed.
+## Scalar 기준 통합과 K1 occupancy-v2 검증
 
-Failures are deferred until final dominance is known. Only proven losers may
-have their failures ignored. Surviving required failures and preparation errors
-retain whole-loop configured estimated/native fallback and discard attempted backend cost reports.
-Pruned candidates never receive fabricated zero-spill observations. Logical
-results are applied in original candidate order; physical execution status may
-vary. JSONL records `pruned`, exact score bounds, and `not-started`, `cancelled`
-or `completed`. Text reports mark `backend-lower-bound`. CFG trace/dump and both
-cost reports remain passive. The timing phase is `probe_pruning`.
+2026-10-31 scalar 기준 통합과 K1 occupancy-v2 구현의 compiler/tools와 unit-test
+대상을 기존 cache에서 `--parallel 2`로 빌드했다. VectorizeTests 104개, RISCVTests 50개,
+pass-manager IRTests 7개가 통과했다. 전체 LoopVectorize 및
+`rvv/stack-slot-coloring.mir` lit는 1,367개 중 990개 통과, 377개 unsupported,
+실패 0이다. Unsupported는 빌드에 없는 backend 등의 조건에 따른다.
 
-The bound applies to tuned and default TTI real-spill modes. MIR modes do not prune;
-estimated-only modes never probe.
+진단은 `.cache/scalar-cost-unification/`에 네 단계로 분리했다: 변경 전,
+TTI scalar 출처 통합만 적용, scalar MIR 및 symmetric spill substitution 적용,
+K1 occupancy-v2 적용. 각 단계는 LU, first-diff, pi-reduce, trap-int, tealeaf finalise,
+sparse-repetitions의 source bytes를 retained metadata hash와 맞춘 뒤 3 targets ×
+8 modes = 144개 opt 실행을 기록했다. 총 576개 opt-only 실행은 모두 성공했다.
+IC=1, vector epilogue OFF, LMUL limit=8과 default gate를 유지했다. 이는 feedback
+pipeline/selection 진단이며 최종 executable codegen이나 runtime timing 측정이 아니다.
+단계별 compiler hash는 각 디렉터리의 `compiler-identity.json`에 보관한다. 이후 cache
+재빌드는 이 관측의 compiler identity를 바꾸지 않는다.
 
-JSONL includes body-unit `lower_bound_quarters_*`, normalized
-`score_lower_bound_quarters_*`, proof basis, requested/effective models,
-`score_kind` and physical `execution` status. Cost reports are transactional and passive.
+다음은 보관된 `04-k1-tables` 단계의 `bench_kernel` 선택이다. 각 셀은 **tuned TTI estimated / MIR**
+VF이며, 이 사례들의 MIR-estimated 선택도 MIR과 같았다. `sN`은 scalable VF의
+최소 element count이고 LMUL 표기가 아니다. `f1`은 scalar 선택이다.
 
-## 이전 구현의 검증 기록
+| 사례 | XiangShan VLEN128 | Saturn VLEN256 | K1 VLEN256 |
+|---|---|---|---|
+| LU | s8 / s8 | s8 / s8 | s4 / s8 |
+| first-diff | s4 / f1 | s4 / s8 | s4 / s8 |
+| pi-reduce | s8 / s8 | f1 / s8 | s4 / s4 |
+| trap-int | s8 / s8 | f1 / s8 | s4 / s4 |
+| tealeaf finalise | s8 / s8 | s8 / s8 | s4 / s8 |
+| sparse-repetitions | s8 / s8 | f1 / s8 | s4 / s4 |
 
-2026-10-31 CostSheet 정리 후 기존 compiler cache에서 compiler/tool 및 unit-test
-대상을 64 build jobs로 빌드했다. RISCVTests 41개, VectorizeTests 98개,
-pass-manager IRTests 7개가 통과했다. 전체 LoopVectorize와
-`rvv/stack-slot-coloring.mir` lit 검사는 987개 통과, 377개 unsupported, 실패 0이다.
-Unsupported는 현재 빌드에 없는 backend 등의 검사 조건에 따른다.
+변경 전 대비 scalar 출처를 맞춘 결과, LU와 tealeaf는 세 타깃 모두 TTI/MIR에서
+vector 선택으로 바뀌었다. Saturn의 pi-reduce/trap-int/sparse는 TTI에서 scalar를
+유지하고 scalar MIR 도입 후 MIR에서 vector를 선택했다. XiangShan first-diff의
+MIR은 scalar를 유지했다. K1 first-diff는 TTI scalar 통합 직후 f1, scalar MIR 단계에서
+MIR s4였고, 마지막 occupancy table 단계에서 TTI s4/MIR s8이 되었다. K1 pi-reduce와
+trap-int는 s8에서 s4로, sparse는 TTI f1/MIR s8에서 양쪽 s4로 바뀌었다. 이는 최종
+수치 비교의 결과이며 원하는 kernel 선택을 강제하는 예외를 추가하지 않았다.
 
-당시 구현과 unit/lit 검사는 `RISCVCostSheet` 및 aggregate spill hook을 직접
-사용한다. 별도 호환 wrapper, access 기반 spill 가격 API, 이전 모델 대조용 source·
-실행 파일·로그와 완료된 계획 문서는 유지하지 않는다. Compiler build/cache와
-호환 경로 symlink는 빌드 재사용을 위해 유지한다. 이 검증은 compiler 회귀 검사이며
-전체 dataset 성능이나 target runtime 측정이 아니다.
+성공한 pure-MIR `bench_kernel` 18쌍은 default-TTI toggle 전후 관측 `R/S`, scalar
+기준, VF/IC와 정규화된 kernel IR이 모두 같았다. Sparse의 `bench_prepare`는 별도
+multi-block scalar observation 실패로 raw=false의 tuned-estimated retry와 raw=true의
+native fallback이 갈리므로 whole-module bitcode는 다를 수 있다. 이는 정상 pure-MIR
+costing과 구분되는 기존 실패 목적지 정책이다. 그 시도의 scalar/candidate 보고는 함께 폐기된다.
 
+단위/통합 검사는 scalar TTI scope와 power-of-two divide/rem, scalar VF1/IC1 identity,
+원본 함수 문맥, fractional unroll 정규화, scalar/vector `R-S+Et`, 추정/관측 spill의
+독립성, native/tuned estimated spill, 보고의 수동성, whole-loop fallback, forced VF와
+trip-count/tail/epilogue 비교 및 K1 opcode별 fractional LMUL 경계를 다룬다.
+Scalar MIR 실례에는 XiangShan first-diff의 `R=79/19, Wobs=19`처럼 quarter 단위보다
+정밀한 기준도 있으며 exact rational을 유지한다. Scalar spill을 포함한 synthetic
+pressure 검사는 관측 spill에서 추정을 역산하지 않고 원본 VF1 plan을 사용한다.
 
-## 타깃별 CostSheet 구현 검증
-
-2026-10-31 Saturn/K1 추가 후 기존 cache에서 지정된 compiler/tools와 unit-test
-대상을 `--parallel 2`로 빌드했다. RISCVTests 43개, VectorizeTests 99개,
-pass-manager IRTests 7개가 통과했다. 전체 LoopVectorize와 StackSlotColoring MIR
-lit는 988개 통과, 377개 unsupported, 실패 0이다. 새 타깃의 estimated/observed/MIR/
-MIR-estimated/default-TTI 조합과 homogeneous spill units의 비선형 가격을 검사한다.
-
-이 cache는 CLANG_INCLUDE_TESTS=OFF이므로 Clang lit site config가 없다.
-대신 riscv-cpus.c의 RUN/FileCheck 88개를 빌드된 clang으로 직접 실행하여 모두 통과했다.
-문서 로컬 링크와 diff whitespace 검사도 통과했다. Target simulator/실기기 실행,
-전체 dataset 성능 측정은 수행하지 않았다. 가정 가격의 성능 정확도 검증을 뜻하지 않는다.
-
-최종 문서/코드 검토에서는 수식의 규범 위치와 앵커, opcode 적용 범위, 가정 Rule의
-표기 예외를 정리했다. K1 scalar units는 Q를 가격화하도록 보정했고 whole-register
-memory는 각 sheet의 spill hook 가격을 재사용한다. 수정 후 관련 target/tools 빌드,
-RISCVTests 43개와 backend-target-sheets/backend-feedback/backend-cost-report lit 3개가
-통과했다. 새 통합 검사는 model·관측 상태·fallback 부재도 확인한다.
+새 K1 hardware timing, 전체 dataset runtime 측정 또는 historical post-frame compiler
+재실행은 수행하지 않았다. Retained sweep의 timing을 새 executable에 할당하거나
+성능 향상을 주장하지 않는다. Scalar nominal defaults, XiangShan 대표값, Saturn의
+iterative=64 가정 및 scheduler 근거 K1 가격의 물리적 정확성은 남은 검증 범위다.

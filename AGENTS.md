@@ -41,7 +41,12 @@ and the configured aggregate register-class TTI hook. Tuned candidate costs use 
 use the generic MIR sheet and native RISC-V TTI. Observed units are homogeneous
 per class, direction and physical register group. Default-TTI selection
 also applies to MIR estimated spills, independently of MIR sheet selection.
-Scalar baselines, native-cost IC, probe optimization and final codegen stay native.
+Scalar baselines use the configured TTI in TTI modes. MIR uses one original-loop
+VF1/IC1 scalar probe per attempt and the same post-frame sheet as vector bodies;
+estimated MIR substitutes `R - S + Et` symmetrically. Preserve exact scalar
+rationals for ranking and tails. Default-TTI selects both estimated spill terms
+without changing successful pure-MIR pricing/selection. Native-cost IC, probe
+optimization and final codegen stay native.
 
 Preserve the master flag, CPU/VLEN selection, `L - Ev + Sv` / `L` / `R` /
 `R - S + Et`, exact rational normalization, gate and main/epilogue policy unless

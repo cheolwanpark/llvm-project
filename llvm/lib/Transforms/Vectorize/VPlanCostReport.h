@@ -76,6 +76,8 @@ class VPlanCostReport {
   DenseMap<const VPlan *, unsigned> PlanIDs;
   SmallVector<CandidateRecord, 0> Candidates;
   std::optional<InstructionCost> ScalarBaseline;
+  std::optional<VPExactCost> ExactScalarBaseline;
+  std::string ScalarSource, ScalarDetails;
   std::optional<SelectionRecord> MainSelection, EpilogueSelection;
   std::optional<unsigned> InterleaveCount;
   std::string InterleaveReason;
@@ -142,6 +144,8 @@ public:
   unsigned planID(const VPlan &Plan) { return registerPlan(Plan); }
   void forgetPlan(const VPlan &Plan) { PlanIDs.erase(&Plan); }
   void scalarBaseline(InstructionCost Cost) { ScalarBaseline = Cost; }
+  void backendScalarCost(const VPBackendScalarCostEntry &Cost,
+                         const VPlanBackendResult *Observation);
   void bodyCost(const VPlan &Plan, ElementCount VF, InstructionCost Cost);
   void skip(const VPlan &Plan, ElementCount VF, StringRef Reason,
             bool Epilogue = false);

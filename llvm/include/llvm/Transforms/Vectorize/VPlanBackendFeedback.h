@@ -62,6 +62,7 @@ struct VPlanBackendCandidate {
   ElementCount EpilogueVF = ElementCount::getFixed(0);
   VPlanBackendObservationOptions Observation{};
   std::shared_ptr<VPlanBackendProbeControl> Control{};
+  VPlanBackendCandidateKind Kind = VPlanBackendCandidateKind::Vector;
 };
 
 /// Explicit per-pass state for materializing a candidate on a disposable clone.

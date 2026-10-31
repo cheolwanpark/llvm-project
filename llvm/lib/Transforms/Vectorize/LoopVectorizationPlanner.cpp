@@ -775,10 +775,16 @@ bool LoopVectorizationPlanner::isMoreProfitable(const VectorizationFactor &A,
                           : "unknown-trip-count-cross-products");
     }
 
-    auto RTCostA = vplanCostForTripCount(EstimatedWidthA, CostA,
-                                        CostT(A.ScalarCost), MaxTripCount, HasTail);
-    auto RTCostB = vplanCostForTripCount(EstimatedWidthB, CostB,
-                                        CostT(B.ScalarCost), MaxTripCount, HasTail);
+    auto Scalar = [](const VectorizationFactor &V) -> CostT {
+      if constexpr (std::is_same_v<CostT, VPExactCost>)
+        return V.ExactScalarCost.value_or(VPExactCost(V.ScalarCost));
+      else
+        return V.ScalarCost;
+    };
+    auto RTCostA = vplanCostForTripCount(EstimatedWidthA, CostA, Scalar(A),
+                                       MaxTripCount, HasTail);
+    auto RTCostB = vplanCostForTripCount(EstimatedWidthB, CostB, Scalar(B),
+                                       MaxTripCount, HasTail);
     if constexpr (std::is_same_v<CostT, VPExactCost>)
       if (!RTCostA.isValid() || !RTCostB.isValid())
         Config.BackendCosts->fail("exact trip-count comparison overflow");

@@ -10,14 +10,15 @@
 명령의 서비스/자원 점유 비용을 합산한다. 독립 실행 경로의 overlap, 전체 issue 폭,
 RAW/WAW dependency와 bank conflict를 합성하지 않으므로 합은 실제 loop cycles가 아니다.
 Scalar 일반 연산의 기본값 1은 두 개의 ALU가 있어도 1이다. 코어 전체의 독립 명령
-처리율로 나눠 재정규화하지 않는다. Native scalar baseline은 LLVM 값을 유지하므로
-이 값과도 완전한 cycle 정확성을 주장하지 않는다.
+처리율로 나눠 재정규화하지 않는다. Scalar 기준도 선택 모드와 같은 가격 출처를
+사용하지만 이 가산값이 실제 loop cycles와 일치한다는 뜻은 아니다. Native 단위와 맞추는 calibration factor는 없다.
 
-근거 우선순위는 공식 spec → 고정 configuration의 RTL → 기존 LLVM target schedule
-→ 명시적 가정이다. Pipeline depth/latency를 reciprocal throughput으로 복사하지 않는다.
-고정 initiation interval/점유값을 우선하고, iterative 연산은 공개된 범위의 상한을 쓴다.
-정보가 없는 지원 연산은 scalar 1, SIMD 처리 group당 1, iterative element당 64를 사용한다.
-이는 가정이며 하드웨어가 보장한 상한이 아니다. Saturn/K1은 가격 Rule의
+근거 우선순위는 공식 spec → 명령별로 검증 가능한 occupancy 근거(고정 configuration의
+RTL 포함) → 고정 LLVM scheduler의 명시적 `ReleaseAtCycles` → 명시적 가정이다.
+Pipeline depth/latency를 reciprocal throughput으로 복사하지 않는다. 명시적인 initiation
+interval/점유값을 우선하며, 공개 근거가 없는 iterative 대표값은 가정으로 표시한다.
+근거가 부족한 지원 연산의 nominal 기본값과 iterative 대표값은 타깃 문서에 명시한다.
+가정값은 하드웨어가 보장한 상한이 아니다. Saturn/K1은 가격 Rule의
 `assumed`로 이를 표시한다. XiangShan은 기존 opcode/form Rule 식별자를 유지하므로
 Rule 문자열만으로 근거 수준을 판별할 수 없다. 해당 타깃 문서의 가정 구분을 따른다.
 
@@ -44,8 +45,20 @@ Gather/scatter처럼 TTI에 index geometry가 없으면 inherited sequence 추�
 XiangShan의 기존 Rule 식별자는 위 예외를 따른다. Unknown은 아직
 지원하지 않는 opcode/sequence이며, MIR에서는 1+unknown, TTI에서는 inherited
 fallback을 쓴다. 지원 가격의 불확실성을 unknown으로 숨기지 않는다. 누락/불가능한
-필수 geometry와 overflow는 오류다. 유효한 spill 관측 실패를 0으로 바꾸지 않는다.
-Profile은 명시적인 후보 reciprocal-throughput scope에서만 활성화된다.
+필수 geometry와 overflow는 오류다. Spill 관측 실패를 0으로 바꾸지 않는다.
+Profile은 명시적인 backend 비교의 scalar/vector reciprocal-throughput scope에서만
+활성화된다. Native IC, probe 최적화와 최종 codegen에는 이 scope를 전달하지 않는다.
+
+### Scalar adapter
+
+모드별 scalar/vector 비용 출처와 spill 대체 수식은
+[선택 계약](../BACKEND_FEEDBACK.md#bodyspill-ablation과-mir-info)을 따른다.
+
+Scalar TTI는 지원 산술, load/store, sqrt/fma intrinsic과 FP/정수 변환을 sheet에
+전달한다. Unsigned power-of-two divide/rem은 shift/and로 단순화한 가격을 먼저 쓴다.
+Branch/control 및 adapter가 다루지 않는 sequence는 기존 native TTI를 사용한다.
+MIR은 실제 지원 scalar opcode를 직접 가격화하고 미지원 opcode는 비용 1과 unknown
+표식을 남긴다. 지원 가격의 존재와 실기기에서 검증된 정확성은 별개의 속성이다.
 
 ## Spill → units → TTI → CostSheet
 
@@ -56,7 +69,8 @@ Profile은 명시적인 후보 reciprocal-throughput scope에서만 활성화된
 Default aggregate hook은 기존 단일-register hook의 Q배다. Empty units는 (0,0)이다.
 Scalar class는 단일-register 접근을 사용한다. TTI hook의 public signature는 유지한다.
 
-예를 들어 K1에서 `{1,1,4}`는 `(2,2)+(4,1)`로 14, `{2,2,2}`는 `(6,3)`으로 12다.
+예를 들어 register group `{1,1,4}`는 `(2,2)+(4,1)`, `{2,2,2}`는 `(6,3)`으로
+전달한다. Q가 같아도 group별 f(g)가 다르므로 가격은 같지 않을 수 있다.
 가격을 units에 미리 넣지 않는다. Backend collector는 가격 규칙을 모른다.
 Spill-slot 여부는 MIR body에서 제거할 비용을 분류하며 일반 whole-register 접근도
 동일 명령이면 같은 sheet 가격이다. 별도 주소 계산은 MIR body에 남는다.
@@ -64,7 +78,8 @@ Spill-slot 여부는 MIR body에서 제거할 비용을 분류하며 일반 whol
 가격 계산 후 `Wtti/Wobs`를 정확히 한 번 곱한다. Wobs는 IC와 검증된 추가 unroll을
 포함하므로 IC를 다시 곱하지 않는다. MIR rational을 quarter-cost rational로 바꾸고,
 기존 VPExactCost 비교를 사용한다. TTI는 기존 quarter-cost 표현을 사용한다.
-현재 타깃 표는 정수 가격이므로 TTI/MIR간 precision 손실은 없다.
+타깃 명령 가격은 정수지만 관측 unroll 폭으로 나눈 scalar/vector body는 분수가 될 수
+있다. Scalar 기준과 tail에도 exact rational을 유지하며 ranking 전에 절삭하지 않는다.
 
 ## Generic fallback
 

@@ -78,7 +78,10 @@ json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R) {
       {"vf", R.VF.getKnownMinValue()},
       {"scalable", R.VF.isScalable()},
       {"ic", R.IC},
-      {"observation_role", R.IsEpilogue ? "epilogue" : "main"},
+      {"observation_role",
+       R.Kind == VPlanBackendCandidateKind::ScalarBaseline
+           ? "scalar-baseline"
+           : R.IsEpilogue ? "epilogue" : "main"},
       {"stage", R.Stage},
       {"iteration_width", R.IterationWidth},
       {"iteration_mapping", R.IterationMapping},

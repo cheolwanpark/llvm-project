@@ -203,7 +203,10 @@ public:
   getInstructionCost(const VPlanMIRInstruction &MI) const override {
     if (MI.Opcode == "invalid")
       return createStringError("invalid geometry");
-    return MIRInstructionCost{"fraction", false, MI.Spill ? 5 : 7, 3};
+    if (MI.Opcode == "overflow")
+      return MIRInstructionCost{"overflow", false, INT64_MAX, 1};
+    return MIRInstructionCost{"fraction", MI.Opcode == "unknown",
+                               MI.Spill ? 5 : 7, 3};
   }
 };
 } // namespace
@@ -299,6 +302,20 @@ public:
   static bool run(VPlanBackendCostModel &M, ArrayRef<Prepared> Cs,
                   std::optional<VPBackendPruningContext> Context) {
     return M.addBatch(Cs, Context);
+  }
+  static bool scalar(VPlanBackendCostModel &M, InstructionCost Estimate,
+                      VPlanBackendResult O) {
+    M.MIRInfo = std::make_unique<FractionMIRInfo>();
+    VPlanBackendCandidate C{"scalar", 0, ElementCount::getFixed(1), true,
+                            false, false};
+    C.Kind = VPlanBackendCandidateKind::ScalarBaseline;
+    return M.applyScalar(C, Estimate, VPlanBackendProbeResult(std::move(O)));
+  }
+  static const auto &scalarEntry(const VPlanBackendCostModel &M) {
+    return M.ScalarEntry;
+  }
+  static bool rowsEmpty(const VPlanBackendCostModel &M) {
+    return M.Rows.empty();
   }
 };
 } // namespace llvm
@@ -401,6 +418,98 @@ TEST_F(BackendSchedulerTest, EstimatedModeNeverCallsProvider) {
   ASSERT_NE(Costs.lookup(Plan, ElementCount::getFixed(4)), nullptr);
   EXPECT_EQ(Costs.lookup(Plan, ElementCount::getFixed(4))->Body,
             VPExactCost(InstructionCost(500)));
+}
+
+TEST_F(BackendSchedulerTest, ScalarMIRExactSymmetricSpillSubstitution) {
+  VPlanBackendResult O;
+  O.Kind = VPlanBackendCandidateKind::ScalarBaseline;
+  O.Candidate = "scalar";
+  O.VF = ElementCount::getFixed(1);
+  O.IC = 1;
+  O.Stage = "post-frame-lowering";
+  O.IterationMapping = true;
+  O.IterationWidth = 8;
+  O.MIRBody.emplace(2);
+  // An ordinary stack load belongs to R, but never to S.
+  O.MIRBody->front().Load = true;
+  O.MIRBody->back().Spill = true;
+  for (bool Estimated : {false, true})
+    for (bool Default : {false, true})
+      for (bool ObservedSpill : {false, true})
+        for (unsigned Et : {0u, 3u}) {
+          O.MIRBody->back().Spill = ObservedSpill;
+          VPlanBackendCostModel Costs(Feedback, TTI, *F, *Header, nullptr,
+                                      {true, Estimated, Default});
+          ASSERT_TRUE(Access::scalar(Costs, Et, O));
+          auto R = VPExactCost::ratio(ObservedSpill ? 6 : 7, 3);
+          auto S = VPExactCost::ratio(ObservedSpill ? 5 : 0, 6);
+          EXPECT_EQ(Costs.scalarCost(),
+                    Estimated ? R - S + VPExactCost(InstructionCost(Et)) : R);
+          const auto &E = *Access::scalarEntry(Costs);
+          ASSERT_TRUE(E.MIR.has_value());
+          EXPECT_EQ(E.MIR->Body, R);
+          EXPECT_EQ(E.MIR->Spill, S);
+          EXPECT_EQ(E.ObservedWidth, 8u);
+          EXPECT_EQ(E.Source, Estimated ? "mir-estimated-spill" : "mir");
+        }
+}
+
+TEST_F(BackendSchedulerTest, ScalarFailureDiscardsWholeAttempt) {
+  for (unsigned Failure = 0; Failure != 11; ++Failure) {
+    VPlanBackendCostModel Costs(Feedback, TTI, *F, *Header, nullptr,
+                                {true, true, false});
+    VPlanBackendResult O;
+    O.Kind = VPlanBackendCandidateKind::ScalarBaseline;
+    O.Candidate = "scalar";
+    O.VF = ElementCount::getFixed(1);
+    O.IC = 1;
+    O.Stage = "post-frame-lowering";
+    O.IterationMapping = true;
+    O.IterationWidth = 8;
+    O.MIRBody.emplace(1);
+    O.MIRBody->front().Opcode = "unknown";
+    ASSERT_TRUE(Access::scalar(Costs, 0, O));
+    EXPECT_TRUE(Access::scalarEntry(Costs)->MIR->Instructions.front().Unknown);
+    InstructionCost Et = 0;
+    switch (Failure) {
+    case 0: O.Candidate = "wrong"; break;
+    case 1: O.Kind = VPlanBackendCandidateKind::Vector; break;
+    case 2: O.VF = ElementCount::getScalable(1); break;
+    case 3: O.IC = 2; break;
+    case 4: O.IterationMapping = false; break;
+    case 5: O.Stage = "post-stack-slot-coloring"; break;
+    case 6: O.MIRBody->front().Opcode = "invalid"; break;
+    case 7: Et = InstructionCost::getInvalid(); break;
+    case 8: Et = -1; break;
+    case 9: O.IterationWidth = 0; break;
+    case 10: O.MIRBody->front().Opcode = "overflow"; break;
+    }
+    EXPECT_FALSE(Access::scalar(Costs, Et, O));
+    EXPECT_TRUE(Costs.failed());
+    EXPECT_FALSE(Costs.scalarCost().isValid());
+    EXPECT_FALSE(Access::scalarEntry(Costs).has_value());
+    EXPECT_TRUE(Access::rowsEmpty(Costs));
+    EXPECT_EQ(Costs.lookup(Plan, ElementCount::getFixed(4)), nullptr);
+  }
+}
+
+TEST(VPlanBackendCost, ExactScalarTailAndProfitabilityCeilings) {
+  auto Scalar = VPExactCost::ratio(1, 3);
+  // Positive baseline below one quarter: truncation would make the tail free.
+  EXPECT_EQ(InstructionCost(Scalar), InstructionCost(0));
+  EXPECT_EQ(vplanCostForTripCount(4, VPExactCost::ratio(1, 2), Scalar, 11, true),
+            VPExactCost::ratio(2, 1));
+  EXPECT_TRUE(vplanStrictlyCheaper(VPExactCost::ratio(1, 2), 4,
+                                  Scalar, 1, Scalar, 11, true));
+  EXPECT_EQ(Scalar.ceilDivide(VPExactCost::ratio(1, 4)), 2u);
+  EXPECT_EQ(VPExactCost().ceilDivide(Scalar), 0u);
+  EXPECT_FALSE(Scalar.ceilDivide(VPExactCost()).has_value());
+  EXPECT_FALSE(VPExactCost::ratio(-1, 1).ceilDivide(Scalar).has_value());
+  EXPECT_FALSE(VPExactCost::ratio(INT64_MAX, 1)
+                   .ceilDivide(VPExactCost::ratio(1, INT64_MAX)).has_value());
+  EXPECT_EQ(VPExactCost::ratio(INT64_MAX, INT64_MAX - 1)
+                .ceilDivide(VPExactCost::ratio(INT64_MAX - 1, INT64_MAX)), 2u);
+  EXPECT_FALSE(VPExactCost(InstructionCost(-1)).isValid());
 }
 
 TEST(VPlanBackendCost, ObservedSpillsUseAsymmetricClassHooks) {

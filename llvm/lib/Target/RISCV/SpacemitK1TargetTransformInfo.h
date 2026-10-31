@@ -23,6 +23,10 @@ class SpacemitK1TTIImpl : public RISCVTTIImpl {
 
 public:
   SpacemitK1TTIImpl(const RISCVTargetMachine *TM, const Function &F);
+  InstructionCost getExtendedReductionCost(
+      unsigned Opcode, bool IsUnsigned, Type *ResTy, VectorType *ValTy,
+      std::optional<FastMathFlags> FMF,
+      TTI::TargetCostKind Kind) const override;
   InstructionCost
   getRegisterClassSpillReloadCost(unsigned ClassID, bool IsLoad,
                                   TTI::SpillReloadUnits Units,

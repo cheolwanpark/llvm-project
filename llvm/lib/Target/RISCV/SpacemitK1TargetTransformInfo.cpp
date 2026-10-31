@@ -199,11 +199,71 @@ SpacemitK1TTIImpl::getRegisterClassReloadCost(unsigned C,
              ? Sheet->spillCost(C == RISCVRegisterClass::VRRC, true, {1, 1})
              : RISCVTTIImpl::getRegisterClassReloadCost(C, Kind);
 }
+
+InstructionCost SpacemitK1TTIImpl::getExtendedReductionCost(
+    unsigned Opcode, bool IsUnsigned, Type *ResTy, VectorType *ValTy,
+    std::optional<FastMathFlags> FMF, TTI::TargetCostKind Kind) const {
+  auto Inherited = [&] {
+    return RISCVTTIImpl::getExtendedReductionCost(Opcode, IsUnsigned, ResTy,
+                                                ValTy, FMF, Kind);
+  };
+  if (!active(Kind) ||
+      (isa<FixedVectorType>(ValTy) &&
+       !getST()->useRVVForFixedLengthVectors()) ||
+      (Opcode != Instruction::Add && Opcode != Instruction::FAdd) ||
+      ResTy->getScalarSizeInBits() > getST()->getELen())
+    return Inherited();
+
+  auto LT = getTypeLegalizationCost(ValTy);
+  unsigned Bits = ValTy->getScalarSizeInBits();
+  // Model one widening reduction only when legalization leaves its source
+  // intact. Split/promoted and mask reductions retain the inherited sequence.
+  if (LT.first != 1 || !LT.second.isVector() ||
+      LT.second.getScalarSizeInBits() != Bits ||
+      ResTy->getScalarSizeInBits() != 2 * Bits)
+    return Inherited();
+
+  unsigned Reduction, Insert, Extract;
+  if (Opcode == Instruction::FAdd) {
+    bool HalfToFloat = ValTy->getElementType()->isHalfTy() && ResTy->isFloatTy();
+    bool FloatToDouble =
+        ValTy->getElementType()->isFloatTy() && ResTy->isDoubleTy();
+    if ((!HalfToFloat && !FloatToDouble) ||
+        (Bits == 16 && !getST()->hasVInstructionsF16()) ||
+        (Bits == 32 && !getST()->hasVInstructionsF64()) ||
+        (Bits != 16 && Bits != 32))
+      return Inherited();
+    Reduction = TTI::requiresOrderedReduction(FMF) ? RISCV::VFWREDOSUM_VS
+                                                 : RISCV::VFWREDUSUM_VS;
+    Insert = RISCV::VFMV_S_F;
+    Extract = RISCV::VFMV_F_S;
+  } else {
+    if (!ValTy->getElementType()->isIntegerTy() || !ResTy->isIntegerTy() ||
+        Bits == 1)
+      return Inherited();
+    Reduction = IsUnsigned ? RISCV::VWREDSUMU_VS : RISCV::VWREDSUM_VS;
+    Insert = RISCV::VMV_S_X;
+    Extract = RISCV::VMV_X_S;
+  }
+  // VPatWidenReductionVL(_Ext_VL_RM) selects these forms from reduce(ext(A)).
+  // Use source SEW/LMUL for the widening instruction, just as observed MIR does.
+  auto Cost = getRISCVInstructionCost({Insert, Reduction, Extract}, LT.second,
+                                     Kind);
+  return Cost.isValid() ? Cost : Inherited();
+}
+
 InstructionCost SpacemitK1TTIImpl::getArithmeticInstrCost(
     unsigned Opcode, Type *Ty, TTI::TargetCostKind Kind,
     TTI::OperandValueInfo O1, TTI::OperandValueInfo O2,
     ArrayRef<const Value *> Args, const Instruction *I) const {
   if (active(Kind) && !Ty->isVectorTy()) {
+    // Preserve the native lowering simplification before pricing a divide.
+    if ((Opcode == Instruction::UDiv || Opcode == Instruction::URem) &&
+        O2.isConstant() && O2.isPowerOf2())
+      return getArithmeticInstrCost(Opcode == Instruction::UDiv
+                                        ? Instruction::LShr
+                                        : Instruction::And,
+                                    Ty, Kind, O1, O2.getNoProps());
     auto LT = getTypeLegalizationCost(Ty);
     StringRef Op;
     bool FP = Ty->isFloatingPointTy();
