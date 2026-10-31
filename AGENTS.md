@@ -3,8 +3,8 @@
 ## Scope and documentation
 
 This LLVM fork provides in-process VF selection. `BACKEND_FEEDBACK.md`
-describes its contract, fixed TTI corrections and cost reports; README covers
-usage, build and tests. `BACKEND_COST_MODEL_VALIDATION.md` records dated results.
+describes its contract, shared CostSheets, spill pricing and cost reports; README covers
+usage, build and tests.
 Preserve existing upstream LLVM options and behavior when cleaning up fork code.
 
 Keep README and these existing documents current instead of adding overlapping
@@ -29,21 +29,28 @@ retained artifacts accurately.
 
 ## Backend feedback invariants
 
-The current in-process probe stops immediately after StackSlotColoring, using
-the spill observer's pass ID. Its stage is `post-stack-slot-coloring`. It runs
-VSETVLI insertion and scalar allocation but stops before subsequent copy
-propagation, post-RA LICM, and frame lowering. The collector and pricing remain
-vector-spill-only; final scalar spill support would require revisiting both.
+The non-MIR vector-spill probe stops immediately after StackSlotColoring, using
+its observer's pass ID (`post-stack-slot-coloring`). It runs VSETVLI insertion and
+scalar allocation before subsequent copy propagation, post-RA LICM and frame
+lowering. This collector remains vector-spill-only. MIR body observations use the
+separate `post-frame-lowering` observer and include scalar/vector spill-slot costs.
 
-Preserve the master flag, fixed XiangShan profile, `L - Ev + Sv`, exact rational
-normalization, native-cost IC, gate, and main/epilogue policy unless the task
-explicitly changes them. Failed required probe candidates retry the whole original
-loop with specific TTI estimated costs when raw default-TTI is false and that
-profile is supported, then revert to native if unavailable or unsuccessful.
-Requested TTI estimated failures go directly native. Never treat failure as zero spill. Do not silently
-add post-frame retries, benchmark-specific exceptions, or whole-MIR transport
-to the in-process path. Keep the two cost-report options passive and discard
-attempted backend reports on whole-loop native fallback.
+Estimated and observed non-MIR spills use profile-independent `SpillReloadUnits`
+and the configured aggregate register-class TTI hook. Tuned candidate costs use
+the shared XiangShan CostSheet for Kunminghu at exact VLEN=128; other RVV CPU/VLEN
+settings use the generic MIR sheet and native RISC-V TTI. Default-TTI selection
+also applies to MIR estimated spills, independently of MIR sheet selection.
+Scalar baselines, native-cost IC, probe optimization and final codegen stay native.
+
+Preserve the master flag, CPU/VLEN selection, `L - Ev + Sv` / `L` / `R` /
+`R - S + Et`, exact rational normalization, gate and main/epilogue policy unless
+the task explicitly changes them. Failed required probe candidates retry the
+whole original loop with specific TTI estimated costs when raw default-TTI is
+false and that profile is supported, then revert to native if unavailable or
+unsuccessful. Requested TTI estimated failures go directly native. Never treat
+failure as zero spill. Do not add post-frame retries or benchmark-specific
+exceptions. Keep reports passive and discard attempted backend reports on
+whole-loop native fallback.
 
 ## Reference and dataset comparisons
 

@@ -632,13 +632,19 @@ public:
 
   virtual StringRef getVPlanCostProfileName() const { return "native"; }
 
-  virtual InstructionCost
-  getSpillReloadCost(const TTI::SpillReloadAccess &Access,
-                     TTI::TargetCostKind Kind) const {
-    return getMemoryOpCost(
-        Access.IsLoad ? Instruction::Load : Instruction::Store,
-        Access.AccessType, Access.Alignment, Access.AddressSpace, Kind,
-        TTI::OperandValueInfo(), nullptr);
+  virtual InstructionCost getRegisterClassSpillReloadCost(
+      unsigned ClassID, bool IsLoad, TTI::SpillReloadUnits Units,
+      TTI::TargetCostKind Kind) const {
+    if (!Units.isValid())
+      return InstructionCost::getInvalid();
+    if (!Units.Registers)
+      return 0;
+    auto Unit = IsLoad ? getRegisterClassReloadCost(ClassID, Kind)
+                       : getRegisterClassSpillCost(ClassID, Kind);
+    if (!Unit.isValid() || Unit < 0 ||
+        Unit.getQuarterValue() > INT64_MAX / int64_t(Units.Registers))
+      return InstructionCost::getInvalid();
+    return Unit * int64_t(Units.Registers);
   }
 
   virtual InstructionCost

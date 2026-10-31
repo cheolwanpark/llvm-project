@@ -20,7 +20,7 @@
 #include "RISCVVPlanMIR.h"
 #include "RISCVVPlanSpill.h"
 #include "TargetInfo/RISCVTargetInfo.h"
-#include "XiangShanV2MIRInfo.h"
+#include "RISCVCostSheet.h"
 #include "XiangShanV2TargetTransformInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
@@ -297,10 +297,9 @@ RISCVTargetMachine::getTargetTransformInfo(const Function &F) const {
 std::unique_ptr<TargetMIRInfo>
 RISCVTargetMachine::getTargetMIRInfo(const Function &F) const {
   const auto *ST = getSubtargetImpl(F);
-  if (ST->getTuneCPU() == "xiangshan-kunminghu" && ST->hasVInstructions() &&
-      ST->getRealMinVLen() == 128 && ST->getRealMaxVLen() == 128)
-    return std::make_unique<XiangShanV2MIRInfo>();
-  return nullptr;
+  if (!ST->hasVInstructions())
+    return nullptr;
+  return createRISCVCostSheet(*ST);
 }
 
 // A RISC-V hart has a single byte-addressable address space of 2^XLEN bytes

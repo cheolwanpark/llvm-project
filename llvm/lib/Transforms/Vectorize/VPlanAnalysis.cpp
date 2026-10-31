@@ -104,23 +104,30 @@ VPRegisterUsage::spillCost(const TargetTransformInfo &TTI,
       // Assume that for each register used past what's available we get one
       // spill and reload.
       unsigned Spills = MaxUsers - AvailableRegs;
-      InstructionCost SpillUnit =
-          TTI.getRegisterClassSpillCost(RegClass, CostKind);
-      InstructionCost ReloadUnit =
-          TTI.getRegisterClassReloadCost(RegClass, CostKind);
-      InstructionCost SpillCost = SpillUnit + ReloadUnit;
-      InstructionCost TotalCost = Spills * SpillCost;
+      TargetTransformInfo::SpillReloadUnits Units{Spills, Spills};
+      InstructionCost SpillUnit = TTI.getRegisterClassSpillReloadCost(
+          RegClass, false, Units, CostKind);
+      InstructionCost ReloadUnit = TTI.getRegisterClassSpillReloadCost(
+          RegClass, true, Units, CostKind);
+      auto CheckedAdd = [](InstructionCost A, InstructionCost B) {
+        int64_t Sum;
+        if (!A.isValid() || !B.isValid() || A < 0 || B < 0 ||
+            AddOverflow(A.getQuarterValue(), B.getQuarterValue(), Sum))
+          return InstructionCost::getInvalid();
+        return A + B;
+      };
+      InstructionCost TotalCost = CheckedAdd(SpillUnit, ReloadUnit);
       VP_COST_DETAIL(Report, OS << "        coverage=expanded excess=" << Spills
-                                << " getRegisterClassSpillCost=" << SpillUnit
-                                << " getRegisterClassReloadCost=" << ReloadUnit
-                                << " spill_plus_reload=" << SpillCost
-                                << " multiply=" << TotalCost << '\n');
+                                << " Q=" << Spills << " A=" << Spills
+                                << " tti_profile=" << TTI.getVPlanCostProfileName()
+                                << " store=" << SpillUnit << " load=" << ReloadUnit
+                                << " spill_plus_reload=" << TotalCost << '\n');
       LLVM_DEBUG(dbgs() << "LV(REG): Cost of " << TotalCost << " from "
                         << Spills << " spills of "
                         << TTI.getRegisterClassName(RegClass) << "\n");
-      Cost += TotalCost;
+      Cost = CheckedAdd(Cost, TotalCost);
       if (VectorCost && RegClass == TTI.getRegisterClassForType(true))
-        *VectorCost += TotalCost;
+        *VectorCost = CheckedAdd(*VectorCost, TotalCost);
     }
   }
   return Cost;

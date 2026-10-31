@@ -59,8 +59,15 @@ LLVM_ABI_FOR_TEST bool vplanStrictlyCheaper(
     VPExactCost A, unsigned WidthA, VPExactCost B, unsigned WidthB,
     VPExactCost Scalar, unsigned MaxTripCount, bool ScalarTail);
 
+struct VPSpillCost {
+  unsigned ClassID;
+  bool IsLoad;
+  uint64_t Registers = 0, Accesses = 0;
+  InstructionCost Cost = 0;
+};
 struct VPMIRCost {
-  std::string Model, Revision;
+  std::string Model, Revision, CPU;
+  unsigned NominalVLEN = 0;
   VPExactCost RawBody, RawSpill, Body, Spill;
   std::vector<MIRInstructionCost> Instructions;
 };
@@ -95,7 +102,7 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
     VPExactCost Spill;
     std::optional<VPMIRCost> MIR;
     InstructionCost Raw;
-    SmallVector<InstructionCost> AccessCosts;
+    SmallVector<VPSpillCost> AccessCosts;
     std::string Error;
   };
   EvaluatedCost
@@ -162,6 +169,6 @@ LLVM_ABI_FOR_TEST Expected<VPExactCost>
 priceVPlanVectorSpills(const VPlanBackendResult &Observation,
                        const TargetTransformInfo &TTI, LLVMContext &Context,
                        unsigned Width, InstructionCost &RawCost,
-                       SmallVectorImpl<InstructionCost> *AccessCosts = nullptr);
+                       SmallVectorImpl<VPSpillCost> *AccessCosts = nullptr);
 } // namespace llvm
 #endif

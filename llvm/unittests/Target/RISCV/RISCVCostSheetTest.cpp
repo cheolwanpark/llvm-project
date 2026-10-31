@@ -1,11 +1,10 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-#include "XiangShanV2MIRInfo.h"
+#include "RISCVCostSheet.h"
 #include "gtest/gtest.h"
 using namespace llvm;
 namespace {
-// Fixed service-sum-v1 expectations independently evaluated with the Python
-// kunminghu_v2 model at RTL e7bab53e66dfb3c4a1d11cf9519b0396f8576cae.
+// Direct instruction prices for the fixed Kunminghu profile.
 VPlanMIRInstruction op(StringRef Name, unsigned Group = 0, unsigned SEW = 0) {
   VPlanMIRInstruction I;
   I.Opcode = I.BaseOpcode = Name.str();
@@ -16,24 +15,20 @@ VPlanMIRInstruction op(StringRef Name, unsigned Group = 0, unsigned SEW = 0) {
 }
 void expectCost(const VPlanMIRInstruction &I, unsigned Cost,
                 bool Unknown = false) {
-  auto C = XiangShanV2MIRInfo().getInstructionCost(I);
+  auto C = XiangShanCostSheet().getInstructionCost(I);
   ASSERT_TRUE(bool(C)) << (C ? "" : toString(C.takeError()));
-  int64_t Sum = 0;
-  for (const auto &D : C->Demands) {
-    EXPECT_EQ(D.Denominator, 1);
-    Sum += D.Numerator;
-  }
-  EXPECT_EQ(Sum, Cost) << I.BaseOpcode;
+  EXPECT_EQ(C->Denominator, 1);
+  EXPECT_EQ(C->Numerator, Cost) << I.BaseOpcode;
   EXPECT_EQ(C->Unknown, Unknown);
 }
 void expectInvalid(const VPlanMIRInstruction &I) {
-  auto C = XiangShanV2MIRInfo().getInstructionCost(I);
+  auto C = XiangShanCostSheet().getInstructionCost(I);
   EXPECT_FALSE(bool(C));
   if (!C)
     consumeError(C.takeError());
 }
 } // namespace
-TEST(XiangShanMIRInfo, ScalarAndConfiguration) {
+TEST(XiangShanCostSheet, ScalarAndConfiguration) {
   expectCost(op("ADD"), 1);
   auto Store = op("SD");
   Store.Store = true;
@@ -50,7 +45,7 @@ TEST(XiangShanMIRInfo, ScalarAndConfiguration) {
   expectCost(Copy, 1, true);
   expectCost(op("UNREVIEWED"), 1, true);
 }
-TEST(XiangShanMIRInfo, ArithmeticGeometry) {
+TEST(XiangShanCostSheet, ArithmeticGeometry) {
   expectCost(op("VADD_VV", 32, 32), 4);
   expectCost(op("VADD_VX", 32, 32), 5);
   expectCost(op("VFADD_VF", 4, 32), 2);
@@ -66,6 +61,7 @@ TEST(XiangShanMIRInfo, ArithmeticGeometry) {
   expectCost(op("VFREDOSUM_VS", 16, 32), 8);
   expectCost(op("VWADD_VV", 16, 32), 4);
   expectCost(op("VMAND_MM", 8, 1), 1);
+  expectInvalid(op("VFDIV_VF", 8, 8));
   expectInvalid(op("VWADD_VV", 64, 32));
   expectInvalid(op("VADD_VV", 3, 32));
   expectInvalid(op("VADD_VV", 1, 64));
@@ -73,7 +69,7 @@ TEST(XiangShanMIRInfo, ArithmeticGeometry) {
   Missing.Vector = true;
   expectInvalid(Missing);
 }
-TEST(XiangShanMIRInfo, MemoryAndWholeRegisters) {
+TEST(XiangShanCostSheet, MemoryAndWholeRegisters) {
   auto Load = op("VLE32_V", 16, 32);
   Load.Load = true;
   expectCost(Load, 3);
@@ -109,4 +105,32 @@ TEST(XiangShanMIRInfo, MemoryAndWholeRegisters) {
     Whole.RegisterGroups8.push_back(G == 1 ? 16 : 8);
     expectInvalid(Whole);
   }
+}
+
+TEST(RISCVCostSheet, GenericPricesAndGeometry) {
+  RISCVCostSheet Sheet(256);
+  auto Check = [&](VPlanMIRInstruction Q, int64_t Expected) {
+    auto C = Sheet.getInstructionCost(Q);
+    ASSERT_TRUE(bool(C)) << (C ? "" : toString(C.takeError()));
+    EXPECT_EQ(C->Numerator, Expected);
+    EXPECT_EQ(C->Denominator, 1);
+  };
+  Check(op("ADD"), 1);
+  Check(op("DIV"), 4);
+  Check(op("FDIV_D"), 2);
+  Check(op("VADD_VV", 32, 32), 4);
+  Check(op("VFDIV_VF", 32, 32), 8);
+  Check(op("VDIVU_VV", 16, 32), 8);
+  Check(op("VREDMAX_VS", 16, 32), 4);
+  Check(op("VFREDOSUM_VS", 16, 32), 16);
+  Check(op("VRGATHER_VV", 32, 32), 16);
+  auto Load = op("VLSE32_V", 16, 32);
+  Load.Load = true;
+  Check(Load, 16);
+  Load.BaseOpcode = "VLSEG2E32_V";
+  Check(Load, 32);
+  Load.BaseOpcode = "VLE32_V";
+  Check(Load, 2);
+  // Fractional LMUL valid for VLEN=256, even though invalid at VLEN=128.
+  Check(op("VADD_VV", 1, 32), 1);
 }

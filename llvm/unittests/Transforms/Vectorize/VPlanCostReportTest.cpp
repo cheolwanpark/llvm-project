@@ -67,9 +67,11 @@ public:
 
   unsigned getEpilogueVectorizationMinVF() const override { return 2; }
   bool preferEpilogueVectorization(ElementCount) const override { return true; }
-  InstructionCost getSpillReloadCost(const TTI::SpillReloadAccess &A,
-                                     TTI::TargetCostKind) const override {
-    return record("spill", 0, A.AccessType, InstructionCost(1));
+  InstructionCost getRegisterClassSpillReloadCost(
+      unsigned ClassID, bool IsLoad, TTI::SpillReloadUnits Units,
+      TTI::TargetCostKind Kind) const override {
+    auto Cost = Base::getRegisterClassSpillReloadCost(ClassID, IsLoad, Units, Kind);
+    return record(IsLoad ? "reload" : "spill", ClassID, nullptr, Cost);
   }
 
   InstructionCost
@@ -166,7 +168,7 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
     // 5=preparation fails (a prepared prefix may run); 6=first failure ->
     // estimated, 7=epilogue failure -> estimated; 8=estimated scalar is
     // success, 9=both preparations fail; 10=requested estimated fails (no
-    // retry), 11=MIR service absent -> estimated; 12=MIR + raw default ->
+    // retry), 11=MIR sheet absent -> estimated; 12=MIR + raw default ->
     // native, 13=real spill + raw default -> native despite specific
     // capability.
     for (unsigned Scenario = 0; Scenario != 14; ++Scenario) {

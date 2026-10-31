@@ -73,19 +73,20 @@ protected:
   InstructionCost getSlideCost(FixedVectorType *Tp, ArrayRef<int> Mask,
                                TTI::TargetCostKind CostKind) const;
 
-  enum class MemoryCostPath { Contiguous, Strided, GatherScatter, Segment };
+  enum class MemoryCostPath { Strided, Segment };
   virtual std::optional<InstructionCost>
   profileOpcodeCost(unsigned Opcode, MVT VT, TTI::TargetCostKind Kind) const {
     return std::nullopt;
   }
-  virtual InstructionCost
-  profileArithmeticCost(InstructionCost Cost, bool FP, bool Uniform,
-                        TTI::TargetCostKind Kind) const {
-    return FP ? Cost * 2 : Cost;
+  virtual std::optional<InstructionCost> profileArithmeticInstruction(
+      unsigned Opcode, MVT VT, TTI::TargetCostKind Kind,
+      TTI::OperandValueInfo O1, TTI::OperandValueInfo O2) const {
+    return std::nullopt;
   }
   virtual InstructionCost
   profileMemoryCost(InstructionCost Cost, MemoryCostPath Path, unsigned Opcode,
-                    InstructionCost Count, TTI::TargetCostKind Kind) const {
+                    TTI::TargetCostKind Kind, Type *DataTy,
+                    unsigned Fields) const {
     return Cost;
   }
 

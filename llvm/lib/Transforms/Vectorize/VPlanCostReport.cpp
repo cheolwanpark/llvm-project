@@ -342,7 +342,7 @@ void VPlanCostReport::comparisonScore(VPExactCost Score,
 void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
                                   const VPRegisterUsageBound &Bound,
                                   const VPlanBackendResult *Observation,
-                                  ArrayRef<InstructionCost> AccessCosts,
+                                  ArrayRef<VPSpillCost> AccessCosts,
                                   unsigned Width, StringRef ProfileName,
                                   InstructionCost Raw, VPExactCost Spill,
                                   VPlanBackendMode Mode) {
@@ -368,6 +368,8 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
   if (Cost.MIR) {
     const auto &M = *Cost.MIR;
     DS << " ic=" << Cost.IC << " mir_model=" << M.Model
+       << " cpu=" << M.CPU << " nominal_vlen=" << M.NominalVLEN
+       << " cost_schema=direct-instruction-cost-v1 tti_profile=" << ProfileName
        << " revision=" << M.Revision << " stage=" << Observation->Stage
        << " Wtti=" << Width << " Wobs=" << Observation->IterationWidth;
     DS << " raw_R=";
@@ -386,8 +388,7 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
     for (auto [MI, IC] : zip(*Observation->MIRBody, M.Instructions)) {
       DS << "      mir-op " << MI.Opcode << " rule=" << IC.Rule
          << " spill=" << MI.Spill << " unknown=" << IC.Unknown;
-      for (const auto &D : IC.Demands)
-        DS << " " << D.Service << "=" << D.Numerator << "/" << D.Denominator;
+      DS << " cost=" << IC.Numerator << "/" << IC.Denominator;
       DS << '\n';
       if (!MI.Text.empty())
         DS << "        " << MI.Text;
@@ -427,14 +428,19 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
   }
   DS << "      spill_source=observed stage=" << Observation->Stage
      << " iteration_mapping=" << Observation->IterationMapping << '\n';
-  assert(AccessCosts.size() == Observation->Spills.size());
-  for (auto [A, Price] : zip(Observation->Spills, AccessCosts))
+  for (const auto &A : Observation->Spills)
     DS << "      vector-spill direction=" << (A.IsLoad ? "load" : "store")
-       << " bytes=" << A.MinBytes << " scalable=" << A.Scalable
+       << " class=vector bytes=" << A.MinBytes << " scalable=" << A.Scalable
        << " group=" << A.RegisterGroup << " alignment=" << A.Alignment
        << " address_space=" << A.AddressSpace
        << " whole_register=" << A.WholeRegister
-       << " segment_lowering=" << A.FromSegment << " cost=" << Price << '\n';
+       << " segment_lowering=" << A.FromSegment << '\n';
+  for (const auto &P : AccessCosts)
+    DS << "      spill-price class=" << P.ClassID
+       << " direction=" << (P.IsLoad ? "load" : "store")
+       << " Q=" << P.Registers << " A=" << P.Accesses
+       << " tti_profile=" << ProfileName << " cost=" << P.Cost
+       << " Wtti=" << Width << " Wobs=" << Observation->IterationWidth << '\n';
 }
 
 void VPlanCostReport::comparisonResult(bool Result, StringRef Reason) {

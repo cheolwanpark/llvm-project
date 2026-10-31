@@ -50,11 +50,11 @@ def verify(rows, mir, estimated, default):
             assert o['stage'] == 'post-frame-lowering'
             assert o['schema'] == 'mir-body-observation-v1'
             assert o['body'] and len(o['body']) == len(r['mir_costs'])
-            assert r['mir_model'] == 'rtl-service-sum-v1'
-            assert r['tti_profile'] == 'xiangshan-v2-128'
+            assert r['mir_model'] == 'xiangshan-direct-v1'
+            assert r['tti_profile'] == ('native' if default else 'xiangshan-v2-128')
             demand = spill = Q(0)
             for op, cost in zip(o['body'], r['mir_costs']):
-                c = sum((Q(d['numerator'], d['denominator']) for d in cost['demands']), Q(0))
+                c = Q(cost['numerator'], cost['denominator'])
                 demand += c
                 if op['spill_slot']:
                     spill += c
@@ -76,7 +76,7 @@ def verify(rows, mir, estimated, default):
             assert body == expected
             if 'observation' in r:
                 assert r['observation']['stage'] == 'post-stack-slot-coloring'
-        if not mir and default:
+        if default:
             assert r['profile_body_quarters'] == r['native_body_quarters']
             assert r['tti_profile'] != 'xiangshan-v2-128'
 
@@ -95,7 +95,6 @@ for mir, estimated, default in itertools.product((False, True), repeat=3):
 assert results[False, True, True][0] == native
 
 for estimated in (False, True):
-    assert results[True, estimated, False] == results[True, estimated, True]
     assert any(r['register_usage_bound']['would_skip'] for r in candidates(results[True, estimated, False][1]))
 
 # The two TTI-only controls do not require even a usable backend allocator.
@@ -134,14 +133,17 @@ assert 'vec.epilog' in epilogue
 
 # Native fallback must also discard attempted detailed backend cost reports.
 for name, extra, cpu in [('fast', ['-riscv-rvv-regalloc=fast'], None),
-                          ('limited', ['-stop-before=prologepilog'], None),
-                          ('unsupported', [], 'generic-rv64')]:
+                          ('limited', ['-stop-before=prologepilog'], None)]:
     baseline, _, _ = run(name + '-baseline', cpu=cpu)
     out, rows, stderr = run(name, ['-vplan-backend', '-use-mir',
                                   '-print-detailed-vplans', '-use-default-tti=true'] + extra, cpu=cpu)
     assert out == baseline
     assert any(r['status'] == 'native-fallback' for r in rows), rows
     assert 'backend-cost phase=' not in stderr
+
+# Other RVV CPUs use an executable generic sheet, independent of default TTI.
+_, generic_rows, _ = run('generic', ['-vplan-backend', '-use-mir'], cpu='generic-rv64')
+assert all(r['mir_model'] == 'riscv-generic-direct-v1' for r in candidates(generic_rows))
 
 # Passive reporting does not alter selection, and captures MIR text on demand.
 printed, rows, stderr = run('detail', ['-vplan-backend', '-use-mir', '-print-detailed-vplans'])
@@ -154,9 +156,8 @@ wide_source = Path(prefix + '.vlen256.ll')
 wide_source.write_text(Path(source).read_text().replace('vscale_range(2,2)', 'vscale_range(4,4)'))
 wide_native, _, _ = run('vlen256-native', src=str(wide_source))
 wide_ir, wide_rows, _ = run('vlen256', ['-vplan-backend', '-use-mir'], src=str(wide_source))
-assert wide_ir == wide_native
-assert any(r['status'] == 'native-fallback' and r['reason'].endswith('target has no MIR service model')
-           for r in wide_rows)
+assert candidates(wide_rows)
+assert all(r['mir_model'] == 'riscv-generic-direct-v1' for r in candidates(wide_rows))
 
 # CFG reduction is never applied to either MIR body model, regardless of option.
 for estimated in (False, True):

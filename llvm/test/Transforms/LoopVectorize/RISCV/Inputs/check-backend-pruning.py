@@ -147,16 +147,17 @@ for mir in (False, True):
                            for r in rows if 'candidate' in r)
                 assert ' B=L=' in text and ' B=R=' not in text
 
-# Capability depends on the function's CPU and VLEN, independently of MIRInfo.
+# Other RVV CPUs and VLENs now select the executable generic MIR sheet.
 for name, flags, src in [('cpu', ['-mcpu=generic-rv64'], basic),
                          ('vlen', [], str(root / 'wide.ll'))]:
     if name == 'vlen':
         Path(src).write_text(Path(basic).read_text().replace('vscale_range(2,2)', 'vscale_range(4,4)'))
     native, _, _ = run(name + '-native', flags, src)
     ir, rows, _ = run(name, flags + ['-vplan-backend', '-use-mir'], src)
-    assert ir == native
-    assert any(r['status'] == 'native-fallback' for r in rows)
-    assert not any(r['status'] == 'estimated-fallback' for r in rows)
+    assert not any('fallback' in r['status'] for r in rows)
+    candidates = [r for r in rows if 'candidate' in r]
+    assert candidates and all(r['mir_model'] == 'riscv-generic-direct-v1' for r in candidates)
+    assert any(r['status'] == 'selected' for r in rows)
 
 # Compare actual probe costs and output across capacities on a spilling loop.
 reference = None

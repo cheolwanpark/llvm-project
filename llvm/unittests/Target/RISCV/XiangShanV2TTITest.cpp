@@ -68,9 +68,10 @@ TEST_F(XiangShanV2TTITest, ArithmeticMemoryAndSpillScopes) {
     for (unsigned Group : {1, 2, 4, 8})
       for (bool Load : {false, true}) {
         auto *Ty = ScalableVectorType::get(Type::getInt8Ty(C), Group * 8);
-        TargetTransformInfo::SpillReloadAccess A{Load, Ty,   Align(16),
-                                                 0,    true, Group};
-        EXPECT_EQ(TTI.getSpillReloadCost(A, Kind), Group + 1);
+        EXPECT_EQ(
+            TTI.getRegisterClassSpillReloadCost(
+                TTI.getRegisterClassForType(true, Ty), Load, {Group, 1}, Kind),
+            Group + 1);
       }
     {
       VPlanCostProfileScope P(false);
@@ -99,7 +100,7 @@ TEST_F(XiangShanV2TTITest, MemoryPathsAndUniformTransfer) {
   for (auto ID : {Intrinsic::masked_gather, Intrinsic::masked_scatter})
     EXPECT_EQ(TTI.getMemIntrinsicInstrCost(
                   MemIntrinsicCostAttributes(ID, FT, Align(4)), K),
-              9);
+              8);
   EXPECT_EQ(TTI.getInterleavedMemoryOpCost(Instruction::Load, FT, 2, {0, 1},
                                            Align(4), 0, K),
             65);
@@ -118,10 +119,10 @@ TEST_F(XiangShanV2TTITest, EffectiveTuneAndVectorLength) {
         TTI.getArithmeticInstrCost(Instruction::FAdd, FT,
                                    TargetTransformInfo::TCK_RecipThroughput),
         4);
-    TargetTransformInfo::SpillReloadAccess A{true, FT, Align(16), 0, true, 2};
-    EXPECT_EQ(
-        TTI.getSpillReloadCost(A, TargetTransformInfo::TCK_RecipThroughput),
-        TTI.getMemoryOpCost(Instruction::Load, FT, Align(16), 0));
+    EXPECT_EQ(TTI.getRegisterClassSpillReloadCost(
+                  TTI.getRegisterClassForType(true, FT), true, {2, 1},
+                  TargetTransformInfo::TCK_RecipThroughput),
+              2);
   }
   F->addFnAttr("target-cpu", "generic-rv64");
   F->addFnAttr("tune-cpu", "xiangshan-kunminghu");
@@ -139,7 +140,6 @@ TEST_F(XiangShanV2TTITest, OpcodeFormulaBoundariesAndInternalDispatch) {
     return TTI.getRISCVInstructionCost({Op}, VT, K);
   };
   auto NativeGather = Cost(RISCV::VRGATHER_VV, MVT::nxv4i32);
-  auto NativeUDiv = Cost(RISCV::VDIVU_VV, MVT::nxv4i32);
   VPlanCostProfileScope S(true);
   for (auto [VT, L] : {std::pair{MVT::nxv2i32, 1}, std::pair{MVT::nxv4i32, 2},
                        std::pair{MVT::nxv8i32, 4}}) {
@@ -164,7 +164,7 @@ TEST_F(XiangShanV2TTITest, OpcodeFormulaBoundariesAndInternalDispatch) {
     EXPECT_EQ(Cost(RISCV::VREM_VV, VT), Div);
   }
   EXPECT_EQ(Cost(RISCV::VRGATHER_VV, MVT::nxv4i32), NativeGather);
-  EXPECT_EQ(Cost(RISCV::VDIVU_VV, MVT::nxv4i32), NativeUDiv);
+  EXPECT_EQ(Cost(RISCV::VDIVU_VV, MVT::nxv4i32), 34);
 }
 
 // Exercise the normally target-disabled epilogue comparison without changing
@@ -179,8 +179,7 @@ public:
 } // namespace
 TEST_F(XiangShanV2TTITest, EpilogueObservationsAndTransactionalFallback) {
   auto &Opts = cl::getRegisteredOptions();
-  auto &Enable =
-      *static_cast<cl::opt<bool> *>(Opts["vplan-backend"]);
+  auto &Enable = *static_cast<cl::opt<bool> *>(Opts["vplan-backend"]);
   auto &ForceAll =
       *static_cast<cl::opt<bool> *>(Opts["vplan-backend-force-all"]);
   auto &IC = *static_cast<cl::opt<unsigned> *>(Opts["force-vector-interleave"]);
@@ -293,13 +292,102 @@ TEST_F(XiangShanV2TTITest, EpilogueObservationsAndTransactionalFallback) {
   }
 }
 
-TEST_F(XiangShanV2TTITest, MIRInfoRequiresSupportedCPUAndVLEN) {
+TEST_F(XiangShanV2TTITest, MIRSheetSelectionUsesEffectiveTuneAndVLEN) {
   auto Info = TM->getTargetMIRInfo(*F);
   ASSERT_TRUE(Info);
-  EXPECT_EQ(Info->getModelName(), "rtl-service-sum-v1");
+  EXPECT_EQ(Info->getModelName(), "xiangshan-direct-v1");
   F->addFnAttr("tune-cpu", "generic-rv64");
-  EXPECT_FALSE(TM->getTargetMIRInfo(*F));
+  ASSERT_TRUE(TM->getTargetMIRInfo(*F));
+  EXPECT_EQ(TM->getTargetMIRInfo(*F)->getModelName(),
+            "riscv-generic-direct-v1");
   F->removeFnAttr("tune-cpu");
   F->addFnAttr(Attribute::getWithVScaleRangeArgs(C, 4, 4));
-  EXPECT_FALSE(TM->getTargetMIRInfo(*F));
+  ASSERT_TRUE(TM->getTargetMIRInfo(*F));
+  EXPECT_EQ(TM->getTargetMIRInfo(*F)->getModelName(),
+            "riscv-generic-direct-v1");
+}
+
+TEST_F(XiangShanV2TTITest, AggregateSpillUnitsAndScalarScopes) {
+  auto Tuned = TM->getTargetTransformInfo(*F);
+  F->addFnAttr("tune-cpu", "generic-rv64");
+  auto Native = TM->getTargetTransformInfo(*F);
+  auto K = TargetTransformInfo::TCK_RecipThroughput;
+  unsigned V = Tuned.getRegisterClassForType(true);
+  unsigned S = Tuned.getRegisterClassForType(false);
+  auto Pair = [&](const TargetTransformInfo &TTI, uint64_t Q, uint64_t A) {
+    return TTI.getRegisterClassSpillReloadCost(V, false, {Q, A}, K) +
+           TTI.getRegisterClassSpillReloadCost(V, true, {Q, A}, K);
+  };
+  auto Baseline =
+      Tuned.getArithmeticInstrCost(Instruction::SDiv, Type::getInt64Ty(C), K);
+  {
+    VPlanCostProfileScope Scope(true);
+    EXPECT_EQ(Pair(Native, 4, 4), 8);
+    EXPECT_EQ(Pair(Tuned, 4, 4), 16);
+    EXPECT_EQ(Pair(Native, 4, 1), 8);
+    EXPECT_EQ(Pair(Tuned, 4, 1), 10);
+    EXPECT_EQ(Pair(Tuned, 0, 0), 0);
+    for (const auto &TTI : {&Native, &Tuned}) {
+      EXPECT_FALSE(Pair(*TTI, 1, 2).isValid());
+      EXPECT_FALSE(Pair(*TTI, 1, 0).isValid());
+      EXPECT_FALSE(Pair(*TTI, UINT64_MAX, 1).isValid());
+    }
+    EXPECT_EQ(Tuned.getRegisterClassSpillCost(S, K), 2);
+    EXPECT_EQ(Tuned.getRegisterClassReloadCost(S, K), 1);
+    unsigned FP = Tuned.getRegisterClassForType(false, Type::getDoubleTy(C));
+    EXPECT_EQ(Tuned.getRegisterClassSpillCost(FP, K), 2);
+    EXPECT_EQ(Tuned.getRegisterClassReloadCost(FP, K), 1);
+    EXPECT_EQ(
+        Tuned.getArithmeticInstrCost(Instruction::SDiv, Type::getInt64Ty(C), K),
+        23);
+    EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::FDiv,
+                                           Type::getDoubleTy(C), K),
+              14);
+    for (unsigned G : {1, 2, 4, 8}) {
+      EXPECT_EQ(Pair(Tuned, G, 1), 2 * (G + 1));
+      EXPECT_EQ(Pair(Native, G, 1), 2 * G);
+    }
+  }
+  EXPECT_EQ(
+      Tuned.getArithmeticInstrCost(Instruction::SDiv, Type::getInt64Ty(C), K),
+      Baseline);
+}
+
+TEST_F(XiangShanV2TTITest, OpcodeAdapterMatchesDirectSheet) {
+  ExposedTTI TTI(static_cast<RISCVTargetMachine *>(TM.get()), *F);
+  auto K = TargetTransformInfo::TCK_RecipThroughput;
+  VPlanCostProfileScope Scope(true);
+  struct Operation {
+    unsigned Opcode;
+    const char *Name;
+  };
+  for (auto [VT, Group, SEW] :
+       {std::tuple{MVT::nxv1i8, 1u, 8u}, std::tuple{MVT::nxv2i32, 8u, 32u},
+        std::tuple{MVT::nxv8i32, 32u, 32u}}) {
+    for (Operation Op : {Operation{RISCV::VADD_VV, "VADD_VV"},
+                         Operation{RISCV::VDIVU_VV, "VDIVU_VV"},
+                         Operation{RISCV::VRGATHEREI16_VV, "VRGATHEREI16_VV"},
+                         Operation{RISCV::VSLIDEUP_VX, "VSLIDEUP_VX"},
+                         Operation{RISCV::VREDSUM_VS, "VREDSUM_VS"}}) {
+      VPlanMIRInstruction Q;
+      Q.BaseOpcode = Op.Name;
+      Q.Vector = true;
+      Q.LMUL8 = Group;
+      Q.SEW = SEW;
+      auto C = XiangShanCostSheet().getInstructionCost(Q);
+      ASSERT_TRUE(bool(C));
+      EXPECT_EQ(TTI.getRISCVInstructionCost({Op.Opcode}, VT, K),
+                InstructionCost(C->Numerator) / C->Denominator)
+          << Op.Name;
+    }
+  }
+  auto *Half = ScalableVectorType::get(Type::getHalfTy(C), 4);
+  auto *Float = ScalableVectorType::get(Type::getFloatTy(C), 4);
+  // The narrow source/destination is m1, e16. The wide operand occupies m2.
+  EXPECT_EQ(TTI.getCastInstrCost(Instruction::FPExt, Float, Half,
+                                 TargetTransformInfo::CastContextHint::None, K),
+            2);
+  EXPECT_EQ(TTI.getCastInstrCost(Instruction::FPTrunc, Half, Float,
+                                 TargetTransformInfo::CastContextHint::None, K),
+            2);
 }

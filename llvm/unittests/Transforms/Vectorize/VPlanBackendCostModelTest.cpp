@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #include "../lib/Transforms/Vectorize/VPlanBackendCostModel.h"
 #include "../lib/Transforms/Vectorize/VPlan.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Instructions.h"
 #include "../lib/Transforms/Vectorize/VPlanAnalysis.h"
 #include "../lib/Transforms/Vectorize/VPlanRegisterUsageBounds.h"
 #include "llvm/Analysis/TargetTransformInfoImpl.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "gtest/gtest.h"
 using namespace llvm;
 
@@ -78,14 +78,6 @@ public:
       unsigned C, TargetTransformInfo::TargetCostKind) const override {
     return C ? 5 : 11;
   }
-  InstructionCost
-  getSpillReloadCost(const TargetTransformInfo::SpillReloadAccess &A,
-                     TargetTransformInfo::TargetCostKind) const override {
-    EXPECT_TRUE(VPlanCostProfileScope::active());
-    EXPECT_EQ(A.AccessType->getPrimitiveSizeInBits().getKnownMinValue(),
-              A.RegisterGroup * 64);
-    return A.RegisterGroup + 1;
-  }
 };
 VPlanBackendResult observation() {
   VPlanBackendResult R;
@@ -120,8 +112,8 @@ TEST(VPlanBackendCost, PriceOnlyActualBodyVectorSpills) {
   auto O = observation();
   auto Cost = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
   ASSERT_TRUE(bool(Cost));
-  EXPECT_EQ(Raw, 3);
-  EXPECT_EQ(*Cost, VPExactCost::ratio(12, 64));
+  EXPECT_EQ(Raw, 6);
+  EXPECT_EQ(*Cost, VPExactCost::ratio(24, 64));
   EXPECT_FALSE(VPlanCostProfileScope::active());
   O.IterationMapping = false;
   auto Bad = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
@@ -143,8 +135,8 @@ TEST(VPlanBackendCost, SplitSegmentSpillsPriceEachAccessNotTheSlot) {
   O.Spills.push_back(O.Spills[0]);
   auto Cost = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
   ASSERT_TRUE(bool(Cost));
-  EXPECT_EQ(Raw, 6); // Two group-2 stores, each costs 2+1.
-  EXPECT_EQ(*Cost, VPExactCost::ratio(24, 64));
+  EXPECT_EQ(Raw, 12); // Two group-2 stores at the supplied class unit of 3.
+  EXPECT_EQ(*Cost, VPExactCost::ratio(48, 64));
 }
 
 TEST(VPlanBackendCost, ValidateSpillFactsAndEmptyMapping) {
@@ -211,8 +203,7 @@ public:
   getInstructionCost(const VPlanMIRInstruction &MI) const override {
     if (MI.Opcode == "invalid")
       return createStringError("invalid geometry");
-    return MIRInstructionCost{
-        "fraction", false, {{"test", MI.Spill ? 5 : 7, 3}}};
+    return MIRInstructionCost{"fraction", false, MI.Spill ? 5 : 7, 3};
   }
 };
 } // namespace
@@ -262,7 +253,7 @@ TEST(VPlanBackendCost, StrictLowerBoundObjectives) {
   EXPECT_TRUE(vplanStrictlyCheaper(C(4), 1, C(17), 4, C(4), 0, true));
   EXPECT_FALSE(vplanStrictlyCheaper(C(4), 1, C(16), 4, C(4), 0, true));
   EXPECT_TRUE(vplanStrictlyCheaper(VPExactCost::ratio(1, 3), 4,
-                                  VPExactCost::ratio(1, 2), 4, C(4), 0, true));
+                                   VPExactCost::ratio(1, 2), 4, C(4), 0, true));
   // Twenty elements: f16 main=32, f4 main=40. f4 must remain available
   // for an epilogue even though it loses the main comparison.
   EXPECT_TRUE(vplanStrictlyCheaper(C(16), 16, C(8), 4, C(4), 20, true));
@@ -272,7 +263,7 @@ TEST(VPlanBackendCost, StrictLowerBoundObjectives) {
   EXPECT_FALSE(vplanStrictlyCheaper(C(4), 1, C(100), 4, C(4), 3, true));
   EXPECT_TRUE(vplanStrictlyCheaper(C(4), 1, C(100), 4, C(4), 3, false));
   EXPECT_FALSE(vplanStrictlyCheaper(C(1), 4, VPExactCost::ratio(INT64_MAX, 1),
-                                   8, C(4), 0, true));
+                                    8, C(4), 0, true));
   EXPECT_FALSE(vplanStrictlyCheaper(C(1), 0, C(100), 4, C(4), 0, true));
 }
 
@@ -316,8 +307,9 @@ class BackendSchedulerTest : public testing::Test {
 protected:
   LLVMContext Context;
   Module M{"scheduler", Context};
-  Function *F = Function::Create(FunctionType::get(Type::getVoidTy(Context), false),
-                                 GlobalValue::ExternalLinkage, "f", M);
+  Function *F =
+      Function::Create(FunctionType::get(Type::getVoidTy(Context), false),
+                       GlobalValue::ExternalLinkage, "f", M);
   BasicBlock *Header = [&] {
     auto *BB = BasicBlock::Create(Context, "header", F);
     UncondBrInst::Create(BB, BB);
@@ -329,8 +321,8 @@ protected:
   unsigned FailVF = 0;
   bool Malformed = false;
   VPlanBackendFeedback Feedback{[&](const Function &, const BasicBlock &,
-                                   ArrayRef<VPlanBackendCandidate> Cs)
-                                   -> Expected<VPlanBackendFeedback::Batch> {
+                                    ArrayRef<VPlanBackendCandidate> Cs)
+                                    -> Expected<VPlanBackendFeedback::Batch> {
     VPlanBackendFeedback::Batch Results;
     for (const auto &C : Cs) {
       Started.push_back(C.VF.getKnownMinValue());
@@ -409,4 +401,82 @@ TEST_F(BackendSchedulerTest, EstimatedModeNeverCallsProvider) {
   ASSERT_NE(Costs.lookup(Plan, ElementCount::getFixed(4)), nullptr);
   EXPECT_EQ(Costs.lookup(Plan, ElementCount::getFixed(4))->Body,
             VPExactCost(InstructionCost(500)));
+}
+
+TEST(VPlanBackendCost, ObservedSpillsUseAsymmetricClassHooks) {
+  TargetTransformInfo TTI(std::make_unique<TestTTI>());
+  LLVMContext C;
+  InstructionCost Raw;
+  auto O = observation();
+  O.Spills[0].IsLoad = true;
+  auto Cost = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
+  ASSERT_TRUE(bool(Cost));
+  EXPECT_EQ(Raw, 10); // Group 2, supplied reload unit 5.
+  EXPECT_EQ(*Cost, VPExactCost::ratio(40, 64));
+}
+namespace {
+class InvalidSpillTTI : public TargetTransformInfoImplBase {
+  inline static const DataLayout Layout{""};
+
+public:
+  int64_t Price;
+  explicit InvalidSpillTTI(int64_t Price)
+      : TargetTransformInfoImplBase(Layout), Price(Price) {}
+  InstructionCost getRegisterClassSpillCost(
+      unsigned, TargetTransformInfo::TargetCostKind) const override {
+    return Price;
+  }
+};
+} // namespace
+TEST(VPlanBackendCost, InvalidSpillPricesAndOverflowFail) {
+  LLVMContext C;
+  InstructionCost Raw;
+  for (int64_t Price : {int64_t(-1), int64_t(INT64_MAX / 4)}) {
+    TargetTransformInfo TTI(std::make_unique<InvalidSpillTTI>(Price));
+    auto Cost = priceVPlanVectorSpills(observation(), TTI, C, 1, Raw);
+    EXPECT_FALSE(bool(Cost));
+    if (!Cost)
+      consumeError(Cost.takeError());
+  }
+}
+
+namespace {
+class RecordingAggregateTTI : public TargetTransformInfoImplBase {
+  inline static const DataLayout Layout{""};
+
+public:
+  mutable unsigned Queries = 0;
+  RecordingAggregateTTI() : TargetTransformInfoImplBase(Layout) {}
+  unsigned getNumberOfRegisters(unsigned) const override { return 2; }
+  InstructionCost getRegisterClassSpillReloadCost(
+      unsigned ClassID, bool Load, TargetTransformInfo::SpillReloadUnits U,
+      TargetTransformInfo::TargetCostKind) const override {
+    EXPECT_EQ(ClassID, 1u);
+    ++Queries;
+    return int64_t(U.Registers * (Load ? 2 : 3) + U.Accesses * (Load ? 5 : 7));
+  }
+};
+} // namespace
+TEST(VPlanBackendCost, AggregateHookReceivesUnitsWithoutReportingQueries) {
+  auto Impl = std::make_unique<RecordingAggregateTTI>();
+  auto *Recorded = Impl.get();
+  TargetTransformInfo TTI(std::move(Impl));
+  VPRegisterUsage RU;
+  RU.MaxLocalUsers[1] = 6;
+  EXPECT_EQ(RU.spillCost(TTI, TargetTransformInfo::TCK_RecipThroughput), 68);
+  EXPECT_EQ(Recorded->Queries, 2u);
+  Recorded->Queries = 0;
+  auto O = observation();
+  O.Spills.push_back(O.Spills.front());
+  LLVMContext C;
+  InstructionCost Raw;
+  SmallVector<VPSpillCost> Prices;
+  auto Price = priceVPlanVectorSpills(O, TTI, C, 1, Raw, &Prices);
+  ASSERT_TRUE(bool(Price));
+  EXPECT_EQ(Recorded->Queries, 1u);
+  ASSERT_EQ(Prices.size(), 1u);
+  EXPECT_EQ(Prices[0].Registers, 4u);
+  EXPECT_EQ(Prices[0].Accesses, 2u);
+  EXPECT_EQ(Raw, 26);
+  EXPECT_EQ(*Price, VPExactCost::ratio(104, 64));
 }

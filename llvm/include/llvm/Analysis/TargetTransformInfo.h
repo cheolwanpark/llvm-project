@@ -1696,18 +1696,17 @@ public:
   /// Name of the profile available to explicit VPlan throughput cost scopes.
   LLVM_ABI StringRef getVPlanCostProfileName() const;
 
-  /// Describes one actual spill/reload access, not an entire stack slot.
-  /// RegisterGroup is the number of whole vector registers accessed.
-  struct SpillReloadAccess {
-    bool IsLoad;
-    Type *AccessType;
-    Align Alignment;
-    unsigned AddressSpace;
-    bool WholeRegister;
-    unsigned RegisterGroup;
+  /// Profile-independent transferred registers and memory accesses.
+  struct SpillReloadUnits {
+    uint64_t Registers = 0, Accesses = 0;
+    bool isValid() const {
+      return (!Registers && !Accesses) ||
+             (Accesses && Registers >= Accesses && Registers <= INT64_MAX);
+    }
   };
-  LLVM_ABI InstructionCost getSpillReloadCost(const SpillReloadAccess &Access,
-                                              TargetCostKind CostKind) const;
+  LLVM_ABI InstructionCost getRegisterClassSpillReloadCost(
+      unsigned ClassID, bool IsLoad, SpillReloadUnits Units,
+      TargetCostKind CostKind) const;
 
   /// Cost of a load or store. OpdInfo describes the stored value for stores
   /// and the address for loads.

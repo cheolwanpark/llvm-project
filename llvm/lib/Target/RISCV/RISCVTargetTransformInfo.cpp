@@ -1145,8 +1145,8 @@ InstructionCost RISCVTTIImpl::getInterleavedMemoryOpCost(
         // Factor ops).
         unsigned NumLoads = getEstimatedVLFor(VTy);
         return profileMemoryCost(NumLoads * TTI::TCC_Basic,
-                                 MemoryCostPath::Segment, Opcode, NumLoads,
-                                 CostKind);
+                                 MemoryCostPath::Segment, Opcode,
+                                 CostKind, SubVecTy, Factor);
       }
     }
   }
@@ -1257,9 +1257,8 @@ RISCVTTIImpl::getGatherScatterOpCost(const MemIntrinsicCostAttributes &MICA,
   // know exactly what VL will be.
   auto &VTy = *cast<VectorType>(DataTy);
   unsigned NumLoads = getEstimatedVLFor(&VTy);
-  return profileMemoryCost(NumLoads * TTI::TCC_Basic,
-                           MemoryCostPath::GatherScatter, 0, NumLoads,
-                           CostKind);
+  // This query has no index geometry for a CostSheet instruction.
+  return NumLoads * TTI::TCC_Basic;
 }
 
 InstructionCost RISCVTTIImpl::getExpandCompressMemoryOpCost(
@@ -1322,8 +1321,10 @@ RISCVTTIImpl::getStridedMemoryOpCost(const MemIntrinsicCostAttributes &MICA,
   // know exactly what VL will be.
   auto &VTy = *cast<VectorType>(DataTy);
   unsigned NumLoads = getEstimatedVLFor(&VTy);
+  unsigned Opcode = MICA.getID() == Intrinsic::experimental_vp_strided_load
+                        ? Instruction::Load : Instruction::Store;
   return profileMemoryCost(NumLoads * TTI::TCC_Basic, MemoryCostPath::Strided,
-                           0, NumLoads, CostKind);
+                           Opcode, CostKind, DataTy, 1);
 }
 
 InstructionCost
@@ -2380,9 +2381,6 @@ InstructionCost RISCVTTIImpl::getMemoryOpCost(unsigned Opcode, Type *Src,
   if (ST->hasVInstructions() && LT.second.isVector() &&
       CostKind != TTI::TCK_CodeSize)
     BaseCost *= TLI->getLMULCost(LT.second);
-  if (ST->hasVInstructions() && LT.second.isVector())
-    return profileMemoryCost(Cost + BaseCost, MemoryCostPath::Contiguous,
-                             Opcode, LT.first, CostKind);
   return Cost + BaseCost;
 }
 
@@ -2889,13 +2887,14 @@ InstructionCost RISCVTTIImpl::getArithmeticInstrCost(
                                          Args, CxtI);
   }
 
-  InstructionCost InstrCost = getRISCVInstructionCost(Op, LT.second, CostKind);
-  // We use BasicTTIImpl to calculate scalar costs, which assumes floating point
-  // ops are twice as expensive as integer ops. Do the same for vectors so
-  // scalar floating point ops aren't cheaper than their vector equivalents.
-  InstrCost = profileArithmeticCost(InstrCost, Ty->isFPOrFPVectorTy(),
-                                    Op1Info.isUniform() || Op2Info.isUniform(),
-                                    CostKind);
+  auto Tuned = profileArithmeticInstruction(Opcode, LT.second, CostKind,
+                                            Op1Info, Op2Info);
+  InstructionCost InstrCost =
+      Tuned ? *Tuned : getRISCVInstructionCost(Op, LT.second, CostKind);
+  // Keep native FP scaling for inherited estimates. CostSheet results already
+  // include their operation price.
+  if (!Tuned && Ty->isFPOrFPVectorTy())
+    InstrCost *= 2;
   return CastCost + ConstantMatCost + LT.first * InstrCost;
 }
 

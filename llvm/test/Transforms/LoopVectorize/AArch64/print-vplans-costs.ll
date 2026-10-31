@@ -28,7 +28,7 @@
 ; FOLD: selected-for-main plan=2 vf=s4
 
 ; SPILL: register_class=0 local_peak=3 invariant_usage=1 limit=1
-; SPILL-NEXT: coverage=expanded excess=2 getRegisterClassSpillCost=1 getRegisterClassReloadCost=1 spill_plus_reload=2 multiply=4
+; SPILL-NEXT: coverage=expanded excess=2 Q=2 A=2 tti_profile=native store=2 load=2 spill_plus_reload=4
 ; SPILL: spill_cost=4
 ; SPILL: candidate_cost=9 status=evaluated
 

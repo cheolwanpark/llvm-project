@@ -24,19 +24,19 @@ static cl::opt<bool> EnableBackendCostModel(
     cl::desc("Select VF using scoped TTI and actual vector spill costs"));
 static cl::opt<bool> UseMIR(
     "use-mir", cl::Hidden, cl::init(false),
-    cl::desc("Use target MIR service demand for VPlan backend body costs"));
+    cl::desc("Use target MIR direct cost for VPlan backend body costs"));
 static cl::opt<bool> UseEstimatedSpill(
     "use-estimated-spill", cl::Hidden, cl::init(false),
     cl::desc("Use estimated spill costs in VPlan backend selection"));
 static cl::opt<bool>
     UseDefaultTTI("use-default-tti", cl::Hidden, cl::init(false),
-                  cl::desc("Use generic TTI for non-MIR VPlan backend costs"));
+                  cl::desc("Use default TTI for all VPlan backend TTI queries"));
 bool llvm::vplanBackendUseMIR() { return EnableBackendCostModel && UseMIR; }
 bool llvm::vplanBackendUseEstimatedSpill() {
   return EnableBackendCostModel && UseEstimatedSpill;
 }
 bool llvm::vplanBackendUseDefaultTTI() {
-  return EnableBackendCostModel && !UseMIR && UseDefaultTTI;
+  return EnableBackendCostModel && UseDefaultTTI;
 }
 bool llvm::vplanBackendRequestedDefaultTTI() { return UseDefaultTTI; }
 StringRef VPlanBackendMode::name() const {

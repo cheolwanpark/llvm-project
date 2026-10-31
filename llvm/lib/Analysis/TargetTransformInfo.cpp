@@ -821,10 +821,10 @@ StringRef TargetTransformInfo::getVPlanCostProfileName() const {
   return TTIImpl->getVPlanCostProfileName();
 }
 
-InstructionCost
-TargetTransformInfo::getSpillReloadCost(const SpillReloadAccess &Access,
-                                        TargetCostKind Kind) const {
-  return TTIImpl->getSpillReloadCost(Access, Kind);
+InstructionCost TargetTransformInfo::getRegisterClassSpillReloadCost(
+    unsigned ClassID, bool IsLoad, SpillReloadUnits Units,
+    TargetCostKind Kind) const {
+  return TTIImpl->getRegisterClassSpillReloadCost(ClassID, IsLoad, Units, Kind);
 }
 
 InstructionCost TargetTransformInfo::getRegisterClassSpillCost(

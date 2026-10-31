@@ -87,15 +87,15 @@ Expected<VPMIRCost> llvm::priceVPlanMIR(const VPlanBackendResult &O,
   VPMIRCost R;
   R.Model = Info.getModelName().str();
   R.Revision = Info.getRevision().str();
+  R.CPU = Info.getCPU().str();
+  R.NominalVLEN = Info.getNominalVLEN();
   for (const auto &MI : *O.MIRBody) {
     auto Cost = Info.getInstructionCost(MI);
     if (!Cost)
       return Cost.takeError();
-    if (Cost->Demands.empty())
-      return createStringError("empty MIR service expansion");
-    VPExactCost C;
-    for (const auto &D : Cost->Demands)
-      C = C + VPExactCost::ratio(D.Numerator, D.Denominator) * 4;
+    VPExactCost C = VPExactCost::ratio(Cost->Numerator, Cost->Denominator) * 4;
+    if (!C.isValid())
+      return createStringError("invalid MIR direct cost");
     R.RawBody = R.RawBody + C;
     if (MI.Spill)
       R.RawSpill = R.RawSpill + C;
@@ -104,7 +104,7 @@ Expected<VPMIRCost> llvm::priceVPlanMIR(const VPlanBackendResult &O,
   R.Body = R.RawBody.normalize(Width, O.IterationWidth);
   R.Spill = R.RawSpill.normalize(Width, O.IterationWidth);
   if (!R.Body.isValid() || !R.Spill.isValid())
-    return createStringError("invalid or overflowing MIR service demand");
+    return createStringError("invalid or overflowing MIR direct cost");
   return R;
 }
 bool VPExactCost::operator<(VPExactCost B) const {
@@ -142,12 +142,13 @@ void VPExactCost::print(raw_ostream &OS, unsigned Divisor) const {
 Expected<VPExactCost> llvm::priceVPlanVectorSpills(
     const VPlanBackendResult &O, const TargetTransformInfo &TTI,
     LLVMContext &Context, unsigned Width, InstructionCost &RawCost,
-    SmallVectorImpl<InstructionCost> *AccessCosts) {
+    SmallVectorImpl<VPSpillCost> *AccessCosts) {
   if (!O.IterationMapping || O.Stage != "post-stack-slot-coloring")
     return createStringError("invalid backend loop/iteration mapping");
   uint64_t Wobs = O.IterationWidth;
   if (!Wobs || Wobs > INT64_MAX || !Width || Wobs % Width)
     return createStringError("invalid backend iteration width");
+  SmallVector<VPSpillCost> Prices;
   int64_t RawQuarters = 0;
   for (const auto &A : O.Spills) {
     if (!A.MinBytes || A.MinBytes > UINT32_MAX || !A.Alignment ||
@@ -157,24 +158,37 @@ Expected<VPExactCost> llvm::priceVPlanVectorSpills(
       return createStringError("unsupported vector spill access");
     Type *Ty = VectorType::get(Type::getInt8Ty(Context),
                                ElementCount::get(A.MinBytes, A.Scalable));
-    TargetTransformInfo::SpillReloadAccess Access{
-        A.IsLoad,       Ty, Align(A.Alignment), A.AddressSpace, A.WholeRegister,
-        A.RegisterGroup};
-    VPlanCostProfileScope Scope(true);
-    auto Cost = TTI.getSpillReloadCost(
-        Access, TargetTransformInfo::TCK_RecipThroughput);
+    unsigned ClassID = TTI.getRegisterClassForType(true, Ty);
+    auto I = llvm::find_if(Prices, [&](const VPSpillCost &P) {
+      return P.ClassID == ClassID && P.IsLoad == A.IsLoad;
+    });
+    if (I == Prices.end()) {
+      Prices.push_back({ClassID, A.IsLoad});
+      I = std::prev(Prices.end());
+    }
+    if (I->Registers > uint64_t(INT64_MAX) - A.RegisterGroup ||
+        I->Accesses == uint64_t(INT64_MAX))
+      return createStringError("spill units overflow");
+    I->Registers += A.RegisterGroup;
+    ++I->Accesses;
+  }
+  VPlanCostProfileScope Scope(true);
+  for (auto &P : Prices) {
+    auto Cost = TTI.getRegisterClassSpillReloadCost(
+        P.ClassID, P.IsLoad, {P.Registers, P.Accesses},
+        TargetTransformInfo::TCK_RecipThroughput);
     if (!Cost.isValid() || Cost < 0 ||
         AddOverflow(RawQuarters, Cost.getQuarterValue(), RawQuarters))
       return createStringError("invalid or overflowing vector spill cost");
     if (AccessCosts)
-      AccessCosts->push_back(Cost);
+      AccessCosts->push_back({P.ClassID, P.IsLoad, P.Registers, P.Accesses, Cost});
   }
   RawCost =
       InstructionCost(RawQuarters / 4) + InstructionCost(RawQuarters % 4) / 4;
-  int64_t Numerator;
-  if (MulOverflow(RawQuarters, int64_t(Width), Numerator))
+  auto Normalized = VPExactCost::ratio(RawQuarters, 1).normalize(Width, Wobs);
+  if (!Normalized.isValid())
     return createStringError("vector spill normalization overflow");
-  return VPExactCost::ratio(Numerator, Wobs);
+  return Normalized;
 }
 void VPlanBackendCostModel::fail(StringRef Reason) {
   if (Failed)
@@ -473,7 +487,7 @@ bool VPlanBackendCostModel::applyCost(
   InstructionCost Raw;
   std::string Error;
   std::optional<VPlanBackendResult> Observation;
-  SmallVector<InstructionCost> AccessCosts;
+  SmallVector<VPSpillCost> AccessCosts;
   std::optional<VPMIRCost> MIRCost;
   if (!Native.isValid() || !Profile.isValid() || !Ev.isValid() ||
       !P.EstimatedSpill.isValid())
@@ -571,20 +585,19 @@ bool VPlanBackendCostModel::applyCost(
         const auto &M = *Costs.back().MIR;
         Row["mir_model"] = M.Model;
         Row["mir_revision"] = M.Revision;
+        Row["mir_cost_schema"] = "direct-instruction-cost-v1";
+        Row["mir_cpu"] = M.CPU;
+        Row["mir_nominal_vlen"] = M.NominalVLEN;
         Row["mir_body_quarters_numerator"] = M.Body.numerator();
         Row["mir_body_quarters_denominator"] = M.Body.denominator();
         Row["mir_spill_quarters_numerator"] = M.Spill.numerator();
         Row["mir_spill_quarters_denominator"] = M.Spill.denominator();
         json::Array Ops;
         for (const auto &I : M.Instructions) {
-          json::Array Demands;
-          for (const auto &D : I.Demands)
-            Demands.push_back(json::Object{{"service", D.Service},
-                                           {"numerator", D.Numerator},
-                                           {"denominator", D.Denominator}});
           Ops.push_back(json::Object{{"rule", I.Rule},
                                      {"unknown", I.Unknown},
-                                     {"demands", std::move(Demands)}});
+                                     {"numerator", I.Numerator},
+                                     {"denominator", I.Denominator}});
         }
         Row["mir_costs"] = std::move(Ops);
       }
@@ -620,7 +633,7 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
   if (Mode.MIR) {
     MIRInfo = Feedback.getMIRInfo(F);
     if (!MIRInfo) {
-      fail("target has no MIR service model");
+      fail("target has no MIR cost sheet");
       return false;
     }
   }

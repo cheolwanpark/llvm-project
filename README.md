@@ -1,15 +1,15 @@
 # RISC-V backend-aware vectorization
 
 This LLVM fork selects VPlan vectorization factors using TTI costs and observed
-vector spills, with optional MIR body-cost ablations. The model is OFF by default. IC and scalar costs retain native
+vector spills, with optional MIR body costs. The model is OFF by default.
+Candidate scalar/vector operations and estimated spills use the selected TTI.
+Scalar baselines, IC selection, probe optimization and final codegen retain native
 LLVM policy. A required probe failure retries the whole loop with specific TTI
 estimated costs when supported and requested, then falls back to native selection
 if that attempt fails.
 
-- [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md): cost model, probe contract, fixed
-  XiangShan TTI corrections, and cost-report formats.
-- [BACKEND_COST_MODEL_VALIDATION.md](BACKEND_COST_MODEL_VALIDATION.md): dated
-  measurements and retained reference data.
+- [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md): cost model, probe contract, shared
+  RISC-V CostSheets, and cost-report formats.
 - [AGENTS.md](AGENTS.md): repository working and comparison rules.
 
 ## Options and usage
@@ -19,9 +19,9 @@ if that attempt fails.
 | `-vplan-backend` | Enable backend costs; default false. |
 | `-vplan-backend-prune-cfg=false` | Disable CFG reduction for private vector-spill probes (default ON). |
 | `-vplan-backend-probe-threads=N` | Bound concurrent main-candidate probes; positive integer, default `1`. |
-| `-use-mir` | Use target MIR service demand for the body; default false. |
-| `-use-estimated-spill` | Keep TTI estimates, or replace all MIR spill demand with tuned TTI estimates; default false. |
-| `-use-default-tti` | Use generic RISC-V TTI in non-MIR modes; ignored for successful MIR costing, but still controls its fallback; default false. |
+| `-use-mir` | Use target MIR direct costs for the body; default false. |
+| `-use-estimated-spill` | Keep TTI estimates, or replace all MIR spill costs with the selected TTI estimates; default false. |
+| `-use-default-tti` | Use default RISC-V TTI for every TTI query, including MIR estimated spills; default false. |
 | `-vplan-backend-force-all` | Bypass both the gate and lower-bound pruning for real-spill candidates; MIR always queries and TTI-only estimates never query. |
 | `-vplan-backend-jsonl=FILE` | Append candidate and selection/fallback diagnostics as JSONL. |
 | `-vplan-backend-time` | Print probe and cost-preparation timings to stderr. |
@@ -43,8 +43,13 @@ one detailed report per original loop.
 Print reports show the final effective model: native LLVM costs when OFF or after
 native fallback, and exact model costs otherwise. Failed attempts are discarded.
 Internal probe clones do not emit cost reports.
-The fixed XiangShan profile applies to `xiangshan-kunminghu` with exact VLEN=128;
-other RISC-V CPU/VLEN settings use native TTI with actual vector spill costs.
+The effective tuning CPU selects the pricing implementation. Kunminghu with
+exact VLEN=128 uses scoped XiangShan TTI and `xiangshan-direct-v1` MIR pricing.
+Other RVV CPU/VLEN settings use native RISC-V TTI and
+`riscv-generic-direct-v1` MIR pricing. `-use-default-tti` selects native RISC-V TTI
+for all candidate TTI calculations, including MIR estimated spills; MIR sheet
+selection still follows the CPU/VLEN. Without RVV or the required probe pipeline,
+the configured fallback policy applies.
 
 ### Body/spill ablations
 
@@ -53,19 +58,22 @@ All three controls require `-vplan-backend`. LLVM accepts both `-use-mir` and
 
 | Additional flags | Body cost | Model ID |
 |---|---|---|
-| none | `Lt - Evt + Svt` | `tti-real-vector-spill-v1` (unchanged default) |
+| none | `Lt - Evt + Svt` | `tti-real-vector-spill-v1` |
 | `-use-estimated-spill` | `Lt` | `tti-v1` |
 | `-use-default-tti` | `L0 - Ev0 + Sv0` | `llvm-real-vector-spill-v1` |
 | `-use-default-tti -use-estimated-spill` | `L0` | `llvm-v1` |
 | `-use-mir` | `R` | `mir-v1` |
 | `-use-mir -use-estimated-spill` | `R - S + Et` | `mir-me-spill-v1` |
 
-`L0/Lt` are generic/tuned TTI body costs. `Ev/Sv` are estimated/observed
+`L0/Lt` are default/profile-selected TTI body costs; without a supported tuned
+profile, `Lt` uses native RISC-V TTI. `Ev/Sv` are estimated/observed
 **vector** spill costs, priced with the selected TTI. `R/S` are the MIR body
-and its **scalar and vector** spill service demand; `Et` is the tuned TTI's
-**total** estimated spill. MIR demand is normalized by the validated iteration
-width before substituting `Et`. `-use-default-tti` has no effect in either MIR
-mode, including on `Et`. Its raw boolean value still controls the failure destination.
+and its **scalar and vector** spill costs; `Et` is the selected TTI's
+**total** estimated spill. MIR cost is normalized by the validated iteration
+width before substituting `Et`. Either MIR row also accepts `-use-default-tti`:
+`R` and `S` keep the CPU-selected sheet while `Et` uses default TTI. The MIR mode
+ID stays the same; `tti_profile` records the separate TTI choice. The raw
+`use-default-tti` boolean also controls the failure destination.
 
 MIR uses a separate post-frame-lowering observer, after RISC-V post-RA pseudo
 expansion and load/store optimization but before final scheduling/RVV pseudo
@@ -73,14 +81,23 @@ expansion. It queries every required candidate even when the vector-spill gate
 would skip. TTI-only estimated modes require no backend query. Other modes retain
 the existing post-stack-slot-coloring observer and gate.
 
-The first MIR Info implementation supports XiangShan Kunminghu, exact VLEN=128.
-Other CPU/VLEN settings fall back to native selection in MIR modes. Its
-`rtl-service-sum-v1` rules are ported from `llvm-cost-model`; unsupported opcode
-rules have explicit unit demand and are reported as unknown, while invalid
-geometry or required observations trigger the whole-loop fallback policy below. This is
-nominal service demand, not a prediction of CPU cycles. The non-MIR real-spill
-models retain their earlier stage, vector-only scope and TTI pricing; they are
-not numerically identical to the sibling project's full post-frame models.
+MIR and scoped tuned TTI share `RISCVCostSheet` queries. The effective tune CPU
+selects `xiangshan-direct-v1` for Kunminghu with exact VLEN=128; other RVV
+CPU/VLEN settings select `riscv-generic-direct-v1` for MIR. Generic geometry uses
+the subtarget's minimum VLEN. Default TTI remains the upstream RISC-V TTI.
+Unknown opcodes cost 1 and carry an unknown marker; invalid geometry and pricing
+fail through the whole-loop policy below. These are nominal direct costs.
+The XiangShan opcode rules retain RTL provenance
+`e7bab53e66dfb3c4a1d11cf9519b0396f8576cae`, independently of the new model version.
+
+Both estimated and observed vector spills use register-class aggregate pricing
+with transferred registers `Q` and accesses `A`. Estimated excess registers `n`
+produce `(n,n)` per direction; an observed group `g` produces `(g,1)`.
+Default TTI charges `Q` times its inherited class unit. Scoped XiangShan charges
+vector `Q+A`, scalar stores `2Q`, and scalar loads `Q`. Thus excess 4 registers
+costs 8/16 with default/tuned estimates; a group-4 store and reload costs 8/10.
+The observed non-MIR collector remains vector-only. Prices are normalized once
+by the exact iteration-width ratio, and invalid prices never become zero.
 
 ```sh
 .cache/build/bin/clang --target=riscv64-unknown-elf \
@@ -91,7 +108,8 @@ not numerically identical to the sibling project's full post-frame models.
 
 ### Pruning and fallback
 
-In both TTI real-spill modes, automatic lower-bound pruning follows the common policy described below. Epilogue vectorization must be disabled; the former scalar-only pruning with epilogues possible is removed.
+Both TTI real-spill modes use the pruning policy below. Automatic candidate
+pruning requires vector epilogues to be disabled.
 
 | Required evaluation fails | Whole-loop destination |
 |---|---|
@@ -103,7 +121,7 @@ In both TTI real-spill modes, automatic lower-bound pruning follows the common p
 A scalar/non-vectorized result is a successful evaluation. Each attempt owns its
 costs, profitable candidates, epilogue clone and reports; none are reused after
 failure. Scalar baselines and IC remain native. The retry does not require MIR
-service or backend observations and does not change global options. Reports
+cost sheets or backend observations and does not change global options. Reports
 identify requested/effective models and the fallback reason.
 
 ### Parallel probes
@@ -139,12 +157,7 @@ must be enabled; zero queries or a single main query do not produce this warning
 Use external process timing for parallel comparisons: `-vplan-backend-time`
 retains its serial process-CPU interpretation.
 
-The [dated measurements](BACKEND_COST_MODEL_VALIDATION.md) cover the 313-input
-corpus and ten SPEC applications, before the current pruning/retry changes. In those single-run measurements, more workers
-reduced time for the small-input corpus but increased time for every SPEC app
-relative to worker count `1`.
-Worker count remains an explicit choice with a default of `1`; the app timings
-use a separate frontend/opt/backend/assemble pipeline. See the
+Worker count defaults to `1`. See the
 [parallel execution contract](BACKEND_FEEDBACK.md#제한된-probe-병렬-실행) for module
 boundaries, ownership and diagnostic compatibility.
 
@@ -169,8 +182,7 @@ pruning/cancellation; the CFG switch still controls probe reduction independentl
 
 Queries run in stable zero-spill cost order. Eligible completed costs, gate-skip
 costs and permitted scalar selection bound other queries. Only strictly losing
-candidates are removed; ties are measured. Dominated failures no longer require
-native fallback, so final VF or scalar selection can change. A surviving required
+candidates are removed; ties are measured. Failures of candidates proven to lose do not trigger fallback. A surviving required
 failure still discards all backend costs for the loop.
 
 `-vplan-backend-pruning-trace` reports CFG applicability and sizes;
@@ -180,10 +192,27 @@ and `execution=not-started/cancelled/completed`; physical execution states may
 vary with scheduling while logical results retain original candidate order.
 See [the contract](BACKEND_FEEDBACK.md#probe-pruning) for ownership and failure rules.
 
+The bound applies to default and tuned TTI real-spill modes. MIR modes always
+observe required candidates; estimated-only modes do not probe. JSONL includes
+body-unit `lower_bound_quarters_*`, normalized `score_lower_bound_quarters_*`,
+proof basis, `score_kind`, execution state and requested/effective model IDs.
 
-The automatic candidate bound applies to both tuned and default TTI real-spill models. MIR models do not prune; estimated-only models never probe. Existing ablation formulas and configured whole-loop estimated retries remain supported.
+## Cost-model sweeps
 
-JSONL retains body-unit `lower_bound_quarters_*`, proof basis and requested/effective model fields. Added `score_lower_bound_quarters_*` encode the normalized comparison score, with `score_kind` and physical `execution` status. Cost reports remain transactional and passive.
+The sibling `~/scripts/gen-cost-model-sweep.sh` defaults to this checkout's
+`.cache/build/bin`. New sweeps use the binaries currently at that path. `--llvm`
+selects a different bin directory; `--workspace` changes the default checkout
+location. The script builds the six modes above and records tool paths, versions
+and hashes. It does not rebuild LLVM or update previous sweep outputs.
+
+```sh
+~/scripts/gen-cost-model-sweep.sh --target xiangshan \
+  --llvm /work/llvm-integration-ablation/.cache/build/bin \
+  --out .cache/cost-model-sweep
+```
+
+Use a new or empty output directory. The sweep preserves IC=1, LMUL=8 and disabled
+vector epilogues. Sweep build concurrency is separate from compiler probe workers.
 
 ## Build
 
@@ -220,12 +249,16 @@ libc/sysroot.
 ```sh
 .cache/build/unittests/Transforms/Vectorize/VectorizeTests
 .cache/build/unittests/Target/RISCV/RISCVTests
+.cache/build/unittests/IR/IRTests --gtest_filter='PassManager.*:LegacyPassManager.*'
 .cache/build/bin/llvm-lit -v llvm/test/Transforms/LoopVectorize \
   llvm/test/CodeGen/RISCV/rvv/stack-slot-coloring.mir
 ```
 
-Tests cover exact costs, spill collection, gate and lower-bound decisions,
-epilogue preservation, passive reporting, and configured whole-loop retries. Parallel tests cover pool overlap and limits,
+Tests cover direct CostSheet prices and TTI/MIR agreement, effective tune CPU
+and VLEN selection, aggregate spill units and asymmetric class hooks, all four
+default/tuned × estimated/observed spill combinations, exact normalization,
+scalar scope restoration, MIR default-TTI selection, gate/pruning decisions,
+epilogue preservation, passive reporting and configured whole-loop retries. Parallel tests cover pool overlap and limits,
 ordered results, reuse, serial compatibility and 1/2/4-worker equivalence.
 Opt-only tests isolate the probe from normal final codegen. Lit marks tests for
 backends absent from the build as unsupported.
