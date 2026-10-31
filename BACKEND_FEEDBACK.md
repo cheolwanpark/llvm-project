@@ -8,7 +8,7 @@ reciprocal-throughput 이외 비용 모드는 native 선택을 유지한다.
 ## 비용과 선택 정책
 
 ```text
-L  = 후보 TTI body (지원되는 XiangShan에서는 scoped profile)
+L  = 선택한 native/tuned TTI의 후보 body 비용
 Ev = L에 포함된 estimated vector-register spill
 Sv = 관측된 vector spill/reload 비용 × Wtti / Wobs
 B  = L − Ev + Sv
@@ -29,8 +29,22 @@ profitability는 native 정책을 유지한다. Ev는 기존 register-pressure �
 ### Body/spill ablation과 MIR Info
 
 `-use-mir`, `-use-estimated-spill`, `-use-default-tti`는 모두 기본 OFF이며
-master가 OFF이면 효과가 없다. 조합별 수식과 실행 명령은 README의
-[Body/spill ablations](README.md#bodyspill-ablations)를 따른다.
+master가 OFF이면 효과가 없다. 실행 명령은 README의
+[Body/spill ablations](README.md#bodyspill-ablations)를 따른다. 조합별 수식은 다음과 같다.
+`Lt`는 타깃 profile TTI(미지원 시 native), `L0`는 default TTI의 body이며
+`Ev/Sv`도 각각 선택한 TTI로 가격화한다.
+
+| 추가 옵션 | 적용 body 비용 |
+|---|---|
+| 없음 | `Lt - Evt + Svt` |
+| `-use-estimated-spill` | `Lt` |
+| `-use-default-tti` | `L0 - Ev0 + Sv0` |
+| `-use-default-tti -use-estimated-spill` | `L0` |
+| `-use-mir` | `R` |
+| `-use-mir -use-estimated-spill` | `R - S + Et` |
+
+두 MIR 조합에도 `-use-default-tti`를 추가할 수 있다. `R/S`의 sheet는 유지하고
+`Et`만 default TTI를 사용한다. `R`, `S`, `Et`의 범위는 아래에서 정의한다.
 
 비-MIR real-spill 모드는 `L - Ev + Sv`를 사용하며 vector spill만 관측한다.
 `use-default-tti`는 MIR 여부와 관계없이 `RISCVTTIImpl`을 선택한다. 비-MIR body의
@@ -60,7 +74,7 @@ feedback analysis service를 통해 Vectorize에 전달한다. Vectorize에는 C
 RVV가 없는 대상은 nullptr를 반환하여 아래 fallback을 적용한다.
 
 TTI/MIR sheet 선택과 직접 가격표는
-[공통 CostSheet와 TTI adapter](#공통-costsheet와-tti-adapter)에 정의한다.
+[타깃별 CostSheet](#타깃별-costsheet)에 정의한다.
 
 `R`은 전체 body, `S`는 spill-slot MMO가 있는 scalar/vector load/store의 직접
 비용이다. 별도 주소 계산은 `R-S`에 남는다. 두 값에 `Wtti/Wobs`를 정확히 적용한
@@ -68,12 +82,8 @@ TTI/MIR sheet 선택과 직접 가격표는
 spill이며 vector-only `Ev`와 별도 보관한다. MIR sheet와 TTI profile은 독립적으로
 보고한다. Raw requested boolean은 기존 fallback 목적지를 유지한다.
 
-Estimated/real spill은 공통 `SpillReloadUnits {Registers=Q, Accesses=A}`와
-aggregate register-class hook을 사용한다. 초과 register n개는 방향별 `(n,n)`,
-실제 group g 접근은 `(g,1)`이다. 빈 입력은 `(0,0)`, 그 외 `Q>=A>0`이다.
-Default는 `Q × inherited class unit`, scoped XiangShan vector는 `Q+A`, scalar
-store는 `2Q`, load는 `Q`다. 가격 계산 후 정확한 반복 폭 정규화를 한 번 적용한다.
-Invalid units/가격과 overflow는 오류이며 0으로 대체하지 않는다.
+Estimated/real spill의 units와 target 가격은 [변환 규칙](costsheet/rule.md#spill--units--tti--costsheet)을 따른다.
+관측값은 register class·방향·group별로 묶으며 가격화 후 반복 폭을 한 번 정규화한다.
 
 Native scalar 기준, native-cost IC, 후보 순서와 main/epilogue 정책은 동일하다.
 필수 관측이나 가격 계산 실패 시 전체 원본 loop에 아래 설정 기반 fallback을 적용한다.
@@ -135,8 +145,8 @@ loop, scalar spill과 일반 whole-register memory는 제외한다. Scalar 주�
 virtual register나 frame index여도 해석할 수 있다. 미할당 vector register,
 subregister, 미지원 접근과 불완전 mapping은 실패다.
 
-`priceVPlanVectorSpills`는 검증된 접근을 class·방향별 `SpillReloadUnits`로
-누적한 뒤 설정된 TTI의 `getRegisterClassSpillReloadCost`를 한 번씩 호출한다.
+`priceVPlanVectorSpills`는 검증된 접근을 class·방향·group별 `SpillReloadUnits`로
+누적한 뒤 설정된 TTI의 `getRegisterClassSpillReloadCost`를 묶음마다 한 번씩 호출한다.
 Default aggregate hook은 기존 단일-register spill/reload hook의 override를 존중한다.
 Spill 가격 질의의 단일 진입점은 aggregate hook이다. Segment spill은 실제 lowering과
 공유하는 물리 register 분할 helper로 접근을 해석하고 각 접근의 크기·alignment·
@@ -203,124 +213,11 @@ Master OFF·query 없음·main query 하나인 경우는 불필요한 warning을
 Threads 비활성 빌드도 같은 정책을 사용한다. 병렬 성능은 외부에서 compiler
 프로세스의 wall·CPU·peak RSS를 측정한다.
 
-## 공통 CostSheet와 TTI adapter
+## 타깃별 CostSheet
 
-`createRISCVCostSheet`는 함수별 effective tune-cpu와 subtarget VLEN으로 immutable
-sheet를 만든다. `tune-cpu`가 없으면 `target-cpu`/`-mcpu`를 따른다.
-
-| 조건 | MIR sheet/model | 후보 TTI (`use-default-tti=false`) |
-|---|---|---|
-| Kunminghu, 최소/최대 VLEN 모두 128 | `XiangShanCostSheet` / `xiangshan-direct-v1` | `XiangShanV2TTIImpl`, profile `xiangshan-v2-128` |
-| 다른 RVV CPU/VLEN | `RISCVCostSheet` / `riscv-generic-direct-v1` | `RISCVTTIImpl`, profile `native` |
-| RVV 없음 | 관측 불가 | Native 정책 |
-
-RVV가 있어도 필요한 관측 pipeline을 실행할 수 없으면 설정 기반 whole-loop
-fallback을 적용한다.
-
-`use-default-tti=true`는 후보 TTI를 `RISCVTTIImpl`로 선택한다. Generic MIR sheet가
-upstream TTI를 대체하지 않는다. MIR에서 `tti_profile=native`와
-`mir_model=xiangshan-direct-v1`이 함께 나오는 것은 유효한 조합이다.
-
-TTI와 MIR은 base opcode, operand form, scalar width, LMUL/EMUL, SEW/EEW,
-index geometry, segment fields, whole-register group과 configuration 정보를
-가격 입력으로 사용한다. Sheet는 IR/MachineInstr/Function 포인터를 보관하지 않으며,
-LLVM 비용 질의나 backend 실행을 다시 호출하지 않는다. 결과는 명령별 정확한
-비용 분자·분모, rule, unknown 여부다. 측정 cycle, dependency/port 정보,
-benchmark 이름이나 실제 runtime VL은 가격 입력이 아니다.
-
-`VPlanCostProfileScope`는 후보 body와 spill의 reciprocal-throughput 질의에만
-적용된다. 후보 body 안의 scalar 연산과 estimated scalar spill도 tuned 가격을
-사용한다. Scalar baseline, native-cost IC, probe 최적화와 일반 최종 codegen은
-native scope이며, scope 밖과 다른 cost kind는 inherited TTI 동작을 사용한다.
-
-Tuned TTI는 middle-end 정보로 예상 opcode sequence를 구성해 sheet에 전달한다.
-Scalar/vector arithmetic, signed/unsigned divide·remainder, FP divide/sqrt/FMA,
-scalar/vector memory, 지원되는 cast·conversion·reduction·shuffle·intrinsic sequence가
-이 경로를 사용한다. Fixed vector는 RVV container에서 fractional LMUL을 구한다.
-단일 widening은 좁은 source, narrowing은 좁은 destination을 기준으로 가격화한다.
-Uniform operand 정보로 지원되는 VV/VX/VF 및 reverse 형태를 선택한다. 전달 비용은
-sheet 안에 포함되며 legalization multiplier와 materialization은 예상 sequence에
-맞춰 한 번 합산한다. Init/extract와 configuration도 sequence에 있을 때만 계산한다.
-
-구성할 수 없는 sequence와 unknown TTI opcode는 inherited 추정을 사용한다.
-구성된 query의 invalid geometry/산술은 invalid cost다. Index geometry가 없는
-TTI gather/scatter 질의는 native 추정이며 MIR indexed 명령은 관측 geometry로
-가격화한다. 동일 query의 TTI/MIR 가격은 같지만 예상 lowering과 실제 lowering의
-차이로 전체 body의 동일성을 요구하지 않는다.
-
-### XiangShan 직접 비용
-
-아래에서 `G=LMUL8`, `L=max(1,G/8)`, `W=max(1,G/4)`이고,
-data element 수 `N=128×(G/8)/SEW`다. Memory는 data EMUL과 EEW로 element 수를
-계산한다. Fractional LMUL, widening/narrowing과 index geometry를 검증한 뒤
-opcode 분류에 따라 직접 가격을 반환한다.
-
-| 명령군 / 형태 | 직접 비용 |
-|---|---|
-| Scalar 일반 정수·FP 산술·load·branch·configuration | 1 |
-| Scalar store | 2 |
-| Scalar integer divide/remainder (32/64-bit) | 15 / 23 |
-| Scalar FP divide (16/32/64-bit) | 7 / 9 / 14 |
-| Scalar FP sqrt (16/32/64-bit) | 6 / 9 / 16 |
-| 일반 vector VV 산술·변환 | `L` |
-| 지원되는 vector VX/VI/VF 산술 | 해당 vector 연산 비용 + 1 |
-| Vector integer divide/remainder (SEW 8/16/32/64) | `L × {11,13,17,25}`, scalar 형태는 +1 |
-| Vector FP divide (SEW 16/32/64) | `L × {8,10,15}`, VF/reverse VF는 +1 |
-| Vector FP sqrt (SEW 16/32/64) | `L × {7,10,17}` |
-| Widening/narrowing | opcode별 `2L` 또는 `W`, scalar 형태는 +1 |
-| Slide up/down (L=1/2/4/8) | `{1,3,10,36}+1` |
-| Slide1 up/down | `L+1` / `(2L-1)+1` |
-| Gather VV / VI·VX | `L²` / `L²+1` |
-| Gather EI16 VV | SEW=8이고 G≠64이면 `2L²`, 그 외 `L²` |
-| Compress (L=1/2/4/8) | `{1,4,13,43}` |
-| 일반 integer reduction | `L` |
-| Fold FP reduction | `L+Fold`, 아래 정의 |
-| Ordered FP reduction | `max(1,N)` |
-| Contiguous vector load/store | `L+1` |
-| Strided vector load/store | `N+2` |
-| Unordered indexed load / indexed store | `N+1` |
-| Ordered indexed load | `4N+1` |
-| Segment load/store, F fields | `8NF+T` / `4NF+T`; unit stride T=1, strided T=2 |
-| Whole-register copy, group g | `g` |
-| Whole-register load/store, group g | `g+1`, aggregate spill과 같은 가격 정의 |
-
-Fold는 `(min(log2(G)-3,0)+C+8) mod 8`이며 C는 SEW 16/32/64에 대해 3/2/1이다.
-Mask 논리, scalar extract/insert와 move는 opcode별 고정 또는 group 규칙을 사용한다.
-지원 opcode와 형태의 정확한 분류는
-[`RISCVCostSheetTables.inc`](llvm/lib/Target/RISCV/RISCVCostSheetTables.inc),
-geometry와 직접식은
-[`RISCVCostSheet.cpp`](llvm/lib/Target/RISCV/RISCVCostSheet.cpp)에 있다.
-미지원 opcode는 unknown 표식과 명시적인 가격으로 구분하고, 잘못된 geometry나
-지원하지 않는 산술 precision은 실패다. RTL revision
-`e7bab53e66dfb3c4a1d11cf9519b0396f8576cae`는 출처이며 모델 버전과 별개다.
-
-### Generic MIR 직접 비용
-
-Generic sheet의 nominal VLEN은 subtarget의 실제 최소 VLEN이다.
-`L=max(1,data LMUL/EMUL)`, `N=nominal VLEN×data LMUL/SEW`이며 memory는 EEW를
-사용한다. Geometry 검증과 unknown/error 구분은 공통 경로를 사용한다.
-
-| 명령군 | 직접 비용 |
-|---|---|
-| Scalar 일반 정수·load/store·branch·configuration | 1 |
-| Scalar integer divide/remainder | 4 |
-| Scalar FP 연산·변환·divide/sqrt | 2 |
-| 일반 vector 정수·변환 | `L` |
-| Vector FP 산술·divide/sqrt | `2L` |
-| Vector integer divide/remainder | `4L` |
-| 고정 mask 논리·scalar extract/insert | 1 |
-| Whole-register copy/load/store, group g | `g` |
-| Contiguous vector memory | `L` |
-| Strided/indexed memory | `N` |
-| Segment memory, F fields | `NF` |
-| Gather VV/EI16 | `L²` |
-| 기타 shuffle·slide·compress | `L` |
-| 일반 reduction | `max(1,ceil(log2(N)))` |
-| Ordered FP reduction | `N` |
-| 미지원 opcode | Unknown 비용 1 |
-
-이는 실행 가능한 기본 가격 모델이며 CPU cycles 예측 정확도나 runtime 측정값을
-뜻하지 않는다. Scalar FP load/store는 memory 규칙을 사용한다.
+가격의 정의와 IR/MIR/spill 변환은 [작성 규칙](costsheet/rule.md), 가격표와 출처는
+[XiangShan](costsheet/xiangshan.md), [Saturn](costsheet/saturn.md),
+[K1](costsheet/k1.md)이 소유한다. CPU/VLEN별 선택은 README를 따른다.
 
 ## 비용 출력
 
@@ -348,7 +245,7 @@ Scalar baseline, 최종 main/epilogue 선택, IC와 emission 결과도 표시한
 `queried/would_skip/force_all`과 `body_cost`가 나온다. 상세 `backend-calculation`은
 native body, L, Ev, raw vector spill, Wtti, Wobs, Sv, B와 gate bound를 보여준다.
 관측된 각 spill에는 방향, 최소 bytes/scalability, group, alignment, address space,
-whole-register/segment-lowering 여부가 나온다. 별도 `spill-price`는 class·방향별
+whole-register/segment-lowering 여부가 나온다. 별도 `spill-price`는 class·방향·group별
 누적 Q/A, 설정한 TTI profile, 가격과 Wtti/Wobs를 출력한다. Gate 생략이면
 `Wobs=not-observed`, `spill_source=gate-skip`이다. Recipe 평가 단계는 native body,
 profile body, native IC와 native selection context를 구분한다.
@@ -446,7 +343,7 @@ JSONL includes body-unit `lower_bound_quarters_*`, normalized
 `score_lower_bound_quarters_*`, proof basis, requested/effective models,
 `score_kind` and physical `execution` status. Cost reports are transactional and passive.
 
-## 현재 구현의 검증
+## 이전 구현의 검증 기록
 
 2026-10-31 CostSheet 정리 후 기존 compiler cache에서 compiler/tool 및 unit-test
 대상을 64 build jobs로 빌드했다. RISCVTests 41개, VectorizeTests 98개,
@@ -454,8 +351,28 @@ pass-manager IRTests 7개가 통과했다. 전체 LoopVectorize와
 `rvv/stack-slot-coloring.mir` lit 검사는 987개 통과, 377개 unsupported, 실패 0이다.
 Unsupported는 현재 빌드에 없는 backend 등의 검사 조건에 따른다.
 
-현재 구현과 unit/lit 검사는 `RISCVCostSheet` 및 aggregate spill hook을 직접
+당시 구현과 unit/lit 검사는 `RISCVCostSheet` 및 aggregate spill hook을 직접
 사용한다. 별도 호환 wrapper, access 기반 spill 가격 API, 이전 모델 대조용 source·
 실행 파일·로그와 완료된 계획 문서는 유지하지 않는다. Compiler build/cache와
 호환 경로 symlink는 빌드 재사용을 위해 유지한다. 이 검증은 compiler 회귀 검사이며
 전체 dataset 성능이나 target runtime 측정이 아니다.
+
+
+## 타깃별 CostSheet 구현 검증
+
+2026-10-31 Saturn/K1 추가 후 기존 cache에서 지정된 compiler/tools와 unit-test
+대상을 `--parallel 2`로 빌드했다. RISCVTests 43개, VectorizeTests 99개,
+pass-manager IRTests 7개가 통과했다. 전체 LoopVectorize와 StackSlotColoring MIR
+lit는 988개 통과, 377개 unsupported, 실패 0이다. 새 타깃의 estimated/observed/MIR/
+MIR-estimated/default-TTI 조합과 homogeneous spill units의 비선형 가격을 검사한다.
+
+이 cache는 CLANG_INCLUDE_TESTS=OFF이므로 Clang lit site config가 없다.
+대신 riscv-cpus.c의 RUN/FileCheck 88개를 빌드된 clang으로 직접 실행하여 모두 통과했다.
+문서 로컬 링크와 diff whitespace 검사도 통과했다. Target simulator/실기기 실행,
+전체 dataset 성능 측정은 수행하지 않았다. 가정 가격의 성능 정확도 검증을 뜻하지 않는다.
+
+최종 문서/코드 검토에서는 수식의 규범 위치와 앵커, opcode 적용 범위, 가정 Rule의
+표기 예외를 정리했다. K1 scalar units는 Q를 가격화하도록 보정했고 whole-register
+memory는 각 sheet의 spill hook 가격을 재사용한다. 수정 후 관련 target/tools 빌드,
+RISCVTests 43개와 backend-target-sheets/backend-feedback/backend-cost-report lit 3개가
+통과했다. 새 통합 검사는 model·관측 상태·fallback 부재도 확인한다.

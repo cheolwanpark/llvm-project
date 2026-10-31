@@ -391,3 +391,25 @@ TEST_F(XiangShanV2TTITest, OpcodeAdapterMatchesDirectSheet) {
                                  TargetTransformInfo::CastContextHint::None, K),
             2);
 }
+
+TEST_F(XiangShanV2TTITest, SaturnAndK1FactoryScopes) {
+  F->addFnAttr(Attribute::getWithVScaleRangeArgs(C, 4, 4));
+  for (StringRef CPU : {"saturn-shuttle-v256d128", "spacemit-x60"}) {
+    F->addFnAttr("tune-cpu", CPU);
+    auto TTI = TM->getTargetTransformInfo(*F);
+    EXPECT_EQ(TTI.getVPlanCostProfileName(),
+              CPU == "spacemit-x60" ? "spacemit-k1-256"
+                                    : "saturn-shuttle-v256d128");
+    auto Info = TM->getTargetMIRInfo(*F);
+    ASSERT_NE(Info, nullptr);
+    EXPECT_EQ(Info->getNominalVLEN(), 256u);
+    auto *Ty = ScalableVectorType::get(Type::getInt32Ty(C), 4);
+    auto K = TargetTransformInfo::TCK_RecipThroughput;
+    auto Native = TTI.getArithmeticInstrCost(Instruction::Add, Ty, K);
+    {
+      VPlanCostProfileScope Scope(true);
+      EXPECT_EQ(TTI.getArithmeticInstrCost(Instruction::Add, Ty, K), 4);
+    }
+    EXPECT_EQ(TTI.getArithmeticInstrCost(Instruction::Add, Ty, K), Native);
+  }
+}

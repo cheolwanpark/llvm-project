@@ -134,3 +134,59 @@ TEST(RISCVCostSheet, GenericPricesAndGeometry) {
   // Fractional LMUL valid for VLEN=256, even though invalid at VLEN=128.
   Check(op("VADD_VV", 1, 32), 1);
 }
+
+TEST(TargetCostSheets, SaturnAndK1ServiceCosts) {
+  SaturnCostSheet Saturn;
+  SpacemitK1CostSheet K1;
+  auto Check = [&](const RISCVCostSheet &Sheet, VPlanMIRInstruction Q,
+                   int64_t Expected) {
+    auto C = Sheet.getInstructionCost(Q);
+    ASSERT_TRUE(bool(C)) << (C ? "" : toString(C.takeError()));
+    EXPECT_EQ(C->Numerator, Expected) << Q.BaseOpcode;
+    EXPECT_EQ(C->Denominator, 1);
+    EXPECT_FALSE(C->Unknown);
+  };
+  Check(Saturn, op("VADD_VV", 16, 32), 4);
+  Check(K1, op("VADD_VV", 16, 32), 4);
+  Check(Saturn, op("VFMACC_VV", 8, 32), 2);
+  Check(K1, op("VFMACC_VV", 8, 32), 1);
+  // Integer extension prefixes deliberately use the ordinary SIMD service.
+  Check(Saturn, op("VSEXT_VF2", 8, 32), 2);
+  Check(K1, op("VZEXT_VF2", 16, 32), 2);
+  Check(Saturn, op("VDIV_VV", 8, 32), 512);
+  auto Load = op("VLE32_V", 8, 32);
+  Load.Load = true;
+  Check(Saturn, Load, 2);
+  Check(K1, Load, 3);
+  Load.BaseOpcode = "VLSE32_V";
+  Check(Saturn, Load, 8);
+  Check(K1, Load, 8);
+  for (unsigned G : {1u, 2u, 4u, 8u}) {
+    auto Whole = op("VL" + std::to_string(G) + "RE8_V", G * 8);
+    Whole.Load = Whole.Spill = true;
+    Whole.RegisterGroups8 = {G * 8};
+    Check(Saturn, Whole, 2 * G);
+    Check(K1, Whole, G == 1 ? 3 : 2 * G);
+    EXPECT_EQ(Saturn.spillCost(true, true, {G, 1}), 2 * G);
+    EXPECT_EQ(K1.spillCost(true, true, {G, 1}), G == 1 ? 3 : 2 * G);
+  }
+  EXPECT_EQ(K1.spillCost(true, false, {2, 2}) +
+                K1.spillCost(true, false, {4, 1}), 14);
+  EXPECT_EQ(K1.spillCost(true, false, {6, 3}), 12);
+  EXPECT_FALSE(K1.spillCost(true, false, {5, 2}).isValid());
+  // Scalar pricing counts transferred registers, independently of accesses.
+  EXPECT_EQ(K1.spillCost(false, true, {4, 1}), 4);
+  EXPECT_EQ(K1.spillCost(false, false, {4, 1}), 4);
+  EXPECT_FALSE(K1.spillCost(false, false, {uint64_t(INT64_MAX), 1}).isValid());
+  auto Invalid = Saturn.getInstructionCost(op("VADD_VV", 3, 32));
+  EXPECT_FALSE(bool(Invalid));
+  if (!Invalid)
+    consumeError(Invalid.takeError());
+  SaturnMIRInfo SM;
+  SpacemitK1MIRInfo KM;
+  EXPECT_EQ(SM.getModelName(), Saturn.getModelName());
+  EXPECT_EQ(KM.getModelName(), K1.getModelName());
+  auto SC = SM.getInstructionCost(op("VADD_VV", 16, 32));
+  ASSERT_TRUE(bool(SC));
+  EXPECT_EQ(SC->Numerator, 4);
+}

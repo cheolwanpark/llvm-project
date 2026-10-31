@@ -5,7 +5,6 @@
 #include "llvm/Analysis/TargetMIRInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 namespace llvm {
-class RISCVSubtarget;
 /// Immutable direct pricing of owned instruction facts. The same query is used
 /// by the MIR adapter and the TTI lowering adapter; no compiler state is
 /// retained.
@@ -40,6 +39,61 @@ public:
   spillCost(bool Vector, bool IsLoad,
             TargetTransformInfo::SpillReloadUnits U) const override;
 };
-std::unique_ptr<RISCVCostSheet> createRISCVCostSheet(const RISCVSubtarget &ST);
+class XiangShanMIRInfo final : public TargetMIRInfo {
+  XiangShanCostSheet Sheet;
+public:
+  StringRef getModelName() const override { return Sheet.getModelName(); }
+  StringRef getRevision() const override { return Sheet.getRevision(); }
+  StringRef getCPU() const override { return Sheet.getCPU(); }
+  unsigned getNominalVLEN() const override { return Sheet.getNominalVLEN(); }
+  Expected<MIRInstructionCost> getInstructionCost(
+      const VPlanMIRInstruction &MI) const override {
+    return Sheet.getInstructionCost(MI);
+  }
+};
+class SaturnCostSheet : public RISCVCostSheet {
+public:
+  SaturnCostSheet() : RISCVCostSheet(256, "saturn-shuttle-v256d128") {}
+  StringRef getModelName() const override { return "saturn-shuttle-direct-v1"; }
+  StringRef getRevision() const override { return "dfe75de2a8868d51d42c20612821431a9fcf645e+vat-clear"; }
+  Expected<MIRInstructionCost>
+  getInstructionCost(const VPlanMIRInstruction &MI) const override;
+  InstructionCost spillCost(bool Vector, bool IsLoad,
+      TargetTransformInfo::SpillReloadUnits Units) const override;
+};
+class SaturnMIRInfo final : public TargetMIRInfo {
+  SaturnCostSheet Sheet;
+public:
+  StringRef getModelName() const override { return Sheet.getModelName(); }
+  StringRef getRevision() const override { return Sheet.getRevision(); }
+  StringRef getCPU() const override { return Sheet.getCPU(); }
+  unsigned getNominalVLEN() const override { return Sheet.getNominalVLEN(); }
+  Expected<MIRInstructionCost> getInstructionCost(
+      const VPlanMIRInstruction &MI) const override {
+    return Sheet.getInstructionCost(MI);
+  }
+};
+class SpacemitK1CostSheet : public RISCVCostSheet {
+public:
+  SpacemitK1CostSheet() : RISCVCostSheet(256, "spacemit-x60") {}
+  StringRef getModelName() const override { return "spacemit-k1-direct-v1"; }
+  StringRef getRevision() const override { return "llvm-x60-occupancy-v1"; }
+  Expected<MIRInstructionCost>
+  getInstructionCost(const VPlanMIRInstruction &MI) const override;
+  InstructionCost spillCost(bool Vector, bool IsLoad,
+      TargetTransformInfo::SpillReloadUnits Units) const override;
+};
+class SpacemitK1MIRInfo final : public TargetMIRInfo {
+  SpacemitK1CostSheet Sheet;
+public:
+  StringRef getModelName() const override { return Sheet.getModelName(); }
+  StringRef getRevision() const override { return Sheet.getRevision(); }
+  StringRef getCPU() const override { return Sheet.getCPU(); }
+  unsigned getNominalVLEN() const override { return Sheet.getNominalVLEN(); }
+  Expected<MIRInstructionCost> getInstructionCost(
+      const VPlanMIRInstruction &MI) const override {
+    return Sheet.getInstructionCost(MI);
+  }
+};
 } // namespace llvm
 #endif

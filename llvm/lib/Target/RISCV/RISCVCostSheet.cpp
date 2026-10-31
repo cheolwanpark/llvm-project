@@ -1,7 +1,6 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #include "RISCVCostSheet.h"
-#include "RISCVSubtarget.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/MathExtras.h"
@@ -466,11 +465,4 @@ InstructionCost
 XiangShanCostSheet::spillCost(bool Vector, bool IsLoad,
                               TargetTransformInfo::SpillReloadUnits U) const {
   return priceSpillUnits(true, Vector, IsLoad, U);
-}
-std::unique_ptr<RISCVCostSheet>
-llvm::createRISCVCostSheet(const RISCVSubtarget &ST) {
-  if (ST.getTuneCPU() == "xiangshan-kunminghu" && ST.getRealMinVLen() == 128 &&
-      ST.getRealMaxVLen() == 128)
-    return std::make_unique<XiangShanCostSheet>();
-  return std::make_unique<RISCVCostSheet>(ST.getRealMinVLen(), ST.getTuneCPU());
 }

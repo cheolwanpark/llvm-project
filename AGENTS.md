@@ -3,12 +3,12 @@
 ## Scope and documentation
 
 This LLVM fork provides in-process VF selection. `BACKEND_FEEDBACK.md`
-describes its contract, shared CostSheets, spill pricing and cost reports; README covers
+describes its contract, target-specific CostSheets, spill pricing and cost reports; README covers
 usage, build and tests.
 Preserve existing upstream LLVM options and behavior when cleaning up fork code.
 
-Keep README and these existing documents current instead of adding overlapping
-reports. Distinguish historical measurements from the current binary and describe
+Keep README, BACKEND_FEEDBACK.md and costsheet/ current instead of adding overlapping
+reports. costsheet/rule.md owns pricing/conversion rules; target documents own prices and evidence. Distinguish historical measurements from the current binary and describe
 retained artifacts accurately.
 
 ## Build and cache layout
@@ -36,9 +36,10 @@ lowering. This collector remains vector-spill-only. MIR body observations use th
 separate `post-frame-lowering` observer and include scalar/vector spill-slot costs.
 
 Estimated and observed non-MIR spills use profile-independent `SpillReloadUnits`
-and the configured aggregate register-class TTI hook. Tuned candidate costs use
-the shared XiangShan CostSheet for Kunminghu at exact VLEN=128; other RVV CPU/VLEN
-settings use the generic MIR sheet and native RISC-V TTI. Default-TTI selection
+and the configured aggregate register-class TTI hook. Tuned candidate costs use each target's CostSheet at its documented exact VLEN
+(Kunminghu 128, Saturn GEN/Shuttle and K1 256); other RVV CPU/VLEN settings
+use the generic MIR sheet and native RISC-V TTI. Observed units are homogeneous
+per class, direction and physical register group. Default-TTI selection
 also applies to MIR estimated spills, independently of MIR sheet selection.
 Scalar baselines, native-cost IC, probe optimization and final codegen stay native.
 

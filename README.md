@@ -8,8 +8,8 @@ LLVM policy. A required probe failure retries the whole loop with specific TTI
 estimated costs when supported and requested, then falls back to native selection
 if that attempt fails.
 
-- [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md): cost model, probe contract, shared
-  RISC-V CostSheets, and cost-report formats.
+- [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md): cost model, probe contract,
+  target-specific RISC-V CostSheets, and cost-report formats.
 - [AGENTS.md](AGENTS.md): repository working and comparison rules.
 
 ## Options and usage
@@ -43,37 +43,44 @@ one detailed report per original loop.
 Print reports show the final effective model: native LLVM costs when OFF or after
 native fallback, and exact model costs otherwise. Failed attempts are discarded.
 Internal probe clones do not emit cost reports.
-The effective tuning CPU selects the pricing implementation. Kunminghu with
-exact VLEN=128 uses scoped XiangShan TTI and `xiangshan-direct-v1` MIR pricing.
-Other RVV CPU/VLEN settings use native RISC-V TTI and
-`riscv-generic-direct-v1` MIR pricing. `-use-default-tti` selects native RISC-V TTI
-for all candidate TTI calculations, including MIR estimated spills; MIR sheet
-selection still follows the CPU/VLEN. Without RVV or the required probe pipeline,
-the configured fallback policy applies.
+CPU/VLEN selects the target sheet and scoped TTI:
+
+| Effective tune CPU | Exact VLEN | CostSheet documentation |
+|---|---|---|
+| `xiangshan-kunminghu` | 128 | [XiangShan](costsheet/xiangshan.md) |
+| `saturn-shuttle-v256d128` (new tune-only CPU) | 256 | [Saturn](costsheet/saturn.md) |
+| `spacemit-x60` | 256 | [K1](costsheet/k1.md) |
+
+Other CPU/VLEN combinations retain native TTI and generic MIR pricing.
+`-use-default-tti` changes TTI selection independently of the MIR sheet.
+Pricing units, evidence policy and conversions live in [CostSheet rules](costsheet/rule.md).
+
+```sh
+.cache/build/bin/clang --target=riscv64-unknown-elf -march=rv64gcv \
+  -mtune=saturn-shuttle-v256d128 -mrvv-vector-bits=256 -O3 \
+  -mllvm -vplan-backend kernel.c -S -o .cache/saturn-kernel.s
+.cache/build/bin/clang --target=riscv64-unknown-elf -mcpu=spacemit-x60 \
+  -mrvv-vector-bits=256 -O3 -mllvm -vplan-backend kernel.c -S -o .cache/k1-kernel.s
+```
 
 ### Body/spill ablations
 
 All three controls require `-vplan-backend`. LLVM accepts both `-use-mir` and
 `--use-mir` spellings; Clang requires `-mllvm` before each LLVM option.
 
-| Additional flags | Body cost | Model ID |
+| Additional flags | Cost source | Model ID |
 |---|---|---|
-| none | `Lt - Evt + Svt` | `tti-real-vector-spill-v1` |
-| `-use-estimated-spill` | `Lt` | `tti-v1` |
-| `-use-default-tti` | `L0 - Ev0 + Sv0` | `llvm-real-vector-spill-v1` |
-| `-use-default-tti -use-estimated-spill` | `L0` | `llvm-v1` |
-| `-use-mir` | `R` | `mir-v1` |
-| `-use-mir -use-estimated-spill` | `R - S + Et` | `mir-me-spill-v1` |
+| none | Selected TTI body, observed vector spills | `tti-real-vector-spill-v1` |
+| `-use-estimated-spill` | Selected TTI estimates | `tti-v1` |
+| `-use-default-tti` | Native TTI body, observed vector spills | `llvm-real-vector-spill-v1` |
+| `-use-default-tti -use-estimated-spill` | Native TTI estimates | `llvm-v1` |
+| `-use-mir` | Observed MIR body | `mir-v1` |
+| `-use-mir -use-estimated-spill` | MIR body with selected TTI spill estimates | `mir-me-spill-v1` |
 
-`L0/Lt` are default/profile-selected TTI body costs; without a supported tuned
-profile, `Lt` uses native RISC-V TTI. `Ev/Sv` are estimated/observed
-**vector** spill costs, priced with the selected TTI. `R/S` are the MIR body
-and its **scalar and vector** spill costs; `Et` is the selected TTI's
-**total** estimated spill. MIR cost is normalized by the validated iteration
-width before substituting `Et`. Either MIR row also accepts `-use-default-tti`:
-`R` and `S` keep the CPU-selected sheet while `Et` uses default TTI. The MIR mode
-ID stays the same; `tti_profile` records the separate TTI choice. The raw
-`use-default-tti` boolean also controls the failure destination.
+The exact combination formulas and scalar/vector coverage are specified in
+[BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md#bodyspill-ablation과-mir-info).
+Either MIR row accepts `-use-default-tti`; the MIR sheet remains CPU-selected.
+The raw `use-default-tti` boolean also controls the failure destination.
 
 MIR uses a separate post-frame-lowering observer, after RISC-V post-RA pseudo
 expansion and load/store optimization but before final scheduling/RVV pseudo
@@ -81,23 +88,8 @@ expansion. It queries every required candidate even when the vector-spill gate
 would skip. TTI-only estimated modes require no backend query. Other modes retain
 the existing post-stack-slot-coloring observer and gate.
 
-MIR and scoped tuned TTI share `RISCVCostSheet` queries. The effective tune CPU
-selects `xiangshan-direct-v1` for Kunminghu with exact VLEN=128; other RVV
-CPU/VLEN settings select `riscv-generic-direct-v1` for MIR. Generic geometry uses
-the subtarget's minimum VLEN. Default TTI remains the upstream RISC-V TTI.
-Unknown opcodes cost 1 and carry an unknown marker; invalid geometry and pricing
-fail through the whole-loop policy below. These are nominal direct costs.
-The XiangShan opcode rules retain RTL provenance
-`e7bab53e66dfb3c4a1d11cf9519b0396f8576cae`, independently of the new model version.
-
-Both estimated and observed vector spills use register-class aggregate pricing
-with transferred registers `Q` and accesses `A`. Estimated excess registers `n`
-produce `(n,n)` per direction; an observed group `g` produces `(g,1)`.
-Default TTI charges `Q` times its inherited class unit. Scoped XiangShan charges
-vector `Q+A`, scalar stores `2Q`, and scalar loads `Q`. Thus excess 4 registers
-costs 8/16 with default/tuned estimates; a group-4 store and reload costs 8/10.
-The observed non-MIR collector remains vector-only. Prices are normalized once
-by the exact iteration-width ratio, and invalid prices never become zero.
+Target-specific prices and spill units are specified once in
+[costsheet/rule.md](costsheet/rule.md) and its target documents.
 
 ```sh
 .cache/build/bin/clang --target=riscv64-unknown-elf \

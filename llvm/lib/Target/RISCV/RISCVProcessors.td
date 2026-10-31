@@ -110,6 +110,11 @@ def GENERIC_RV64 : RISCVProcessorModel<"generic-rv64",
                    GenericTuneInfo;
 // Support generic for compatibility with other targets. The triple will be used
 // to change to the appropriate rv32/rv64 version.
+// Cost profile for the pinned Saturn GEN/Shuttle configuration. Native
+// scheduling deliberately remains the same approximation as generic-rv64.
+def SATURN_SHUTTLE : RISCVTuneProcessorModel<"saturn-shuttle-v256d128",
+                                            SpacemitX60Model,
+                                            GenericTuneFeatures>, GenericTuneInfo;
 def GENERIC : RISCVTuneProcessorModel<"generic", NoSchedModel>, GenericTuneInfo;
 // `generic-ooo` is expected to target out-of-order application processors designed
 // for general-purpose computing.

@@ -768,3 +768,6 @@
 // COM: The list of extensions are tested in `test/Driver/print-enabled-extensions/riscv-xt-c920v2.c`
 // MCPU-XT-C920V2: "-target-cpu" "xt-c920v2"
 // MCPU-XT-C920V2-SAME: "-target-abi" "lp64d"
+
+// RUN: %clang --target=riscv64 -march=rv64gcv -mtune=saturn-shuttle-v256d128 -mrvv-vector-bits=256 -### -c %s 2>&1 | FileCheck %s --check-prefix=MTUNE-SATURN
+// MTUNE-SATURN: "-tune-cpu" "saturn-shuttle-v256d128"

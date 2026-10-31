@@ -1697,6 +1697,9 @@ public:
   LLVM_ABI StringRef getVPlanCostProfileName() const;
 
   /// Profile-independent transferred registers and memory accesses.
+  /// Observed RVV accesses are grouped by class, direction AND register group:
+  /// each nonempty such query has homogeneous group size Registers/Accesses.
+  /// Estimated excess registers use (n,n), i.e. group-1 accesses.
   struct SpillReloadUnits {
     uint64_t Registers = 0, Accesses = 0;
     bool isValid() const {

@@ -480,3 +480,37 @@ TEST(VPlanBackendCost, AggregateHookReceivesUnitsWithoutReportingQueries) {
   EXPECT_EQ(Raw, 26);
   EXPECT_EQ(*Price, VPExactCost::ratio(104, 64));
 }
+
+namespace {
+struct NonlinearGroupTTI : TargetTransformInfoImplBase {
+  inline static const DataLayout Layout{""};
+  NonlinearGroupTTI() : TargetTransformInfoImplBase(Layout) {}
+  unsigned getRegisterClassForType(bool, Type *) const override { return 1; }
+  InstructionCost getRegisterClassSpillReloadCost(
+      unsigned, bool, TargetTransformInfo::SpillReloadUnits U,
+      TargetTransformInfo::TargetCostKind) const override {
+    EXPECT_EQ(U.Registers % U.Accesses, 0u);
+    uint64_t G = U.Registers / U.Accesses;
+    return int64_t(U.Accesses * (G == 1 ? 3 : 2 * G));
+  }
+};
+}
+TEST(VPlanBackendCost, PreserveNonlinearRegisterGroups) {
+  TargetTransformInfo TTI(std::make_unique<NonlinearGroupTTI>());
+  LLVMContext C;
+  for (auto Groups : {std::vector<unsigned>{1, 1, 4},
+                       std::vector<unsigned>{2, 2, 2}}) {
+    auto O = observation();
+    auto Access = O.Spills.front();
+    O.Spills.clear();
+    for (unsigned G : Groups) {
+      Access.RegisterGroup = G;
+      Access.MinBytes = G * 8;
+      O.Spills.push_back(Access);
+    }
+    InstructionCost Raw;
+    auto Price = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
+    ASSERT_TRUE(bool(Price));
+    EXPECT_EQ(Raw, Groups.front() == 1 ? 14 : 12);
+  }
+}

@@ -22,6 +22,8 @@
 #include "TargetInfo/RISCVTargetInfo.h"
 #include "RISCVCostSheet.h"
 #include "XiangShanV2TargetTransformInfo.h"
+#include "SaturnTargetTransformInfo.h"
+#include "SpacemitK1TargetTransformInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
@@ -291,6 +293,13 @@ RISCVTargetMachine::getTargetTransformInfo(const Function &F) const {
       ST->getTuneCPU() == "xiangshan-kunminghu" &&
       ST->getRealMinVLen() == 128 && ST->getRealMaxVLen() == 128)
     return TargetTransformInfo(std::make_unique<XiangShanV2TTIImpl>(this, F));
+  if (!vplanBackendUseDefaultTTI() && ST->hasVInstructions() &&
+      ST->getRealMinVLen() == 256 && ST->getRealMaxVLen() == 256) {
+    if (ST->getTuneCPU() == "saturn-shuttle-v256d128")
+      return TargetTransformInfo(std::make_unique<SaturnTTIImpl>(this, F));
+    if (ST->getTuneCPU() == "spacemit-x60")
+      return TargetTransformInfo(std::make_unique<SpacemitK1TTIImpl>(this, F));
+  }
   return TargetTransformInfo(std::make_unique<RISCVTTIImpl>(this, F));
 }
 
@@ -299,7 +308,16 @@ RISCVTargetMachine::getTargetMIRInfo(const Function &F) const {
   const auto *ST = getSubtargetImpl(F);
   if (!ST->hasVInstructions())
     return nullptr;
-  return createRISCVCostSheet(*ST);
+  if (ST->getRealMinVLen() == 256 && ST->getRealMaxVLen() == 256) {
+    if (ST->getTuneCPU() == "saturn-shuttle-v256d128")
+      return std::make_unique<SaturnMIRInfo>();
+    if (ST->getTuneCPU() == "spacemit-x60")
+      return std::make_unique<SpacemitK1MIRInfo>();
+  }
+  if (ST->getTuneCPU() == "xiangshan-kunminghu" &&
+      ST->getRealMinVLen() == 128 && ST->getRealMaxVLen() == 128)
+    return std::make_unique<XiangShanMIRInfo>();
+  return std::make_unique<RISCVCostSheet>(ST->getRealMinVLen(), ST->getTuneCPU());
 }
 
 // A RISC-V hart has a single byte-addressable address space of 2^XLEN bytes

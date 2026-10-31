@@ -438,6 +438,7 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
   for (const auto &P : AccessCosts)
     DS << "      spill-price class=" << P.ClassID
        << " direction=" << (P.IsLoad ? "load" : "store")
+       << " group=" << (P.Accesses ? P.Registers / P.Accesses : 0)
        << " Q=" << P.Registers << " A=" << P.Accesses
        << " tti_profile=" << ProfileName << " cost=" << P.Cost
        << " Wtti=" << Width << " Wobs=" << Observation->IterationWidth << '\n';

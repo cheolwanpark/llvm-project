@@ -160,7 +160,8 @@ Expected<VPExactCost> llvm::priceVPlanVectorSpills(
                                ElementCount::get(A.MinBytes, A.Scalable));
     unsigned ClassID = TTI.getRegisterClassForType(true, Ty);
     auto I = llvm::find_if(Prices, [&](const VPSpillCost &P) {
-      return P.ClassID == ClassID && P.IsLoad == A.IsLoad;
+      return P.ClassID == ClassID && P.IsLoad == A.IsLoad &&
+             P.Registers / P.Accesses == A.RegisterGroup;
     });
     if (I == Prices.end()) {
       Prices.push_back({ClassID, A.IsLoad});

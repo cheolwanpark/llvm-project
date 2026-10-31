@@ -9,7 +9,7 @@ static bool active(TargetTransformInfo::TargetCostKind Kind) {
 }
 XiangShanV2TTIImpl::XiangShanV2TTIImpl(const RISCVTargetMachine *TM,
                                        const Function &F)
-    : RISCVTTIImpl(TM, F), Sheet(createRISCVCostSheet(*getST())) {}
+    : RISCVTTIImpl(TM, F), Sheet(std::make_unique<XiangShanCostSheet>()) {}
 
 VPlanMIRInstruction XiangShanV2TTIImpl::query(StringRef Op, MVT VT) const {
   VPlanMIRInstruction Q;
