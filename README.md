@@ -50,6 +50,10 @@ CPU/VLEN selects the target sheet and scoped TTI:
 | `saturn-shuttle-v256d128` (tune-only CPU) | 256 | [Saturn](costsheet/saturn.md) |
 | `spacemit-x60` | 256 | [K1](costsheet/k1.md) |
 
+K1 uses pricing revision `k1-structural-service-v1`: nominal 128-bit services
+and explicit reference algorithms, documented in the [K1 CostSheet](costsheet/k1.md).
+Historical scheduler occupancy prices and measurements describe the previous model.
+
 Other CPU/VLEN combinations retain native TTI and generic MIR pricing.
 `-use-default-tti` changes TTI selection independently of the MIR sheet.
 Pricing units, evidence policy and conversions live in [CostSheet rules](costsheet/rule.md).

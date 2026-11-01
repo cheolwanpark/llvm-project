@@ -479,3 +479,15 @@ InstructionCost SpacemitK1TTIImpl::getCastInstrCost(
   // return through profileOpcodeCost. Unsupported sequences stay native.
   return RISCVTTIImpl::getCastInstrCost(Opcode, Dst, Src, CCH, Kind, I);
 }
+
+InstructionCost
+SpacemitK1TTIImpl::getCallInstrCost(Function *F, Type *RetTy,
+                                    ArrayRef<Type *> Tys,
+                                    TTI::TargetCostKind Kind) const {
+  if (active(Kind) && F && RetTy->isFloatingPointTy() &&
+      (F->getIntrinsicID() == Intrinsic::sqrt ||
+       F->getIntrinsicID() == Intrinsic::fma))
+    return getIntrinsicInstrCost(
+        IntrinsicCostAttributes(F->getIntrinsicID(), RetTy, Tys), Kind);
+  return RISCVTTIImpl::getCallInstrCost(F, RetTy, Tys, Kind);
+}

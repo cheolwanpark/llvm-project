@@ -450,13 +450,21 @@ TEST_F(XiangShanV2TTITest, ScalarPricesUseConfiguredProfileAndRestoreScope) {
       for (unsigned Opcode : FPOpcodes)
         EXPECT_EQ(Tuned.getArithmeticInstrCost(Opcode, F64, K), 1);
       EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::UDiv, I64, K),
-                XiangShan ? 23 : Saturn ? 64 : 20);
+                XiangShan ? 23
+                : Saturn  ? 64
+                          : 66);
       EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::URem, I64, K),
-                XiangShan ? 23 : Saturn ? 64 : 20);
+                XiangShan ? 23
+                : Saturn  ? 64
+                          : 66);
       EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::FDiv, F32, K),
-                XiangShan ? 9 : Saturn ? 64 : 15);
+                XiangShan ? 9
+                : Saturn  ? 64
+                          : 28);
       EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::FDiv, F64, K),
-                XiangShan ? 14 : Saturn ? 64 : 22);
+                XiangShan ? 14
+                : Saturn  ? 64
+                          : 57);
       for (unsigned Opcode : {Instruction::UDiv, Instruction::URem})
         for (Type *Ty : {Type::getInt32Ty(C), I64})
           EXPECT_EQ(Tuned.getArithmeticInstrCost(Opcode, Ty, K, {}, PowerTwo),
@@ -465,8 +473,9 @@ TEST_F(XiangShanV2TTITest, ScalarPricesUseConfiguredProfileAndRestoreScope) {
                 1);
       EXPECT_EQ(Tuned.getMemoryOpCost(Instruction::Store, F64, Align(8), 0, K),
                 XiangShan ? 2 : 1);
-      EXPECT_EQ(Tuned.getIntrinsicInstrCost(Sqrt, K),
-                XiangShan ? 16 : Saturn ? 64 : 22);
+      EXPECT_EQ(Tuned.getIntrinsicInstrCost(Sqrt, K), XiangShan ? 16
+                                                      : Saturn  ? 64
+                                                                : 57);
       IntrinsicCostAttributes FMA(Intrinsic::fma, F64,
                                  ArrayRef<Type *>{F64, F64, F64});
       EXPECT_EQ(Tuned.getIntrinsicInstrCost(FMA, K), 1);
@@ -502,7 +511,7 @@ public:
   using SpacemitK1TTIImpl::SpacemitK1TTIImpl;
 };
 } // namespace
-TEST_F(XiangShanV2TTITest, K1OccupancyFormsMatchMIRSheet) {
+TEST_F(XiangShanV2TTITest, K1StructuralFormsMatchMIRSheet) {
   F->addFnAttr("tune-cpu", "spacemit-x60");
   F->addFnAttr(Attribute::getWithVScaleRangeArgs(C, 4, 4));
   ExposedK1TTI TTI(static_cast<RISCVTargetMachine *>(TM.get()), *F);
@@ -553,6 +562,9 @@ TEST_F(XiangShanV2TTITest, K1OccupancyFormsMatchMIRSheet) {
         // A scalable MVT's vscale=1 minimum must contain a whole element.
         if (G * 8 < SEW || (O.Widening && !O.Floating && G == 64))
           continue;
+        if (StringRef(O.Name) == "VRGATHEREI16_VV" &&
+            (G * 16 < SEW || G * 16 > 64 * SEW))
+          continue;
         MVT VT = MVT::getScalableVectorVT(Elem, G * 8 / SEW);
         if (!VT.isValid())
           continue;
@@ -571,7 +583,6 @@ TEST_F(XiangShanV2TTITest, K1OccupancyFormsMatchMIRSheet) {
     }
   }
 }
-
 
 TEST_F(XiangShanV2TTITest, K1PublicExtendedReductionUsesWideningForms) {
   F->addFnAttr("tune-cpu", "spacemit-x60");
@@ -601,9 +612,10 @@ TEST_F(XiangShanV2TTITest, K1PublicExtendedReductionUsesWideningForms) {
           EXPECT_EQ(Public.getExtendedReductionCost(Instruction::FAdd, false,
                                                     Result, Ty, Flags, K),
                     Expected);
-          // The public hook must not substitute the single-width FP table.
-          EXPECT_NE(Expected, Public.getArithmeticReductionCost(
-                                  Instruction::FAdd, Ty, Flags, K));
+          // Ordered widening uses the same number of serial additions.
+          if (Flags.allowReassoc())
+            EXPECT_NE(Expected, Public.getArithmeticReductionCost(
+                                    Instruction::FAdd, Ty, Flags, K));
           {
             VPlanCostProfileScope NativeScope(false);
             EXPECT_EQ(Public.getExtendedReductionCost(Instruction::FAdd, false,
@@ -643,4 +655,23 @@ TEST_F(XiangShanV2TTITest, K1PublicExtendedReductionUsesWideningForms) {
                                               Result, Ty, std::nullopt, K),
               Native);
   }
+}
+
+TEST_F(XiangShanV2TTITest, K1ScalarIntrinsicCallUsesSheetOnlyInScope) {
+  F->addFnAttr("tune-cpu", "spacemit-x60");
+  F->addFnAttr(Attribute::getWithVScaleRangeArgs(C, 4, 4));
+  auto TTI = TM->getTargetTransformInfo(*F);
+  Type *D = Type::getDoubleTy(C);
+  auto *Sqrt = Intrinsic::getOrInsertDeclaration(M.get(), Intrinsic::sqrt, {D});
+  auto K = TargetTransformInfo::TCK_RecipThroughput;
+  EXPECT_EQ(TTI.getCallInstrCost(Sqrt, D, {D}, K), 10);
+  {
+    VPlanCostProfileScope Scope(true);
+    EXPECT_EQ(TTI.getCallInstrCost(Sqrt, D, {D}, K), 57);
+    EXPECT_EQ(TTI.getCallInstrCost(nullptr, D, {D}, K), 10);
+    EXPECT_EQ(
+        TTI.getCallInstrCost(Sqrt, D, {D}, TargetTransformInfo::TCK_Latency),
+        10);
+  }
+  EXPECT_EQ(TTI.getCallInstrCost(Sqrt, D, {D}, K), 10);
 }

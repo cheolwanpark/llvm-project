@@ -246,6 +246,11 @@ Threads 비활성 빌드도 같은 정책을 사용한다. 병렬 성능은 외�
 [XiangShan](costsheet/xiangshan.md), [Saturn](costsheet/saturn.md),
 [K1](costsheet/k1.md)이 소유한다. CPU/VLEN별 선택은 README를 따른다.
 
+K1의 exact VLEN256 가격은 `k1-structural-service-v1`이다.
+128-bit nominal service와 명시적 참조 알고리즘을 사용하며,
+가격·근거·가정은 [K1 CostSheet](costsheet/k1.md)에 있다.
+기존 scheduler occupancy 및 과거 timing과 구분한다.
+
 ## 비용 출력
 
 `-print-vplans`는 요약을, `-print-detailed-vplans`는 요약과 계산 상세를 stderr에
@@ -354,6 +359,7 @@ Cost-bound candidate pruning은 [비용 하한 pruning](#비용-하한-pruning),
 `-vplan-backend-pruning-trace`는 CFG 적용 여부와 크기를,
 `-vplan-backend-pruning-dump-ir`는 `before`, `after`, `suffix` IR을 출력한다.
 두 진단은 수동적이며 timing phase는 `probe_pruning`이다.
+
 
 ## Scalar 기준 통합과 K1 occupancy-v2 검증
 

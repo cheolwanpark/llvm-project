@@ -77,7 +77,7 @@ class SpacemitK1CostSheet : public RISCVCostSheet {
 public:
   SpacemitK1CostSheet() : RISCVCostSheet(256, "spacemit-x60") {}
   StringRef getModelName() const override { return "spacemit-k1-direct-v1"; }
-  StringRef getRevision() const override { return "llvm-x60-occupancy-v2"; }
+  StringRef getRevision() const override { return "k1-structural-service-v1"; }
   Expected<MIRInstructionCost>
   getInstructionCost(const VPlanMIRInstruction &MI) const override;
   InstructionCost spillCost(bool Vector, bool IsLoad,

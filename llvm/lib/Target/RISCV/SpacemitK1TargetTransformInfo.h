@@ -22,6 +22,9 @@ class SpacemitK1TTIImpl : public RISCVTTIImpl {
                                     unsigned Fields) const override;
 
 public:
+  InstructionCost getCallInstrCost(Function *F, Type *RetTy,
+                                   ArrayRef<Type *> Tys,
+                                   TTI::TargetCostKind Kind) const override;
   SpacemitK1TTIImpl(const RISCVTargetMachine *TM, const Function &F);
   InstructionCost getExtendedReductionCost(
       unsigned Opcode, bool IsUnsigned, Type *ResTy, VectorType *ValTy,
