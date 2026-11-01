@@ -35,6 +35,9 @@ master가 OFF이면 효과가 없다. 실행 명령은 README의
 `Lt`는 타깃 profile TTI(미지원 시 native), `L0`는 default TTI의 body이며
 `Ev/Sv`도 각각 선택한 TTI로 가격화한다.
 
+기존 LLVM에서 유지한 scalar 기준 정책, scalar loop와 scalar spill의 구분 및
+모델 비교의 해석 범위는 [ABLATION](ABLATION.md)에 설명한다.
+
 | 추가 옵션 | Vector body 비용 | Scalar 기준 |
 |---|---|---|
 | 없음 | `Lt - Evt + Svt` | tuned TTI scalar IR |

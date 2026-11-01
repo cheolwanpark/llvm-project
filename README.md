@@ -78,6 +78,8 @@ All three controls require `-vplan-backend`. LLVM accepts both `-use-mir` and
 
 The combination formulas and scalar/vector coverage are specified in
 [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md#bodyspill-ablation과-mir-info).
+For inherited LLVM policies, scalar-loop versus scalar-spill coverage, and the
+limits of comparisons between these models, see [ABLATION.md](ABLATION.md).
 Either MIR row accepts `-use-default-tti`; the MIR sheet remains CPU-selected.
 The flag selects both estimated spill terms in MIR-estimated mode; successful
 pure-MIR pricing and selection are unchanged by toggling it. Each MIR attempt
