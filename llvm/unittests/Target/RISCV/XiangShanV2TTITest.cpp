@@ -409,9 +409,57 @@ TEST_F(XiangShanV2TTITest, SaturnAndK1FactoryScopes) {
     auto Native = TTI.getArithmeticInstrCost(Instruction::Add, Ty, K);
     {
       VPlanCostProfileScope Scope(true);
-      EXPECT_EQ(TTI.getArithmeticInstrCost(Instruction::Add, Ty, K), 4);
+      EXPECT_EQ(TTI.getArithmeticInstrCost(Instruction::Add, Ty, K),
+                CPU == "spacemit-x60" ? InstructionCost(4) : Native);
     }
     EXPECT_EQ(TTI.getArithmeticInstrCost(Instruction::Add, Ty, K), Native);
+  }
+}
+
+TEST_F(XiangShanV2TTITest, SaturnPricesMatchNativeTTI) {
+  F->addFnAttr("tune-cpu", "saturn-shuttle-v256d128");
+  F->addFnAttr(Attribute::getWithVScaleRangeArgs(C, 4, 4));
+  auto Saturn = TM->getTargetTransformInfo(*F);
+  TargetTransformInfo Native(std::make_unique<RISCVTTIImpl>(
+      static_cast<RISCVTargetMachine *>(TM.get()), *F));
+  using TTI = TargetTransformInfo;
+  Type *ScalarTypes[] = {Type::getInt32Ty(C), Type::getFloatTy(C),
+                         Type::getDoubleTy(C)};
+  for (bool Enabled : {false, true}) {
+    VPlanCostProfileScope Scope(Enabled);
+    for (auto K : {TTI::TCK_RecipThroughput, TTI::TCK_Latency,
+                   TTI::TCK_CodeSize}) {
+      for (Type *Scalar : ScalarTypes) {
+        for (Type *Ty : {Scalar, static_cast<Type *>(
+                                    ScalableVectorType::get(Scalar, 4))}) {
+          bool FP = Ty->isFPOrFPVectorTy();
+          for (unsigned Op : {FP ? Instruction::FAdd : Instruction::Add,
+                               FP ? Instruction::FMul : Instruction::Mul,
+                               FP ? Instruction::FDiv : Instruction::SDiv})
+            EXPECT_EQ(Saturn.getArithmeticInstrCost(Op, Ty, K),
+                      Native.getArithmeticInstrCost(Op, Ty, K));
+          for (unsigned Op : {Instruction::Load, Instruction::Store})
+            EXPECT_EQ(Saturn.getMemoryOpCost(Op, Ty, Align(8), 0, K),
+                      Native.getMemoryOpCost(Op, Ty, Align(8), 0, K));
+          if (FP) {
+            IntrinsicCostAttributes FMA(Intrinsic::fma, Ty,
+                                       ArrayRef<Type *>{Ty, Ty, Ty});
+            IntrinsicCostAttributes Sqrt(Intrinsic::sqrt, Ty,
+                                        ArrayRef<Type *>{Ty});
+            EXPECT_EQ(Saturn.getIntrinsicInstrCost(FMA, K),
+                      Native.getIntrinsicInstrCost(FMA, K));
+            EXPECT_EQ(Saturn.getIntrinsicInstrCost(Sqrt, K),
+                      Native.getIntrinsicInstrCost(Sqrt, K));
+          }
+          unsigned RC = Saturn.getRegisterClassForType(Ty->isVectorTy(), Ty);
+          for (bool Load : {false, true})
+            for (auto Units : {TTI::SpillReloadUnits{4, 1},
+                                TTI::SpillReloadUnits{4, 4}})
+              EXPECT_EQ(Saturn.getRegisterClassSpillReloadCost(RC, Load, Units, K),
+                        Native.getRegisterClassSpillReloadCost(RC, Load, Units, K));
+        }
+      }
+    }
   }
 }
 
@@ -438,6 +486,11 @@ TEST_F(XiangShanV2TTITest, ScalarPricesUseConfiguredProfileAndRestoreScope) {
     IntrinsicCostAttributes Sqrt(Intrinsic::sqrt, F64,
                                  ArrayRef<Type *>{F64});
     auto NativeSqrt = Tuned.getIntrinsicInstrCost(Sqrt, K);
+    IntrinsicCostAttributes FMA(Intrinsic::fma, F64,
+                                ArrayRef<Type *>{F64, F64, F64});
+    auto NativeFMA = Tuned.getIntrinsicInstrCost(FMA, K);
+    auto NativeExt = Tuned.getCastInstrCost(
+        Instruction::FPExt, F64, F32, TTI::CastContextHint::None, K);
     auto NativeCast = Tuned.getCastInstrCost(
         Instruction::FPToSI, I64, F64, TTI::CastContextHint::None, K);
     {
@@ -448,22 +501,22 @@ TEST_F(XiangShanV2TTITest, ScalarPricesUseConfiguredProfileAndRestoreScope) {
       const unsigned FPOpcodes[] = {Instruction::FAdd, Instruction::FSub,
                                     Instruction::FMul, Instruction::FNeg};
       for (unsigned Opcode : FPOpcodes)
-        EXPECT_EQ(Tuned.getArithmeticInstrCost(Opcode, F64, K), 1);
+        EXPECT_EQ(Tuned.getArithmeticInstrCost(Opcode, F64, K), Saturn ? 2 : 1);
       EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::UDiv, I64, K),
                 XiangShan ? 23
-                : Saturn  ? 64
+                : Saturn  ? 4
                           : 66);
       EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::URem, I64, K),
                 XiangShan ? 23
-                : Saturn  ? 64
+                : Saturn  ? 4
                           : 66);
       EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::FDiv, F32, K),
                 XiangShan ? 9
-                : Saturn  ? 64
+                : Saturn  ? 2
                           : 28);
       EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::FDiv, F64, K),
                 XiangShan ? 14
-                : Saturn  ? 64
+                : Saturn  ? 2
                           : 57);
       for (unsigned Opcode : {Instruction::UDiv, Instruction::URem})
         for (Type *Ty : {Type::getInt32Ty(C), I64})
@@ -473,18 +526,16 @@ TEST_F(XiangShanV2TTITest, ScalarPricesUseConfiguredProfileAndRestoreScope) {
                 1);
       EXPECT_EQ(Tuned.getMemoryOpCost(Instruction::Store, F64, Align(8), 0, K),
                 XiangShan ? 2 : 1);
-      EXPECT_EQ(Tuned.getIntrinsicInstrCost(Sqrt, K), XiangShan ? 16
-                                                      : Saturn  ? 64
-                                                                : 57);
-      IntrinsicCostAttributes FMA(Intrinsic::fma, F64,
-                                 ArrayRef<Type *>{F64, F64, F64});
-      EXPECT_EQ(Tuned.getIntrinsicInstrCost(FMA, K), 1);
+      EXPECT_EQ(Tuned.getIntrinsicInstrCost(Sqrt, K),
+                Saturn ? NativeSqrt : InstructionCost(XiangShan ? 16 : 57));
+      EXPECT_EQ(Tuned.getIntrinsicInstrCost(FMA, K),
+                Saturn ? NativeFMA : InstructionCost(1));
       EXPECT_EQ(Tuned.getCastInstrCost(Instruction::FPToSI, I64, F64,
                                        TTI::CastContextHint::None, K),
-                1);
+                Saturn ? NativeCast : InstructionCost(1));
       EXPECT_EQ(Tuned.getCastInstrCost(Instruction::FPExt, F64, F32,
                                        TTI::CastContextHint::None, K),
-                1);
+                Saturn ? NativeExt : InstructionCost(1));
       {
         VPlanCostProfileScope NativeScope(false);
         EXPECT_EQ(Tuned.getArithmeticInstrCost(Instruction::UDiv, I64, K),

@@ -18,9 +18,10 @@ RTL 포함) → 고정 LLVM scheduler의 명시적 `ReleaseAtCycles` → 명시�
 Pipeline depth/latency를 reciprocal throughput으로 복사하지 않는다. 명시적인 initiation
 interval/점유값을 우선하며, 공개 근거가 없는 iterative 대표값은 가정으로 표시한다.
 근거가 부족한 지원 연산의 nominal 기본값과 iterative 대표값은 타깃 문서에 명시한다.
-가정값은 하드웨어가 보장한 상한이 아니다. Saturn/K1은 가격 Rule의
-`assumed`로 이를 표시한다. XiangShan은 기존 opcode/form Rule 식별자를 유지하므로
-Rule 문자열만으로 근거 수준을 판별할 수 없다. 해당 타깃 문서의 가정 구분을 따른다.
+가정값은 하드웨어가 보장한 상한이 아니다. K1은 가격 Rule의
+`assumed`로 이를 표시한다. Saturn은 native TTI와 native-relative MIR 상대가격을
+사용하며 해당 가격을 하드웨어 service 시간으로 해석하지 않는다. XiangShan은 기존
+opcode/form Rule 식별자를 유지하므로 Rule 문자열만으로 근거 수준을 판별할 수 없다. 해당 타깃 문서의 가정 구분을 따른다.
 
 ## 사양에서 가져오는 정보
 
@@ -33,7 +34,8 @@ runtime VL·stride·mask density·페이지 경계·의존성·전력은 입력�
 
 ## TTI와 MIR
 
-각 target TTI는 예상 opcode sequence를 자기 CostSheet에 보낸다. Target MIRInfo는
+XiangShan/K1 TTI는 예상 opcode sequence를 자기 CostSheet에 보낸다. Saturn TTI는
+native RISC-V TTI를 그대로 사용한다. Target MIRInfo는
 관측된 base opcode·geometry를 같은 sheet에 보낸다. Scalar/vector 연산과 spill은
 같은 단위를 쓴다. TTI는 legalization multiplier와 materialization을 한 번 더한다.
 Fixed vector는 RVV container, widening은 좁은 source, narrowing은 좁은 destination
@@ -41,7 +43,8 @@ geometry를 사용한다. Uniform operand의 VV/VX/VF/reverse 선택은 sequence
 Gather/scatter처럼 TTI에 index geometry가 없으면 inherited sequence 추정을 유지한다.
 예상 sequence와 관측 lowering이 다르면 전체 body 가격은 달라도 된다.
 
-명령별 `Rule`은 문서의 식을 식별한다. Saturn/K1의 `assumed`는 채택한 근사이며,
+명령별 `Rule`은 문서의 식을 식별한다. K1의 `assumed`와 Saturn의
+`native-relative`는 채택한 근사이며,
 XiangShan의 기존 Rule 식별자는 위 예외를 따른다. Unknown은 아직
 지원하지 않는 opcode/sequence이며, MIR에서는 1+unknown, TTI에서는 inherited
 fallback을 쓴다. 지원 가격의 불확실성을 unknown으로 숨기지 않는다. 누락/불가능한
@@ -54,8 +57,9 @@ Profile은 명시적인 backend 비교의 scalar/vector reciprocal-throughput sc
 모드별 scalar/vector 비용 출처와 spill 대체 수식은
 [선택 계약](../BACKEND_FEEDBACK.md#bodyspill-ablation과-mir-info)을 따른다.
 
-Scalar TTI는 지원 산술, load/store, sqrt/fma intrinsic과 FP/정수 변환을 sheet에
-전달한다. Unsigned power-of-two divide/rem은 shift/and로 단순화한 가격을 먼저 쓴다.
+XiangShan/K1 scalar TTI는 지원 산술, load/store, sqrt/fma intrinsic과 FP/정수
+변환을 sheet에 전달한다. Saturn scalar TTI는 native 구현을 따른다. Unsigned
+power-of-two divide/rem은 shift/and로 단순화한 가격을 먼저 쓴다.
 Branch/control 및 adapter가 다루지 않는 sequence는 기존 native TTI를 사용한다.
 MIR은 실제 지원 scalar opcode를 직접 가격화하고 미지원 opcode는 비용 1과 unknown
 표식을 남긴다. 지원 가격의 존재와 실기기에서 검증된 정확성은 별개의 속성이다.
@@ -63,8 +67,9 @@ MIR은 실제 지원 scalar opcode를 직접 가격화하고 미지원 opcode는
 ## Spill → units → TTI → CostSheet
 
 관측 변환은 target-independent다. 실제 접근의 register class, 방향, group g별로
-묶어 n개를 `(Q=g*n,A=n)`으로 전달한다. 각 묶음은 homogeneous이며 TTI가 `g=Q/A`를
-검증하고 CostSheet의 `A*f(g)`로 가격화한다. 서로 다른 group을 평균내지 않는다.
+묶어 n개를 `(Q=g*n,A=n)`으로 전달한다. 각 묶음은 homogeneous이며 서로 다른
+group을 평균내지 않는다. XiangShan/K1 TTI는 `g=Q/A`를 검증하고 CostSheet의
+`A*f(g)`로 가격화한다. Saturn은 native aggregate hook의 방향별 Q를 사용한다.
 추정 초과 register n개는 방향별 `(n,n)`으로 group-1 접근을 가정한다.
 Default aggregate hook은 기존 단일-register hook의 Q배다. Empty units는 (0,0)이다.
 Scalar class는 단일-register 접근을 사용한다. TTI hook의 public signature는 유지한다.

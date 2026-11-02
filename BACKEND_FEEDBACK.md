@@ -246,6 +246,11 @@ Threads 비활성 빌드도 같은 정책을 사용한다. 병렬 성능은 외�
 [XiangShan](costsheet/xiangshan.md), [Saturn](costsheet/saturn.md),
 [K1](costsheet/k1.md)이 소유한다. CPU/VLEN별 선택은 README를 따른다.
 
+Saturn TTI는 native RISC-V TTI를 그대로 사용하며 연산군 계수는 모두 1이다.
+MIR은 [Saturn 가격표](costsheet/saturn.md)의 native-relative opcode 가격을 쓴다.
+Scalar/vector spill과 body의 단위를 맞추며, default-TTI flag는 successful MIR의
+sheet를 교체하지 않는다. CPU/VLEN 선택과 whole-loop fallback 계약은 그대로다.
+
 K1의 exact VLEN256 가격은 `k1-structural-service-v1`이다.
 128-bit nominal service와 명시적 참조 알고리즘을 사용하며,
 가격·근거·가정은 [K1 CostSheet](costsheet/k1.md)에 있다.
@@ -361,60 +366,15 @@ Cost-bound candidate pruning은 [비용 하한 pruning](#비용-하한-pruning),
 두 진단은 수동적이며 timing phase는 `probe_pruning`이다.
 
 
-## Scalar 기준 통합과 K1 occupancy-v2 검증
+## Scalar 기준과 검증 계약
 
-2026-10-31 scalar 기준 통합과 K1 occupancy-v2 구현의 compiler/tools와 unit-test
-대상을 기존 cache에서 `--parallel 2`로 빌드했다. VectorizeTests 104개, RISCVTests 50개,
-pass-manager IRTests 7개가 통과했다. 전체 LoopVectorize 및
-`rvv/stack-slot-coloring.mir` lit는 1,367개 중 990개 통과, 377개 unsupported,
-실패 0이다. Unsupported는 빌드에 없는 backend 등의 조건에 따른다.
-
-진단은 `.cache/scalar-cost-unification/`에 네 단계로 분리했다: 변경 전,
-TTI scalar 출처 통합만 적용, scalar MIR 및 symmetric spill substitution 적용,
-K1 occupancy-v2 적용. 각 단계는 LU, first-diff, pi-reduce, trap-int, tealeaf finalise,
-sparse-repetitions의 source bytes를 retained metadata hash와 맞춘 뒤 3 targets ×
-8 modes = 144개 opt 실행을 기록했다. 총 576개 opt-only 실행은 모두 성공했다.
-IC=1, vector epilogue OFF, LMUL limit=8과 default gate를 유지했다. 이는 feedback
-pipeline/selection 진단이며 최종 executable codegen이나 runtime timing 측정이 아니다.
-단계별 compiler hash는 각 디렉터리의 `compiler-identity.json`에 보관한다. 이후 cache
-재빌드는 이 관측의 compiler identity를 바꾸지 않는다.
-
-다음은 보관된 `04-k1-tables` 단계의 `bench_kernel` 선택이다. 각 셀은 **tuned TTI estimated / MIR**
-VF이며, 이 사례들의 MIR-estimated 선택도 MIR과 같았다. `sN`은 scalable VF의
-최소 element count이고 LMUL 표기가 아니다. `f1`은 scalar 선택이다.
-
-| 사례 | XiangShan VLEN128 | Saturn VLEN256 | K1 VLEN256 |
-|---|---|---|---|
-| LU | s8 / s8 | s8 / s8 | s4 / s8 |
-| first-diff | s4 / f1 | s4 / s8 | s4 / s8 |
-| pi-reduce | s8 / s8 | f1 / s8 | s4 / s4 |
-| trap-int | s8 / s8 | f1 / s8 | s4 / s4 |
-| tealeaf finalise | s8 / s8 | s8 / s8 | s4 / s8 |
-| sparse-repetitions | s8 / s8 | f1 / s8 | s4 / s4 |
-
-변경 전 대비 scalar 출처를 맞춘 결과, LU와 tealeaf는 세 타깃 모두 TTI/MIR에서
-vector 선택으로 바뀌었다. Saturn의 pi-reduce/trap-int/sparse는 TTI에서 scalar를
-유지하고 scalar MIR 도입 후 MIR에서 vector를 선택했다. XiangShan first-diff의
-MIR은 scalar를 유지했다. K1 first-diff는 TTI scalar 통합 직후 f1, scalar MIR 단계에서
-MIR s4였고, 마지막 occupancy table 단계에서 TTI s4/MIR s8이 되었다. K1 pi-reduce와
-trap-int는 s8에서 s4로, sparse는 TTI f1/MIR s8에서 양쪽 s4로 바뀌었다. 이는 최종
-수치 비교의 결과이며 원하는 kernel 선택을 강제하는 예외를 추가하지 않았다.
-
-성공한 pure-MIR `bench_kernel` 18쌍은 default-TTI toggle 전후 관측 `R/S`, scalar
-기준, VF/IC와 정규화된 kernel IR이 모두 같았다. Sparse의 `bench_prepare`는 별도
-multi-block scalar observation 실패로 raw=false의 tuned-estimated retry와 raw=true의
-native fallback이 갈리므로 whole-module bitcode는 다를 수 있다. 이는 정상 pure-MIR
-costing과 구분되는 기존 실패 목적지 정책이다. 그 시도의 scalar/candidate 보고는 함께 폐기된다.
+Scalar TTI 기준은 vector body와 같은 configured TTI를 사용한다. Saturn은
+두 기준 모두 native RISC-V TTI이며, MIR은 같은 표로 원본 VF1/IC1 scalar
+probe와 vector body를 가격화한다. Scalar/vector `R-S+Et`는 대칭적으로 적용한다.
 
 단위/통합 검사는 scalar TTI scope와 power-of-two divide/rem, scalar VF1/IC1 identity,
 원본 함수 문맥, fractional unroll 정규화, scalar/vector `R-S+Et`, 추정/관측 spill의
 독립성, native/tuned estimated spill, 보고의 수동성, whole-loop fallback, forced VF와
-trip-count/tail/epilogue 비교 및 K1 opcode별 fractional LMUL 경계를 다룬다.
-Scalar MIR 실례에는 XiangShan first-diff의 `R=79/19, Wobs=19`처럼 quarter 단위보다
-정밀한 기준도 있으며 exact rational을 유지한다. Scalar spill을 포함한 synthetic
-pressure 검사는 관측 spill에서 추정을 역산하지 않고 원본 VF1 plan을 사용한다.
-
-새 K1 hardware timing, 전체 dataset runtime 측정 또는 historical post-frame compiler
-재실행은 수행하지 않았다. Retained sweep의 timing을 새 executable에 할당하거나
-성능 향상을 주장하지 않는다. Scalar nominal defaults, XiangShan 대표값, Saturn의
-iterative=64 가정 및 scheduler 근거 K1 가격의 물리적 정확성은 남은 검증 범위다.
+trip-count/tail/epilogue 비교 및 opcode별 fractional LMUL 경계를 다룬다.
+Pure MIR의 body 가격과 관측은 default-TTI flag와 독립적이다. 필수 probe 실패 시의
+estimated/native fallback 목적지는 successful MIR 가격과 별도로 취급한다.

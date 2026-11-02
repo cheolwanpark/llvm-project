@@ -135,7 +135,7 @@ TEST(RISCVCostSheet, GenericPricesAndGeometry) {
   Check(op("VADD_VV", 1, 32), 1);
 }
 
-TEST(TargetCostSheets, SaturnAndK1ServiceCosts) {
+TEST(TargetCostSheets, SaturnAndK1Prices) {
   SaturnCostSheet Saturn;
   SpacemitK1CostSheet K1;
   auto Check = [&](const RISCVCostSheet &Sheet, VPlanMIRInstruction Q,
@@ -146,28 +146,38 @@ TEST(TargetCostSheets, SaturnAndK1ServiceCosts) {
     EXPECT_EQ(C->Denominator, 1);
     EXPECT_FALSE(C->Unknown);
   };
-  Check(Saturn, op("VADD_VV", 16, 32), 4);
+  Check(Saturn, op("VADD_VV", 16, 32), 2);
   Check(K1, op("VADD_VV", 16, 32), 4);
-  Check(Saturn, op("VFMACC_VV", 8, 32), 2);
+  Check(Saturn, op("VFMACC_VV", 8, 32), 1);
   Check(K1, op("VFMACC_VV", 8, 32), 2);
   // Integer extension prefixes deliberately use the ordinary SIMD service.
-  Check(Saturn, op("VSEXT_VF2", 8, 32), 2);
+  Check(Saturn, op("VSEXT_VF2", 8, 32), 1);
   Check(K1, op("VZEXT_VF2", 16, 32), 4);
-  Check(Saturn, op("VDIV_VV", 8, 32), 512);
+  Check(Saturn, op("VDIV_VV", 8, 32), 4);
   auto Load = op("VLE32_V", 8, 32);
   Load.Load = true;
-  Check(Saturn, Load, 2);
+  Check(Saturn, Load, 1);
   Check(K1, Load, 2);
   Load.BaseOpcode = "VLSE32_V";
   Check(Saturn, Load, 8);
   Check(K1, Load, 8);
+  // The native-relative MIR sheet uses the element/field estimate for both
+  // segment forms, and memory EEW can differ from the current SEW.
+  for (StringRef Opcode : {"VLSEG3E64_V", "VSSEG3E64_V", "VLSSEG3E64_V",
+                           "VSSSEG3E64_V", "VLSEG3E32_V", "VSSEG3E32_V",
+                           "VLSSEG3E32_V", "VSSSEG3E32_V"}) {
+    auto Segment = op(Opcode, 16, 64);
+    Segment.Load = Opcode.starts_with("VL");
+    Segment.Store = !Segment.Load;
+    Check(Saturn, Segment, Opcode.contains("E32") ? 48 : 24);
+  }
   for (unsigned G : {1u, 2u, 4u, 8u}) {
     auto Whole = op("VL" + std::to_string(G) + "RE8_V", G * 8);
     Whole.Load = Whole.Spill = true;
     Whole.RegisterGroups8 = {G * 8};
-    Check(Saturn, Whole, 2 * G);
+    Check(Saturn, Whole, G);
     Check(K1, Whole, 2 * G);
-    EXPECT_EQ(Saturn.spillCost(true, true, {G, 1}), 2 * G);
+    EXPECT_EQ(Saturn.spillCost(true, true, {G, 1}), G);
     EXPECT_EQ(K1.spillCost(true, true, {G, 1}), 2 * G);
   }
   EXPECT_EQ(K1.spillCost(true, false, {2, 2}) +
@@ -189,7 +199,43 @@ TEST(TargetCostSheets, SaturnAndK1ServiceCosts) {
   EXPECT_EQ(KM.getModelName(), K1.getModelName());
   auto SC = SM.getInstructionCost(op("VADD_VV", 16, 32));
   ASSERT_TRUE(bool(SC));
-  EXPECT_EQ(SC->Numerator, 4);
+  EXPECT_EQ(SC->Numerator, 2);
+}
+
+TEST(SaturnCostSheet, NativeRelativeFamiliesAndSpills) {
+  SaturnCostSheet Sheet;
+  auto Check = [&](VPlanMIRInstruction Q, int64_t Expected) {
+    auto C = Sheet.getInstructionCost(Q);
+    ASSERT_TRUE(bool(C)) << (C ? "" : toString(C.takeError()));
+    EXPECT_FALSE(C->Unknown);
+    EXPECT_EQ(C->Numerator, Expected) << Q.BaseOpcode;
+    EXPECT_EQ(C->Denominator, 1);
+  };
+  for (unsigned G : {1u, 2u, 4u, 8u, 16u, 32u}) {
+    unsigned L = std::max(1u, G / 8);
+    for (StringRef Opcode : {"VFMACC_VV", "VFMACC_VF", "VFNMSUB_VV",
+                             "VFWMACC_VV"})
+      Check(op(Opcode, G, 32), L);
+    Check(op("VFADD_VV", G, 32), 2 * L);
+    Check(op("VFDIV_VV", G, 32), 2 * L);
+    Check(op("VDIV_VV", G, 32), 4 * L);
+  }
+  Check(op("VREDSUM_VS", 8, 32), 3);
+  Check(op("VFREDUSUM_VS", 8, 32), 3);
+  Check(op("VFREDOSUM_VS", 8, 32), 8);
+  Check(op("FADD_D"), 2);
+  Check(op("FSQRT_D"), 2);
+  Check(op("DIV"), 4);
+  for (bool Vector : {false, true})
+    for (bool Load : {false, true}) {
+      EXPECT_EQ(Sheet.spillCost(Vector, Load, {4, 1}), 4);
+      EXPECT_EQ(Sheet.spillCost(Vector, Load, {4, 4}), 4);
+      EXPECT_FALSE(Sheet.spillCost(Vector, Load, {4, 0}).isValid());
+    }
+  auto Unknown = Sheet.getInstructionCost(op("UNSUPPORTED", 8, 32));
+  ASSERT_TRUE(bool(Unknown));
+  EXPECT_TRUE(Unknown->Unknown);
+  EXPECT_EQ(Unknown->Numerator, 1);
 }
 
 TEST(SpacemitK1CostSheet, StructuralWorkAndGeometry) {

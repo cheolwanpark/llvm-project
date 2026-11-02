@@ -55,6 +55,9 @@ and explicit reference algorithms, documented in the [K1 CostSheet](costsheet/k1
 Historical scheduler occupancy prices and measurements describe the previous model.
 
 Other CPU/VLEN combinations retain native TTI and generic MIR pricing.
+
+Saturn uses native RISC-V TTI prices with unit coefficients. Its MIR sheet uses
+native-relative opcode prices as documented in the [Saturn CostSheet](costsheet/saturn.md).
 `-use-default-tti` changes TTI selection independently of the MIR sheet.
 Pricing units, evidence policy and conversions live in [CostSheet rules](costsheet/rule.md).
 

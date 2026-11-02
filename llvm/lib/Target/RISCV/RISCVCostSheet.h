@@ -55,11 +55,9 @@ class SaturnCostSheet : public RISCVCostSheet {
 public:
   SaturnCostSheet() : RISCVCostSheet(256, "saturn-shuttle-v256d128") {}
   StringRef getModelName() const override { return "saturn-shuttle-direct-v1"; }
-  StringRef getRevision() const override { return "dfe75de2a8868d51d42c20612821431a9fcf645e+vat-clear"; }
+  StringRef getRevision() const override { return "saturn-native-relative-v1"; }
   Expected<MIRInstructionCost>
   getInstructionCost(const VPlanMIRInstruction &MI) const override;
-  InstructionCost spillCost(bool Vector, bool IsLoad,
-      TargetTransformInfo::SpillReloadUnits Units) const override;
 };
 class SaturnMIRInfo final : public TargetMIRInfo {
   SaturnCostSheet Sheet;
