@@ -289,7 +289,7 @@ MachineFunctionInfo *RISCVTargetMachine::createMachineFunctionInfo(
 TargetTransformInfo
 RISCVTargetMachine::getTargetTransformInfo(const Function &F) const {
   const auto *ST = getSubtargetImpl(F);
-  if (!vplanBackendUseDefaultTTI() &&
+  if (!vplanBackendUseDefaultTTI() && ST->hasVInstructions() &&
       ST->getTuneCPU() == "xiangshan-kunminghu" &&
       ST->getRealMinVLen() == 128 && ST->getRealMaxVLen() == 128)
     return TargetTransformInfo(std::make_unique<XiangShanV2TTIImpl>(this, F));

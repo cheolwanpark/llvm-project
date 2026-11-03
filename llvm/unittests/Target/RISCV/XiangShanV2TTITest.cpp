@@ -133,6 +133,23 @@ TEST_F(XiangShanV2TTITest, EffectiveTuneAndVectorLength) {
   F->addFnAttr(Attribute::getWithVScaleRangeArgs(C, 4, 4));
   EXPECT_EQ(TM->getTargetTransformInfo(*F).getVPlanCostProfileName(), "native");
 }
+
+TEST_F(XiangShanV2TTITest, ScalarFunctionsUseNativeTTI) {
+  F->addFnAttr("target-cpu", "generic-rv64");
+  F->addFnAttr("target-features",
+               "-v,-zve32x,-zve32f,-zve64x,-zve64f,-zve64d");
+  for (StringRef CPU : {"xiangshan-kunminghu", "saturn-shuttle-v256d128",
+                       "spacemit-x60"}) {
+    SCOPED_TRACE(CPU.str());
+    F->addFnAttr("tune-cpu", CPU);
+    for (bool Active : {false, true}) {
+      VPlanCostProfileScope Scope(Active);
+      EXPECT_EQ(TM->getTargetTransformInfo(*F).getVPlanCostProfileName(),
+                "native");
+      EXPECT_EQ(TM->getTargetMIRInfo(*F), nullptr);
+    }
+  }
+}
 TEST_F(XiangShanV2TTITest, OpcodeFormulaBoundariesAndInternalDispatch) {
   ExposedTTI TTI(static_cast<RISCVTargetMachine *>(TM.get()), *F);
   auto K = TargetTransformInfo::TCK_RecipThroughput;
