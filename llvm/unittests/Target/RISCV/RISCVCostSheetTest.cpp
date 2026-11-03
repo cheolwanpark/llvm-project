@@ -147,17 +147,17 @@ TEST(TargetCostSheets, SaturnAndK1Prices) {
     EXPECT_FALSE(C->Unknown);
   };
   Check(Saturn, op("VADD_VV", 16, 32), 2);
-  Check(K1, op("VADD_VV", 16, 32), 4);
+  Check(K1, op("VADD_VV", 16, 32), 2);
   Check(Saturn, op("VFMACC_VV", 8, 32), 1);
-  Check(K1, op("VFMACC_VV", 8, 32), 2);
+  Check(K1, op("VFMACC_VV", 8, 32), 1);
   // Integer extension prefixes deliberately use the ordinary SIMD service.
   Check(Saturn, op("VSEXT_VF2", 8, 32), 1);
-  Check(K1, op("VZEXT_VF2", 16, 32), 4);
+  Check(K1, op("VZEXT_VF2", 16, 32), 2);
   Check(Saturn, op("VDIV_VV", 8, 32), 4);
   auto Load = op("VLE32_V", 8, 32);
   Load.Load = true;
   Check(Saturn, Load, 1);
-  Check(K1, Load, 2);
+  Check(K1, Load, 1);
   Load.BaseOpcode = "VLSE32_V";
   Check(Saturn, Load, 8);
   Check(K1, Load, 8);
@@ -176,15 +176,14 @@ TEST(TargetCostSheets, SaturnAndK1Prices) {
     Whole.Load = Whole.Spill = true;
     Whole.RegisterGroups8 = {G * 8};
     Check(Saturn, Whole, G);
-    Check(K1, Whole, 2 * G);
+    Check(K1, Whole, G);
     EXPECT_EQ(Saturn.spillCost(true, true, {G, 1}), G);
-    EXPECT_EQ(K1.spillCost(true, true, {G, 1}), 2 * G);
+    EXPECT_EQ(K1.spillCost(true, true, {G, 1}), G);
   }
-  EXPECT_EQ(K1.spillCost(true, false, {2, 2}) +
-                K1.spillCost(true, false, {4, 1}),
-            12);
-  EXPECT_EQ(K1.spillCost(true, false, {6, 3}), 12);
-  EXPECT_FALSE(K1.spillCost(true, false, {5, 2}).isValid());
+  EXPECT_EQ(
+      K1.spillCost(true, false, {2, 2}) + K1.spillCost(true, false, {4, 1}), 6);
+  EXPECT_EQ(K1.spillCost(true, false, {6, 3}), 6);
+  EXPECT_FALSE(K1.spillCost(true, false, {4, 0}).isValid());
   // Scalar pricing counts transferred registers, independently of accesses.
   EXPECT_EQ(K1.spillCost(false, true, {4, 1}), 4);
   EXPECT_EQ(K1.spillCost(false, false, {4, 1}), 4);
@@ -193,13 +192,6 @@ TEST(TargetCostSheets, SaturnAndK1Prices) {
   EXPECT_FALSE(bool(Invalid));
   if (!Invalid)
     consumeError(Invalid.takeError());
-  SaturnMIRInfo SM;
-  SpacemitK1MIRInfo KM;
-  EXPECT_EQ(SM.getModelName(), Saturn.getModelName());
-  EXPECT_EQ(KM.getModelName(), K1.getModelName());
-  auto SC = SM.getInstructionCost(op("VADD_VV", 16, 32));
-  ASSERT_TRUE(bool(SC));
-  EXPECT_EQ(SC->Numerator, 2);
 }
 
 TEST(SaturnCostSheet, NativeRelativeFamiliesAndSpills) {
@@ -238,97 +230,54 @@ TEST(SaturnCostSheet, NativeRelativeFamiliesAndSpills) {
   EXPECT_EQ(Unknown->Numerator, 1);
 }
 
-TEST(SpacemitK1CostSheet, StructuralWorkAndGeometry) {
-  SpacemitK1CostSheet Sheet;
-  auto Check = [&](VPlanMIRInstruction Q, int64_t Expected) {
-    auto C = Sheet.getInstructionCost(Q);
-    ASSERT_TRUE(bool(C)) << (C ? "" : toString(C.takeError()));
-    EXPECT_FALSE(C->Unknown);
-    EXPECT_EQ(C->Numerator, Expected) << Q.BaseOpcode;
-    EXPECT_EQ(C->Denominator, 1);
-    EXPECT_NE(C->Rule.find("assumed-structural-"), std::string::npos);
+TEST(SpacemitK1CostSheet, MatchesSaturnNativeRelativePolicy) {
+  SaturnCostSheet Saturn;
+  SpacemitK1CostSheet K1;
+  auto Check = [&](const VPlanMIRInstruction &Q) {
+    auto S = Saturn.getInstructionCost(Q);
+    auto K = K1.getInstructionCost(Q);
+    ASSERT_EQ(bool(S), bool(K));
+    if (!S) {
+      consumeError(S.takeError());
+      consumeError(K.takeError());
+      return;
+    }
+    EXPECT_EQ(S->Numerator, K->Numerator) << Q.BaseOpcode;
+    EXPECT_EQ(S->Denominator, K->Denominator);
+    EXPECT_EQ(S->Unknown, K->Unknown);
+    if (!K->Unknown)
+      EXPECT_EQ(K->Rule.find("k1:native-relative"), 0u);
   };
-  unsigned G = 1;
-  for (unsigned Expected : {1, 1, 1, 2, 4, 8, 16}) {
-    for (StringRef Name : {"VADD_VV", "VMUL_VX", "VSLIDEUP_VI"})
-      Check(op(Name, G, 8), Expected);
-    G *= 2;
-  }
-  Check(op("DIVW"), 34);
-  Check(op("DIV"), 66);
-  Check(op("REMU"), 66);
-  Check(op("FDIV_H"), 15);
-  Check(op("FSQRT_S"), 28);
-  Check(op("FSQRT_D"), 57);
-  Check(op("VDIV_VV", 8, 64), 132);
-  Check(op("VREMU_VX", 1, 8), 10);
-  EXPECT_EQ(Sheet.spillCost(true, true, {0, 0}), 0);
-  EXPECT_FALSE(
-      Sheet.spillCost(true, false, {uint64_t(INT64_MAX), uint64_t(INT64_MAX)})
-          .isValid());
-  Check(op("VWADD_VV", 1, 8), 1);
-  Check(op("VWADD_VV", 4, 8), 2);
-  Check(op("VFREDOSUM_VS", 8, 32), 8);
-  Check(op("VFREDUSUM_VS", 8, 32), 4);
-  Check(op("VFWREDUSUM_VS", 8, 32), 5);
-  Check(op("VREDSUM_VS", 1, 32), 1);
-  Check(op("VRGATHER_VX", 8, 32), 3);
-  Check(op("VRGATHER_VV", 8, 32), 4);
-  Check(op("VRGATHEREI16_VV", 8, 8), 8);
-  Check(op("VCOMPRESS_VM", 8, 32), 16);
-  Check(op("VIOTA_M", 8, 32), 16);
-  Check(op("VMAND_MM", 8, 1), 2);
-  Check(op("VMV_X_S", 64, 32), 1);
-  auto Q = op("VLSEG3E64_V", 16, 64);
-  Q.Load = true;
-  Check(Q, 24);
-  Q.BaseOpcode = "VLSSEG3E64_V";
-  Check(Q, 24);
-  Q.BaseOpcode = "VLSEG3E32_V";
-  Check(Q, 24);
-  Q.BaseOpcode = "VLSSEG3E32_V";
-  Check(Q, 48);
-  Q = op("VLOXEI16_V", 8, 32);
-  Q.Load = true;
-  Q.IndexEEW = 16;
-  Q.IndexEMUL8 = 4;
-  Check(Q, 9);
-  Q.BaseOpcode = "VLUXEI16_V";
-  Check(Q, 9);
-  Q = op("VADD_VV", 8, 32);
-  Q.Opcode = "PseudoVADD_VV_M1_MASK";
-  Check(Q, 2);
-  for (auto Bad : {op("VRGATHEREI16_VV", 64, 8), op("VRGATHEREI16_VV", 1, 64),
-                   op("VZEXT_VF8", 8, 32), op("VWADD_VV", 8, 64)}) {
-    auto C = Sheet.getInstructionCost(Bad);
-    EXPECT_FALSE(bool(C));
-    if (!C)
-      consumeError(C.takeError());
-  }
-  EXPECT_EQ(Sheet.getRevision(), "k1-structural-service-v1");
-}
-
-TEST(SpacemitK1CostSheet, ExplicitIterativeFormsAndUnknownOpcodes) {
-  SpacemitK1CostSheet Sheet;
   for (unsigned G : {1u, 2u, 4u, 8u, 16u, 32u, 64u})
-    for (unsigned SEW : {16u, 32u, 64u})
-      for (StringRef Name : {"VFDIV_VF", "VFRDIV_VF", "VFDIV_VV", "VFSQRT_V"}) {
-        if (32 * G < SEW)
-          continue;
-        auto Cost = Sheet.getInstructionCost(op(Name, G, SEW));
-        ASSERT_TRUE(bool(Cost));
-        unsigned Unit = SEW == 16 ? 15 : SEW == 32 ? 28 : 57;
-        EXPECT_EQ(Cost->Numerator, Unit * std::max(1u, G / 4));
-        EXPECT_FALSE(Cost->Unknown);
-      }
-  for (StringRef Name : {"VSLIDE_UNREVIEWED", "VFRED_UNKNOWN", "VFDIV_UNKNOWN"}) {
-    auto Cost = Sheet.getInstructionCost(op(Name, 8, 32));
-    ASSERT_TRUE(bool(Cost));
-    EXPECT_TRUE(Cost->Unknown);
-    EXPECT_EQ(Cost->Numerator, 1);
+    for (unsigned SEW : {8u, 16u, 32u, 64u})
+      for (StringRef Name :
+           {"VADD_VV", "VFADD_VV", "VFMACC_VV", "VFMACC_VF", "VFWMACC_VV",
+            "VFDIV_VV", "VDIV_VV", "VFSQRT_V", "VFWREDUSUM_VS", "VFREDOSUM_VS",
+            "VREDSUM_VS", "VRGATHER_VV", "VRGATHEREI16_VV", "VCOMPRESS_VM",
+            "VIOTA_M", "VSLIDEUP_VI", "VZEXT_VF2"})
+        Check(op(Name, G, SEW));
+  for (StringRef Name :
+       {"VLE32_V", "VLSE32_V", "VLSEG3E32_V", "VLSSEG3E32_V", "VSSEG3E32_V",
+        "VSSSEG3E32_V", "VLOXEI16_V", "VLUXEI16_V"}) {
+    auto Q = op(Name, 16, 64);
+    Q.Load = Name.starts_with("VL");
+    Q.Store = !Q.Load;
+    Q.IndexEEW = 16;
+    Q.IndexEMUL8 = 4;
+    Check(Q);
   }
-  auto Invalid = Sheet.getInstructionCost(op("VFWREDOSUM_VS", 8, 64));
-  EXPECT_FALSE(bool(Invalid));
-  if (!Invalid)
-    consumeError(Invalid.takeError());
+  for (StringRef Name : {"FADD_D", "FSQRT_D", "DIV", "UNSUPPORTED"})
+    Check(op(Name));
+  Check(op("VMAND_MM", 8, 1));
+  Check(op("VADD_VV", 3, 32));
+  for (bool Vector : {false, true})
+    for (bool Load : {false, true})
+      for (auto U : {TargetTransformInfo::SpillReloadUnits{0, 0},
+                     {4, 1},
+                     {4, 4},
+                     {4, 0},
+                     {uint64_t(INT64_MAX), 1}})
+        EXPECT_EQ(K1.spillCost(Vector, Load, U),
+                  Saturn.spillCost(Vector, Load, U));
+  EXPECT_EQ(K1.getRevision(), "k1-native-relative-v1");
 }

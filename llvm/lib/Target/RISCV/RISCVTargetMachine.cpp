@@ -310,9 +310,9 @@ RISCVTargetMachine::getTargetMIRInfo(const Function &F) const {
     return nullptr;
   if (ST->getRealMinVLen() == 256 && ST->getRealMaxVLen() == 256) {
     if (ST->getTuneCPU() == "saturn-shuttle-v256d128")
-      return std::make_unique<SaturnMIRInfo>();
+      return std::make_unique<SaturnCostSheet>();
     if (ST->getTuneCPU() == "spacemit-x60")
-      return std::make_unique<SpacemitK1MIRInfo>();
+      return std::make_unique<SpacemitK1CostSheet>();
   }
   if (ST->getTuneCPU() == "xiangshan-kunminghu" &&
       ST->getRealMinVLen() == 128 && ST->getRealMaxVLen() == 128)

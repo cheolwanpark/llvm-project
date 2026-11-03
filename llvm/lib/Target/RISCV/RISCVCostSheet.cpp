@@ -466,3 +466,27 @@ XiangShanCostSheet::spillCost(bool Vector, bool IsLoad,
                               TargetTransformInfo::SpillReloadUnits U) const {
   return priceSpillUnits(true, Vector, IsLoad, U);
 }
+
+// Shared native-relative MIR prices; rules: costsheet/saturn.md and k1.md.
+Expected<MIRInstructionCost>
+RISCVCostSheet::getNativeRelativeInstructionCost(const VPlanMIRInstruction &MI,
+                                                 StringRef Target) const {
+  auto Cost = RISCVCostSheet::getInstructionCost(MI);
+  if (!Cost || Cost->Unknown)
+    return Cost;
+  StringRef Op = MI.BaseOpcode;
+  // Native vector FMA opcode sequences cost one LMUL unit. Ordinary FP
+  // arithmetic retains the generic two-unit price. IR legalization and
+  // materialization remain the responsibility of the actual native TTI.
+  bool Fused = Op.starts_with("VFMACC") || Op.starts_with("VFNMACC") ||
+               Op.starts_with("VFMSAC") || Op.starts_with("VFNMSAC") ||
+               Op.starts_with("VFMADD") || Op.starts_with("VFNMADD") ||
+               Op.starts_with("VFMSUB") || Op.starts_with("VFNMSUB") ||
+               Op.starts_with("VFWMACC") || Op.starts_with("VFWNMACC") ||
+               Op.starts_with("VFWMSAC") || Op.starts_with("VFWNMSAC");
+  if (MI.Vector && !MI.Configuration && Fused)
+    return MIRInstructionCost{(Target + ":native-relative-fma").str(), false,
+                              int64_t(std::max(1u, MI.LMUL8 / 8)), 1};
+  Cost->Rule = (Target + ":native-relative:" + Cost->Rule).str();
+  return Cost;
+}

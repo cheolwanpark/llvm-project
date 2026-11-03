@@ -251,10 +251,10 @@ MIR은 [Saturn 가격표](costsheet/saturn.md)의 native-relative opcode 가격�
 Scalar/vector spill과 body의 단위를 맞추며, default-TTI flag는 successful MIR의
 sheet를 교체하지 않는다. CPU/VLEN 선택과 whole-loop fallback 계약은 그대로다.
 
-K1의 exact VLEN256 가격은 `k1-structural-service-v1`이다.
-128-bit nominal service와 명시적 참조 알고리즘을 사용하며,
+K1의 exact VLEN256 가격은 `k1-native-relative-v1`이다.
+TTI는 spacemit-x60의 native RISC-V 가격이며 MIR은 Saturn과 같은 정책을 사용한다.
 가격·근거·가정은 [K1 CostSheet](costsheet/k1.md)에 있다.
-기존 scheduler occupancy 및 과거 timing과 구분한다.
+기존 scheduler occupancy, structural service 및 과거 timing과 구분한다.
 
 ## 비용 출력
 
@@ -368,7 +368,7 @@ Cost-bound candidate pruning은 [비용 하한 pruning](#비용-하한-pruning),
 
 ## Scalar 기준과 검증 계약
 
-Scalar TTI 기준은 vector body와 같은 configured TTI를 사용한다. Saturn은
+Scalar TTI 기준은 vector body와 같은 configured TTI를 사용한다. Saturn과 K1은
 두 기준 모두 native RISC-V TTI이며, MIR은 같은 표로 원본 VF1/IC1 scalar
 probe와 vector body를 가격화한다. Scalar/vector `R-S+Et`는 대칭적으로 적용한다.
 

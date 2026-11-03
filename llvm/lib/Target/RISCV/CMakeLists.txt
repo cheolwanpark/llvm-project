@@ -36,10 +36,6 @@ add_llvm_target(RISCVCodeGen
   RISCVCodeGenPrepare.cpp
   RISCVConstantPoolValue.cpp
   RISCVCostSheet.cpp
-  SaturnCostSheet.cpp
-  SpacemitK1CostSheet.cpp
-  SaturnTargetTransformInfo.cpp
-  SpacemitK1TargetTransformInfo.cpp
   RISCVDeadRegisterDefinitions.cpp
   RISCVExpandAtomicPseudoInsts.cpp
   RISCVExpandPseudoInsts.cpp

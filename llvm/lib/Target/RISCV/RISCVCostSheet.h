@@ -12,6 +12,9 @@ class RISCVCostSheet : public TargetMIRInfo {
 protected:
   const unsigned NominalVLEN;
   const std::string CPU;
+  Expected<MIRInstructionCost>
+  getNativeRelativeInstructionCost(const VPlanMIRInstruction &MI,
+                                   StringRef Target) const;
 
 public:
   explicit RISCVCostSheet(unsigned VLEN, StringRef CPU = "generic")
@@ -57,40 +60,18 @@ public:
   StringRef getModelName() const override { return "saturn-shuttle-direct-v1"; }
   StringRef getRevision() const override { return "saturn-native-relative-v1"; }
   Expected<MIRInstructionCost>
-  getInstructionCost(const VPlanMIRInstruction &MI) const override;
-};
-class SaturnMIRInfo final : public TargetMIRInfo {
-  SaturnCostSheet Sheet;
-public:
-  StringRef getModelName() const override { return Sheet.getModelName(); }
-  StringRef getRevision() const override { return Sheet.getRevision(); }
-  StringRef getCPU() const override { return Sheet.getCPU(); }
-  unsigned getNominalVLEN() const override { return Sheet.getNominalVLEN(); }
-  Expected<MIRInstructionCost> getInstructionCost(
-      const VPlanMIRInstruction &MI) const override {
-    return Sheet.getInstructionCost(MI);
+  getInstructionCost(const VPlanMIRInstruction &MI) const override {
+    return getNativeRelativeInstructionCost(MI, "saturn");
   }
 };
 class SpacemitK1CostSheet : public RISCVCostSheet {
 public:
   SpacemitK1CostSheet() : RISCVCostSheet(256, "spacemit-x60") {}
   StringRef getModelName() const override { return "spacemit-k1-direct-v1"; }
-  StringRef getRevision() const override { return "k1-structural-service-v1"; }
+  StringRef getRevision() const override { return "k1-native-relative-v1"; }
   Expected<MIRInstructionCost>
-  getInstructionCost(const VPlanMIRInstruction &MI) const override;
-  InstructionCost spillCost(bool Vector, bool IsLoad,
-      TargetTransformInfo::SpillReloadUnits Units) const override;
-};
-class SpacemitK1MIRInfo final : public TargetMIRInfo {
-  SpacemitK1CostSheet Sheet;
-public:
-  StringRef getModelName() const override { return Sheet.getModelName(); }
-  StringRef getRevision() const override { return Sheet.getRevision(); }
-  StringRef getCPU() const override { return Sheet.getCPU(); }
-  unsigned getNominalVLEN() const override { return Sheet.getNominalVLEN(); }
-  Expected<MIRInstructionCost> getInstructionCost(
-      const VPlanMIRInstruction &MI) const override {
-    return Sheet.getInstructionCost(MI);
+  getInstructionCost(const VPlanMIRInstruction &MI) const override {
+    return getNativeRelativeInstructionCost(MI, "k1");
   }
 };
 } // namespace llvm

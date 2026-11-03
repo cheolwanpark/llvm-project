@@ -50,9 +50,10 @@ CPU/VLEN selects the target sheet and scoped TTI:
 | `saturn-shuttle-v256d128` (tune-only CPU) | 256 | [Saturn](costsheet/saturn.md) |
 | `spacemit-x60` | 256 | [K1](costsheet/k1.md) |
 
-K1 uses pricing revision `k1-structural-service-v1`: nominal 128-bit services
-and explicit reference algorithms, documented in the [K1 CostSheet](costsheet/k1.md).
-Historical scheduler occupancy prices and measurements describe the previous model.
+K1 uses pricing revision `k1-native-relative-v1`: native RISC-V TTI prices
+and the same MIR pricing policy as Saturn, including vector FMA at one LMUL unit.
+See the [K1 CostSheet](costsheet/k1.md). Historical scheduler occupancy and
+structural service results describe previous models.
 
 Other CPU/VLEN combinations retain native TTI and generic MIR pricing.
 
@@ -190,6 +191,10 @@ and hashes. It does not rebuild LLVM or update previous sweep outputs.
 
 Use a new or empty output directory. The sweep preserves IC=1, LMUL=8 and disabled
 vector epilogues. Sweep build concurrency is separate from compiler probe workers.
+For K1, use `--target k1-linux`; it selects `spacemit-x60` with exact VLEN 256.
+Native and tuned TTI modes now use the same native pricing policy. If all six
+execution images match, the generator records the omission in metadata and
+publishes no ELF for that case.
 
 ## Build
 
@@ -246,4 +251,4 @@ cache and `.cache/post-frame-reference/`. Use this checkout's 313-input
 Historical measurements describe their recorded compiler identities, not the
 current binary at the same path.
 Current verification results and the six-case, three-target diagnostic selections
-are recorded in [BACKEND_FEEDBACK](BACKEND_FEEDBACK.md#scalar-기준-통합과-k1-occupancy-v2-검증).
+are recorded in [BACKEND_FEEDBACK](BACKEND_FEEDBACK.md#scalar-기준과-검증-계약).

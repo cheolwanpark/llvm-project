@@ -98,7 +98,7 @@ for cpu, vscale, profile, revision, divide_delta, difference_delta in (
          "e7bab53e66dfb3c4a1d11cf9519b0396f8576cae", 13, 0),
         ("saturn-shuttle-v256d128", 4, "saturn-shuttle-v256d128",
          "saturn-native-relative-v1", 0, 0),
-        ("spacemit-x60", 4, "spacemit-k1-256", "k1-structural-service-v1", 55, -1)):
+        ("spacemit-x60", 4, "spacemit-k1-256", "k1-native-relative-v1", 0, 0)):
     costs = []
     for default in (True, False):
         _, rows = run(cpu, vscale, "tti-" + str(default),

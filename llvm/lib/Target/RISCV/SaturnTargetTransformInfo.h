@@ -8,7 +8,7 @@ namespace llvm {
 // identity so CPU/VLEN selection and whole-loop retry policy remain explicit.
 class SaturnTTIImpl : public RISCVTTIImpl {
 public:
-  SaturnTTIImpl(const RISCVTargetMachine *TM, const Function &F);
+  using RISCVTTIImpl::RISCVTTIImpl;
   StringRef getVPlanCostProfileName() const override {
     return "saturn-shuttle-v256d128";
   }
