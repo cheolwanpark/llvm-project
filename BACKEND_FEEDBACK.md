@@ -246,9 +246,8 @@ Threads 비활성 빌드도 같은 정책을 사용한다. 병렬 성능은 외�
 [XiangShan](costsheet/xiangshan.md), [Saturn](costsheet/saturn.md),
 [K1](costsheet/k1.md)이 소유한다. CPU/VLEN별 선택은 README를 따른다.
 
-RVV가 없는 함수는 tune CPU와 관계없이 native RISC-V TTI를 사용하며
-`getTargetMIRInfo()`는 `nullptr`를 반환한다. Scalar support TU의 TTI 생성은
-RVV 기능 검사 뒤에만 실제 VLEN을 조회한다.
+RVV가 없는 함수는 tune CPU와 관계없이 native RISC-V TTI를 사용한다.
+TTI 생성은 RVV 기능 검사 뒤에만 실제 VLEN을 조회한다.
 
 Saturn TTI는 native RISC-V TTI를 그대로 사용하며 연산군 계수는 모두 1이다.
 MIR은 [Saturn 가격표](costsheet/saturn.md)의 native-relative opcode 가격을 쓴다.

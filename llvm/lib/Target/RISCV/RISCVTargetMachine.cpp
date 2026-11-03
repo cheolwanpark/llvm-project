@@ -289,16 +289,18 @@ MachineFunctionInfo *RISCVTargetMachine::createMachineFunctionInfo(
 TargetTransformInfo
 RISCVTargetMachine::getTargetTransformInfo(const Function &F) const {
   const auto *ST = getSubtargetImpl(F);
-  if (!vplanBackendUseDefaultTTI() && ST->hasVInstructions() &&
-      ST->getTuneCPU() == "xiangshan-kunminghu" &&
-      ST->getRealMinVLen() == 128 && ST->getRealMaxVLen() == 128)
-    return TargetTransformInfo(std::make_unique<XiangShanV2TTIImpl>(this, F));
-  if (!vplanBackendUseDefaultTTI() && ST->hasVInstructions() &&
-      ST->getRealMinVLen() == 256 && ST->getRealMaxVLen() == 256) {
-    if (ST->getTuneCPU() == "saturn-shuttle-v256d128")
-      return TargetTransformInfo(std::make_unique<SaturnTTIImpl>(this, F));
-    if (ST->getTuneCPU() == "spacemit-x60")
-      return TargetTransformInfo(std::make_unique<SpacemitK1TTIImpl>(this, F));
+  if (!vplanBackendUseDefaultTTI() && ST->hasVInstructions()) {
+    unsigned MinVLen = ST->getRealMinVLen();
+    unsigned MaxVLen = ST->getRealMaxVLen();
+    if (ST->getTuneCPU() == "xiangshan-kunminghu" && MinVLen == 128 &&
+        MaxVLen == 128)
+      return TargetTransformInfo(std::make_unique<XiangShanV2TTIImpl>(this, F));
+    if (MinVLen == 256 && MaxVLen == 256) {
+      if (ST->getTuneCPU() == "saturn-shuttle-v256d128")
+        return TargetTransformInfo(std::make_unique<SaturnTTIImpl>(this, F));
+      if (ST->getTuneCPU() == "spacemit-x60")
+        return TargetTransformInfo(std::make_unique<SpacemitK1TTIImpl>(this, F));
+    }
   }
   return TargetTransformInfo(std::make_unique<RISCVTTIImpl>(this, F));
 }
