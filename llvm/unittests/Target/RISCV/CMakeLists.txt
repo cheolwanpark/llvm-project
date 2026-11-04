@@ -18,8 +18,8 @@ set(LLVM_LINK_COMPONENTS
   )
 
 add_llvm_target_unittest(RISCVTests
-  XiangShanV2TTITest.cpp
-  RISCVCostSheetTest.cpp
+  RISCVBackendPricingTest.cpp
+  RISCVBackendObservationTest.cpp
   MCInstrAnalysisTest.cpp
   RISCVInstrInfoTest.cpp
   RISCVSelectionDAGTest.cpp

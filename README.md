@@ -128,15 +128,22 @@ cmake --build .cache/build --target clang clang-resource-headers opt llc \
   FileCheck split-file not count llvm-readobj VectorizeTests RISCVTests --parallel 2
 ```
 
-Focused probing checks:
+Focused backend contract checks (four unit files, four lit entry points):
 
 ```sh
-.cache/build/unittests/Transforms/Vectorize/VectorizeTests --gtest_filter='VPlanBackendFeedback.*'
-.cache/build/unittests/Target/RISCV/RISCVTests --gtest_filter='*SpillLoopMappingAndLifetime*:*LinearMarkerScope*'
+.cache/build/unittests/Transforms/Vectorize/VectorizeTests --gtest_filter='VPlanBackendPricing.*:VPlanBackendExecution.*:BackendGate.*'
+.cache/build/unittests/Target/RISCV/RISCVTests --gtest_filter='RISCVBackendPricing.*:RISCVBackendSheets.*:RISCVBackendObservation.*'
 .cache/build/bin/llvm-lit -j 1 -v \
-  llvm/test/Transforms/LoopVectorize/RISCV/backend-region-probes.ll \
-  llvm/test/Transforms/LoopVectorize/RISCV/backend-feedback-loop-regions.ll
+  llvm/test/Transforms/LoopVectorize/RISCV/backend-pipeline.ll \
+  llvm/test/Transforms/LoopVectorize/RISCV/backend-scopes.ll \
+  llvm/test/Transforms/LoopVectorize/RISCV/backend-selection.ll \
+  llvm/test/Transforms/LoopVectorize/RISCV/backend-execution.ll
 ```
+
+The shared lit driver checks cost equations and meaningful observation/selection
+fields. Unit checks cover exact arithmetic, target profiles, machine scope
+boundaries, raw reuse, cancellation and injected whole-loop failures. Native
+report arithmetic/path regressions remain separate from these backend checks.
 
 Scale additional checks to the change. Run PassManager tests only for relevant
 pass-manager changes; do not run the full LLVM suite by default. Opt-only checks

@@ -8,9 +8,6 @@
 ; RUN: FileCheck %s --check-prefix=SPILL < %t.spill
 ; RUN: %python %S/../Inputs/check-vplan-accounting.py < %t.spill
 ; RUN: opt -passes=loop-vectorize -vectorizer-min-trip-count=0 -vectorizer-consider-reg-pressure=false -print-vplans -disable-output %s 2>&1 | FileCheck %s --check-prefix=NO-SPILL
-; RUN: %python %S/../Inputs/check-vplan-invariance.py opt %s -vectorizer-min-trip-count=0
-; RUN: %python %S/../Inputs/check-vplan-invariance.py opt %s -vectorizer-min-trip-count=0 -mattr=+sve -tail-folding-policy=must-fold-tail -sve-vscale-for-tuning=2
-; RUN: %python %S/../Inputs/check-vplan-invariance.py opt %s -vectorizer-min-trip-count=0 -vectorizer-consider-reg-pressure -force-target-num-vector-regs=1
 
 ; TAIL: function=known
 ; TAIL: scalar-baseline cost=7

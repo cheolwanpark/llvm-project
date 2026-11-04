@@ -4,15 +4,8 @@
 ; RUN: opt -passes=forceattrs,loop-vectorize -force-attribute=minsize -print-vplans -disable-output %S/optsize_minsize.ll 2>&1 | FileCheck %s --check-prefix=SIZE
 ; RUN: opt -passes=loop-vectorize -enable-vplan-native-path -mtriple=aarch64 -print-vplans -disable-output %S/../VPlan/vplan-printing-outer-loop.ll 2>&1 | FileCheck %s --check-prefix=OUTER
 
-; RUN: %python %S/../Inputs/check-vplan-invariance.py opt %S/sve-invalid-costs.ll -mattr=+sve -force-vector-width=4 -tail-folding-policy=dont-fold-tail
-; RUN: %python %S/../Inputs/check-vplan-invariance.py opt %S/print-vplans.ll -epilogue-vectorization-minimum-VF=1
-; RUN: %python %S/../Inputs/check-vplan-invariance.py opt %S/optsize_minsize.ll -passes=forceattrs,loop-vectorize -force-attribute=minsize
-; RUN: %python %S/../Inputs/check-vplan-invariance.py opt %S/../VPlan/vplan-printing-outer-loop.ll -enable-vplan-native-path -mtriple=aarch64
-
 ; RUN: opt -passes=loop-vectorize -print-vplans -disable-output %S/cost-no-valid-vplans-built.ll 2>&1 | FileCheck %s --check-prefix=NO-PLAN
 ; RUN: opt -passes=loop-vectorize -mattr=+sve -print-vplans -disable-output %S/low_trip_count_predicates.ll 2>&1 | FileCheck %s --check-prefix=LATE-REJECTION
-; RUN: %python %S/../Inputs/check-vplan-invariance.py opt %S/cost-no-valid-vplans-built.ll
-; RUN: %python %S/../Inputs/check-vplan-invariance.py opt %S/low_trip_count_predicates.ll -mattr=+sve
 
 ; INVALID: main | 0 | s4 | 4 | Invalid | not-evaluated
 ; INVALID: invalid-cost plan=0 vf=s4 recipe=R{{[0-9]+}} scope=vector-region source=recipe

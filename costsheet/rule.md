@@ -55,8 +55,10 @@ Estimated excess registers use direction-specific `(n,n)` group-1 assumptions.
 Empty units are `(0,0)`; scalar classes use single-register accesses.
 
 The default aggregate hook respects existing single-register overrides and scales
-by Q. XiangShan validates `g=Q/A` and uses `A*f(g)`. Saturn/K1 use native aggregate
-pricing. Segment facts follow physical register decomposition, retaining actual
+by Q. The unit type validates `(0,0)` or `0<A≤Q≤INT64_MAX`; the observer/pricing
+caller keeps physical groups homogeneous. XiangShan uses `Q+A` for vector
+accesses, equivalent to `A*f(g)` for `g=Q/A` and `f(g)=g+1`. Saturn/K1 use
+native aggregate pricing. Segment facts follow physical register decomposition, retaining actual
 sizes, alignment and address spaces. Slot size is not a substitute for an access's
 opcode/register geometry.
 

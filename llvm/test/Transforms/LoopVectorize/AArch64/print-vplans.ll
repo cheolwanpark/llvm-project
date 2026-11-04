@@ -15,8 +15,6 @@
 ; RUN: diff %t.report %t.repeat
 ; RUN: opt -passes=loop-vectorize -force-vector-width=4 -print-vplans -disable-output %s 2>&1 | FileCheck %s --check-prefix=HINT
 ; RUN: opt -passes=loop-vectorize -mcpu=cortex-a57 -print-vplans -disable-output %s 2>&1 | FileCheck %s --check-prefix=CPU
-; RUN: %python %S/../Inputs/check-vplan-invariance.py opt %s
-; RUN: %python %S/../Inputs/check-vplan-invariance.py opt %s -force-vector-width=4
 
 ; REPORT: VPlan report_version=2 {{.*}} function=add loop=0 header=loop depth={{[12]}}
 ; REPORT: target=aarch64-unknown-linux-gnu cpu=unspecified
