@@ -11,7 +11,9 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/PseudoProbe.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
@@ -55,6 +57,11 @@ static cl::opt<bool> ForceAllFeedback(
     "vplan-backend-force-all", cl::Hidden,
     cl::desc("Query every candidate, retaining the register-bound decision"));
 
+static cl::opt<bool> RegionProbes(
+    "vplan-backend-region-probes", cl::Hidden, cl::init(true),
+    cl::desc("Insert backend region probes for loop-first spill and MIR "
+             "observation, including fully unrolled bodies"));
+
 static cl::opt<bool>
     TimeFeedback("vplan-backend-time", cl::Hidden,
                  cl::desc("Print per-candidate spill probe phase timings"));
@@ -92,6 +99,11 @@ static json::Object summarizeObservation(const VPlanBackendObservation &O) {
       {"iteration_width", O.IterationWidth},
       {"iteration_mapping", O.IterationMapping},
       {"spills", std::move(Accesses)}};
+  if (O.RegionProbeCount) {
+    Result["scope"] = "probe-region";
+    Result["region_granularity"] = "machine-block";
+    Result["region_probe_count"] = O.RegionProbeCount;
+  }
   if (O.MIRBody) {
     Result.erase("spills");
     json::Array Body;
@@ -229,6 +241,39 @@ void llvm::markVPlanBackendLoop(Loop &L, StringRef ID, ScalarEvolution &SE) {
   }
 }
 
+// One pair denotes one materialized VF * IC iteration (one for a scalar probe).
+// This uses the same
+// nominal width as loop observations, including masked/EVL iterations; it does
+// not claim that every lane is active. The caller establishes the body identity.
+void llvm::markVPlanBackendRegion(BasicBlock &Entry, BasicBlock &Exit,
+                                  StringRef ID) {
+  Function &F = *Entry.getParent();
+  uint64_t Width = 0;
+  if (!RegionProbes || !F.hasFnAttribute("vplan.backend.candidate"))
+    return;
+  // Identity is always inserted. Unknown geometry makes marker recovery
+  // ineligible, without suppressing markers or the ordinary loop proof.
+  if ((F.getFnAttribute("vplan.backend.scalable").getValueAsString() != "0" &&
+       !F.getVScaleValue()) ||
+      F.getFnAttribute("vplan.backend.width")
+          .getValueAsString()
+          .getAsInteger(10, Width) ||
+      !Width || Width > UINT32_MAX)
+    Width = 0;
+  uint64_t GUID = GlobalValue::getGUIDAssumingExternalLinkage(ID);
+  F.addFnAttr("vplan.backend.region-guid", std::to_string(GUID));
+  F.addFnAttr("vplan.backend.region-width", std::to_string(Width));
+  auto *Probe = Intrinsic::getOrInsertDeclaration(F.getParent(),
+                                                 Intrinsic::pseudoprobe);
+  auto Insert = [&](BasicBlock &BB, BasicBlock::iterator IP, uint64_t Index) {
+    IRBuilder<> B(&BB, IP);
+    B.CreateCall(Probe, {B.getInt64(GUID), B.getInt64(Index), B.getInt32(0),
+                        B.getInt64(PseudoProbeFullDistributionFactor)});
+  };
+  Insert(Entry, Entry.getFirstInsertionPt(), 1);
+  Insert(Exit, Exit.getTerminator()->getIterator(), 2);
+}
+
 // Count matching markers, even repeated markers on the same loop, so both
 // pruning and passive diagnostics require exactly one observation identity.
 VPlanBackendObservedLoop llvm::findVPlanBackendObservedLoop(Function &F,
@@ -263,6 +308,49 @@ void llvm::finalizeVPlanBackendIterationMapping(Function &F,
                                                 FunctionAnalysisManager &AM) {
   if (!F.hasFnAttribute("vplan.backend.candidate"))
     return;
+  // Require codegen to retain every pair surviving the IR suffix. Otherwise a
+  // lost pair could silently shrink the normalization denominator.
+  if (F.hasFnAttribute("vplan.backend.region-guid")) {
+    uint64_t GUID = 0, Begins = 0, Ends = 0;
+    BasicBlock *Body = nullptr;
+    bool SingleBlock = true;
+    bool Valid = !F.getFnAttribute("vplan.backend.region-guid")
+                      .getValueAsString()
+                      .getAsInteger(10, GUID);
+    for (auto &BB : F)
+      for (auto &I : BB)
+        if (auto *Probe = dyn_cast<PseudoProbeInst>(&I)) {
+          if (Probe->getFuncGuid()->getZExtValue() != GUID)
+            continue;
+          if (Body && Body != &BB)
+            SingleBlock = false;
+          Body = &BB;
+          if (Probe->getIndex()->equalsInt(1))
+            ++Begins;
+          else if (Probe->getIndex()->equalsInt(2))
+            ++Ends;
+          else
+            Valid = false;
+        }
+    F.addFnAttr("vplan.backend.region-count",
+                std::to_string(Valid && Begins == Ends ? Begins : 0));
+    // Nontrivial work outside the marked block makes its spill scope
+    // incomplete and can leave CFG boundaries that change scheduling/RA.
+    // Empty entry/trampoline blocks are harmless for this eligibility check.
+    // Record the IR-suffix condition before codegen can merge these blocks.
+    bool Isolated = Valid && Begins && Begins == Ends && SingleBlock;
+    for (auto &BB : F) {
+      if (&BB == Body)
+        continue;
+      for (auto &I : BB) {
+        if (isa<DbgInfoIntrinsic>(I))
+          continue;
+        if (!isa<UncondBrInst>(I))
+          Isolated = false;
+      }
+    }
+    F.addFnAttr("vplan.backend.region-isolated", Isolated ? "1" : "0");
+  }
   F.addFnAttr("vplan.backend.iteration-mapping", "0");
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);

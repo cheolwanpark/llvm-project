@@ -214,6 +214,9 @@ LLVM_ABI bool vplanBackendFeedbackOutputEnabled();
 /// Append diagnostics only when a JSONL destination was requested.
 LLVM_ABI void writeVPlanBackendFeedback(const json::Object &Result);
 LLVM_ABI void markVPlanBackendLoop(Loop &L, StringRef ID, ScalarEvolution &SE);
+/// Mark one materialized iteration in a disposable vector or scalar probe.
+LLVM_ABI void markVPlanBackendRegion(BasicBlock &Entry, BasicBlock &Exit,
+                                     StringRef ID);
 LLVM_ABI void finalizeVPlanBackendIterationMapping(Function &F,
                                                    FunctionAnalysisManager &AM);
 } // namespace llvm

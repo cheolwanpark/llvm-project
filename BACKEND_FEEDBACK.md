@@ -103,9 +103,12 @@ loop에는 LV vectorization/interleaving을 하지 않고 observation marker를 
 최종 codegen 설정을 바꾸지 않는다. 비-MIR post-stack-slot-coloring collector는 계속
 vector-spill 전용이며 scalar 관측을 추가하지 않는다.
 
-Scalar도 innermost·single-block·identity·backedge와 affine induction witness 검증을
-통과해야 한다. Suffix unroll이 관측 폭을 바꾸면 원래 scalar iteration 하나로 정확히
-정규화한다. Loop 제거 또는 증명 불가능한 mapping은 실패이며 비용 0이 아니다.
+Scalar도 기본 loop 경로에서는 innermost·single-block·identity·backedge와 induction
+witness 검증을 통과해야 한다. 원본은 innermost/unique latch를 요구하지만 block 수는
+미리 제한하지 않고 suffix 이후 공통 selector가 판정한다. Region probes가 ON이면
+loop 제거 시에도 아래 marker recovery 조건으로 관측할 수 있다. Suffix unroll이 관측
+폭을 바꾸면 원래 scalar iteration 하나로 정확히 정규화한다. 두 경로에서 모두 증명
+불가능한 mapping은 실패이며 비용 0이 아니다.
 관측은 한 시도 안에서만 공유하고 persistent/cross-loop cache를 만들지 않는다.
 
 Known TC, scalar tail, epilogue와 최종 profitability는 exact scalar rational을
@@ -170,6 +173,51 @@ data register가 확인되는 load/store만 포함한다. Backedge 이후 명령
 loop, scalar spill과 일반 whole-register memory는 제외한다. Scalar 주소 operand는
 virtual register나 frame index여도 해석할 수 있다. 미할당 vector register,
 subregister, 미지원 접근과 불완전 mapping은 실패다.
+
+<a id="experimental-region-probes"></a>
+
+`-vplan-backend-region-probes`는 backend feedback probe에서 기본 ON이다.
+비교용으로 `-vplan-backend-region-probes=false`를 지정할 수 있다. 모든 materialized
+backend candidate에 upfront begin/end `llvm.pseudoprobe`를 삽입한다. 비-MIR/MIR
+vector candidate와 원본-loop scalar baseline 모두 같은 경로를 사용하며, 최종 출력
+IR에는 삽입하지 않는다. VPlan entry/exit identity를 backedge 제거 전에 보존하므로
+vectorization 중 loop가 소멸한 body도 표시한다. Geometry가 미증명이어도 marker는
+삽입하지만 region width를 0으로 기록하여 marker 정규화는 거절한다.
+
+두 observer는 공통 `findObservedRegion`/`collectBody`를 사용한다.
+먼저 identity·iteration width·backedge가 증명된 innermost single-block loop를 찾고,
+그 구조적 증명이 실패할 때만 marker region을 찾는다. 선택한 region을 한 번 순회하여
+vector spill access 또는 MIR instruction list를 수집한다. Payload/geometry 오류는
+다른 region 선택이나 backend 재시도로 우회하지 않는다.
+
+Spill은 기존 post-StackSlotColoring, MIR은 기존 post-frame-lowering 지점을 유지한다.
+Stage마다 region을 독립적으로 선택하며 결과의 성공/실패도 독립이다. 공통 순회는
+metadata, pseudo probe, function return, `FrameSetup`/`FrameDestroy` 명령을 제외한다.
+이 제외는 기존 loop 선택 성공 경로에도 적용하지만 일반적인 loop에는 이 명령들이
+backedge 앞 body 범위에 없다. MIR list는 기존 CostSheet와 scalar baseline 정책으로
+가격화하며 `R`, `R-S+Et`, 정확한 rational 정규화를 유지한다.
+
+Marker recovery는 다음 조건을 모두 요구한다.
+
+- IR suffix 시점에서 candidate marker가 단일 IR block에 모여 있고, 나머지 IR
+  block에는 debug intrinsic과 unconditional branch만 있다.
+- 모든 machine marker가 한 block에 균형 있는 begin/end 순서로 남고, pair count가
+  IR suffix 직후 기록한 값과 같다.
+- 다른 machine block에는 metadata, frame/return overhead, unconditional branch만
+  있다. Scalar/vector spill을 포함한 executable body work가 밖에 있으면 거절한다.
+
+Scheduling은 marker를 block 앞에 모을 수 있으므로 marker 위치를 명령 fence로
+사용하지 않는다. Marked block 전체의 body를 관측한다. 폭은 기존과 같은 nominal
+`materialized VF × IC × pair count`이며 scalar baseline의 pair 폭은 1이다.
+Masked/EVL의 active lane 수나 dynamic frequency를 입증한 값은 아니다.
+성공 JSONL은 `scope=probe-region`, `region_granularity=machine-block`,
+`region_probe_count`로 구분한다. 원래 scalar probe에 명령을 삽입할 때는 non-CFG
+변경으로 기록하여 instruction analysis를 invalidate하고 scalar suffix 정책은 보존한다.
+
+이 경계는 근사적이며 같은 block에 합쳐진 setup/exit 작업 중 frame flag가 없는 명령은
+포함할 수 있다. Marker가 optimization/RA에 영향을 줄 수 있어 최종 assembly와 동일한
+codegen을 보장하지 않는다. 실패는 기존 whole-loop fallback을 따르고 post-frame 재시도,
+benchmark-specific 예외, 실패를 zero spill로 바꾸는 대체는 없다.
 
 `priceVPlanVectorSpills`는 검증된 접근을 class·방향·group별 `SpillReloadUnits`로
 누적한 뒤 설정된 TTI의 `getRegisterClassSpillReloadCost`를 묶음마다 한 번씩 호출한다.

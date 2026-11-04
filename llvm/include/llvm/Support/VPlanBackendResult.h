@@ -70,6 +70,9 @@ struct VPlanBackendObservation {
   std::string Failure;
   uint64_t IterationWidth = 0;
   bool IterationMapping = false;
+  // Nonzero for an experimental linear region delimited by pseudo probes.
+  // Each pair represents one materialized vector iteration.
+  uint64_t RegionProbeCount = 0;
   std::string Stage = "post-stack-slot-coloring";
   std::vector<VPlanVectorSpillAccess> Spills;
   std::optional<std::vector<VPlanMIRInstruction>> MIRBody;

@@ -1,4 +1,4 @@
-"""Lower-bound proofs and bounded whole-loop retries through the opt pipeline."""
+"""Lower-bound proofs and pruning through the opt pipeline."""
 import json
 from fractions import Fraction as Q
 from pathlib import Path
@@ -99,20 +99,6 @@ _, rows, _ = run('epilogue-possible', ['-vplan-backend',
 verify_pruned(rows)
 assert not any(r['status'] == 'pruned' for r in rows)
 assert any(r['status'] == 'collected' and r['function'] == 'gate' for r in rows)
-
-# Required failure at the actual mapping boundary: keep unrolling enabled.
-estimated_ir, estimated_rows, _ = run('estimated', ['-vplan-backend', '-use-estimated-spill'])
-forced_ir, forced_rows, text = run('force', ['-vplan-backend', '-vplan-backend-force-all',
-                                          '-print-detailed-vplans'])
-assert forced_ir == estimated_ir
-fallback = next(r for r in forced_rows if r['function'] == 'dot4' and r['status'] == 'estimated-fallback')
-assert 'original scalar iteration mapping is unproven' in fallback['reason']
-assert fallback['requested_model'] == 'tti-real-vector-spill-v1'
-assert fallback['effective_model'] == 'tti-v1'
-assert all(r['model'] == 'tti-v1' for r in forced_rows if r['function'] == 'dot4')
-assert 'B=L=' in text
-assert any(r['status'] == 'selected' and r['function'] == 'dot4' and r['vf'] == 1
-           for r in forced_rows)
 
 # Forced VF bypasses pruning; scalable-always uses the baseline eligibility policy.
 for name, extra in [('vf', ['-force-vector-width=4']),

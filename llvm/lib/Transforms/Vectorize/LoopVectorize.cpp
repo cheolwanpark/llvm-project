@@ -6700,6 +6700,15 @@ DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
   // Retrieving VectorPH now when it's easier while VPlan still has Regions.
   VPBasicBlock *VectorPH = cast<VPBasicBlock>(BestVPlan.getVectorPreheader());
 
+  // Retain body identity before VPlan can remove its backedge. Mark every
+  // emitted backend candidate, independently of later loop/mapping analysis.
+  VPBasicBlock *ProbeEntry = nullptr, *ProbeExit = nullptr;
+  if (Config.BackendProbe) {
+    auto *Region = BestVPlan.getVectorLoopRegion();
+    ProbeEntry = Region->getEntryBasicBlock();
+    ProbeExit = Region->getExitingBasicBlock();
+  }
+
   RUN_VPLAN_PASS(VPlanTransforms::materializeConstantVectorTripCount, BestVPlan,
                  BestVF, BestUF, PSE);
   RUN_VPLAN_PASS(VPlanTransforms::optimizeForVFAndUF, BestVPlan, BestVF, BestUF,
@@ -6853,6 +6862,15 @@ DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
       SE.forgetLoop(Generated);
       markVPlanBackendLoop(*Generated, Config.BackendProbe->Candidate.ID, SE);
     }
+  }
+
+  // Insert before either observer tries loop-first, then marker-based region
+  // discovery. Marker recovery may reject a complex region later.
+  if (ObserveBackendRole && ProbeEntry && ProbeExit) {
+    auto *Entry = State.CFG.VPBB2IRBB.lookup(ProbeEntry);
+    auto *Exit = State.CFG.VPBB2IRBB.lookup(ProbeExit);
+    if (Entry && Exit)
+      markVPlanBackendRegion(*Entry, *Exit, Config.BackendProbe->Candidate.ID);
   }
 
   ILV.printDebugTracesAtEnd();
@@ -8718,14 +8736,13 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                           VPlanBackendCandidateKind::ScalarBaseline) {
     const auto &C = BackendProbe->Candidate;
     if (C.VF != ElementCount::getFixed(1) || C.IC != 1 || C.IsEpilogue ||
-        !C.Observation.CollectMIR || !L->isInnermost() ||
-        L->getNumBlocks() != 1 || L->getLoopLatch() != L->getHeader()) {
+        !C.Observation.CollectMIR || !L->isInnermost() || !L->getLoopLatch()) {
       BackendProbe->Error = "invalid scalar baseline probe";
       return false;
     }
     // Retain the original loop and its complete function context. The native
-    // post-LV suffix may unroll it; the induction witness proves the resulting
-    // width in original scalar iterations before the shared MIR observer runs.
+    // post-LV suffix may simplify/unroll it. The shared observer decides whether
+    // the resulting loop or marked region has a supported shape and width.
     Function &F = *L->getHeader()->getParent();
     F.addFnAttr("vplan.backend.candidate", C.ID);
     F.addFnAttr("vplan.backend.ic", "1");
@@ -8734,9 +8751,10 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     F.addFnAttr("vplan.backend.scalable", "0");
     F.addFnAttr("vplan.backend.width", "1");
     markVPlanBackendLoop(*L, C.ID, *SE);
+    markVPlanBackendRegion(*L->getHeader(), *L->getLoopLatch(), C.ID);
     BackendProbe->Emitted = true;
-    // Observation metadata does not change the CFG or the analyses. Returning
-    // false also keeps ShouldRunExtraVectorPasses at its native scalar value.
+    // Marker insertion is recorded separately as a non-CFG change in runImpl,
+    // preserving the scalar ShouldRunExtraVectorPasses behavior.
     return false;
   }
   assert((EnableVPlanNativePath || L->isInnermost()) &&
@@ -9484,6 +9502,10 @@ LoopVectorizeResult LoopVectorizePass::runImpl(Function &F) {
     Changed |= formLCSSARecursively(*L, *DT, LI, SE);
 
     Changed |= CFGChanged |= processLoop(L);
+    if (BackendProbe && BackendProbe->Emitted &&
+        BackendProbe->Candidate.Kind == VPlanBackendCandidateKind::ScalarBaseline &&
+        F.hasFnAttribute("vplan.backend.region-guid"))
+      Changed = true;
     ++ReportLoopIndex;
 
     if (Changed) {

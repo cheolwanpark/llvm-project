@@ -164,21 +164,28 @@ Error llvm::vplan::collectVectorSpillAccess(
   return Error::success();
 }
 
-static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
-                                                bool Text) {
+namespace {
+// The range is local to one observation stage. A null Last includes the entire
+// block; a loop range ends at its backedge, before any exit-only instructions.
+struct ObservedRegion {
+  const MachineBasicBlock *Block;
+  const MachineInstr *Last;
+  uint64_t Width;
+  uint64_t ProbeCount = 0;
+};
+
+bool isBodyInstruction(const MachineInstr &MI) {
+  return !MI.isMetaInstruction() && !MI.isPseudoProbe() && !MI.isReturn() &&
+         !MI.getFlag(MachineInstr::FrameSetup) &&
+         !MI.getFlag(MachineInstr::FrameDestroy);
+}
+
+Expected<ObservedRegion> findLoopRegion(MachineFunction &MF) {
   const Function &F = MF.getFunction();
-  auto ID = F.getFnAttribute("vplan.backend.candidate").getValueAsString();
-  auto Role = F.getFnAttribute("vplan.backend.role").getValueAsString();
-  auto VF = attr(F, "vplan.backend.vf"), IC = attr(F, "vplan.backend.ic");
   auto Width = attr(F, "vplan.backend.width");
-  bool Scalar = Role == "scalar-baseline";
-  if (ID.empty() || VF <= 0 || VF > UINT32_MAX || IC <= 0 || IC > UINT32_MAX ||
-      (Role != "main" && Role != "epilogue" && !Scalar))
-    return createStringError("invalid backend candidate identity");
-  if (Scalar && (VF != 1 || IC != 1 || attr(F, "vplan.backend.scalable") != 0))
-    return createStringError("invalid scalar baseline observation identity");
   if (attr(F, "vplan.backend.iteration-mapping") != 1 || Width <= 0)
     return createStringError("original scalar iteration mapping is unproven");
+  auto ID = F.getFnAttribute("vplan.backend.candidate").getValueAsString();
   MachineDominatorTree DT(MF);
   MachineLoopInfo LI(DT);
   MachineLoop *Loop = nullptr;
@@ -194,6 +201,100 @@ static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
       Loop->getLoopLatch() != Loop->getHeader())
     return createStringError("only innermost single-block loops have a proven "
                              "circular execution order");
+  for (const auto &MI : *Loop->getHeader())
+    if (MI.isBranch())
+      for (const auto &MO : MI.operands())
+        if (MO.isMBB() && MO.getMBB() == Loop->getHeader())
+          return ObservedRegion{Loop->getHeader(), &MI, uint64_t(Width)};
+  return createStringError("candidate backedge is unproven");
+}
+
+Expected<ObservedRegion> findMarkedRegion(MachineFunction &MF) {
+  const Function &F = MF.getFunction();
+  auto Width = attr(F, "vplan.backend.region-width");
+  uint64_t GUID;
+  if (Width <= 0 || Width > UINT32_MAX ||
+      F.getFnAttribute("vplan.backend.region-guid")
+          .getValueAsString()
+          .getAsInteger(10, GUID))
+    return createStringError("invalid region probe identity/width");
+
+  const MachineBasicBlock *Block = nullptr;
+  bool Inside = false;
+  uint64_t Count = 0;
+  for (const auto &MBB : MF)
+    for (const auto &MI : MBB) {
+      if (!MI.isPseudoProbe() || MI.getNumOperands() < 2 ||
+          !MI.getOperand(0).isImm() ||
+          uint64_t(MI.getOperand(0).getImm()) != GUID)
+        continue;
+      if (Block && Block != &MBB)
+        return createStringError("region probes span multiple machine blocks");
+      Block = &MBB;
+      if (!MI.getOperand(1).isImm())
+        return createStringError("invalid region probe index");
+      int64_t Index = MI.getOperand(1).getImm();
+      if (Index == 1 && !Inside)
+        Inside = true;
+      else if (Index == 2 && Inside) {
+        Inside = false;
+        ++Count;
+      } else
+        return createStringError("region probes are not balanced");
+    }
+  if (!Block || Inside || !Count)
+    return createStringError("region probes missing or incomplete");
+  if (attr(F, "vplan.backend.region-count") <= 0 ||
+      Count != uint64_t(attr(F, "vplan.backend.region-count")))
+    return createStringError("region probe count changed during codegen");
+  if (Count > UINT32_MAX / uint64_t(Width))
+    return createStringError("region probe iteration width overflow");
+  if (attr(F, "vplan.backend.region-isolated") != 1)
+    return createStringError(
+        "region probe has executable IR outside its single marked block");
+
+  // One scope rule for both observers: do not lose scalar work or spills when
+  // collecting MIR, or assign outside work the marked block's frequency.
+  // Frame scaffolding and empty branch-only blocks are not candidate body work.
+  for (const auto &MBB : MF) {
+    if (&MBB == Block)
+      continue;
+    for (const auto &MI : MBB)
+      if (isBodyInstruction(MI) && !MI.isUnconditionalBranch())
+        return createStringError(
+            "region probe has executable machine code outside its marked block");
+  }
+  return ObservedRegion{Block, nullptr, uint64_t(Width) * Count, Count};
+}
+
+Expected<ObservedRegion> findObservedRegion(MachineFunction &MF) {
+  auto Region = findLoopRegion(MF);
+  if (Region ||
+      !MF.getFunction().hasFnAttribute("vplan.backend.region-guid"))
+    return Region;
+  // Recover only a missing structural proof. Instruction/geometry errors from
+  // collection below do not trigger another selection or backend execution.
+  consumeError(Region.takeError());
+  return findMarkedRegion(MF);
+}
+} // namespace
+
+static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
+                                               bool Text) {
+  const Function &F = MF.getFunction();
+  auto ID = F.getFnAttribute("vplan.backend.candidate").getValueAsString();
+  auto Role = F.getFnAttribute("vplan.backend.role").getValueAsString();
+  auto VF = attr(F, "vplan.backend.vf"), IC = attr(F, "vplan.backend.ic");
+  bool Scalar = Role == "scalar-baseline";
+  if (ID.empty() || VF <= 0 || VF > UINT32_MAX || IC <= 0 || IC > UINT32_MAX ||
+      (Role != "main" && Role != "epilogue" && !Scalar))
+    return createStringError("invalid backend candidate identity");
+  if (Scalar && (VF != 1 || IC != 1 || attr(F, "vplan.backend.scalable") != 0))
+    return createStringError("invalid scalar baseline observation identity");
+  auto Region = findObservedRegion(MF);
+  if (!Region)
+    return Region.takeError();
+
   VPlanBackendResult Result;
   Result.Candidate = ID.str();
   Result.VF = ElementCount::get(VF, attr(F, "vplan.backend.scalable") != 0);
@@ -202,29 +303,26 @@ static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
   Result.Kind = Scalar ? VPlanBackendCandidateKind::ScalarBaseline
                        : VPlanBackendCandidateKind::Vector;
   auto &Observation = MIR ? Result.MIR : Result.Spill;
-  Observation.Status = VPlanBackendObservationStatus::Succeeded;
-  Observation.IterationWidth = Width;
+  Observation.IterationWidth = Region->Width;
   Observation.IterationMapping = true;
+  Observation.RegionProbeCount = Region->ProbeCount;
   if (MIR) {
     Observation.Stage = "post-frame-lowering";
     Observation.MIRBody.emplace();
   }
-  bool BackedgeSeen = false;
-  for (auto &MI : *Loop->getHeader()) {
-    if (MIR) {
-      if (!MI.isMetaInstruction())
+  // Markers identify the block, not instruction fences: scheduling may cluster
+  // them. Both payloads traverse the same region and omit frame/return overhead.
+  for (const auto &MI : *Region->Block) {
+    if (isBodyInstruction(MI)) {
+      if (MIR)
         Observation.MIRBody->push_back(vplan::collectMIRInstruction(MI, Text));
-    } else if (auto E = vplan::collectVectorSpillAccess(MI, Observation.Spills))
-      return std::move(E);
-    if (MI.isBranch())
-      for (const auto &MO : MI.operands())
-        if (MO.isMBB() && MO.getMBB() == Loop->getHeader())
-          BackedgeSeen = true;
-    if (BackedgeSeen)
+      else if (auto E = vplan::collectVectorSpillAccess(MI, Observation.Spills))
+        return std::move(E);
+    }
+    if (&MI == Region->Last)
       break;
   }
-  if (!BackedgeSeen)
-    return createStringError("candidate backedge is unproven");
+  Observation.Status = VPlanBackendObservationStatus::Succeeded;
   return Result;
 }
 Expected<VPlanBackendResult>

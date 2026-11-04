@@ -18,6 +18,7 @@ required evaluation failure follows the whole-loop retry policy below.
 | `-vplan-backend` | Enable backend costs; default false. |
 | `-vplan-backend-prune-cfg=false` | Disable CFG reduction for private vector-spill probes (default ON). |
 | `-vplan-backend-probe-threads=N` | Bound concurrent main-candidate probes; positive integer, default `1`. |
+| `-vplan-backend-region-probes` | Insert markers upfront for shared loop-first spill/MIR region recovery; default ON. |
 | `-use-mir` | Use target MIR direct costs for the body; default false. |
 | `-use-estimated-spill` | Keep TTI estimates, or replace all MIR spill costs with the selected TTI estimates; default false. |
 | `-use-default-tti` | Use native TTI for scalar/vector comparison costs in TTI modes and both estimated spill terms in MIR modes; default false. |
@@ -166,6 +167,45 @@ See [the contract](BACKEND_FEEDBACK.md#probe-pruning) for ownership and failure 
 
 The bound applies to default and tuned TTI real-spill modes. MIR modes always
 observe required candidates; estimated-only modes do not probe.
+
+`-vplan-backend-region-probes` enables upfront begin/end markers in every
+materialized disposable backend candidate, including MIR candidates and the
+original-loop scalar baseline. It is enabled by default for backend feedback
+probes; `-vplan-backend-region-probes=false` disables it for comparisons. Markers
+are not inserted into the final emitted program. VPlan body identity is retained
+before backedge removal, so single-iteration bodies are marked too. Unknown geometry
+still receives identity markers, but cannot use marker-based normalization.
+
+Both backend observers use the same selection and traversal logic:
+
+1. Find a uniquely identified single-block loop with a proven iteration width
+   and backedge.
+2. If that structural proof fails, find a balanced, count-preserving marker
+   region in one machine block.
+3. Traverse the selected region for vector spill accesses or MIR records.
+   Payload/geometry errors do not trigger another selection or codegen retry.
+
+The spill observer stays after StackSlotColoring; MIR stays after frame lowering.
+Each stage selects its region independently. Both traversals omit metadata,
+markers, function returns, and frame setup/destroy instructions. Successful MIR
+recovery uses the existing CostSheet and exact normalization, including the
+scalar baseline; it does not require a surviving backedge.
+
+Marker recovery requires one marked IR block after the suffix, with only debug
+intrinsics and unconditional branches in all other IR blocks. At each backend
+stage, other machine blocks may contain only metadata, frame/return overhead,
+and unconditional branches. Executable work outside the region, including
+scalar or vector spills, causes fallback. This is deliberately conservative.
+
+Normalization uses the nominal materialized VF × IC width times the surviving
+pair count; scalar baseline pairs have width 1. It is not an active-lane or
+dynamic-frequency measurement. JSONL identifies recovered observations with
+`scope=probe-region`, `region_granularity=machine-block`, and `region_probe_count`.
+Scheduling may cluster markers, so their positions are not instruction fences.
+The whole marked block's body instructions are included, potentially including
+merged setup/exit work not identified as frame overhead. Markers can change
+optimization and register allocation; this policy does not establish equivalence
+with final assembly. See [the observer contract](BACKEND_FEEDBACK.md#experimental-region-probes).
 
 ## Cost-model sweeps
 
