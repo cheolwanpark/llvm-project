@@ -272,8 +272,6 @@ measurements; parallel comparisons require external process measurements.
 Behavior tests cover exact pricing, independent slots, scope/width proof,
 whole-loop fallback, configured scalar costs, gate/pruning, reuse, cancellation
 and report passivity. Opt-only tests isolate observers from final object codegen.
-The refactoring's actual build/test and experiment status is recorded in
-[REFACTORING_PLAN.md](REFACTORING_PLAN.md), with raw evidence under `.cache/`.
 Historical TSVC success counts describe retained compiler versions, not acceptance
 thresholds. Compare matched candidates, stage, scope, width and payload before
 interpreting assembly differences; never count fallback as a zero spill or MIR

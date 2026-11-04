@@ -6,17 +6,16 @@ This fork adds in-process VPlan VF selection. Preserve upstream LLVM options and
 behavior. README owns usage/build/test commands; BACKEND_FEEDBACK.md owns module,
 probe, selection, fallback and reporting contracts. costsheet/rule.md owns units
 and conversion; target sheets own prices, revisions, evidence and assumptions.
-Update these documents instead of adding overlapping reports. Track refactoring
-progress in REFACTORING_PLAN.md. Keep historical measurements distinct from the
-current compiler and describe artifact availability accurately.
+Update these documents instead of adding overlapping reports. Keep historical
+measurements distinct from the current compiler and describe artifact availability
+accurately.
 
 ## Tests and builds
 
 - Follow existing conventions and test observable behavior. Keep tests minimal;
   avoid redundant coverage, unnecessary mocks and implementation snapshots.
 - Never add or modify tests without prior approval. Explain proposed checks and
-  wait for explicit permission unless that scope is already approved. The
-  refactoring plan records approval for its fork-specific test replacement.
+  wait for explicit permission unless that scope is already approved.
 - Run the smallest relevant existing checks. Do not run the full suite unless
   explicitly requested, or repeat passed checks without a change/failure reason.
 - Reuse `.cache/build`, its Release/assertions/tests-enabled configuration
@@ -81,9 +80,8 @@ provenance only. Verification command:
 python3 -B .cache/post-frame-reference/reference.py verify
 ```
 
-Use stored post-frame results, not a rerun baseline compiler. Requested dataset
-comparisons use this checkout's 313-input dataset.sqlite, not the historical
-203-input DB. Match source bytes, language, effective flags, candidate identity,
+Use stored post-frame results, not a rerun baseline compiler.
+Match source bytes, language, effective flags, candidate identity,
 VF, IC, role, width and preceding-loop context. Separate timing and observation
 compiler identities. Compare executable/allocated sections and normalized
 relocations when debug paths or compiler strings differ.

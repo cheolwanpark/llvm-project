@@ -160,11 +160,10 @@ native-TTI estimated selection, not master-OFF selection.
 
 Keep outputs under a distinct `.cache/` directory and record compiler hashes,
 source bytes and effective flags. Existing results never become current merely
-because binaries at their recorded paths were replaced. Requested reference
-comparisons use this checkout's 313-input database and stored baseline results;
-follow AGENTS.md. The documented `.cache/post-frame-reference` directory is
+because binaries at their recorded paths were replaced. Reference comparisons
+use stored baseline results; follow AGENTS.md.
+The documented `.cache/post-frame-reference` directory is
 absent in this checkout and has not been verified during this refactoring.
 
-Current refactoring progress and validation evidence are recorded in
-[REFACTORING_PLAN.md](REFACTORING_PLAN.md). Historical TSVC coverage and timing
-are evidence about their recorded compiler versions, not current guarantees.
+Historical TSVC coverage and timing are evidence about their recorded compiler
+versions, not current guarantees.
