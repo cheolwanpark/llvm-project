@@ -142,6 +142,17 @@ for default in (False, True):
     _, rows, _ = run('estimated-fast-' + str(default), flags)
     verify(rows, False, True, default)
 
+# Losing the early observation does not invalidate either MIR pricing policy.
+for estimated in (False, True):
+    ir, rows, _ = run('mir-no-ssc-' + str(estimated),
+        ['-vplan-backend', '-use-mir', '-disable-ssc',
+         '-use-estimated-spill=' + str(estimated).lower()])
+    verify(rows, True, estimated, False)
+    for row in candidates(rows):
+        assert row['observation']['spill_observation']['status'] == 'failed'
+        assert row['observation']['mir_observation']['status'] == 'succeeded'
+        assert not row['real_spill_used']
+
 # Parallel transport, native IC normalization, and real spill subtraction.
 for estimated in (False, True):
     flags = ['-vplan-backend', '-use-mir'] + (['-use-estimated-spill'] if estimated else [])
@@ -245,15 +256,14 @@ verify(rows, True, False, False)
 assert any(r['vector_epilogue'] for r in candidates(rows))
 assert 'vec.epilog' in epilogue
 
-# Native fallback must also discard attempted detailed backend cost reports.
-for name, extra, cpu in [('fast', ['-riscv-rvv-regalloc=fast'], None),
-                          ('limited', ['-stop-before=prologepilog'], None)]:
+# A proved no-spill TTI retry survives unavailable codegen and discards MIR costs.
+for name, extra, cpu in [('limited', ['-stop-before=prologepilog'], None)]:
     baseline, _, _ = run(name + '-baseline', cpu=cpu)
     out, rows, stderr = run(name, ['-vplan-backend', '-use-mir',
                                   '-print-detailed-vplans', '-use-default-tti=true'] + extra, cpu=cpu)
     assert out == baseline
-    assert any(r['status'] == 'native-fallback' for r in rows), rows
-    assert 'backend-cost phase=' not in stderr
+    assert any(r['status'] == 'real-spill-fallback' for r in rows), rows
+    assert 'model=llvm-real-vector-spill-v1' in stderr
     assert 'backend-scalar source=mir' not in stderr
     assert not any(r.get('role') == 'scalar-baseline' for r in rows)
 
@@ -298,3 +308,21 @@ for estimated in (False, True):
     traces = [json.loads(line.split(': ', 1)[1]) for line in text.splitlines()
               if line.startswith('VPLAN-BACKEND-PRUNING: ')]
     assert traces and all(not r['applied'] and r['reason'] == 'mir-observation' for r in traces)
+
+# One fallback matrix owns allocator-failure policy across the ablation modes.
+for mir, estimated, default in itertools.product((False, True), repeat=3):
+    if not mir and estimated:
+        continue  # Estimated-only allocator independence is checked above.
+    flags = ['-vplan-backend', '-vplan-backend-force-all',
+             '-riscv-rvv-regalloc=fast',
+             '-use-mir=' + str(mir).lower(),
+             '-use-estimated-spill=' + str(estimated).lower(),
+             '-use-default-tti=' + str(default).lower()]
+    ir, rows, _ = run(f'fallback-{mir}-{estimated}-{default}', flags)
+    assert ir == results[False, True, default][0]
+    fallback = next(r for r in rows if r['status'] == 'estimated-fallback')
+    real = 'llvm-real-vector-spill-v1' if default else 'tti-real-vector-spill-v1'
+    final = 'llvm-v1' if default else 'tti-v1'
+    expected = (['mir-me-spill-v1'] if estimated else ['mir-v1', real]) if mir else [real]
+    assert [a['model'] for a in fallback['attempts']] == expected + [final]
+    assert all(a['use_default_tti'] == default for a in fallback['attempts'])

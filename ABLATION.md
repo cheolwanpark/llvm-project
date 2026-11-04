@@ -57,7 +57,8 @@ vector 후보뿐 아니라 **원본 scalar 기준의 IR 연산 가격에도 적�
 
 MIR sheet는 CPU/VLEN으로 별도 선택한다. MIR estimated 모드에서 이 flag는 scalar와
 vector 양쪽 추정 spill 항의 TTI를 선택한다. 성공한 pure-MIR 비용과 선택은 flag에
-독립적이다. 실패 시 fallback 목적지는 raw flag 값에 따라 달라질 수 있다.
+독립적이다. 실패 시에도 요청한 TTI 설정을 유지하며, 재선택 순서는
+[backend fallback 계약](BACKEND_FEEDBACK.md#probe와-fallback)을 따른다.
 Native IC 계산, probe 최적화와 최종 codegen에는 tuned 비교 scope를 전달하지 않는다.
 
 ## 5. 모델 비교에서 말할 수 있는 것
@@ -82,7 +83,7 @@ TTI에 추가하려면 각각 대체 범위와 기준 정책을 바꾸는 별도
 spill만 관측하여 대체**한다.
 
 요청 모델과 실제 적용 모델은 구분해야 한다. MIR 또는 real-spill 요청이 성공적으로
-ELF를 만들었어도 required probe 실패로 tuned-estimated retry나 native fallback을
+ELF를 만들었어도 required probe 실패로 TTI real/estimated retry나 native fallback을
 사용했을 수 있다. 빌드 성공이나 ELF 이름만으로 관측 모델 적용을 판단하지 않는다.
 모델의 선택 결과를 해석할 때는 해당 실행의 feedback/fallback 진단과 compiler
 identity를 확인한다. 새 binary는 기존 sweep 결과를 갱신하지 않으므로 비교 실행은

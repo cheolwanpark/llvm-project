@@ -175,8 +175,7 @@ static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
   if (ID.empty() || VF <= 0 || VF > UINT32_MAX || IC <= 0 || IC > UINT32_MAX ||
       (Role != "main" && Role != "epilogue" && !Scalar))
     return createStringError("invalid backend candidate identity");
-  if (Scalar && (!MIR || VF != 1 || IC != 1 ||
-                 attr(F, "vplan.backend.scalable") != 0))
+  if (Scalar && (VF != 1 || IC != 1 || attr(F, "vplan.backend.scalable") != 0))
     return createStringError("invalid scalar baseline observation identity");
   if (attr(F, "vplan.backend.iteration-mapping") != 1 || Width <= 0)
     return createStringError("original scalar iteration mapping is unproven");
@@ -202,18 +201,20 @@ static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
   Result.IsEpilogue = Role == "epilogue";
   Result.Kind = Scalar ? VPlanBackendCandidateKind::ScalarBaseline
                        : VPlanBackendCandidateKind::Vector;
-  Result.IterationWidth = Width;
-  Result.IterationMapping = true;
+  auto &Observation = MIR ? Result.MIR : Result.Spill;
+  Observation.Status = VPlanBackendObservationStatus::Succeeded;
+  Observation.IterationWidth = Width;
+  Observation.IterationMapping = true;
   if (MIR) {
-    Result.Stage = "post-frame-lowering";
-    Result.MIRBody.emplace();
+    Observation.Stage = "post-frame-lowering";
+    Observation.MIRBody.emplace();
   }
   bool BackedgeSeen = false;
   for (auto &MI : *Loop->getHeader()) {
     if (MIR) {
       if (!MI.isMetaInstruction())
-        Result.MIRBody->push_back(vplan::collectMIRInstruction(MI, Text));
-    } else if (auto E = vplan::collectVectorSpillAccess(MI, Result.Spills))
+        Observation.MIRBody->push_back(vplan::collectMIRInstruction(MI, Text));
+    } else if (auto E = vplan::collectVectorSpillAccess(MI, Observation.Spills))
       return std::move(E);
     if (MI.isBranch())
       for (const auto &MO : MI.operands())

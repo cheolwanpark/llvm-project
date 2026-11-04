@@ -482,16 +482,18 @@ TargetPassConfig *RISCVTargetMachine::createPassConfig(PassManagerBase &PM) {
 
 Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
     Module &M, bool Time, VPlanBackendObservationOptions Options) {
-  bool MIR = Options.Kind == VPlanBackendObservationKind::MIRBody;
+  bool MIR = Options.CollectMIR;
   if (TargetPassConfig::hasLimitedCodeGenPipeline())
     return createStringError(
         "backend feedback requires an unrestricted codegen pipeline");
   legacy::PassManager PM;
   RISCVPassConfig Config(*this, PM);
-  if (Config.isPassSubstitutedOrOverridden(&StackSlotColoringID))
+  bool SpillUnavailable =
+      Config.isPassSubstitutedOrOverridden(&StackSlotColoringID);
+  if (SpillUnavailable && !MIR)
     return createStringError("backend feedback requires StackSlotColoring");
-  if (MIR && Config.isPassSubstitutedOrOverridden(&PrologEpilogCodeInserterID))
-    return createStringError("MIR feedback requires frame lowering");
+  bool MIRUnavailable =
+      MIR && Config.isPassSubstitutedOrOverridden(&PrologEpilogCodeInserterID);
   llvm::call_once(InitializeDefaultRVVRegisterAllocatorFlag,
                   initializeDefaultRVVRegisterAllocatorOnce);
   auto Ctor = RVVRegisterRegAlloc::getDefault();
@@ -501,19 +503,21 @@ Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
        Ctor != createBasicRVVRegisterAllocator))
     return createStringError(
         "backend feedback requires optimized RVV allocation");
-  std::optional<Expected<VPlanBackendResult>> Result;
+  std::optional<Expected<VPlanBackendResult>> Result, SpillResult;
   VPlanFeedbackTimer Timer(Time);
   SaveAndRestore Guard(BackendFeedbackSink, &Result);
+  SaveAndRestore SpillGuard(BackendSpillSink, &SpillResult);
   SaveAndRestore ObservationGuard(BackendObservation, Options);
   SaveAndRestore TimerGuard(BackendFeedbackTimer, Time ? &Timer : nullptr);
-  if (addPassesToBackendObserver(PM, MIR ? &RISCVVPlanMIR::ID
+  if (addPassesToBackendObserver(PM, MIR && !MIRUnavailable
+                                         ? &RISCVVPlanMIR::ID
                                          : &RISCVVPlanSpill::ID))
     return createStringError(
         "cannot configure candidate instruction selection");
   Timer.mark("backend_pipeline_construction");
   PM.run(M);
   Timer.mark("backend_return");
-  if (Time && (!Result || !*Result)) {
+  if (Time && (MIR ? (!Result || !*Result) : (!SpillResult || !*SpillResult))) {
     // Expected errors have no result payload. Preserve executed phase timings
     // in a separate diagnostic record, without turning failure into spill=0.
     json::Object Timing;
@@ -528,12 +532,41 @@ Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
     errs() << "VPLAN-BACKEND-FAILED-TIMING: " << json::Value(std::move(Timing))
            << '\n';
   }
-  if (!Result)
-    return createStringError("backend observer did not see candidate function");
-  if (!*Result)
-    return Result->takeError();
-  (*Result)->Timings = std::move(Timer.Phases);
-  return std::move(**Result);
+  VPlanBackendResult Combined;
+  if (SpillResult && *SpillResult)
+    Combined = std::move(**SpillResult);
+  if (Result && *Result) {
+    auto Spill = std::move(Combined.Spill);
+    Combined = std::move(**Result);
+    Combined.Spill = std::move(Spill);
+  }
+  auto Finish = [](auto &Source, VPlanBackendObservation &Dest,
+                   StringRef Stage) {
+    Dest.Stage = Stage.str();
+    if (Source && !*Source) {
+      Dest.Status = VPlanBackendObservationStatus::Failed;
+      Dest.Failure = toString(Source->takeError());
+    } else if (!Source) {
+      Dest.Status = VPlanBackendObservationStatus::NotCollected;
+      Dest.Failure = "backend observer did not see candidate function";
+    }
+  };
+  Finish(SpillResult, Combined.Spill, "post-stack-slot-coloring");
+  Finish(Result, Combined.MIR, "post-frame-lowering");
+  if (SpillUnavailable) {
+    Combined.Spill.Status = VPlanBackendObservationStatus::Failed;
+    Combined.Spill.Failure = "backend feedback requires StackSlotColoring";
+    Combined.Spill.Spills.clear();
+  }
+  if (!MIR) {
+    Combined.MIR.Status = VPlanBackendObservationStatus::NotRequested;
+    Combined.MIR.Failure.clear();
+  } else if (MIRUnavailable) {
+    Combined.MIR.Status = VPlanBackendObservationStatus::Failed;
+    Combined.MIR.Failure = "MIR feedback requires frame lowering";
+  }
+  Combined.Timings = std::move(Timer.Phases);
+  return Combined;
 }
 
 std::unique_ptr<CSEConfigBase> RISCVPassConfig::getCSEConfig() const {
@@ -587,9 +620,8 @@ bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
 // Stop before post-RA copy propagation, LICM, and frame lowering.
 void RISCVPassConfig::addPostRewrite() {
   auto &TM = getTM<RISCVTargetMachine>();
-  if (TM.BackendObservation.Kind == VPlanBackendObservationKind::VectorSpills)
-    if (auto *Sink = TM.getBackendFeedbackSink())
-      addPass(new RISCVVPlanSpill(*Sink, TM.BackendFeedbackTimer));
+  if (auto *Sink = TM.getBackendSpillSink())
+    addPass(new RISCVVPlanSpill(*Sink, TM.BackendFeedbackTimer));
 }
 
 void RISCVPassConfig::addIRPasses() {
@@ -689,7 +721,7 @@ void RISCVPassConfig::addPreSched2() {
   if (TM->getOptLevel() != CodeGenOptLevel::None)
     addPass(createRISCVLoadStoreOptPass());
   auto &TM = getTM<RISCVTargetMachine>();
-  if (TM.BackendObservation.Kind == VPlanBackendObservationKind::MIRBody)
+  if (TM.BackendObservation.CollectMIR)
     if (auto *Sink = TM.getBackendFeedbackSink())
       addPass(new RISCVVPlanMIR(*Sink, TM.BackendFeedbackTimer,
                                 TM.BackendObservation.CaptureMIRText));

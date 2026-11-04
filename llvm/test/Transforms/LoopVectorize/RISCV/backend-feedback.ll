@@ -19,6 +19,9 @@
 ; Probe only: opt does not run normal final object codegen.
 ; RUN: opt -codegen-opt-level=2 -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -vplan-backend -vplan-backend-force-all -print-after-all %s -disable-output 2>%t.passes
 ; RUN: %python %S/Inputs/check-spill-probe-passes.py %t.passes
+; MIR probes visit both observers in one backend pipeline.
+; RUN: opt -codegen-opt-level=2 -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=1 -enable-epilogue-vectorization=false -disable-loop-unrolling -passes=loop-vectorize -vplan-backend -use-mir -print-after-all %s -disable-output 2>%t.mir-passes
+; RUN: %python %S/Inputs/check-spill-probe-passes.py %t.mir-passes mir
 ; IC=2 is materialized and normalized, rather than rejected.
 ; RUN: opt -codegen-opt-level=2 -mtriple=riscv64 -mcpu=xiangshan-kunminghu -mattr=+v -scalable-vectorization=always -force-vector-interleave=2 -disable-loop-unrolling -passes=loop-vectorize %s -S -o %t.ic2.base.ll
 ; RUN: rm -f %t.ic2.jsonl
@@ -42,7 +45,7 @@
 ; RUN: diff %t.base.ll %t.unsupported.ll
 ; RUN: FileCheck %s --check-prefix=FAST-FAIL <%t.unsupported.jsonl
 ; FAST-FAIL: "reason":"llvm-real-vector-spill-v1: backend feedback requires optimized RVV allocation"
-; FAST-FAIL: "status":"native-fallback"
+; FAST-FAIL: "status":"estimated-fallback"
 
 ; RUN: rm -f %t.no-ssc.jsonl
 ; Disabling the required cleanup cannot masquerade as a post-coloring probe.
@@ -50,7 +53,7 @@
 ; RUN: diff %t.base.ll %t.no-ssc.ll
 ; RUN: FileCheck %s --check-prefix=NO-SSC <%t.no-ssc.jsonl
 ; NO-SSC: "reason":"llvm-real-vector-spill-v1: backend feedback requires StackSlotColoring"
-; NO-SSC: "status":"native-fallback"
+; NO-SSC: "status":"estimated-fallback"
 
 ; Diagnostic flags without the master must not query the provider or tune costs.
 ; RUN: rm -f %t.off.jsonl

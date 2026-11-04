@@ -79,9 +79,9 @@ public:
     return C ? 5 : 11;
   }
 };
-VPlanBackendResult observation() {
-  VPlanBackendResult R;
-  R.Candidate = "owned:candidate";
+VPlanBackendObservation observation() {
+  VPlanBackendObservation R;
+  R.Status = VPlanBackendObservationStatus::Succeeded;
   R.IterationMapping = true;
   R.IterationWidth = 64;
   R.Spills.push_back({false, 16, true, 16, 0, true, 2, false});
@@ -211,7 +211,8 @@ public:
 };
 } // namespace
 TEST(VPlanBackendCost, MIRExactNormalizationAndSpillScope) {
-  VPlanBackendResult O;
+  VPlanBackendObservation O;
+  O.Status = VPlanBackendObservationStatus::Succeeded;
   O.Stage = "post-frame-lowering";
   O.IterationMapping = true;
   O.IterationWidth = 24;
@@ -248,6 +249,25 @@ TEST(VPlanBackendCost, MIRExactNormalizationAndSpillScope) {
     EXPECT_FALSE(bool(R));
     if (!R)
       consumeError(R.takeError());
+  }
+}
+
+TEST(VPlanBackendCost, EmptySpillRequiresSuccessfulObservation) {
+  TargetTransformInfo TTI(std::make_unique<TestTTI>());
+  LLVMContext C;
+  auto O = observation();
+  O.Spills.clear();
+  InstructionCost Raw;
+  for (auto Status : {VPlanBackendObservationStatus::Succeeded,
+                      VPlanBackendObservationStatus::Failed,
+                      VPlanBackendObservationStatus::NotCollected}) {
+    O.Status = Status;
+    auto Cost = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
+    EXPECT_EQ(bool(Cost), Status == VPlanBackendObservationStatus::Succeeded);
+    if (Cost)
+      EXPECT_EQ(*Cost, VPExactCost());
+    else
+      consumeError(Cost.takeError());
   }
 }
 
@@ -353,8 +373,11 @@ protected:
         O.VF = C.VF;
         O.IC = C.IC;
         O.IsEpilogue = C.IsEpilogue;
-        O.IterationMapping = true;
-        O.IterationWidth = C.VF.getKnownMinValue();
+        O.MIR.Status = VPlanBackendObservationStatus::Failed;
+        O.MIR.Failure = "MIR unavailable independently";
+        O.Spill.Status = VPlanBackendObservationStatus::Succeeded;
+        O.Spill.IterationMapping = true;
+        O.Spill.IterationWidth = C.VF.getKnownMinValue();
         Results.emplace_back(std::move(O));
       }
     }
@@ -426,18 +449,23 @@ TEST_F(BackendSchedulerTest, ScalarMIRExactSymmetricSpillSubstitution) {
   O.Candidate = "scalar";
   O.VF = ElementCount::getFixed(1);
   O.IC = 1;
-  O.Stage = "post-frame-lowering";
-  O.IterationMapping = true;
-  O.IterationWidth = 8;
-  O.MIRBody.emplace(2);
+  O.MIR.Status = VPlanBackendObservationStatus::Succeeded;
+  O.MIR.Stage = "post-frame-lowering";
+  O.MIR.IterationMapping = true;
+  O.MIR.IterationWidth = 8;
+  O.MIR.MIRBody.emplace(2);
   // An ordinary stack load belongs to R, but never to S.
-  O.MIRBody->front().Load = true;
-  O.MIRBody->back().Spill = true;
+  O.MIR.MIRBody->front().Load = true;
+  O.MIR.MIRBody->back().Spill = true;
   for (bool Estimated : {false, true})
     for (bool Default : {false, true})
       for (bool ObservedSpill : {false, true})
         for (unsigned Et : {0u, 3u}) {
-          O.MIRBody->back().Spill = ObservedSpill;
+          O.Spill.Status = ObservedSpill
+                               ? VPlanBackendObservationStatus::Failed
+                               : VPlanBackendObservationStatus::Succeeded;
+          O.Spill.Failure = ObservedSpill ? "early spill unavailable" : "";
+          O.MIR.MIRBody->back().Spill = ObservedSpill;
           VPlanBackendCostModel Costs(Feedback, TTI, *F, *Header, nullptr,
                                       {true, Estimated, Default});
           ASSERT_TRUE(Access::scalar(Costs, Et, O));
@@ -463,11 +491,12 @@ TEST_F(BackendSchedulerTest, ScalarFailureDiscardsWholeAttempt) {
     O.Candidate = "scalar";
     O.VF = ElementCount::getFixed(1);
     O.IC = 1;
-    O.Stage = "post-frame-lowering";
-    O.IterationMapping = true;
-    O.IterationWidth = 8;
-    O.MIRBody.emplace(1);
-    O.MIRBody->front().Opcode = "unknown";
+    O.MIR.Status = VPlanBackendObservationStatus::Succeeded;
+    O.MIR.Stage = "post-frame-lowering";
+    O.MIR.IterationMapping = true;
+    O.MIR.IterationWidth = 8;
+    O.MIR.MIRBody.emplace(1);
+    O.MIR.MIRBody->front().Opcode = "unknown";
     ASSERT_TRUE(Access::scalar(Costs, 0, O));
     EXPECT_TRUE(Access::scalarEntry(Costs)->MIR->Instructions.front().Unknown);
     InstructionCost Et = 0;
@@ -476,13 +505,23 @@ TEST_F(BackendSchedulerTest, ScalarFailureDiscardsWholeAttempt) {
     case 1: O.Kind = VPlanBackendCandidateKind::Vector; break;
     case 2: O.VF = ElementCount::getScalable(1); break;
     case 3: O.IC = 2; break;
-    case 4: O.IterationMapping = false; break;
-    case 5: O.Stage = "post-stack-slot-coloring"; break;
-    case 6: O.MIRBody->front().Opcode = "invalid"; break;
+    case 4:
+      O.MIR.IterationMapping = false;
+      break;
+    case 5:
+      O.MIR.Stage = "post-stack-slot-coloring";
+      break;
+    case 6:
+      O.MIR.MIRBody->front().Opcode = "invalid";
+      break;
     case 7: Et = InstructionCost::getInvalid(); break;
     case 8: Et = -1; break;
-    case 9: O.IterationWidth = 0; break;
-    case 10: O.MIRBody->front().Opcode = "overflow"; break;
+    case 9:
+      O.MIR.IterationWidth = 0;
+      break;
+    case 10:
+      O.MIR.MIRBody->front().Opcode = "overflow";
+      break;
     }
     EXPECT_FALSE(Access::scalar(Costs, Et, O));
     EXPECT_TRUE(Costs.failed());

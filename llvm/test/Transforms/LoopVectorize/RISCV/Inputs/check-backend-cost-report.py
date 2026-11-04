@@ -52,8 +52,10 @@ for scenario, options in [
             native_reports.append(report)
         elif scenario == 'fallback':
             assert ir == outputs['native']
-            assert report == native_reports[mode], ('fallback report leaked attempted costs', mode)
-            assert any(r['status'] == 'native-fallback' for r in rows)
+            assert ' model=llvm-real-vector-spill-v1' not in report
+            if mode:
+                assert 'effective_model=llvm-v1' in report
+            assert any(r['status'] == 'estimated-fallback' for r in rows)
         else:
             assert not any(r['status'] == 'native-fallback' for r in rows), rows
             candidates = [r for r in rows if 'candidate' in r and r.get('role') != 'scalar-baseline']

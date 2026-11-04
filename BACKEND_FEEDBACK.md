@@ -88,7 +88,7 @@ spill이며 vector-only `Ev`와 별도 보관한다. Scalar `Et`는 원본 VF1 p
 usage와 기존 `VPRegisterUsage::spillCost()` 정책으로 계산한다. 이 scalar plan은
 tail-fold mask와 predication linearization 전에 원본 VF1 geometry를 보존한 snapshot이다.
 관측 `S_scalar`에서 추정 register 수를 만들지 않는다. 유효한 zero estimate는 실패와 구분한다. MIR sheet와
-TTI profile은 독립적으로 보고한다. Raw requested boolean은 기존 fallback 목적지를 유지한다.
+TTI profile은 독립적으로 보고한다. Requested default/tuned 설정은 모든 fallback TTI 단계에서 유지한다.
 
 Estimated/real spill의 units와 target 가격은 [변환 규칙](costsheet/rule.md#spill--units--tti--costsheet)을 따른다.
 관측값은 register class·방향·group별로 묶으며 가격화 후 반복 폭을 한 번 정규화한다.
@@ -187,19 +187,26 @@ address space를 보존한다.
 초기 관측 폭은 Wtti × IC이며, IR suffix 후 검증된 추가 iteration mapping 비율을
 한 번 곱한다. 관측 결과는 해당 planning invocation에서만 사용한다.
 
-필수 scalar probe/가격/추정 실패를 포함한 provider unavailable, clone/형상/mapping
-실패, 미지원 spill, overflow 또는 필요한
-epilogue 비용 실패 시 원본 loop의 backend 비용·scalar 항목/exact 값·ProfitableVFs·epilogue clone·보고를
-버리고 새 객체로 전체 loop를 다시 선택한다. Probe 모드이고 raw
-`use-default-tti=false`이며 함수의 specific TTI profile이 지원되면 기존 TTI estimated
-builder로 한 번 재시도한다. 비용은 추정 vector/scalar spill을 포함한 `Lt`이고
-scalar 기준도 같은 tuned TTI를 쓰고 IC는 native다. MIR sheet나 provider query는 요구하지 않는다.
-Specific 미지원, raw default-TTI=true, requested TTI estimated 실패 또는 estimated
-재시도 실패는 native 선택으로 간다. Scalar/non-LV 선택도 성공이며 native로
-진행하지 않는다. 전역 옵션 변경이나 일부 후보만 대체하는 경로는 없다. 강제 VF/IC/epilogue 요청은 유지한다. 실패를 spill 0으로
-간주하지 않으며 일부 성공 비용만 적용하지 않는다. LLVM fatal error/assertion의
-예외 격리는 제공하지 않는다. Probe suffix는 임의의 LTO·module pass·사용자 추가
-pass를 재현하지 않으며, 최종 machine instruction 전체와의 동등성을 보장하지 않는다.
+| 요청 모델 | 원본 loop 전체의 시도 순서 |
+|---|---|
+| MIR + real spill | MIR → TTI real spill → TTI estimated spill → native |
+| MIR + estimated spill | MIR estimated spill → TTI estimated spill → native |
+| TTI + real spill | TTI real spill → TTI estimated spill → native |
+| TTI + estimated spill | TTI estimated spill → native |
+
+모든 재시도는 요청한 default/tuned TTI 설정을 유지한다. Scalar 선택도 성공이다.
+실패한 시도의 비용표, scalar 기준, pruning 판정, profitable VF, epilogue 선택과
+임시 비용 보고는 폐기한다. 원시 관측은 원본 loop invocation 동안 보존하며
+candidate identity, VF/IC, 역할, main/epilogue와 CFG 문맥이 일치할 때만 재사용한다.
+MIR 전체 문맥과 축소한 TTI CFG의 동등성을 가정하지 않는다. 관측이 없거나
+문맥이 다르면 다시 수집한다. IC 계산은 native를 유지한다.
+
+Spill/MIR 관측은 독립적인 status, stage, iteration mapping과 geometry를 소유한다.
+MIR 요청도 먼저 post-stack-slot-coloring vector spill을 저장하고 기존
+post-frame-lowering MIR observer까지 진행한다. 한 관측의 실패는 다른 성공
+결과를 지우지 않는다. Scalar MIR 실패 후 TTI scalar 기준을 계산하고 아직
+없는 vector 관측을 수집할 수 있다. 성공한 빈 spill은 관측된 zero이며 미수집,
+실패, gate 생략과 구분한다. Estimated 요청은 Sv의 성공이나 가격에 의존하지 않는다.
 
 ### 제한된 probe 병렬 실행
 
@@ -221,7 +228,7 @@ snapshot의 ordinal로 찾고, module identifier와 context의 이름/ODR 설정
 공통 `runProbe`를 사용하므로 materialization·suffix·관측 종료 지점은 같다.
 각 작업은 native TTI scope에서 실행하고 작업 종료 시 thread-local 상태를 복원한다.
 
-Batch의 준비 오류가 있으면 준비된 prefix는 pruning 없이 처리하고 필요한 실패를 판정한다. Pruning 경로는 최종 dominance까지 실패를 유예하고 proven loser만 무시한다. 협력 취소는 IR 단계 사이와 완료된 legacy pass 경계에서 확인한다. On-demand 분석은 완료하며 정상 finalization 후 모든 작업을 회수한다. 이후에만 현재 시도를 폐기하고 설정된 estimated/native 재시도를 시작한다. Fatal error/assertion 격리는 제공하지 않는다.
+Batch의 준비 오류가 있으면 준비된 prefix는 pruning 없이 처리하고 필요한 실패를 판정한다. Pruning 경로는 최종 dominance까지 실패를 유예하고 proven loser만 무시한다. 협력 취소는 IR 단계 사이와 완료된 legacy pass 경계에서 확인한다. On-demand 분석은 완료하며 정상 finalization 후 모든 작업을 회수한다. 이후에만 현재 시도를 폐기하고 설정된 real-spill/estimated/native 재시도를 시작한다. Fatal error/assertion 격리는 제공하지 않는다.
 
 개별 결과는 context와 독립된 관측 값·오류 문자열·diagnostic 문자열을 소유한다.
 Service는 반환 개수를 검증하고, snapshot과 결과 저장소는 모든 작업이 끝날
@@ -293,7 +300,7 @@ profile body, native IC와 native selection context를 구분한다.
 ## JSONL과 시간 진단
 
 `-vplan-backend-jsonl=FILE`은 최종 시도의 candidate·selected와
-estimated-fallback/native-fallback 행을 append한다.
+real-spill-fallback/estimated-fallback/native-fallback 행을 append한다.
 MIR scalar-baseline 행은 `role=scalar-baseline`을 사용하며 source, sheet revision, `R/S/Et`,
 관측 폭, exact 분자/분모와 unknown 수를 담는다. Vector candidate 집계에서 제외한다.
 `scalar_cost_source`는 `mir`/`mir-estimated-spill`, `scalar_profile`과 `scalar_revision`은
@@ -311,7 +318,11 @@ Pruned 행은 body-unit `lower_bound_quarters_*`, 정규화한
 만들지 않는다.
 미관측 Pruned에는 observation/Wobs/observed spill도 없다. 실제 실행한 speculative
 성공의 관측은 보관할 수 있다. Selected/fallback 행은 requested/effective model을,
-fallback 행은 reason을 포함한다. JSONL quarter-cost 분자를 **4 × 분모**로 나누면 텍스트의 model unit과 같다.
+fallback 행은 reason과 순서 있는 attempts를 포함한다. 각 attempt는 모델, 설정,
+실패 사유와 독립 관측을 기록한다. `observation_schema=independent-observations-v2`는
+`spill_observation`과 `mir_observation`을 제공하며 기존 최상위 관측 필드는 적용
+모델의 호환 표현이다. `real_spill_used`와 `real_spill_unused_reason`은 수집과 적용을
+구분한다. JSONL quarter-cost 분자를 **4 × 분모**로 나누면 텍스트의 model unit과 같다.
 
 Provider는 소유권 있는 `VPlanBackendResult`를 반환한다. `rvv-vector-spill-v1`
 요약은 candidate/VF/IC/role, stage, 검증된 반복 폭과 vector 접근 목록을 담는다.
@@ -380,4 +391,4 @@ probe와 vector body를 가격화한다. Scalar/vector `R-S+Et`는 대칭적으�
 독립성, native/tuned estimated spill, 보고의 수동성, whole-loop fallback, forced VF와
 trip-count/tail/epilogue 비교 및 opcode별 fractional LMUL 경계를 다룬다.
 Pure MIR의 body 가격과 관측은 default-TTI flag와 독립적이다. 필수 probe 실패 시의
-estimated/native fallback 목적지는 successful MIR 가격과 별도로 취급한다.
+real-spill/estimated/native fallback 목적지는 successful MIR 가격과 별도로 취급한다.

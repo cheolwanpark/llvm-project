@@ -9,9 +9,9 @@
 #include <vector>
 namespace llvm {
 enum class VPlanBackendCandidateKind : uint8_t { Vector, ScalarBaseline };
-enum class VPlanBackendObservationKind { VectorSpills, MIRBody };
 struct VPlanBackendObservationOptions {
-  VPlanBackendObservationKind Kind = VPlanBackendObservationKind::VectorSpills;
+  // Every executed probe collects spills; MIR extends the same pipeline.
+  bool CollectMIR = false;
   bool CaptureMIRText = false;
 };
 /// The pricing inputs of a body instruction, independent of CodeGen lifetimes.
@@ -58,17 +58,33 @@ struct VPlanFeedbackTimer {
     Last = Now;
   }
 };
+enum class VPlanBackendObservationStatus {
+  NotCollected,
+  NotRequested,
+  Succeeded,
+  Failed
+};
+struct VPlanBackendObservation {
+  VPlanBackendObservationStatus Status =
+      VPlanBackendObservationStatus::NotCollected;
+  std::string Failure;
+  uint64_t IterationWidth = 0;
+  bool IterationMapping = false;
+  std::string Stage = "post-stack-slot-coloring";
+  std::vector<VPlanVectorSpillAccess> Spills;
+  std::optional<std::vector<VPlanMIRInstruction>> MIRBody;
+  bool succeeded() const {
+    return Status == VPlanBackendObservationStatus::Succeeded;
+  }
+};
 struct VPlanBackendResult {
   std::string Candidate;
   ElementCount VF = ElementCount::getFixed(0);
   unsigned IC = 0;
   bool IsEpilogue = false;
   VPlanBackendCandidateKind Kind = VPlanBackendCandidateKind::Vector;
-  uint64_t IterationWidth = 0;
-  bool IterationMapping = false;
-  std::string Stage = "post-stack-slot-coloring";
-  std::vector<VPlanVectorSpillAccess> Spills;
-  std::optional<std::vector<VPlanMIRInstruction>> MIRBody;
+  VPlanBackendObservation Spill;
+  VPlanBackendObservation MIR;
   std::vector<VPlanFeedbackTiming> Timings;
 };
 } // namespace llvm

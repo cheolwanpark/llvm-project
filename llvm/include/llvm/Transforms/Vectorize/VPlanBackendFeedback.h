@@ -105,7 +105,7 @@ struct VPlanBackendProbeResult {
 /// query.
 class VPlanBackendFeedback {
 public:
-  using Batch = SmallVector<VPlanBackendProbeResult>;
+  using Batch = SmallVector<VPlanBackendProbeResult, 0>;
   using Query = std::function<Expected<Batch>(
       const Function &, const BasicBlock &, ArrayRef<VPlanBackendCandidate>)>;
   using BatchPolicy = std::function<bool(const Function &)>;
@@ -193,8 +193,6 @@ LLVM_ABI bool vplanBackendFeedbackEnabled();
 LLVM_ABI bool vplanBackendUseMIR();
 LLVM_ABI bool vplanBackendUseEstimatedSpill();
 LLVM_ABI bool vplanBackendUseDefaultTTI();
-/// The raw requested value also governs fallback from MIR modes.
-LLVM_ABI bool vplanBackendRequestedDefaultTTI();
 struct VPlanBackendMode {
   bool MIR = false, EstimatedSpill = false, DefaultTTI = false;
   LLVM_ABI StringRef name() const;
@@ -206,7 +204,10 @@ struct VPlanBackendMode {
 };
 LLVM_ABI StringRef vplanBackendModelName();
 LLVM_ABI bool vplanBackendFeedbackTimingEnabled();
-LLVM_ABI json::Object summarizeVPlanBackendResult(const VPlanBackendResult &R);
+LLVM_ABI StringRef
+vplanBackendObservationStatusName(VPlanBackendObservationStatus Status);
+LLVM_ABI json::Object summarizeVPlanBackendResult(const VPlanBackendResult &R,
+                                                  bool MIR = true);
 /// Diagnostic oracle: retain the gate's decision but query every candidate.
 LLVM_ABI bool vplanBackendFeedbackForceAll();
 LLVM_ABI bool vplanBackendFeedbackOutputEnabled();

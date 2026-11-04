@@ -121,32 +121,6 @@ for name, extra in [('vf', ['-force-vector-width=4']),
     if name == 'vf':
         assert not any(r['status'] == 'pruned' for r in rows)
 
-# Both MIR modes bypass lower-bound pruning and use the raw requested default
-# boolean for fallback. Explicit false must behave like an omitted option.
-for mir in (False, True):
-    for estimated in ((False, True) if mir else (False,)):
-        for default in (False, True):
-            flags = ['-vplan-backend', f'-use-mir={str(mir).lower()}',
-                     f'-use-estimated-spill={str(estimated).lower()}',
-                     f'-use-default-tti={str(default).lower()}',
-                     '-vplan-backend-force-all', '-riscv-rvv-regalloc=fast',
-                     '-print-detailed-vplans']
-            ir, rows, text = run(f'fallback-{mir}-{estimated}-{default}', flags, basic)
-            expected, _, _ = run(f'expected-{mir}-{estimated}-{default}',
-                [] if default else ['-vplan-backend', '-use-estimated-spill'], basic)
-            assert ir == expected
-            status = 'native-fallback' if default else 'estimated-fallback'
-            assert any(r['status'] == status for r in rows)
-            assert not any(r['status'] == 'pruned' for r in rows)
-            if default:
-                assert 'backend-cost phase=' not in text
-                assert not any('candidate' in r for r in rows)
-            else:
-                assert all(r['model'] == 'tti-v1' for r in rows)
-                assert all(r['reason'] == 'estimated-spill-no-probe'
-                           for r in rows if 'candidate' in r and r.get('role') != 'scalar-baseline')
-                assert ' B=L=' in text and ' B=R=' not in text
-
 # Other RVV CPUs and VLENs now select the executable generic MIR sheet.
 for name, flags, src in [('cpu', ['-mcpu=generic-rv64'], basic),
                          ('vlen', [], str(root / 'wide.ll'))]:

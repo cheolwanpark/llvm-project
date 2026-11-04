@@ -38,7 +38,6 @@ bool llvm::vplanBackendUseEstimatedSpill() {
 bool llvm::vplanBackendUseDefaultTTI() {
   return EnableBackendCostModel && UseDefaultTTI;
 }
-bool llvm::vplanBackendRequestedDefaultTTI() { return UseDefaultTTI; }
 StringRef VPlanBackendMode::name() const {
   if (MIR)
     return EstimatedSpill ? "mir-me-spill-v1" : "mir-v1";
@@ -61,9 +60,24 @@ static cl::opt<bool>
                  cl::desc("Print per-candidate spill probe phase timings"));
 bool llvm::vplanBackendFeedbackTimingEnabled() { return TimeFeedback; }
 
-json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R) {
+StringRef
+llvm::vplanBackendObservationStatusName(VPlanBackendObservationStatus Status) {
+  switch (Status) {
+  case VPlanBackendObservationStatus::NotCollected:
+    return "not_collected";
+  case VPlanBackendObservationStatus::NotRequested:
+    return "not_requested";
+  case VPlanBackendObservationStatus::Succeeded:
+    return "succeeded";
+  case VPlanBackendObservationStatus::Failed:
+    return "failed";
+  }
+  llvm_unreachable("invalid observation status");
+}
+
+static json::Object summarizeObservation(const VPlanBackendObservation &O) {
   json::Array Accesses;
-  for (const auto &A : R.Spills)
+  for (const auto &A : O.Spills)
     Accesses.push_back(json::Object{{"load", A.IsLoad},
                                     {"bytes", A.MinBytes},
                                     {"scalable", A.Scalable},
@@ -73,23 +87,15 @@ json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R) {
                                     {"register_group", A.RegisterGroup},
                                     {"segment_lowering", A.FromSegment}});
   json::Object Result{
-      {"schema", R.MIRBody ? "mir-body-observation-v1" : "rvv-vector-spill-v1"},
-      {"candidate", R.Candidate},
-      {"vf", R.VF.getKnownMinValue()},
-      {"scalable", R.VF.isScalable()},
-      {"ic", R.IC},
-      {"observation_role",
-       R.Kind == VPlanBackendCandidateKind::ScalarBaseline
-           ? "scalar-baseline"
-           : R.IsEpilogue ? "epilogue" : "main"},
-      {"stage", R.Stage},
-      {"iteration_width", R.IterationWidth},
-      {"iteration_mapping", R.IterationMapping},
+      {"schema", O.MIRBody ? "mir-body-observation-v1" : "rvv-vector-spill-v1"},
+      {"stage", O.Stage},
+      {"iteration_width", O.IterationWidth},
+      {"iteration_mapping", O.IterationMapping},
       {"spills", std::move(Accesses)}};
-  if (R.MIRBody) {
+  if (O.MIRBody) {
     Result.erase("spills");
     json::Array Body;
-    for (const auto &MI : *R.MIRBody) {
+    for (const auto &MI : *O.MIRBody) {
       json::Array Groups;
       for (auto G : MI.RegisterGroups8)
         Groups.push_back(G);
@@ -112,6 +118,28 @@ json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R) {
     }
     Result["body"] = std::move(Body);
   }
+  Result["status"] = vplanBackendObservationStatusName(O.Status);
+  Result["failure"] = O.Failure;
+  return Result;
+}
+json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R,
+                                               bool MIR) {
+  auto SpillObservation = summarizeObservation(R.Spill);
+  auto MIRObservation = summarizeObservation(R.MIR);
+  // Keep the legacy projection without serializing its payload twice.
+  auto Result = json::Object(MIR && R.MIR.succeeded() ? MIRObservation
+                                                    : SpillObservation);
+  Result["candidate"] = R.Candidate;
+  Result["vf"] = R.VF.getKnownMinValue();
+  Result["scalable"] = R.VF.isScalable();
+  Result["ic"] = R.IC;
+  Result["observation_role"] =
+      R.Kind == VPlanBackendCandidateKind::ScalarBaseline ? "scalar-baseline"
+      : R.IsEpilogue                                      ? "epilogue"
+                                                          : "main";
+  Result["spill_observation"] = std::move(SpillObservation);
+  Result["mir_observation"] = std::move(MIRObservation);
+  Result["observation_schema"] = "independent-observations-v2";
   return Result;
 }
 

@@ -50,11 +50,11 @@ optimization and final codegen stay native.
 
 Preserve the master flag, CPU/VLEN selection, `L - Ev + Sv` / `L` / `R` /
 `R - S + Et`, exact rational normalization, gate and main/epilogue policy unless
-the task explicitly changes them. Failed required probe candidates retry the
-whole original loop with specific TTI estimated costs when raw default-TTI is
-false and that profile is supported, then revert to native if unavailable or
-unsuccessful. Requested TTI estimated failures go directly native. Never treat
-failure as zero spill. Do not add post-frame retries or benchmark-specific
+the task explicitly changes them. Follow the whole-loop fallback order in
+[BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md#probe와-fallback), preserving requested
+TTI/spill policy and independently valid observations. Reuse requires matching
+candidate, geometry and materialization contexts; recompute pruning per model.
+Never treat failure as zero spill. Do not add post-frame retries or benchmark-specific
 exceptions. Keep reports passive and discard attempted backend reports on
 whole-loop native fallback.
 

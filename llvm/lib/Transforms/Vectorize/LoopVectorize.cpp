@@ -8718,9 +8718,8 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                           VPlanBackendCandidateKind::ScalarBaseline) {
     const auto &C = BackendProbe->Candidate;
     if (C.VF != ElementCount::getFixed(1) || C.IC != 1 || C.IsEpilogue ||
-        C.Observation.Kind != VPlanBackendObservationKind::MIRBody ||
-        !L->isInnermost() || L->getNumBlocks() != 1 ||
-        L->getLoopLatch() != L->getHeader()) {
+        !C.Observation.CollectMIR || !L->isInnermost() ||
+        L->getNumBlocks() != 1 || L->getLoopLatch() != L->getHeader()) {
       BackendProbe->Error = "invalid scalar baseline probe";
       return false;
     }
@@ -8991,6 +8990,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   std::unique_ptr<VPlan> PreparedEpilogue;
   const auto RequestedMode = VPlanBackendMode::requested();
   std::string FallbackReason;
+  json::Array BackendAttempts;
   auto TrySelection = [&](VPlanBackendMode Mode) {
     if (CostReport) {
       if (!NativeReport)
@@ -9018,13 +9018,17 @@ bool LoopVectorizePass::processLoop(Loop *L) {
             LVP.selectBestEpiloguePlan(*BestPlanPtr, VF.Width, C->IC);
       }
       if (!BackendCosts->failed()) {
-        BackendCosts->commit(RequestedMode, FallbackReason);
+        if (vplanBackendFeedbackOutputEnabled())
+          BackendAttempts.push_back(BackendCosts->attemptSummary());
+        BackendCosts->commit(RequestedMode, FallbackReason, BackendAttempts);
         return true; // Scalar selection is a successful model evaluation too.
       }
     }
     if (!FallbackReason.empty())
       FallbackReason += "; ";
     FallbackReason += (Mode.name() + ": " + BackendCosts->failure()).str();
+    if (vplanBackendFeedbackOutputEnabled())
+      BackendAttempts.push_back(BackendCosts->attemptSummary());
     Config.BackendCosts = nullptr;
     PreparedEpilogue.reset();
     LVP.resetVFSelection();
@@ -9036,19 +9040,24 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       Config.CostKind == TTI::TCK_RecipThroughput &&
       F->getParent()->getTargetTriple().isRISCV() &&
       TTI->getRegisterBitWidth(TTI::RGK_ScalableVector).getKnownMinValue()) {
+    BackendFeedback->beginInvocation();
     Selected = TrySelection(RequestedMode);
-    if (!Selected && RequestedMode.needsProbe() &&
-        !vplanBackendRequestedDefaultTTI() &&
-        TTI->getVPlanCostProfileName() != "native")
-      Selected = TrySelection({false, true, false});
+    if (!Selected && RequestedMode.MIR && !RequestedMode.EstimatedSpill)
+      Selected = TrySelection({false, false, RequestedMode.DefaultTTI});
+    if (!Selected && RequestedMode.needsProbe())
+      Selected = TrySelection({false, true, RequestedMode.DefaultTTI});
     if (!Selected) {
       RestoreNativeReport();
       if (vplanBackendFeedbackOutputEnabled())
-        writeVPlanBackendFeedback(json::Object{
-            {"model", "native"}, {"requested_model", RequestedMode.name()},
-            {"effective_model", "native"}, {"status", "native-fallback"},
-            {"function", F->getName()}, {"loop", ReportLoopIndex},
-            {"reason", FallbackReason}});
+        writeVPlanBackendFeedback(
+            json::Object{{"model", "native"},
+                         {"requested_model", RequestedMode.name()},
+                         {"effective_model", "native"},
+                         {"status", "native-fallback"},
+                         {"attempts", std::move(BackendAttempts)},
+                         {"function", F->getName()},
+                         {"loop", ReportLoopIndex},
+                         {"reason", FallbackReason}});
     }
   }
   if (!Selected)

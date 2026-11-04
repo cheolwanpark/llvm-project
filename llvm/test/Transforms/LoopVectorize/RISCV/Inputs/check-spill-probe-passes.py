@@ -1,10 +1,12 @@
 import sys
 text = open(sys.argv[1]).read()
+mir = sys.argv[2:] == ['mir']
 assert 'RISC-V VPlan vector spill observer' in text, text
 for forbidden in ('Prologue/Epilogue Insertion', 'RISC-V local cost observations',
                   'Stack Frame Layout Analysis', 'Machine Copy Propagation Pass',
                   'After Machine Loop Invariant Code Motion (machinelicm)'):
-    assert forbidden not in text, forbidden
+    if not mir:
+        assert forbidden not in text, forbidden
 executions = [line for line in text.splitlines() if '# *** IR Dump After' in line]
 observers = [i for i, line in enumerate(executions)
              if 'RISC-V VPlan vector spill observer' in line]
@@ -19,3 +21,12 @@ for i in observers:
     assert any('Dead register definitions' in line for line in probe), probe
     assert any('Register Allocation Pass Scoring' in line for line in probe), probe
     start = i + 1
+
+if mir:
+    mir_observers = [i for i, line in enumerate(executions)
+                     if 'RISC-V VPlan MIR body observer' in line]
+    assert len(mir_observers) == len(observers)
+    for spill, body in zip(observers, mir_observers):
+        assert spill < body
+        assert any('Prologue/Epilogue Insertion' in line
+                   for line in executions[spill:body])

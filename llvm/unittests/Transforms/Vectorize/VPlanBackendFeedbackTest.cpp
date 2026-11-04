@@ -32,6 +32,10 @@ TEST(VPlanBackendFeedback, EmptySingletonAndMalformedBatch) {
     for (const auto &Candidate : Candidates) {
       VPlanBackendResult R;
       R.Candidate = Candidate.ID;
+      R.Spill.Status = VPlanBackendObservationStatus::Succeeded;
+      R.Spill.IterationWidth = 8;
+      R.MIR.Status = VPlanBackendObservationStatus::Failed;
+      R.MIR.Failure = "later MIR mapping failed";
       Results.emplace_back(std::move(R));
     }
     return Results;
@@ -43,6 +47,10 @@ TEST(VPlanBackendFeedback, EmptySingletonAndMalformedBatch) {
   auto Single = Service.get(*F, *Header, C);
   ASSERT_TRUE(bool(Single));
   EXPECT_EQ(Single->Candidate, C.ID);
+  EXPECT_TRUE(Single->Spill.succeeded());
+  EXPECT_TRUE(Single->Spill.Spills.empty());
+  EXPECT_EQ(Single->Spill.IterationWidth, 8u);
+  EXPECT_EQ(Single->MIR.Failure, "later MIR mapping failed");
   EXPECT_EQ(Calls, 1u);
 
   VPlanBackendFeedback Malformed(
@@ -74,8 +82,9 @@ TEST(VPlanBackendFeedback, ScalarObservationRole) {
   Result.Kind = VPlanBackendCandidateKind::ScalarBaseline;
   Result.VF = ElementCount::getFixed(1);
   Result.IC = 1;
-  Result.Stage = "post-frame-lowering";
-  Result.MIRBody.emplace();
+  Result.MIR.Stage = "post-frame-lowering";
+  Result.MIR.Status = VPlanBackendObservationStatus::Succeeded;
+  Result.MIR.MIRBody.emplace();
   auto Summary = summarizeVPlanBackendResult(Result);
   EXPECT_EQ(Summary.getString("observation_role"), "scalar-baseline");
   EXPECT_EQ(Summary.getString("schema"), "mir-body-observation-v1");

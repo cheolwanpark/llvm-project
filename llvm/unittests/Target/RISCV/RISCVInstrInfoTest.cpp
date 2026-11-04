@@ -113,8 +113,8 @@ TEST_P(RISCVInstrInfoTest, SpillLoopMappingAndLifetime) {
   AddSpill(*Loop); // After the backedge: not on the repeated execution path.
   auto Result = vplan::collectVectorSpills(*MF);
   ASSERT_TRUE(bool(Result));
-  EXPECT_TRUE(Result->Spills.empty());
-  EXPECT_EQ(Result->IterationWidth, 16u);
+  EXPECT_TRUE(Result->Spill.Spills.empty());
+  EXPECT_EQ(Result->Spill.IterationWidth, 16u);
   EXPECT_EQ(Result->IC, 2u);
   EXPECT_TRUE(Result->IsEpilogue);
   for (unsigned Mode = 0; Mode != 3; ++Mode) {
@@ -143,12 +143,12 @@ TEST_P(RISCVInstrInfoTest, SpillLoopMappingAndLifetime) {
   // preceding StackSlotColoring pass, not to this read-only observer.
   auto Uncleaned = vplan::collectVectorSpills(*MF);
   ASSERT_TRUE(bool(Uncleaned));
-  EXPECT_EQ(Uncleaned->Spills.size(), 2u);
+  EXPECT_EQ(Uncleaned->Spill.Spills.size(), 2u);
   MF.reset();
   M.reset();
   EXPECT_EQ(Result->Candidate, "owned:test");
   EXPECT_EQ(Result->VF, ElementCount::getScalable(4));
-  EXPECT_EQ(Result->Stage, "post-stack-slot-coloring");
+  EXPECT_EQ(Result->Spill.Stage, "post-stack-slot-coloring");
 }
 
 TEST_P(RISCVInstrInfoTest, ScalarMIRIdentityAndSpillSlots) {
@@ -208,20 +208,20 @@ TEST_P(RISCVInstrInfoTest, ScalarMIRIdentityAndSpillSlots) {
   EXPECT_EQ(Result->VF, ElementCount::getFixed(1));
   EXPECT_EQ(Result->IC, 1u);
   EXPECT_FALSE(Result->IsEpilogue);
-  EXPECT_EQ(Result->Stage, "post-frame-lowering");
-  EXPECT_EQ(Result->IterationWidth, 4u);
-  ASSERT_TRUE(Result->MIRBody);
-  ASSERT_EQ(Result->MIRBody->size(), 5u);
-  EXPECT_TRUE((*Result->MIRBody)[0].Spill);
-  EXPECT_FALSE((*Result->MIRBody)[1].Spill);
-  EXPECT_TRUE((*Result->MIRBody)[2].Spill);
-  EXPECT_FALSE((*Result->MIRBody)[3].Spill);
-  EXPECT_FALSE((*Result->MIRBody)[4].Spill);
-  EXPECT_TRUE(llvm::none_of(*Result->MIRBody,
+  EXPECT_EQ(Result->MIR.Stage, "post-frame-lowering");
+  EXPECT_EQ(Result->MIR.IterationWidth, 4u);
+  ASSERT_TRUE(Result->MIR.MIRBody);
+  ASSERT_EQ(Result->MIR.MIRBody->size(), 5u);
+  EXPECT_TRUE((*Result->MIR.MIRBody)[0].Spill);
+  EXPECT_FALSE((*Result->MIR.MIRBody)[1].Spill);
+  EXPECT_TRUE((*Result->MIR.MIRBody)[2].Spill);
+  EXPECT_FALSE((*Result->MIR.MIRBody)[3].Spill);
+  EXPECT_FALSE((*Result->MIR.MIRBody)[4].Spill);
+  EXPECT_TRUE(llvm::none_of(*Result->MIR.MIRBody,
                             [](const auto &I) { return I.Vector; }));
-  auto WrongStage = vplan::collectVectorSpills(*MF);
-  EXPECT_FALSE(bool(WrongStage));
-  consumeError(WrongStage.takeError());
+  auto AuxiliarySpills = vplan::collectVectorSpills(*MF);
+  ASSERT_TRUE(bool(AuxiliarySpills));
+  EXPECT_TRUE(AuxiliarySpills->Spill.Spills.empty());
   for (StringRef Attribute : {"vplan.backend.vf", "vplan.backend.ic",
                               "vplan.backend.scalable"}) {
     F.addFnAttr(Attribute, "2");

@@ -208,6 +208,15 @@ struct ProbePipeline {
   void (*BuildSuffix)(PassBuilder &, OptimizationLevel, FunctionPassManager &);
 };
 
+void setCandidateIdentity(VPlanBackendResult &Result,
+                          const VPlanBackendCandidate &Candidate) {
+  Result.Candidate = Candidate.ID;
+  Result.VF = Candidate.VF;
+  Result.IC = Candidate.IC;
+  Result.IsEpilogue = Candidate.IsEpilogue;
+  Result.Kind = Candidate.Kind;
+}
+
 Expected<VPlanBackendResult>
 runProbe(Module &M, Function &F, BasicBlock &Header,
          const VPlanBackendCandidate &Candidate, const ProbeTarget &Target,
@@ -217,7 +226,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   if (Candidate.Kind == VPlanBackendCandidateKind::ScalarBaseline &&
       (Candidate.VF != ElementCount::getFixed(1) || Candidate.IC != 1 ||
        Candidate.IsEpilogue || Candidate.EpilogueVF.isVector() ||
-       Candidate.Observation.Kind != VPlanBackendObservationKind::MIRBody))
+       !Candidate.Observation.CollectMIR))
     return createStringError("invalid scalar baseline probe identity");
   if (ScopedPassCancellation::check())
     return createStringError("backend probe cancelled");
@@ -267,11 +276,10 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   if (PruningTrace)
     BeforePruning = getProbeIRSize(F, FAM);
   DumpPruningIR("before");
-  PruningResult Pruning =
-      Candidate.Observation.Kind == VPlanBackendObservationKind::MIRBody
-          ? PruningResult{0, "mir-observation"}
-      : PruneLoopRegions ? pruneLoopRegions(F, FAM)
-                         : PruningResult{0, "disabled"};
+  PruningResult Pruning = Candidate.Observation.CollectMIR
+                              ? PruningResult{0, "mir-observation"}
+                          : PruneLoopRegions ? pruneLoopRegions(F, FAM)
+                                             : PruningResult{0, "disabled"};
   unsigned Removed = Pruning.Removed;
   if (Removed) {
     FAM.invalidate(F, PreservedAnalyses::none());
@@ -329,6 +337,8 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   Timer.mark("backend_total");
   if (!Result)
     return Result.takeError();
+  if (!Result->Spill.succeeded() && !Result->MIR.succeeded())
+    setCandidateIdentity(*Result, Candidate);
   if (Result->Candidate != Candidate.ID || Result->VF != Candidate.VF ||
       Result->IC != Candidate.IC || Result->IsEpilogue != Candidate.IsEpilogue ||
       Result->Kind != Candidate.Kind)
@@ -470,6 +480,17 @@ runControlledProbe(const VPlanBackendCandidate &C,
     return Run();
   }();
   R.Cancelled = C.Control && C.Control->Cancellation.Observed;
+  if (!R.Observation) {
+    VPlanBackendResult Unavailable;
+    setCandidateIdentity(Unavailable, C);
+    Unavailable.Spill.Failure = R.Failure;
+    Unavailable.MIR.Stage = "post-frame-lowering";
+    if (C.Observation.CollectMIR)
+      Unavailable.MIR.Failure = R.Failure;
+    else
+      Unavailable.MIR.Status = VPlanBackendObservationStatus::NotRequested;
+    R.Observation = std::move(Unavailable);
+  }
   return R;
 }
 
@@ -479,6 +500,14 @@ class FeedbackProvider {
   IntrusiveRefCntPtr<vfs::FileSystem> FileSystem;
   unsigned Threads;
   VPlanBackendProbePool Pool;
+  struct CachedObservation {
+    const Function *F;
+    const BasicBlock *Header;
+    VPlanBackendCandidate Candidate;
+    bool PrunedContext;
+    VPlanBackendProbeResult Result;
+  };
+  SmallVector<CachedObservation, 0> Observations;
   unsigned SerialMainQueries = 0;
   bool Warned = false;
 
@@ -488,7 +517,10 @@ public:
       : Target(Target), Pipeline(Pipeline), FileSystem(std::move(FileSystem)),
         Threads(ProbeThreads), Pool(Threads) {}
 
-  void beginInvocation() { SerialMainQueries = 0; }
+  void beginInvocation() {
+    SerialMainQueries = 0;
+    Observations.clear();
+  }
 
   bool canBatch(const Function &F) const {
     return Threads > 1 && serialReason(F).empty();
@@ -497,6 +529,64 @@ public:
   Expected<VPlanBackendFeedback::Batch>
   query(const Function &F, const BasicBlock &Header,
         ArrayRef<VPlanBackendCandidate> Candidates) {
+    VPlanBackendFeedback::Batch Results;
+    SmallVector<VPlanBackendCandidate> Missing;
+    SmallVector<unsigned> Indices;
+    auto Pruned = [](const VPlanBackendCandidate &C) {
+      return bool(PruneLoopRegions) && !C.Observation.CollectMIR;
+    };
+    for (const auto &C : Candidates) {
+      auto Found = llvm::find_if(Observations, [&](const CachedObservation &O) {
+        const auto &K = O.Candidate;
+        return O.F == &F && O.Header == &Header &&
+               O.PrunedContext == Pruned(C) && K.ID == C.ID &&
+               K.PlanIndex == C.PlanIndex && K.VF == C.VF && K.IC == C.IC &&
+               K.Kind == C.Kind && K.IsEpilogue == C.IsEpilogue &&
+               K.ScalarTail == C.ScalarTail &&
+               K.MainPlanIndex == C.MainPlanIndex && K.MainVF == C.MainVF &&
+               K.MainIC == C.MainIC && K.EpilogueVF == C.EpilogueVF &&
+               K.InterleaveOnlyWhenForced == C.InterleaveOnlyWhenForced &&
+               K.VectorizeOnlyWhenForced == C.VectorizeOnlyWhenForced &&
+               (!C.Observation.CollectMIR || K.Observation.CollectMIR) &&
+               O.Result.Observation &&
+               (C.Observation.CollectMIR
+                    ? O.Result.Observation->MIR.Status
+                    : O.Result.Observation->Spill.Status) !=
+                   VPlanBackendObservationStatus::NotCollected;
+      });
+      if (Found != Observations.end()) {
+        Results.push_back(Found->Result);
+        Results.back().Diagnostics.clear();
+        if (C.Control && C.Control->Completed)
+          C.Control->Completed(Results.back());
+      } else {
+        Indices.push_back(Results.size());
+        Missing.push_back(C);
+        Results.emplace_back(createStringError("uncollected candidate"));
+      }
+    }
+    if (Missing.empty())
+      return Results;
+    auto Collected = queryUncached(F, Header, Missing);
+    if (!Collected)
+      return Collected.takeError();
+    for (unsigned I = 0; I < Missing.size(); ++I) {
+      auto &R = (*Collected)[I];
+      // Save raw outcomes before any model can discard its cost table.
+      if (R.Observation) {
+        auto Key = Missing[I];
+        Key.Control.reset();
+        Observations.push_back(
+            {&F, &Header, std::move(Key), Pruned(Missing[I]), R});
+      }
+      Results[Indices[I]] = std::move(R);
+    }
+    return Results;
+  }
+
+  Expected<VPlanBackendFeedback::Batch>
+  queryUncached(const Function &F, const BasicBlock &Header,
+                ArrayRef<VPlanBackendCandidate> Candidates) {
     VPlanCostProfileScope NativeScope(false);
     std::string Reason = Threads > 1 ? serialReason(F) : std::string();
     if (!Reason.empty() && !Warned) {

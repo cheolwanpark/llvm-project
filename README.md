@@ -105,19 +105,11 @@ the vector-spill gate. TTI-only estimated modes require no backend query.
 
 Both TTI real-spill modes use the [pruning policy](#probe-pruning) below.
 
-| Required evaluation fails | Whole-loop destination |
-|---|---|
-| Real-spill or MIR mode, raw `use-default-tti=false`, specific TTI supported | Specific TTI estimated (`Lt`, including estimated spills), then native if it fails |
-| Raw `use-default-tti=true`, including MIR | Native |
-| Specific TTI unsupported | Native |
-| TTI estimated mode | Native, without retrying estimated |
-
-A scalar/non-vectorized result is a successful evaluation. Each attempt owns its
-costs, scalar observations/exact values, profitable candidates, epilogue clone
-and reports; none are reused after failure. The retry prices both scalar and
-vector code with the supported tuned TTI; IC remains native. It does not require MIR
-cost sheets or backend observations and does not change global options. Reports
-identify requested/effective models and the fallback reason.
+Fallback reselects the whole original loop while preserving the requested TTI
+and spill policy. Failed costs and pruning decisions are discarded; compatible
+raw spill/MIR observations can be reused. Scalar selection counts as success.
+See the [fallback contract](BACKEND_FEEDBACK.md#probe와-fallback) for attempt
+order, independent observation stages, reuse requirements and failure handling.
 
 ### Parallel probes
 

@@ -74,8 +74,8 @@ struct VPMIRCost {
   std::vector<MIRInstructionCost> Instructions;
 };
 LLVM_ABI_FOR_TEST Expected<VPMIRCost>
-priceVPlanMIR(const VPlanBackendResult &Observation, const TargetMIRInfo &Info,
-              unsigned Width);
+priceVPlanMIR(const VPlanBackendObservation &Observation,
+              const TargetMIRInfo &Info, unsigned Width);
 struct VPBackendCostEntry {
   const VPlan *Plan;
   ElementCount VF;
@@ -130,6 +130,7 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
   VPlanBackendMode Mode;
   std::optional<VPBackendScalarCostEntry> ScalarEntry;
   SmallVector<json::Object, 0> Rows;
+  mutable SmallVector<VPlanBackendResult, 0> Observed;
   bool Failed = false;
   std::string Failure;
 
@@ -172,7 +173,9 @@ public:
   const VPBackendCostEntry *lookup(const VPlan &Plan, ElementCount VF,
                                    bool Epilogue = false) const;
   void fail(StringRef Reason);
-  void commit(VPlanBackendMode Requested, StringRef Reason);
+  json::Object attemptSummary() const;
+  void commit(VPlanBackendMode Requested, StringRef Reason,
+              const json::Array &Attempts);
   void selection(ElementCount VF, unsigned IC, ElementCount Epilogue,
                  bool Emitted) const;
   bool isPruned(const VPlan &P, ElementCount VF) const {
@@ -183,9 +186,10 @@ public:
 };
 /// Strict adapter for the in-process facts; no cost rules live in the backend.
 LLVM_ABI_FOR_TEST Expected<VPExactCost>
-priceVPlanVectorSpills(const VPlanBackendResult &Observation,
+priceVPlanVectorSpills(const VPlanBackendObservation &Observation,
                        const TargetTransformInfo &TTI, LLVMContext &Context,
                        unsigned Width, InstructionCost &RawCost,
-                       SmallVectorImpl<VPSpillCost> *AccessCosts = nullptr);
+                       SmallVectorImpl<VPSpillCost> *AccessCosts = nullptr,
+                       bool UseDefaultTTI = false);
 } // namespace llvm
 #endif

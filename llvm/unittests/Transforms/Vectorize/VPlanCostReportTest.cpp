@@ -168,18 +168,19 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
     // 5=preparation fails (a prepared prefix may run); 6=first failure ->
     // estimated, 7=epilogue failure -> estimated; 8=estimated scalar is
     // success, 9=both preparations fail; 10=requested estimated fails (no
-    // retry), 11=MIR sheet absent -> estimated; 12=MIR + raw default ->
-    // native, 13=real spill + raw default -> native despite specific
-    // capability.
+    // retry), 11=MIR sheet absent -> real; 12=MIR + default -> real;
+    // 13=real spill + default -> estimated.
     for (unsigned Scenario = 0; Scenario != 14; ++Scenario) {
       SaveAndRestore<bool> SaveMaster(Master.getValue(), Scenario != 0);
       SaveAndRestore<bool> SaveEstimated(Estimated.getValue(), Scenario == 10);
       SaveAndRestore<bool> SaveMIR(MIR.getValue(), Scenario == 11 || Scenario == 12);
       SaveAndRestore<bool> SaveDefault(Default.getValue(), Scenario >= 12);
-      bool NativeFallback = (Scenario >= 2 && Scenario <= 5) || Scenario == 9 ||
-                            Scenario == 10 || Scenario >= 12;
-      bool EstimatedFallback = Scenario == 6 || Scenario == 7 || Scenario == 8 ||
-                               Scenario == 11;
+      bool NativeFallback = Scenario == 5 || Scenario == 9 || Scenario == 10;
+      bool EstimatedFallback = (Scenario >= 2 && Scenario <= 4) ||
+                               (Scenario >= 6 && Scenario <= 8) || Scenario == 13;
+      StringRef RealModel = Scenario >= 12 ? "llvm-real-vector-spill-v1"
+                                           : "tti-real-vector-spill-v1";
+      StringRef EstimatedModel = Scenario >= 12 ? "llvm-v1" : "tti-v1";
       std::vector<std::string> ReferenceQueries, ReferenceProbes;
       std::string ReferenceIR;
       for (unsigned Mode = 0; Mode != 4; ++Mode) {
@@ -244,11 +245,13 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
                     R.VF = C.VF;
                     R.IC = C.IC;
                     R.IsEpilogue = C.IsEpilogue;
-                    R.IterationMapping = true;
+                    R.Spill.Status = VPlanBackendObservationStatus::Succeeded;
+                    R.Spill.IterationMapping = true;
                     // A cleanup width of three bodies exercises exact rational
                     // output.
-                    R.IterationWidth = C.VF.getKnownMinValue() * C.IC * 3;
-                    R.Spills.push_back({false, 8, true, 8, 0, true, 1, false});
+                    R.Spill.IterationWidth = C.VF.getKnownMinValue() * C.IC * 3;
+                    R.Spill.Spills.push_back(
+                        {false, 8, true, 8, 0, true, 1, false});
                     return R;
                   };
                   Results.emplace_back(Query());
@@ -295,7 +298,7 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
           NativeIR = IR;
           EXPECT_TRUE(Probes.empty());
         } else {
-          if (Scenario >= 10 && Scenario <= 12)
+          if (Scenario == 10)
             EXPECT_TRUE(Probes.empty());
           else if (Scenario != 5 && Scenario != 9)
             EXPECT_FALSE(Probes.empty());
@@ -309,16 +312,16 @@ TEST(VPlanCostReportTest, ReportingDoesNotQueryCostsOrChangeIR) {
             EXPECT_EQ(NativeIR, IR);
             EXPECT_EQ(NativeReports[Mode], Report);
           } else if (Mode && EstimatedFallback) {
-            EXPECT_NE(Report.find("effective_model=tti-v1"), std::string::npos);
+            EXPECT_NE(Report.find(("effective_model=" + EstimatedModel).str()), std::string::npos);
             EXPECT_EQ(Report.find(" model=tti-real-vector-spill-v1"),
                       std::string::npos);
-            EXPECT_NE(Report.find("model=tti-v1"), std::string::npos);
+            EXPECT_NE(Report.find(("model=" + EstimatedModel).str()), std::string::npos);
             if (Mode & 2)
               EXPECT_NE(Report.find("B=L="), std::string::npos);
             if (Scenario == 8)
               EXPECT_NE(Report.find(" vf=f1\n"), std::string::npos);
           } else if (Mode) {
-            EXPECT_NE(Report.find("model=tti-real-vector-spill-v1"),
+            EXPECT_NE(Report.find(("model=" + RealModel).str()),
                       std::string::npos);
             EXPECT_NE(Report.find("phase=epilogue"), std::string::npos);
             if (Mode & 2)

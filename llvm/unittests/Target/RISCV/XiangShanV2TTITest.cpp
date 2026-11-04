@@ -272,14 +272,14 @@ TEST_F(XiangShanV2TTITest, EpilogueObservationsAndTransactionalFallback) {
               auto O = Native.get(F, H, Candidate);
               EXPECT_TRUE(bool(O));
               if (O) {
-                EXPECT_TRUE(O->IterationMapping);
-                EXPECT_EQ(O->Stage, "post-stack-slot-coloring");
+                EXPECT_TRUE(O->Spill.IterationMapping);
+                EXPECT_EQ(O->Spill.Stage, "post-stack-slot-coloring");
                 EXPECT_EQ(O->IsEpilogue, Candidate.IsEpilogue);
                 EXPECT_EQ(O->IC, Candidate.IC);
                 if (FailureMode == 3)
                   O->Candidate = "incorrect identity";
                 if (FailureMode == 4)
-                  O->IterationMapping = false;
+                  O->Spill.IterationMapping = false;
               }
               return O;
             };

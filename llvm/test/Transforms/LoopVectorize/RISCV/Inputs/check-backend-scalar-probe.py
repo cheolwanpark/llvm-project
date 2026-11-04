@@ -98,7 +98,8 @@ _, rows, _ = run('runtime-remainder', flags, remainder)
 scalar(rows)
 
 # Removing the scalar body in the suffix is a required observation failure.
-# The raw default-TTI request determines whether to retry tuned TTI estimation.
+# Keep the vector body while unrolling away only the scalar baseline.
+# The requested spill policy determines real versus estimated fallback.
 gone = Path(prefix + '.gone.ll')
 gone.write_text('''define void @gone(ptr noalias %a, ptr noalias %b) vscale_range(2,2) {
 entry: br label %loop
@@ -114,14 +115,27 @@ loop:
   br i1 %done, label %exit, label %loop, !llvm.loop !0
 exit: ret void
 }
-!0 = distinct !{!0, !1}
+!0 = distinct !{!0, !1, !2}
 !1 = !{!"llvm.loop.unroll.full"}
+!2 = !{!"llvm.loop.vectorize.followup_vectorized", !3}
+!3 = !{!"llvm.loop.unroll.disable"}
 ''')
 for default in (False, True):
-    _, rows, _ = run('gone-' + str(default), flags +
-        ['-force-vector-width=4', '-use-default-tti=' + str(default).lower()], gone)
-    fallback = [r for r in rows if r['status'] ==
-                ('native-fallback' if default else 'estimated-fallback')]
-    assert fallback and 'original scalar iteration mapping is unproven' in fallback[0]['reason'], rows
-    assert not any(r.get('role') == 'scalar-baseline' for r in rows), rows
-    assert all(not r.get('use_mir', False) for r in rows), rows
+    for estimated in (False, True):
+        _, rows, _ = run(f'gone-{default}-{estimated}', flags +
+            ['-force-vector-width=2', '-force-vector-interleave=1',
+             '-vplan-backend-force-all',
+             '-use-default-tti=' + str(default).lower(),
+             '-use-estimated-spill=' + str(estimated).lower()], gone)
+        status = 'estimated-fallback' if estimated else 'real-spill-fallback'
+        fallback = next(r for r in rows if r['status'] == status)
+        assert 'original scalar iteration mapping is unproven' in fallback['reason']
+        assert len(fallback['attempts']) == 2
+        assert all(a['use_default_tti'] == default for a in fallback['attempts'])
+        assert not any(r.get('role') == 'scalar-baseline' for r in rows)
+        assert all(not r.get('use_mir', False) for r in rows)
+        if not estimated:
+            vectors = [r for r in rows if r.get('role') == 'main']
+            assert vectors and all(r['real_spill_used'] for r in vectors)
+            assert all(r['observation']['spill_observation']['status'] == 'succeeded'
+                       for r in vectors)
