@@ -144,11 +144,99 @@ TEST_P(RISCVInstrInfoTest, SpillLoopMappingAndLifetime) {
   auto Uncleaned = vplan::collectVectorSpills(*MF);
   ASSERT_TRUE(bool(Uncleaned));
   EXPECT_EQ(Uncleaned->Spill.Spills.size(), 2u);
+  // The same repeated body split across two blocks keeps both spill accesses.
+  auto *Latch = MF->CreateMachineBasicBlock(Body);
+  MF->push_back(Latch);
+  Latch->splice(Latch->end(), Loop, BeforeBackedge, Loop->end());
+  Loop->replaceSuccessor(Loop, Latch);
+  Latch->addSuccessor(Loop);
+  BuildMI(*Loop, Loop->end(), DebugLoc(), TII->get(RISCV::PseudoBR))
+      .addMBB(Latch);
+  auto Linear = vplan::collectVectorSpills(*MF);
+  ASSERT_TRUE(bool(Linear));
+  EXPECT_EQ(Linear->Spill.Spills.size(), 2u);
+  EXPECT_EQ(Linear->Spill.IterationWidth, 16u);
+  Setup->addSuccessor(Latch);
+  auto SideEntry = vplan::collectVectorSpills(*MF);
+  EXPECT_FALSE(bool(SideEntry));
+  consumeError(SideEntry.takeError());
   MF.reset();
   M.reset();
   EXPECT_EQ(Result->Candidate, "owned:test");
   EXPECT_EQ(Result->VF, ElementCount::getScalable(4));
   EXPECT_EQ(Result->Spill.Stage, "post-stack-slot-coloring");
+}
+
+// Marker order can change during scheduling; the CFG must still prove one
+// complete finite path and codegen must preserve the suffix pair count.
+TEST_P(RISCVInstrInfoTest, LinearMarkerScope) {
+  Function &F = MF->getFunction();
+  F.addFnAttr("vplan.backend.candidate", "linear");
+  F.addFnAttr("vplan.backend.vf", "4");
+  F.addFnAttr("vplan.backend.scalable", "0");
+  F.addFnAttr("vplan.backend.ic", "1");
+  F.addFnAttr("vplan.backend.role", "main");
+  F.addFnAttr("vplan.backend.region-guid", "123");
+  F.addFnAttr("vplan.backend.region-width", "4");
+  F.addFnAttr("vplan.backend.region-count", "2");
+  F.addFnAttr("vplan.backend.region-isolated", "1");
+  auto *A = MF->CreateMachineBasicBlock();
+  auto *B = MF->CreateMachineBasicBlock();
+  MF->push_back(A);
+  MF->push_back(B);
+  A->addSuccessor(B);
+  auto *TII = ST->getInstrInfo();
+  auto Probe = [&](MachineBasicBlock *BB, unsigned Index) {
+    BuildMI(*BB, BB->end(), DebugLoc(), TII->get(TargetOpcode::PSEUDO_PROBE))
+        .addImm(123)
+        .addImm(Index)
+        .addImm(0)
+        .addImm(0);
+  };
+  Probe(A, 1);
+  Probe(A, 1);
+  Probe(B, 2);
+  Probe(B, 2);
+  int FI = MF->getFrameInfo().CreateSpillStackObject(8, Align(8));
+  for (auto *BB : {A, B})
+    BuildMI(*BB, BB->end(), DebugLoc(), TII->get(RISCV::VS1R_V))
+        .addReg(RISCV::V8)
+        .addFrameIndex(FI)
+        .addMemOperand(MF->getMachineMemOperand(
+            MachinePointerInfo::getFixedStack(*MF, FI),
+            MachineMemOperand::MOStore, TypeSize::getScalable(8), Align(8)));
+  auto Result = vplan::collectVectorSpills(*MF);
+  ASSERT_TRUE(bool(Result));
+  EXPECT_EQ(Result->Spill.Spills.size(), 2u);
+  EXPECT_EQ(Result->Spill.IterationWidth, 8u);
+  EXPECT_EQ(Result->Spill.RegionProbeCount, 2u);
+  EXPECT_FALSE(Result->Spill.StructuralFailure.empty());
+  F.addFnAttr("vplan.backend.region-count", "1");
+  auto Mismatch = vplan::collectVectorSpills(*MF);
+  EXPECT_FALSE(bool(Mismatch));
+  consumeError(Mismatch.takeError());
+  F.addFnAttr("vplan.backend.region-count", "2");
+  B->addSuccessor(A);
+  auto Cycle = vplan::collectVectorSpills(*MF);
+  EXPECT_FALSE(bool(Cycle));
+  consumeError(Cycle.takeError());
+  B->removeSuccessor(A);
+  F.addFnAttr("vplan.backend.region-width", "4294967295");
+  auto Overflow = vplan::collectVectorSpills(*MF);
+  EXPECT_FALSE(bool(Overflow));
+  consumeError(Overflow.takeError());
+  F.addFnAttr("vplan.backend.region-width", "4");
+  auto *Setup = MF->CreateMachineBasicBlock();
+  MF->insert(MF->begin(), Setup);
+  Setup->addSuccessor(A);
+  BuildMI(*Setup, Setup->end(), DebugLoc(), TII->get(RISCV::VS1R_V))
+      .addReg(RISCV::V8).addFrameIndex(FI)
+      .addMemOperand(MF->getMachineMemOperand(
+          MachinePointerInfo::getFixedStack(*MF, FI),
+          MachineMemOperand::MOStore, TypeSize::getScalable(8), Align(8)));
+  auto Outside = vplan::collectVectorSpills(*MF);
+  EXPECT_FALSE(bool(Outside));
+  consumeError(Outside.takeError());
 }
 
 TEST_P(RISCVInstrInfoTest, ScalarMIRIdentityAndSpillSlots) {
@@ -183,9 +271,9 @@ TEST_P(RISCVInstrInfoTest, ScalarMIRIdentityAndSpillSlots) {
     return BuildMI(BB, BB.end(), DebugLoc(), TII.get(RISCV::LW), RISCV::X10)
         .addReg(RISCV::X2)
         .addImm(0)
-        .addMemOperand(MF->getMachineMemOperand(
-            MachinePointerInfo::getFixedStack(*MF, FI),
-            MachineMemOperand::MOLoad, 4, Align(4)));
+        .addMemOperand(
+            MF->getMachineMemOperand(MachinePointerInfo::getFixedStack(*MF, FI),
+                                     MachineMemOperand::MOLoad, 4, Align(4)));
   };
   Load(*Setup, SpillFI); // Context before the loop is retained but not priced.
   Load(*Loop, SpillFI);
@@ -200,8 +288,10 @@ TEST_P(RISCVInstrInfoTest, ScalarMIRIdentityAndSpillSlots) {
   BuildMI(*Loop, Loop->end(), DebugLoc(), TII.get(RISCV::ADDI), RISCV::X10)
       .addReg(RISCV::X10)
       .addImm(1);
-  BuildMI(*Loop, Loop->end(), DebugLoc(), TII.get(RISCV::PseudoBR)).addMBB(Loop);
-  Load(*Loop, SpillFI); // Instructions after the observed backedge are excluded.
+  BuildMI(*Loop, Loop->end(), DebugLoc(), TII.get(RISCV::PseudoBR))
+      .addMBB(Loop);
+  Load(*Loop,
+       SpillFI); // Instructions after the observed backedge are excluded.
   auto Result = vplan::collectMIRBody(*MF, false);
   ASSERT_TRUE(bool(Result));
   EXPECT_EQ(Result->Kind, VPlanBackendCandidateKind::ScalarBaseline);
@@ -222,8 +312,8 @@ TEST_P(RISCVInstrInfoTest, ScalarMIRIdentityAndSpillSlots) {
   auto AuxiliarySpills = vplan::collectVectorSpills(*MF);
   ASSERT_TRUE(bool(AuxiliarySpills));
   EXPECT_TRUE(AuxiliarySpills->Spill.Spills.empty());
-  for (StringRef Attribute : {"vplan.backend.vf", "vplan.backend.ic",
-                              "vplan.backend.scalable"}) {
+  for (StringRef Attribute :
+       {"vplan.backend.vf", "vplan.backend.ic", "vplan.backend.scalable"}) {
     F.addFnAttr(Attribute, "2");
     auto Bad = vplan::collectMIRBody(*MF, false);
     EXPECT_FALSE(bool(Bad));

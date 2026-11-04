@@ -1,80 +1,47 @@
 # RISC-V backend-aware vectorization
 
-This LLVM fork selects VPlan vectorization factors using TTI costs and observed
-vector spills, with optional MIR body costs. The model is OFF by default.
-TTI modes price scalar baselines with the same TTI as vector candidates. MIR
-modes observe both scalar and vector bodies with the same post-frame sheet.
-IC selection, probe optimization and final codegen retain native LLVM policy. A
-required evaluation failure follows the whole-loop retry policy below.
+This LLVM fork adds in-process VPlan VF selection using TTI costs, observed RVV
+vector spills, and optional MIR body pricing. Enable it with `-vplan-backend`;
+the default remains native LLVM selection. Native IC selection, probe
+optimization, and final code generation retain upstream policy.
 
-- [BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md): cost model, probe contract,
-  target-specific RISC-V CostSheets, and cost-report formats.
-- [AGENTS.md](AGENTS.md): repository working and comparison rules.
+[Backend contract](BACKEND_FEEDBACK.md) describes ownership, observations,
+selection and fallback. [Pricing rules](costsheet/rule.md) define units and
+conversions. [Repository guide](AGENTS.md) covers development and retained data.
 
-## Options and usage
+## Usage
 
-| Option | Meaning |
-|---|---|
-| `-vplan-backend` | Enable backend costs; default false. |
-| `-vplan-backend-prune-cfg=false` | Disable CFG reduction for private vector-spill probes (default ON). |
-| `-vplan-backend-probe-threads=N` | Bound concurrent main-candidate probes; positive integer, default `1`. |
-| `-vplan-backend-region-probes` | Insert markers upfront for shared loop-first spill/MIR region recovery; default ON. |
-| `-use-mir` | Use target MIR direct costs for the body; default false. |
-| `-use-estimated-spill` | Keep TTI estimates, or replace all MIR spill costs with the selected TTI estimates; default false. |
-| `-use-default-tti` | Use native TTI for scalar/vector comparison costs in TTI modes and both estimated spill terms in MIR modes; default false. |
-| `-vplan-backend-force-all` | Bypass both the gate and lower-bound pruning for real-spill candidates; MIR always queries and TTI-only estimates never query. |
-| `-vplan-backend-jsonl=FILE` | Append candidate and selection/fallback diagnostics as JSONL. |
-| `-vplan-backend-time` | Print probe and cost-preparation timings to stderr. |
-| `-print-vplans` | Print costs and selection decisions to stderr. |
-| `-print-detailed-vplans` | Also print calculation details. |
-
-Only `-vplan-backend` activates the model. Clang requires `-mllvm` before each
-option; opt accepts them directly. Use a fresh JSONL file. Cost reporting
-requires assertions or `LLVM_ENABLE_DUMP`; enabling both print options produces
-one detailed report per original loop.
+Clang requires `-mllvm` before each LLVM option; opt accepts options directly.
+The compiler does not provide a RISC-V libc or sysroot.
 
 ```sh
-.cache/build/bin/clang --target=riscv64-unknown-elf \
-  -march=rv64gcv -mcpu=xiangshan-kunminghu -mrvv-vector-bits=128 -O3 \
+.cache/build/bin/clang --target=riscv64-unknown-elf -march=rv64gcv \
+  -mcpu=xiangshan-kunminghu -mrvv-vector-bits=128 -O3 \
   -mllvm -vplan-backend -mllvm -print-detailed-vplans \
   kernel.c -S -o .cache/kernel.s
 ```
 
-Print reports show the final effective model: native LLVM costs when OFF or after
-native fallback, and exact model costs otherwise. Failed attempts are discarded.
-Internal probe clones do not emit cost reports.
-CPU/VLEN selects the target sheet and scoped TTI:
+| Option | Behavior and default |
+|---|---|
+| `-vplan-backend` | Enable selection; OFF |
+| `-use-mir` | Observe and price scalar/vector MIR bodies; OFF |
+| `-use-estimated-spill` | Use TTI spill estimates; OFF |
+| `-use-default-tti` | Select native comparison TTI independently of MIR sheet; OFF |
+| `-vplan-backend-region-probes=false` | Disable upfront identity markers; normally ON |
+| `-vplan-backend-prune-cfg=false` | Disable private vector-spill CFG reduction; normally ON |
+| `-vplan-backend-probe-threads=N` | Positive main-probe worker limit; 1 |
+| `-vplan-backend-force-all` | Query real-spill candidates despite gate/pruning; OFF |
+| `-vplan-backend-jsonl=FILE` | Append passive candidate/fallback diagnostics |
+| `-print-vplans` / `-print-detailed-vplans` | Summary / detailed cost report |
+| `-vplan-backend-time` | Serial probe/cost timing diagnostics |
+| `-vplan-backend-pruning-trace` / `-vplan-backend-pruning-dump-ir` | CFG diagnostics / private probe IR |
 
-| Effective tune CPU | Exact VLEN | CostSheet documentation |
-|---|---|---|
-| `xiangshan-kunminghu` | 128 | [XiangShan](costsheet/xiangshan.md) |
-| `saturn-shuttle-v256d128` (tune-only CPU) | 256 | [Saturn](costsheet/saturn.md) |
-| `spacemit-x60` | 256 | [K1](costsheet/k1.md) |
+Only the master flag enables the model. Use a fresh JSONL destination. Cost
+printing requires assertions or `LLVM_ENABLE_DUMP`; enabling both print flags
+produces one detailed report per original loop. Reports describe the effective
+model after fallback, not merely the requested flags.
 
-K1 uses pricing revision `k1-native-relative-v1`: native RISC-V TTI prices
-and the same MIR pricing policy as Saturn, including vector FMA at one LMUL unit.
-See the [K1 CostSheet](costsheet/k1.md). Historical scheduler occupancy and
-structural service results describe previous models.
-
-Other CPU/VLEN combinations retain native TTI and generic MIR pricing.
-
-Saturn uses native RISC-V TTI prices with unit coefficients. Its MIR sheet uses
-native-relative opcode prices as documented in the [Saturn CostSheet](costsheet/saturn.md).
-`-use-default-tti` changes TTI selection independently of the MIR sheet.
-Pricing units, evidence policy and conversions live in [CostSheet rules](costsheet/rule.md).
-
-```sh
-.cache/build/bin/clang --target=riscv64-unknown-elf -march=rv64gcv \
-  -mtune=saturn-shuttle-v256d128 -mrvv-vector-bits=256 -O3 \
-  -mllvm -vplan-backend kernel.c -S -o .cache/saturn-kernel.s
-.cache/build/bin/clang --target=riscv64-unknown-elf -mcpu=spacemit-x60 \
-  -mrvv-vector-bits=256 -O3 -mllvm -vplan-backend kernel.c -S -o .cache/k1-kernel.s
-```
-
-### Body/spill ablations
-
-All three controls require `-vplan-backend`. LLVM accepts both `-use-mir` and
-`--use-mir` spellings; Clang requires `-mllvm` before each LLVM option.
+## Body/spill ablations
 
 | Additional flags | Cost source | Model ID |
 |---|---|---|
@@ -85,163 +52,61 @@ All three controls require `-vplan-backend`. LLVM accepts both `-use-mir` and
 | `-use-mir` | Observed MIR body | `mir-v1` |
 | `-use-mir -use-estimated-spill` | MIR body with selected TTI spill estimates | `mir-me-spill-v1` |
 
-The combination formulas and scalar/vector coverage are specified in
-[BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md#bodyspill-ablation과-mir-info).
-For inherited LLVM policies, scalar-loop versus scalar-spill coverage, and the
-limits of comparisons between these models, see [ABLATION.md](ABLATION.md).
-Either MIR row accepts `-use-default-tti`; the MIR sheet remains CPU-selected.
-The flag selects both estimated spill terms in MIR-estimated mode; successful
-pure-MIR pricing and selection are unchanged by toggling it. Each MIR attempt
-shares one VF1/IC1 scalar observation across the vector candidates and bypasses
-the vector-spill gate. TTI-only estimated modes require no backend query.
+Both MIR modes also accept `-use-default-tti`. It selects both scalar/vector
+estimated spill terms, without changing the CPU-selected MIR sheet or successful
+pure-MIR selection. TTI estimated modes do not query the backend. MIR shares one
+original-loop VF1/IC1 scalar observation per attempt.
+
+These modes differ in scalar baseline and spill coverage as well as body
+representation. TTI real-spill replaces only estimated vector spills; it retains
+scalar spill estimates inside vector bodies. TTI scalar baselines retain LLVM's
+IR-cost policy without a separate pressure-spill term. MIR prices scalar and
+vector spill-slot accesses inside both bodies. The exact formulas and comparison
+limits are in the [backend contract](BACKEND_FEEDBACK.md#bodyspill-ablation과-mir-info).
+
+## Targets
+
+| Effective tune CPU | Exact VLEN | Prices and evidence |
+|---|---|---|
+| `xiangshan-kunminghu` | 128 | [XiangShan](costsheet/xiangshan.md) |
+| `saturn-shuttle-v256d128` (tune-only) | 256 | [Saturn GEN/Shuttle](costsheet/saturn.md) |
+| `spacemit-x60` | 256 | [K1](costsheet/k1.md) |
+
+Other CPU/VLEN settings use native RISC-V TTI and generic MIR prices. Functions
+without RVV retain native TTI. Saturn and K1 use native TTI even with their named
+profiles. Their MIR prices are native-relative models, not measured cycles.
 
 ```sh
-.cache/build/bin/clang --target=riscv64-unknown-elf \
-  -march=rv64gcv -mcpu=xiangshan-kunminghu -mrvv-vector-bits=128 -O3 \
-  -mllvm -vplan-backend -mllvm -use-mir -mllvm -use-estimated-spill \
-  -mllvm -print-detailed-vplans kernel.c -c -o .cache/kernel.o
+.cache/build/bin/clang --target=riscv64-unknown-elf -march=rv64gcv \
+  -mtune=saturn-shuttle-v256d128 -mrvv-vector-bits=256 -O3 \
+  -mllvm -vplan-backend kernel.c -S -o .cache/saturn.s
+.cache/build/bin/clang --target=riscv64-unknown-elf -mcpu=spacemit-x60 \
+  -mrvv-vector-bits=256 -O3 -mllvm -vplan-backend kernel.c -S -o .cache/k1.s
 ```
-
-### Pruning and fallback
-
-Both TTI real-spill modes use the [pruning policy](#probe-pruning) below.
-
-Fallback reselects the whole original loop while preserving the requested TTI
-and spill policy. Failed costs and pruning decisions are discarded; compatible
-raw spill/MIR observations can be reused. Scalar selection counts as success.
-See the [fallback contract](BACKEND_FEEDBACK.md#probe와-fallback) for attempt
-order, independent observation stages, reuse requirements and failure handling.
-
-### Parallel probes
-
-With `-mllvm -vplan-backend-probe-threads=4`, independent main-candidate
-probes can run on up to four workers. Preparation, pricing and selection stay on
-the compiler thread, and selection retains the original plan/VF order. Scalar
-baseline and automatic epilogue queries remain serial; forced epilogues remain
-part of main probes.
-
-```sh
-.cache/build/bin/clang --target=riscv64-unknown-elf \
-  -march=rv64gcv -mcpu=xiangshan-kunminghu -mrvv-vector-bits=128 -O3 \
-  -mllvm -vplan-backend -mllvm -vplan-backend-probe-threads=4 \
-  kernel.c -c -o .cache/kernel.o
-```
-
-The limit applies inside one compiler process, independently of application build
-concurrency. Worker count defaults to `1`. JSON and cost reports support parallel
-probes; incompatible diagnostics use the serial path and warn when they prevent
-overlap. See the [parallel execution contract](BACKEND_FEEDBACK.md#제한된-probe-병렬-실행)
-for ownership, cancellation and diagnostic compatibility. Use external process
-timing for parallel comparisons; `-vplan-backend-time` uses the serial path.
 
 ## Probe pruning
 
-With `-vplan-backend`, private vector-spill probe CFG reduction is enabled by default. MIR observations never apply CFG reduction.
-`-vplan-backend-prune-cfg=false` disables only this transformation. After candidate
-materialization and before the IR suffix, it retains the observed header's CFG
-ancestors and descendants and shortens eligible exclusive paths using existing
-return values. ABI, SSA, returns, vector lifetime and surrounding-cycle guards
-limit applicability. This is an empirical probe reduction: it does not prove
-identical global register allocation for arbitrary programs.
+Gate and strict lower-bound pruning reduce candidate queries; CFG reduction
+changes the private probe's code context. These are separate policies. CFG
+reduction never applies to MIR. Candidate pruning requires compatible main
+candidates, disabled vector epilogues and unforced VFs. Force-all bypasses the
+gate and candidate pruning while leaving the CFG switch independent.
 
-Cost-bound candidate pruning and cooperative cancellation are automatic, with no
-separate switch. They apply when vector epilogues are disabled, main/epilogue VFs
-are not forced, and all candidates share fixed/scalable and scalar-tail policies.
-The latter is an automatic compatibility check, not a user option. Existing
-LLVM epilogue defaults are unchanged, so use
-`-enable-epilogue-vectorization=false` to satisfy that condition.
-`-vplan-backend-force-all` retains its diagnostic meaning and bypasses candidate
-pruning/cancellation; the CFG switch still controls probe reduction independently.
+Markers identify complete paths rather than instruction fences. They can affect
+optimization and allocation; recovered costs need not equal final assembly.
+Each observer proves its own scope. See [scope rules](BACKEND_FEEDBACK.md#experimental-region-probes).
 
-Queries run in stable zero-spill cost order. Eligible completed costs, gate-skip
-costs and permitted scalar selection bound other queries. Only strictly losing
-candidates are removed; ties are measured. Failures of candidates proven to lose do not trigger fallback. A surviving required
-failure still discards all backend costs for the loop.
+Parallelism is bounded within one compiler process. Workers own cloned IR,
+analyses and target machines; pricing and selection stay on the compiler thread.
+Scalar and automatic epilogue probes remain serial. Incompatible diagnostics
+force serial execution and report the reason. Required failures trigger
+[whole-loop fallback](BACKEND_FEEDBACK.md#probe와-fallback).
 
-`-vplan-backend-pruning-trace` reports CFG applicability and sizes;
-`-vplan-backend-pruning-dump-ir` dumps `before`, `after` and `suffix` stages.
-Both are passive. Timing includes `probe_pruning`. JSONL uses `status=pruned`
-and `execution=not-started/cancelled/completed`; physical execution states may
-vary with scheduling while logical results retain original candidate order.
-See [the contract](BACKEND_FEEDBACK.md#probe-pruning) for ownership and failure rules.
+## Build and verification
 
-The bound applies to default and tuned TTI real-spill modes. MIR modes always
-observe required candidates; estimated-only modes do not probe.
-
-`-vplan-backend-region-probes` enables upfront begin/end markers in every
-materialized disposable backend candidate, including MIR candidates and the
-original-loop scalar baseline. It is enabled by default for backend feedback
-probes; `-vplan-backend-region-probes=false` disables it for comparisons. Markers
-are not inserted into the final emitted program. VPlan body identity is retained
-before backedge removal, so single-iteration bodies are marked too. Unknown geometry
-still receives identity markers, but cannot use marker-based normalization.
-
-Both backend observers use the same selection and traversal logic:
-
-1. Find a uniquely identified single-block loop with a proven iteration width
-   and backedge.
-2. If that structural proof fails, find a balanced, count-preserving marker
-   region in one machine block.
-3. Traverse the selected region for vector spill accesses or MIR records.
-   Payload/geometry errors do not trigger another selection or codegen retry.
-
-The spill observer stays after StackSlotColoring; MIR stays after frame lowering.
-Each stage selects its region independently. Both traversals omit metadata,
-markers, function returns, and frame setup/destroy instructions. Successful MIR
-recovery uses the existing CostSheet and exact normalization, including the
-scalar baseline; it does not require a surviving backedge.
-
-Marker recovery requires one marked IR block after the suffix, with only debug
-intrinsics and unconditional branches in all other IR blocks. At each backend
-stage, other machine blocks may contain only metadata, frame/return overhead,
-and unconditional branches. Executable work outside the region, including
-scalar or vector spills, causes fallback. This is deliberately conservative.
-
-Normalization uses the nominal materialized VF × IC width times the surviving
-pair count; scalar baseline pairs have width 1. It is not an active-lane or
-dynamic-frequency measurement. JSONL identifies recovered observations with
-`scope=probe-region`, `region_granularity=machine-block`, and `region_probe_count`.
-Scheduling may cluster markers, so their positions are not instruction fences.
-The whole marked block's body instructions are included, potentially including
-merged setup/exit work not identified as frame overhead. Markers can change
-optimization and register allocation; this policy does not establish equivalence
-with final assembly. See [the observer contract](BACKEND_FEEDBACK.md#experimental-region-probes).
-
-## Cost-model sweeps
-
-The sibling `~/scripts/gen-cost-model-sweep.sh` defaults to this checkout's
-`.cache/build/bin`. New sweeps use the binaries currently at that path. `--llvm`
-selects a different bin directory; `--workspace` changes the default checkout
-location. The script builds the six modes above and records tool paths, versions
-and hashes. It does not rebuild LLVM or update previous sweep outputs.
-
-```sh
-~/scripts/gen-cost-model-sweep.sh --target xiangshan \
-  --llvm /work/llvm-integration-ablation/.cache/build/bin \
-  --out .cache/cost-model-sweep
-```
-
-Use a new or empty output directory. The sweep preserves IC=1, LMUL=8 and disabled
-vector epilogues. Sweep build concurrency is separate from compiler probe workers.
-For K1, use `--target k1-linux`; it selects `spacemit-x60` with exact VLEN 256.
-Native and tuned TTI modes now use the same native pricing policy. If all six
-execution images match, the generator records the omission in metadata and
-publishes no ELF for that case.
-
-## Build
-
-Reuse `.cache/build` for the Release/assertions/tests-enabled build. Keep the
-compatibility symlink `.cache/compiler-build -> build`, which preserves paths
-embedded in the relocated cache. Reconfigure that cache through the alias;
-configure `.cache/build` directly only for a fresh build.
-
-```sh
-cmake --build .cache/build --target clang clang-resource-headers llc opt \
-  FileCheck split-file not count llvm-config llvm-readobj \
-  VectorizeTests RISCVTests IRTests --parallel 2
-```
-
-Fresh configuration:
+Reuse the Release/assertions/tests-enabled `.cache/build` and preserve
+`.cache/compiler-build -> build`. Reconfigure an existing cache through that
+compatibility alias. Use `.cache/build` directly only for a fresh configuration:
 
 ```sh
 cmake -S llvm -B .cache/build -G Ninja \
@@ -255,32 +120,44 @@ cmake -S llvm -B .cache/build -G Ninja \
   -DCLANG_INCLUDE_TESTS=OFF
 ```
 
-Use `AArch64;RISCV` on an ARM64 host. The compiler does not supply a RISC-V
-libc/sysroot.
 
-## Verification and data
+Build only affected targets, with two jobs:
 
 ```sh
-.cache/build/unittests/Transforms/Vectorize/VectorizeTests
-.cache/build/unittests/Target/RISCV/RISCVTests
-.cache/build/unittests/IR/IRTests --gtest_filter='PassManager.*:LegacyPassManager.*'
-.cache/build/bin/llvm-lit -v llvm/test/Transforms/LoopVectorize \
-  llvm/test/CodeGen/RISCV/rvv/stack-slot-coloring.mir
+cmake --build .cache/build --target clang clang-resource-headers opt llc \
+  FileCheck split-file not count llvm-readobj VectorizeTests RISCVTests --parallel 2
 ```
 
-Tests cover direct CostSheet prices and TTI/MIR agreement, effective tune CPU
-and VLEN selection, aggregate spill units and asymmetric class hooks, all four
-default/tuned × estimated/observed spill combinations, exact normalization,
-scalar scope restoration, MIR default-TTI selection, gate/pruning decisions,
-epilogue preservation, passive reporting and configured whole-loop retries. Parallel tests cover pool overlap and limits,
-ordered results, reuse, serial compatibility and 1/2/4-worker equivalence.
-Opt-only tests isolate the probe from normal final codegen. Lit marks tests for
-backends absent from the build as unsupported.
+Focused probing checks:
 
-Keep experiment outputs in a distinct `.cache/` directory. Preserve the compiler
-cache and `.cache/post-frame-reference/`. Use this checkout's 313-input
-`dataset.sqlite` for requested reference comparisons, following AGENTS.md.
-Historical measurements describe their recorded compiler identities, not the
-current binary at the same path.
-Current verification results and the six-case, three-target diagnostic selections
-are recorded in [BACKEND_FEEDBACK](BACKEND_FEEDBACK.md#scalar-기준과-검증-계약).
+```sh
+.cache/build/unittests/Transforms/Vectorize/VectorizeTests --gtest_filter='VPlanBackendFeedback.*'
+.cache/build/unittests/Target/RISCV/RISCVTests --gtest_filter='*SpillLoopMappingAndLifetime*:*LinearMarkerScope*'
+.cache/build/bin/llvm-lit -j 1 -v \
+  llvm/test/Transforms/LoopVectorize/RISCV/backend-region-probes.ll \
+  llvm/test/Transforms/LoopVectorize/RISCV/backend-feedback-loop-regions.ll
+```
+
+Scale additional checks to the change. Run PassManager tests only for relevant
+pass-manager changes; do not run the full LLVM suite by default. Opt-only checks
+separate private feedback from normal final code generation.
+
+## Experiments and retained data
+
+`~/scripts/gen-cost-model-sweep.sh` builds the six modes from the current binaries
+without rebuilding LLVM. Use `--llvm` to specify binaries and a new `--out`
+directory. Sweeps preserve IC1, LMUL8 and disabled vector epilogues; `k1-linux`
+selects K1 VLEN256. Identical execution images may cause ELF publication to be
+omitted, as recorded in the sweep metadata. The `llvm` variant is master-ON
+native-TTI estimated selection, not master-OFF selection.
+
+Keep outputs under a distinct `.cache/` directory and record compiler hashes,
+source bytes and effective flags. Existing results never become current merely
+because binaries at their recorded paths were replaced. Requested reference
+comparisons use this checkout's 313-input database and stored baseline results;
+follow AGENTS.md. The documented `.cache/post-frame-reference` directory is
+absent in this checkout and has not been verified during this refactoring.
+
+Current refactoring progress and validation evidence are recorded in
+[REFACTORING_PLAN.md](REFACTORING_PLAN.md). Historical TSVC coverage and timing
+are evidence about their recorded compiler versions, not current guarantees.

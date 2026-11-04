@@ -8,9 +8,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PseudoProbe.h"
@@ -24,15 +26,15 @@ using namespace llvm;
 static cl::opt<bool> EnableBackendCostModel(
     "vplan-backend", cl::Hidden, cl::init(false),
     cl::desc("Select VF using scoped TTI and actual vector spill costs"));
-static cl::opt<bool> UseMIR(
-    "use-mir", cl::Hidden, cl::init(false),
-    cl::desc("Use target MIR direct cost for VPlan backend body costs"));
+static cl::opt<bool>
+    UseMIR("use-mir", cl::Hidden, cl::init(false),
+           cl::desc("Use target MIR direct cost for VPlan backend body costs"));
 static cl::opt<bool> UseEstimatedSpill(
     "use-estimated-spill", cl::Hidden, cl::init(false),
     cl::desc("Use estimated spill costs in VPlan backend selection"));
-static cl::opt<bool>
-    UseDefaultTTI("use-default-tti", cl::Hidden, cl::init(false),
-                  cl::desc("Use default TTI for all VPlan backend TTI queries"));
+static cl::opt<bool> UseDefaultTTI(
+    "use-default-tti", cl::Hidden, cl::init(false),
+    cl::desc("Use default TTI for all VPlan backend TTI queries"));
 bool llvm::vplanBackendUseMIR() { return EnableBackendCostModel && UseMIR; }
 bool llvm::vplanBackendUseEstimatedSpill() {
   return EnableBackendCostModel && UseEstimatedSpill;
@@ -99,9 +101,13 @@ static json::Object summarizeObservation(const VPlanBackendObservation &O) {
       {"iteration_width", O.IterationWidth},
       {"iteration_mapping", O.IterationMapping},
       {"spills", std::move(Accesses)}};
+  if (!O.StructuralFailure.empty())
+    Result["structural_failure"] = O.StructuralFailure;
+  if (!O.MarkerFailure.empty())
+    Result["marker_failure"] = O.MarkerFailure;
   if (O.RegionProbeCount) {
     Result["scope"] = "probe-region";
-    Result["region_granularity"] = "machine-block";
+    Result["region_granularity"] = "machine-path";
     Result["region_probe_count"] = O.RegionProbeCount;
   }
   if (O.MIRBody) {
@@ -140,7 +146,7 @@ json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R,
   auto MIRObservation = summarizeObservation(R.MIR);
   // Keep the legacy projection without serializing its payload twice.
   auto Result = json::Object(MIR && R.MIR.succeeded() ? MIRObservation
-                                                    : SpillObservation);
+                                                      : SpillObservation);
   Result["candidate"] = R.Candidate;
   Result["vf"] = R.VF.getKnownMinValue();
   Result["scalable"] = R.VF.isScalable();
@@ -241,41 +247,6 @@ void llvm::markVPlanBackendLoop(Loop &L, StringRef ID, ScalarEvolution &SE) {
   }
 }
 
-// One pair denotes one materialized VF * IC iteration (one for a scalar probe).
-// This uses the same
-// nominal width as loop observations, including masked/EVL iterations; it does
-// not claim that every lane is active. The caller establishes the body identity.
-void llvm::markVPlanBackendRegion(BasicBlock &Entry, BasicBlock &Exit,
-                                  StringRef ID) {
-  Function &F = *Entry.getParent();
-  uint64_t Width = 0;
-  if (!RegionProbes || !F.hasFnAttribute("vplan.backend.candidate"))
-    return;
-  // Identity is always inserted. Unknown geometry makes marker recovery
-  // ineligible, without suppressing markers or the ordinary loop proof.
-  if ((F.getFnAttribute("vplan.backend.scalable").getValueAsString() != "0" &&
-       !F.getVScaleValue()) ||
-      (F.hasFnAttribute("vplan.backend.materialized-width")
-           ? F.getFnAttribute("vplan.backend.materialized-width")
-           : F.getFnAttribute("vplan.backend.width"))
-          .getValueAsString()
-          .getAsInteger(10, Width) ||
-      !Width || Width > UINT32_MAX)
-    Width = 0;
-  uint64_t GUID = GlobalValue::getGUIDAssumingExternalLinkage(ID);
-  F.addFnAttr("vplan.backend.region-guid", std::to_string(GUID));
-  F.addFnAttr("vplan.backend.region-width", std::to_string(Width));
-  auto *Probe = Intrinsic::getOrInsertDeclaration(F.getParent(),
-                                                 Intrinsic::pseudoprobe);
-  auto Insert = [&](BasicBlock &BB, BasicBlock::iterator IP, uint64_t Index) {
-    IRBuilder<> B(&BB, IP);
-    B.CreateCall(Probe, {B.getInt64(GUID), B.getInt64(Index), B.getInt32(0),
-                        B.getInt64(PseudoProbeFullDistributionFactor)});
-  };
-  Insert(Entry, Entry.getFirstInsertionPt(), 1);
-  Insert(Exit, Exit.getTerminator()->getIterator(), 2);
-}
-
 // Count matching markers, even repeated markers on the same loop, so both
 // pruning and passive diagnostics require exactly one observation identity.
 VPlanBackendObservedLoop llvm::findVPlanBackendObservedLoop(Function &F,
@@ -314,8 +285,7 @@ void llvm::finalizeVPlanBackendIterationMapping(Function &F,
   // lost pair could silently shrink the normalization denominator.
   if (F.hasFnAttribute("vplan.backend.region-guid")) {
     uint64_t GUID = 0, Begins = 0, Ends = 0;
-    BasicBlock *Body = nullptr;
-    bool SingleBlock = true;
+    SmallPtrSet<const BasicBlock *, 8> Marked;
     bool Valid = !F.getFnAttribute("vplan.backend.region-guid")
                       .getValueAsString()
                       .getAsInteger(10, GUID);
@@ -324,9 +294,7 @@ void llvm::finalizeVPlanBackendIterationMapping(Function &F,
         if (auto *Probe = dyn_cast<PseudoProbeInst>(&I)) {
           if (Probe->getFuncGuid()->getZExtValue() != GUID)
             continue;
-          if (Body && Body != &BB)
-            SingleBlock = false;
-          Body = &BB;
+          Marked.insert(&BB);
           if (Probe->getIndex()->equalsInt(1))
             ++Begins;
           else if (Probe->getIndex()->equalsInt(2))
@@ -336,20 +304,38 @@ void llvm::finalizeVPlanBackendIterationMapping(Function &F,
         }
     F.addFnAttr("vplan.backend.region-count",
                 std::to_string(Valid && Begins == Ends ? Begins : 0));
-    // Nontrivial work outside the marked block makes its spill scope
-    // incomplete and can leave CFG boundaries that change scheduling/RA.
-    // Empty entry/trampoline blocks are harmless for this eligibility check.
-    // Record the IR-suffix condition before codegen can merge these blocks.
-    bool Isolated = Valid && Begins && Begins == Ends && SingleBlock;
-    for (auto &BB : F) {
-      if (&BB == Body)
-        continue;
-      for (auto &I : BB) {
-        if (isa<DbgInfoIntrinsic>(I))
-          continue;
-        if (!isa<UncondBrInst>(I))
-          Isolated = false;
+    // Prove a finite execution path before counting pairs. Keep the minimal
+    // marked subpath; setup and exit computations cannot inherit its frequency.
+    SmallVector<const BasicBlock *, 8> Path;
+    SmallPtrSet<const BasicBlock *, 8> Seen;
+    const BasicBlock *BB = &F.getEntryBlock();
+    bool Isolated = Valid && Begins && Begins == Ends;
+    while (Isolated) {
+      if (!Seen.insert(BB).second || succ_size(BB) > 1 ||
+          pred_size(BB) > (Path.empty() ? 0u : 1u)) {
+        Isolated = false;
+        break;
       }
+      Path.push_back(BB);
+      if (succ_empty(BB))
+        break;
+      BB = *succ_begin(BB);
+    }
+    unsigned First = Path.size(), End = 0;
+    for (unsigned I = 0; I < Path.size(); ++I)
+      if (Marked.erase(Path[I])) {
+        First = std::min(First, I);
+        End = I + 1;
+      }
+    Isolated &= Marked.empty() && First < End;
+    for (const auto &Block : F) {
+      if (Isolated &&
+          is_contained(ArrayRef(Path).slice(First, End - First), &Block))
+        continue;
+      for (const auto &I : Block)
+        if (!isa<DbgInfoIntrinsic>(I) && !isa<UncondBrInst>(I) &&
+            !isa<ReturnInst>(I))
+          Isolated = false;
     }
     F.addFnAttr("vplan.backend.region-isolated", Isolated ? "1" : "0");
   }
@@ -358,6 +344,25 @@ void llvm::finalizeVPlanBackendIterationMapping(Function &F,
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto [Selected, Reason] = findVPlanBackendObservedLoop(F, LI);
   if (!Selected || !Selected->isInnermost())
+    return;
+  // Width witnesses must describe every block of one repeated iteration.
+  SmallPtrSet<const BasicBlock *, 8> LoopPath;
+  const BasicBlock *Current = Selected->getHeader();
+  const BasicBlock *Previous = nullptr;
+  while (true) {
+    if (!Selected->contains(Current) || !LoopPath.insert(Current).second)
+      return;
+    if (Previous && (pred_size(Current) != 1 ||
+                     *pred_begin(Current) != Previous))
+      return;
+    if (Current == Selected->getLoopLatch())
+      break;
+    if (succ_size(Current) != 1)
+      return;
+    Previous = Current;
+    Current = *succ_begin(Current);
+  }
+  if (LoopPath.size() != Selected->getNumBlocks())
     return;
   uint64_t Ratio = 0;
   for (auto &Phi : Selected->getHeader()->phis()) {
@@ -388,16 +393,18 @@ void llvm::finalizeVPlanBackendIterationMapping(Function &F,
   }
   // EVL loops advance by the returned VL, not an affine constant. Prove one
   // get.vector.length operation and an IV increment by that exact value.
-  if (!Ratio && Selected->getNumBlocks() == 1) {
+  if (!Ratio && Selected->getLoopLatch()) {
     IntrinsicInst *VL = nullptr;
     bool Multiple = false;
-    for (auto &I : *Selected->getHeader())
-      if (auto *II = dyn_cast<IntrinsicInst>(&I))
-        if (II->getIntrinsicID() == Intrinsic::experimental_get_vector_length) {
-          if (VL)
-            Multiple = true;
-          VL = II;
-        }
+    for (auto *BB : Selected->blocks())
+      for (auto &I : *BB)
+        if (auto *II = dyn_cast<IntrinsicInst>(&I))
+          if (II->getIntrinsicID() ==
+              Intrinsic::experimental_get_vector_length) {
+            if (VL)
+              Multiple = true;
+            VL = II;
+          }
     if (VL && !Multiple)
       for (auto &Phi : Selected->getHeader()->phis()) {
         auto *Next = dyn_cast<BinaryOperator>(

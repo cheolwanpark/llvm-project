@@ -507,6 +507,7 @@ class FeedbackProvider {
     VPlanBackendMaterializationContext Context;
     bool PrunedContext;
     bool RegionMarkers;
+    unsigned MarkerPolicyRevision;
     VPlanBackendProbeResult Result;
   };
   SmallVector<CachedObservation, 0> Observations;
@@ -542,6 +543,7 @@ public:
         return O.F == &F && O.Header == &Header &&
                O.PrunedContext == Pruned(C) &&
                O.RegionMarkers == vplanBackendRegionProbesEnabled() &&
+               O.MarkerPolicyRevision == VPlanBackendMarkerPolicy::Revision &&
                O.Identity == C && O.Context == C && O.Result.Observation &&
                [&] {
                  auto Status = C.Observation.collectsMIR()
@@ -573,7 +575,8 @@ public:
       if (R.Observation) {
         Observations.push_back({&F, &Header, Missing[I], Missing[I],
                                 Pruned(Missing[I]),
-                                vplanBackendRegionProbesEnabled(), R});
+                                vplanBackendRegionProbesEnabled(),
+                                VPlanBackendMarkerPolicy::Revision, R});
       }
       Results[Indices[I]] = std::move(R);
     }

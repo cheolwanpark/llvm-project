@@ -1,27 +1,28 @@
-# XiangShan Kunminghu v2 CostSheet
+# XiangShan Kunminghu v2
 
-적용: effective tune CPU `xiangshan-kunminghu`, exact VLEN=128.
-Model `xiangshan-direct-v1`, TTI profile `xiangshan-v2-128`.
-[공통 규칙](rule.md)을 따르는 nominal 가격 모델이다.
-이는 실측 throughput 표가 아니다. 기존 모델의 분해/이동 점유 대용값이다.
+Effective tune CPU: `xiangshan-kunminghu`; exact VLEN: 128.
+TTI profile: `xiangshan-v2-128`; MIR model: `xiangshan-direct-v1`.
+Reported revision: `e7bab53e66dfb3c4a1d11cf9519b0396f8576cae`.
+[Common rules](rule.md) define units, conversion and error handling.
 
-## 근거와 가정
+## Evidence and assumptions
 
-고정 [RTL e7bab53e](https://github.com/OpenXiangShan/XiangShan/tree/e7bab53e66dfb3c4a1d11cf9519b0396f8576cae)의
-VecDecoder.scala/DecodeUnit.scala 분류와 기존 reviewed opcode 표를 사용한다.
-[공식 v2 구성](https://docs.xiangshan.cc/projects/user-guide/en/kunminghu-v2/typical-configuration/)은
-FU 구성·latency의 보조 근거다. 최신 V2R2A 가격을 고정 v2에 소급하지 않는다.
-Opcode 지원·형태와 geometry는 RTL 근거다. 아래 +1 scalar 전달, memory setup,
-scalar store=2, divide/sqrt 대표값, permutation 분해 횟수는 기존 모델의 명목 점유
-근사다. Decoder 분류만으로 실제 throughput이 증명된 것은 아니며 별도 실측은 없다.
-이러한 가정도 이 표에 명시된 지원 가격으로 사용한다.
+The fixed [RTL revision](https://github.com/OpenXiangShan/XiangShan/tree/e7bab53e66dfb3c4a1d11cf9519b0396f8576cae)
+provides VecDecoder.scala/DecodeUnit.scala opcode/form classifications alongside
+the reviewed opcode table. The [official v2 configuration](https://docs.xiangshan.cc/projects/user-guide/en/kunminghu-v2/typical-configuration/)
+is supporting evidence for FU configuration and latency. Later V2R2A prices must
+not be retroactively applied to this fixed v2 model.
 
-### Vector 직접 비용
+Decoder support and geometry do not prove throughput. Scalar transfer +1, memory
+setup, scalar store=2, divide/sqrt representatives and permutation decomposition
+counts below are retained nominal occupancy assumptions, not new measurements.
+Rule identifiers retain their historical names and do not encode evidence grade.
 
-아래에서 `G=LMUL8`, `L=max(1,G/8)`, `W=max(1,G/4)`이고,
-data element 수 `N=128×(G/8)/SEW`다. Memory는 data EMUL과 EEW로 element 수를
-계산한다. Fractional LMUL, widening/narrowing과 index geometry를 검증한 뒤
-opcode 분류에 따라 직접 가격을 반환한다.
+## Vector prices
+
+With `G=LMUL8`, use `L=max(1,G/8)`, `W=max(1,G/4)` and
+`N=128*(G/8)/SEW`. Memory uses data EMUL and EEW. Validate fractional LMUL,
+widening/narrowing and index geometry before selecting the opcode formula.
 
 | 명령군 / 형태 | 직접 비용 |
 |---|---|
@@ -47,27 +48,15 @@ opcode 분류에 따라 직접 가격을 반환한다.
 | Whole-register copy, group g | `g` |
 | Whole-register load/store, group g | `g+1`, aggregate spill과 같은 가격 정의 |
 
-Fold는 `(min(log2(G)-3,0)+C+8) mod 8`이며 C는 SEW 16/32/64에 대해 3/2/1이다.
-Mask 논리, scalar extract/insert와 move는 opcode별 고정 또는 group 규칙을 사용한다.
-지원 opcode와 형태의 정확한 분류는
-[`RISCVCostSheetTables.inc`](../llvm/lib/Target/RISCV/RISCVCostSheetTables.inc),
-geometry와 직접식은
-[`RISCVCostSheet.cpp`](../llvm/lib/Target/RISCV/RISCVCostSheet.cpp)에 있다.
-미지원 opcode는 unknown 표식과 명시적인 가격으로 구분하고, 잘못된 geometry나
-지원하지 않는 산술 precision은 실패다. RTL revision
-`e7bab53e66dfb3c4a1d11cf9519b0396f8576cae`는 출처이며 모델 버전과 별개다.
-## Spill와 adapter
+For folded FP reduction,
+`Fold=(min(log2(G)-3,0)+C+8) mod 8`, where C is 3/2/1 for SEW 16/32/64.
+Mask logic, scalar extract/insert and moves use opcode-specific fixed/group rules.
+[Opcode classification](../llvm/lib/Target/RISCV/RISCVCostSheetTables.inc) and
+[geometry/formulas](../llvm/lib/Target/RISCV/RISCVCostSheet.cpp) define the exact
+supported forms. Unknown opcodes have explicit unknown pricing; invalid geometry
+or required unsupported precision fails.
 
-Vector 접근당 f(g)=g+1, aggregate Q+A. Scalar store=2Q, reload=Q.
-예상 n=4 spill/reload는 총16, 관측 group-4 한 쌍은10이다.
-TTI는 해당 opcode/형태를 예상하고 MIRInfo는 관측 opcode를 전달한다.
-TTI lowering의 legalization·init/extract가 MIR과 다를 수 있다.
-Scope 밖 및 다른 cost kind는 기존 RISCVTTIImpl을 사용한다.
-
-## Scalar 가격의 근거와 범위
-
-아래 scalar 가격도 위 RTL 분류와 기존 nominal 모델을 사용한다. RTL이 모든 숫자의
-reciprocal throughput을 증명하는 것은 아니다.
+## Scalar prices
 
 | Scalar 명령군 | 비용 | 근거 수준 |
 |---|---|---|
@@ -81,18 +70,23 @@ reciprocal throughput을 증명하는 것은 아니다.
 | FP sqrt, H / S / D | 6 / 9 / 16 | 기존 representative occupancy 가정 |
 | Scalar spill / reload, Q registers | 2Q / Q | 기존 nominal scalar store/load와 같은 aggregate 가격 |
 
-위 값은 latency 표를 throughput으로 바꾼 값이나 새 실기기 측정치가 아니다.
-RTL에 supported opcode가 있다는 것과 숫자의 hardware-validated accuracy는 별개다.
+These scalar values are nominal defaults or representative occupancy assumptions;
+latency has not been converted into throughput and RTL support is not a hardware
+accuracy validation. Scalar TTI covers supported arithmetic, memory, sqrt/fma and
+casts. Power-of-two unsigned divide/rem simplifies first. Branch/control and
+unhandled sequences remain native; legalization/materialization follows inherited
+sequence construction. Scalar MIR directly prices supported observed instructions,
+including branch/configuration. Unknown opcodes cost 1 with an explicit count.
 
-Scalar TTI adapter는 지원 산술, load/store, sqrt/fma intrinsic과 FP/정수 cast를
-sheet로 가격화한다. Unsigned power-of-two divide/rem은 shift/and 단순화 가격을
-먼저 사용한다. Branch/control 및 다루지 않는 sequence는 native TTI로 남으며
-legalization/materialization은 inherited sequence를 따른다. Backend TTI 모드의
-scalar 기준은 vector와 같은 configured TTI다. Scope 밖, 다른 cost kind와 미지원
-CPU/VLEN은 native다. IC/probe 최적화/final codegen은 native 경로를 유지한다.
+## Spill and adapter boundaries
 
-Scalar MIR은 실제 지원 scalar opcode와 branch/configuration, spill-slot access를
-동일 sheet로 가격화한다. Unknown opcode는 비용 1과 unknown 표식을 남기며 수를
-보고한다. 지원 가격의 불확실성은 unknown으로 숨기지 않는다. 일반 stack access와
-주소 계산은 spill-slot `S`로 빼지 않는다. Scalar/vector MIR의 같은 관측 stage와
-정확한 반복 폭 정규화, symmetric `R-S+Et`는 [공통 규칙](rule.md)을 따른다.
+Vector access `f(g)=g+1` gives aggregate `Q+A`; scalar store/reload costs `2Q/Q`.
+For example, estimated four-register spill/reload costs 16, while one observed
+group-4 spill/reload pair costs 10. TTI predicts a sequence; MIRInfo prices its
+observed sequence. Legalization and initialization/extraction can make their
+totals differ. Scope-outside and other cost-kind queries retain native RISC-V TTI.
+
+Only actual spill-slot accesses contribute to MIR's removable spill term.
+Ordinary stack accesses and separate address computation remain in the body.
+Exact scalar/vector normalization and symmetric estimated-spill composition are
+specified once in the [backend contract](../BACKEND_FEEDBACK.md).

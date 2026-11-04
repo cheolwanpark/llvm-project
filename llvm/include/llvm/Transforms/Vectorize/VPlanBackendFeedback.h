@@ -244,6 +244,20 @@ LLVM_ABI void writeVPlanBackendFeedback(const json::Object &Result);
 LLVM_ABI void setVPlanBackendCandidate(Function &F,
                                        const VPlanBackendCandidate &Candidate,
                                        uint64_t MaterializedWidth);
+struct VPlanBackendMarkerContext {
+  const BasicBlock &Entry, &Exit;
+  StringRef Candidate;
+};
+struct VPlanBackendMarkerDecision {
+  bool Insert;
+  StringRef Reason;
+};
+class VPlanBackendMarkerPolicy {
+public:
+  static constexpr unsigned Revision = 1;
+  LLVM_ABI VPlanBackendMarkerDecision
+  assess(const VPlanBackendMarkerContext &Context) const;
+};
 LLVM_ABI bool vplanBackendRegionProbesEnabled();
 LLVM_ABI void markVPlanBackendLoop(Loop &L, StringRef ID, ScalarEvolution &SE);
 /// Mark one materialized iteration in a disposable vector or scalar probe.

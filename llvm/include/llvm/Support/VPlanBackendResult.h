@@ -70,6 +70,7 @@ struct VPlanBackendObservation {
   VPlanBackendObservationStatus Status =
       VPlanBackendObservationStatus::NotCollected;
   std::string Failure;
+  std::string StructuralFailure, MarkerFailure;
   uint64_t IterationWidth = 0;
   bool IterationMapping = false;
   // Nonzero for an experimental linear region delimited by pseudo probes.

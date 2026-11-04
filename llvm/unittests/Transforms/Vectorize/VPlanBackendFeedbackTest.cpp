@@ -305,3 +305,23 @@ TEST(VPlanBackendFeedback, ScalarIterationMappingRequiresAffineWitness) {
                 .getValueAsString(),
             "0");
 }
+
+TEST(VPlanBackendFeedback, MarkerPolicySeparatesIdentityFromGeometry) {
+  LLVMContext C;
+  SMDiagnostic Error;
+  auto M = parseAssemblyString(R"(
+    define void @f() "vplan.backend.candidate"="unknown-width"
+        "vplan.backend.scalable"="1" {
+    entry: ret void
+    }
+  )", Error, C);
+  ASSERT_TRUE(M);
+  auto &F = *M->getFunction("f");
+  auto &BB = F.getEntryBlock();
+  VPlanBackendMarkerPolicy Policy;
+  EXPECT_TRUE(Policy.assess({BB, BB, "unknown-width"}).Insert);
+  EXPECT_FALSE(Policy.assess({BB, BB, "wrong"}).Insert);
+  markVPlanBackendRegion(BB, BB, "unknown-width");
+  EXPECT_EQ(F.getFnAttribute("vplan.backend.region-width").getValueAsString(), "0");
+  EXPECT_FALSE(Policy.assess({BB, BB, "unknown-width"}).Insert);
+}

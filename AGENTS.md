@@ -1,105 +1,100 @@
-# Repository working guide
+# Working in this LLVM fork
 
-## Scope and documentation
+## Scope and source of truth
 
-This LLVM fork provides in-process VF selection. `BACKEND_FEEDBACK.md`
-describes its contract, target-specific CostSheets, spill pricing and cost reports; README covers
-usage, build and tests.
-Preserve existing upstream LLVM options and behavior when cleaning up fork code.
+This fork adds in-process VPlan VF selection. Preserve upstream LLVM options and
+behavior. README owns usage/build/test commands; BACKEND_FEEDBACK.md owns module,
+probe, selection, fallback and reporting contracts. costsheet/rule.md owns units
+and conversion; target sheets own prices, revisions, evidence and assumptions.
+Update these documents instead of adding overlapping reports. Track refactoring
+progress in REFACTORING_PLAN.md. Keep historical measurements distinct from the
+current compiler and describe artifact availability accurately.
 
-Keep README, BACKEND_FEEDBACK.md and costsheet/ current instead of adding overlapping
-reports. costsheet/rule.md owns pricing/conversion rules; target documents own prices and evidence. Distinguish historical measurements from the current binary and describe
-retained artifacts accurately.
+## Tests and builds
 
-## Build and cache layout
+- Follow existing conventions and test observable behavior. Keep tests minimal;
+  avoid redundant coverage, unnecessary mocks and implementation snapshots.
+- Never add or modify tests without prior approval. Explain proposed checks and
+  wait for explicit permission unless that scope is already approved. The
+  refactoring plan records approval for its fork-specific test replacement.
+- Run the smallest relevant existing checks. Do not run the full suite unless
+  explicitly requested, or repeat passed checks without a change/failure reason.
+- Reuse `.cache/build`, its Release/assertions/tests-enabled configuration
+  (`clang;lld`, `X86;RISCV`) and `cmake --build .cache/build --target <affected>
+  --parallel 2`. Current tools are under `.cache/build/bin`.
+- Preserve `.cache/compiler-build -> build`. Existing cache reconfiguration uses
+  that alias; configure `.cache/build` directly only for a fresh cache.
+- Build affected tools/test targets before checking. Available verification targets
+  include clang, clang-resource-headers, llc, opt, FileCheck, split-file, not,
+  count, llvm-readobj, VectorizeTests, RISCVTests and IRTests. Use focused gtest
+  filters and individual lit entry points. Include
+  `PassManager.*:LegacyPassManager.*` only for relevant pass-manager changes.
+- Opt-only probes distinguish feedback from final object codegen. For relevant
+  allocation changes include `llvm/test/CodeGen/RISCV/rvv/stack-slot-coloring.mir`.
 
-- Use `.cache/build` for the compiler and its incremental build cache. Current
-  executables are `.cache/build/bin/clang`, `opt`, and `llc`.
-- Reuse the existing Release/assertions/tests-enabled build (`clang;lld`,
-  `X86;RISCV`) with `cmake --build .cache/build ... --parallel 2`.
-- `.cache/compiler-build -> build` preserves absolute paths embedded in the
-  relocated cache. Keep this compatibility symlink. If reconfiguring that
-  existing cache, use the old alias; configure `.cache/build` directly only
-  for a fresh build. See README for configuration flags.
-- `.cache/post-frame-reference` is retained reference data, not disposable
-  scratch space. Do not delete or overwrite it during cache cleanup. Preserve
-  the compiler build/cache too unless the user explicitly changes that scope.
-- Put new experiment outputs in a distinct `.cache/` directory. Do not commit
-  build products, databases, measurements, or force-add ignored cache files.
+## Backend invariants
 
-## Backend feedback invariants
+Keep CostSheet/Pricing, Probing and Gate/Pruning responsibilities separate. LV
+coordinates whole-loop attempts and adopts/discards their costs, selections and
+provisional reports together. Preserve the Vectorize→analysis callback→Passes→
+TargetMachine dependency direction.
 
-The non-MIR vector-spill probe stops immediately after StackSlotColoring, using
-its observer's pass ID (`post-stack-slot-coloring`). It runs VSETVLI insertion and
-scalar allocation before subsequent copy propagation, post-RA LICM and frame
-lowering. This collector remains vector-spill-only. MIR body observations use the
-separate `post-frame-lowering` observer and include scalar/vector spill-slot costs.
+The vector-spill observer stops at its own `post-stack-slot-coloring` pass ID.
+VSETVLI insertion and scalar allocation have run; later copy propagation, post-RA
+LICM and frame lowering have not. This collector remains vector-spill-only. MIR
+uses the separate `post-frame-lowering` observer and includes scalar/vector
+spill-slot costs. Preserve independent slot statuses, scope and width. Failure,
+not collected, gate skipped and successfully observed zero are distinct.
 
-Estimated and observed non-MIR spills use profile-independent `SpillReloadUnits`
-and the configured aggregate register-class TTI hook. Tuned candidate costs use each target's CostSheet at its documented exact VLEN
-(Kunminghu 128, Saturn GEN/Shuttle and K1 256); other RVV CPU/VLEN settings
-use the generic MIR sheet and native RISC-V TTI. Observed units are homogeneous
-per class, direction and physical register group. Default-TTI selection
-also applies to MIR estimated spills, independently of MIR sheet selection.
-Scalar baselines use the configured TTI in TTI modes. MIR uses one original-loop
-VF1/IC1 scalar probe per attempt and the same post-frame sheet as vector bodies;
-estimated MIR substitutes `R - S + Et` symmetrically. Preserve exact scalar
-rationals for ranking and tails. Default-TTI selects both estimated spill terms
-without changing successful pure-MIR pricing/selection. Native-cost IC, probe
-optimization and final codegen stay native.
+Preserve master/CPU/exact-VLEN selection, native IC/probe/final-codegen policies,
+`L-Ev+Sv`, `L`, `R`, `R-S+Et`, exact rational normalization and gate/main/epilogue
+policy unless explicitly changed. Non-MIR spill estimates/observations use
+profile-independent SpillReloadUnits and the configured aggregate class hook.
+Observed units remain homogeneous by class, direction and physical group.
 
-Preserve the master flag, CPU/VLEN selection, `L - Ev + Sv` / `L` / `R` /
-`R - S + Et`, exact rational normalization, gate and main/epilogue policy unless
-the task explicitly changes them. Follow the whole-loop fallback order in
-[BACKEND_FEEDBACK.md](BACKEND_FEEDBACK.md#probe와-fallback), preserving requested
-TTI/spill policy and independently valid observations. Reuse requires matching
-candidate, geometry and materialization contexts; recompute pruning per model.
-Never treat failure as zero spill. Do not add post-frame retries or benchmark-specific
-exceptions. Keep reports passive and discard attempted backend reports on
-whole-loop native fallback.
+Tuned profiles apply at Kunminghu128 and Saturn GEN/Shuttle/K1 256. Other settings
+use generic MIR and native TTI. Default-TTI affects both estimated spill terms
+independently of MIR-sheet selection. TTI scalar baselines use configured TTI;
+MIR shares one original-loop VF1/IC1 probe per attempt and applies estimated-spill
+substitution symmetrically. Preserve exact scalar rational ranking and tails.
 
-## Reference and dataset comparisons
+Follow [whole-loop fallback](BACKEND_FEEDBACK.md#probe와-fallback), retaining the
+requested TTI/spill policy and independently valid observations. Raw reuse
+requires candidate, geometry and materialization context matches, including CFG
+and marker policy. Recompute pruning per model. Never turn failure into zero
+spill, add post-frame retries or introduce benchmark-specific exceptions.
+Reports are passive; native fallback discards attempted backend cost reports.
 
-Read `.cache/post-frame-reference/README.md` and use its portable top-level
-manifest and `reference.py`. Historical nested manifests/scripts retain old
-absolute paths as provenance; they must not be used to execute the current
-compiler as though it were the old post-frame compiler.
+## Experiments and protected data
+
+Preserve compiler caches, `.cache/post-frame-reference` when present and other
+retained experiments. Put new outputs in a distinct `.cache/` directory. Never
+commit build products, databases or measurements, or force-add ignored caches.
+The reference directory is currently absent; do not claim verification or
+reconstruct an old baseline by running the current compiler.
+
+When reference data is available, read its top-level README and use the portable
+manifest and `reference.py`; nested historical scripts/absolute paths are
+provenance only. Verification command:
 
 ```sh
 python3 -B .cache/post-frame-reference/reference.py verify
 ```
 
-Use stored post-frame results; do not rerun a baseline compiler. Keep timing
-and observation compiler identities separate. Use this checkout's 313-input
-`dataset.sqlite` for the documented comparison, not the historical 203-input DB.
-Match source bytes, language, effective flags, candidate identity, VF, IC, role,
-iteration width, and preceding-loop context. Compare executable/allocated
-sections and normalized relocations when debug paths or compiler strings differ.
+Use stored post-frame results, not a rerun baseline compiler. Requested dataset
+comparisons use this checkout's 313-input dataset.sqlite, not the historical
+203-input DB. Match source bytes, language, effective flags, candidate identity,
+VF, IC, role, width and preceding-loop context. Separate timing and observation
+compiler identities. Compare executable/allocated sections and normalized
+relocations when debug paths or compiler strings differ.
 
-When a full dataset measurement is requested, run it in a subagent and have the
-main agent independently verify raw counts, successes, and averages. Execute one
-compiler at a time, alternate OFF/ON, use three repetitions and blocking waits
-with a 300-second timeout. Preserve IC=1, disabled vector epilogues, LMUL=8, and
-the default gate for comparisons with this reference. Keep diagnostics separate
-from ordinary timings; exclude preparation/build/hash work from timers. Historical
-timing ratios are not controlled simultaneous speedups. Do not rerun the full
-dataset merely for documentation edits.
-
-## Verification
-
-For relevant compiler changes, build and run the affected checks:
-
-```sh
-cmake --build .cache/build --target clang clang-resource-headers llc opt \
-  FileCheck split-file not count llvm-readobj VectorizeTests RISCVTests IRTests --parallel 2
-.cache/build/unittests/Transforms/Vectorize/VectorizeTests
-.cache/build/unittests/Target/RISCV/RISCVTests
-.cache/build/unittests/IR/IRTests --gtest_filter='PassManager.*:LegacyPassManager.*'
-.cache/build/bin/llvm-lit -v llvm/test/Transforms/LoopVectorize \
-  llvm/test/CodeGen/RISCV/rvv/stack-slot-coloring.mir
-```
-
-Use opt-only probe tests to distinguish the feedback pipeline from normal final
-object codegen. Scale verification to the change; do not repeatedly run passed
-tests without a new reason. Integrated compiler and reporting tests live in the
-LLVM unit/lit suites.
+Full requested dataset measurements run in a subagent; the main agent independently
+checks raw counts, successes and averages. Full TSVC coverage/accuracy evaluations
+use the same delegated execution and independent audit. Execute one compiler at
+a time, alternate OFF/ON for three repetitions, use blocking waits and a
+300-second command timeout. Preserve IC1, disabled vector epilogues, LMUL8 and
+the default gate for reference comparisons. Distinguish force-all diagnostics
+from ordinary selection and report scalar/vector/configuration/loop denominators
+separately. Keep diagnostics separate from ordinary timings; exclude setup,
+building and hashing from timers. Historical timing ratios are not simultaneous
+controlled speedups. Do not rerun full datasets for documentation edits.
