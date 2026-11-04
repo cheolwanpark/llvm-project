@@ -279,9 +279,8 @@ Expected<ObservedRegion> findObservedRegion(MachineFunction &MF) {
 }
 } // namespace
 
-static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
-                                               bool Text) {
-  const Function &F = MF.getFunction();
+Error llvm::vplan::readCandidateIdentity(const Function &F,
+                                         VPlanBackendResult &Result) {
   auto ID = F.getFnAttribute("vplan.backend.candidate").getValueAsString();
   auto Role = F.getFnAttribute("vplan.backend.role").getValueAsString();
   auto VF = attr(F, "vplan.backend.vf"), IC = attr(F, "vplan.backend.ic");
@@ -291,17 +290,27 @@ static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
     return createStringError("invalid backend candidate identity");
   if (Scalar && (VF != 1 || IC != 1 || attr(F, "vplan.backend.scalable") != 0))
     return createStringError("invalid scalar baseline observation identity");
-  auto Region = findObservedRegion(MF);
-  if (!Region)
-    return Region.takeError();
-
-  VPlanBackendResult Result;
   Result.Candidate = ID.str();
   Result.VF = ElementCount::get(VF, attr(F, "vplan.backend.scalable") != 0);
   Result.IC = IC;
   Result.IsEpilogue = Role == "epilogue";
   Result.Kind = Scalar ? VPlanBackendCandidateKind::ScalarBaseline
                        : VPlanBackendCandidateKind::Vector;
+  return Error::success();
+}
+
+static Error collectBody(MachineFunction &MF, VPlanBackendResult &Result,
+                         bool MIR, bool Text) {
+  VPlanBackendResult Identity;
+  if (auto E = vplan::readCandidateIdentity(MF.getFunction(), Identity))
+    return E;
+  if (Identity.Candidate != Result.Candidate || Identity.VF != Result.VF ||
+      Identity.IC != Result.IC || Identity.Kind != Result.Kind ||
+      Identity.IsEpilogue != Result.IsEpilogue)
+    return createStringError("backend observation identity mismatch");
+  auto Region = findObservedRegion(MF);
+  if (!Region)
+    return Region.takeError();
   auto &Observation = MIR ? Result.MIR : Result.Spill;
   Observation.IterationWidth = Region->Width;
   Observation.IterationMapping = true;
@@ -317,26 +326,49 @@ static Expected<VPlanBackendResult> collectBody(MachineFunction &MF, bool MIR,
       if (MIR)
         Observation.MIRBody->push_back(vplan::collectMIRInstruction(MI, Text));
       else if (auto E = vplan::collectVectorSpillAccess(MI, Observation.Spills))
-        return std::move(E);
+        return E;
     }
     if (&MI == Region->Last)
       break;
   }
   Observation.Status = VPlanBackendObservationStatus::Succeeded;
-  return Result;
+  return Error::success();
 }
 Expected<VPlanBackendResult>
 llvm::vplan::collectVectorSpills(MachineFunction &MF) {
-  return collectBody(MF, false, false);
+  VPlanBackendResult Result;
+  if (auto E = readCandidateIdentity(MF.getFunction(), Result))
+    return std::move(E);
+  if (auto E = collectBody(MF, Result, false, false))
+    return std::move(E);
+  return Result;
 }
 Expected<VPlanBackendResult> llvm::vplan::collectMIRBody(MachineFunction &MF,
                                                          bool Text) {
-  return collectBody(MF, true, Text);
+  VPlanBackendResult Result;
+  if (auto E = readCandidateIdentity(MF.getFunction(), Result))
+    return std::move(E);
+  if (auto E = collectBody(MF, Result, true, Text))
+    return std::move(E);
+  return Result;
+}
+void llvm::vplan::observeBody(MachineFunction &MF, VPlanBackendResult &Result,
+                              bool MIR, bool Text) {
+  auto &Slot = MIR ? Result.MIR : Result.Spill;
+  if (Slot.Status != VPlanBackendObservationStatus::NotCollected) {
+    Slot = VPlanBackendObservation();
+    Slot.Status = VPlanBackendObservationStatus::Failed;
+    Slot.Failure = "ambiguous backend candidate function";
+  } else if (auto E = collectBody(MF, Result, MIR, Text)) {
+    Slot = VPlanBackendObservation();
+    Slot.Status = VPlanBackendObservationStatus::Failed;
+    Slot.Failure = toString(std::move(E));
+  }
+  Slot.Stage = MIR ? "post-frame-lowering" : "post-stack-slot-coloring";
 }
 char RISCVVPlanSpill::ID = 0;
-RISCVVPlanSpill::RISCVVPlanSpill(
-    std::optional<Expected<VPlanBackendResult>> &Sink,
-    VPlanFeedbackTimer *Timer)
+RISCVVPlanSpill::RISCVVPlanSpill(VPlanBackendResult &Sink,
+                                 VPlanFeedbackTimer *Timer)
     : MachineFunctionPass(ID), Sink(Sink), Timer(Timer) {
   // This internal pass requires a per-query sink and has no command-line
   // constructor. Register its identity for standard pass instrumentation.
@@ -356,12 +388,7 @@ bool RISCVVPlanSpill::runOnMachineFunction(MachineFunction &MF) {
   if (Timer)
     Timer->mark("post_rvv_to_stack_slot_coloring");
   if (MF.getFunction().hasFnAttribute("vplan.backend.candidate")) {
-    if (Sink) {
-      if (!*Sink)
-        consumeError(Sink->takeError());
-      Sink.emplace(createStringError("ambiguous backend candidate function"));
-    } else
-      Sink.emplace(vplan::collectVectorSpills(MF));
+    vplan::observeBody(MF, Sink, false, false);
   }
   if (Timer)
     Timer->mark("spill_collection");

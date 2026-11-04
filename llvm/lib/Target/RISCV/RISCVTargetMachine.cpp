@@ -286,22 +286,36 @@ MachineFunctionInfo *RISCVTargetMachine::createMachineFunctionInfo(
       Allocator, F, static_cast<const RISCVSubtarget *>(STI));
 }
 
+namespace {
+enum class FeedbackProfile { Generic, XiangShan, Saturn, K1 };
+FeedbackProfile feedbackProfile(const RISCVSubtarget &ST) {
+  if (!ST.hasVInstructions() || ST.getRealMinVLen() != ST.getRealMaxVLen())
+    return FeedbackProfile::Generic;
+  if (ST.getRealMinVLen() == 128 && ST.getTuneCPU() == "xiangshan-kunminghu")
+    return FeedbackProfile::XiangShan;
+  if (ST.getRealMinVLen() == 256) {
+    if (ST.getTuneCPU() == "saturn-shuttle-v256d128")
+      return FeedbackProfile::Saturn;
+    if (ST.getTuneCPU() == "spacemit-x60")
+      return FeedbackProfile::K1;
+  }
+  return FeedbackProfile::Generic;
+}
+} // namespace
+
 TargetTransformInfo
 RISCVTargetMachine::getTargetTransformInfo(const Function &F) const {
-  const auto *ST = getSubtargetImpl(F);
-  if (!vplanBackendUseDefaultTTI() && ST->hasVInstructions()) {
-    unsigned MinVLen = ST->getRealMinVLen();
-    unsigned MaxVLen = ST->getRealMaxVLen();
-    if (ST->getTuneCPU() == "xiangshan-kunminghu" && MinVLen == 128 &&
-        MaxVLen == 128)
+  if (!vplanBackendUseDefaultTTI())
+    switch (feedbackProfile(*getSubtargetImpl(F))) {
+    case FeedbackProfile::XiangShan:
       return TargetTransformInfo(std::make_unique<XiangShanV2TTIImpl>(this, F));
-    if (MinVLen == 256 && MaxVLen == 256) {
-      if (ST->getTuneCPU() == "saturn-shuttle-v256d128")
-        return TargetTransformInfo(std::make_unique<SaturnTTIImpl>(this, F));
-      if (ST->getTuneCPU() == "spacemit-x60")
-        return TargetTransformInfo(std::make_unique<SpacemitK1TTIImpl>(this, F));
+    case FeedbackProfile::Saturn:
+      return TargetTransformInfo(std::make_unique<SaturnTTIImpl>(this, F));
+    case FeedbackProfile::K1:
+      return TargetTransformInfo(std::make_unique<SpacemitK1TTIImpl>(this, F));
+    case FeedbackProfile::Generic:
+      break;
     }
-  }
   return TargetTransformInfo(std::make_unique<RISCVTTIImpl>(this, F));
 }
 
@@ -310,16 +324,18 @@ RISCVTargetMachine::getTargetMIRInfo(const Function &F) const {
   const auto *ST = getSubtargetImpl(F);
   if (!ST->hasVInstructions())
     return nullptr;
-  if (ST->getRealMinVLen() == 256 && ST->getRealMaxVLen() == 256) {
-    if (ST->getTuneCPU() == "saturn-shuttle-v256d128")
-      return std::make_unique<SaturnCostSheet>();
-    if (ST->getTuneCPU() == "spacemit-x60")
-      return std::make_unique<SpacemitK1CostSheet>();
+  switch (feedbackProfile(*ST)) {
+  case FeedbackProfile::XiangShan:
+    return std::make_unique<XiangShanCostSheet>();
+  case FeedbackProfile::Saturn:
+    return std::make_unique<SaturnCostSheet>();
+  case FeedbackProfile::K1:
+    return std::make_unique<SpacemitK1CostSheet>();
+  case FeedbackProfile::Generic:
+    return std::make_unique<RISCVCostSheet>(ST->getRealMinVLen(),
+                                            ST->getTuneCPU());
   }
-  if (ST->getTuneCPU() == "xiangshan-kunminghu" &&
-      ST->getRealMinVLen() == 128 && ST->getRealMaxVLen() == 128)
-    return std::make_unique<XiangShanMIRInfo>();
-  return std::make_unique<RISCVCostSheet>(ST->getRealMinVLen(), ST->getTuneCPU());
+  llvm_unreachable("unknown feedback profile");
 }
 
 // A RISC-V hart has a single byte-addressable address space of 2^XLEN bytes
@@ -482,7 +498,7 @@ TargetPassConfig *RISCVTargetMachine::createPassConfig(PassManagerBase &PM) {
 
 Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
     Module &M, bool Time, VPlanBackendObservationOptions Options) {
-  bool MIR = Options.CollectMIR;
+  bool MIR = Options.collectsMIR();
   if (TargetPassConfig::hasLimitedCodeGenPipeline())
     return createStringError(
         "backend feedback requires an unrestricted codegen pipeline");
@@ -503,10 +519,18 @@ Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
        Ctor != createBasicRVVRegisterAllocator))
     return createStringError(
         "backend feedback requires optimized RVV allocation");
-  std::optional<Expected<VPlanBackendResult>> Result, SpillResult;
+  VPlanBackendResult Result;
+  Result.MIR.Stage = "post-frame-lowering";
+  if (!MIR)
+    Result.MIR.Status = VPlanBackendObservationStatus::NotRequested;
+  for (const auto &F : M)
+    if (F.hasFnAttribute("vplan.backend.candidate")) {
+      if (auto E = vplan::readCandidateIdentity(F, Result))
+        return std::move(E);
+      break;
+    }
   VPlanFeedbackTimer Timer(Time);
   SaveAndRestore Guard(BackendFeedbackSink, &Result);
-  SaveAndRestore SpillGuard(BackendSpillSink, &SpillResult);
   SaveAndRestore ObservationGuard(BackendObservation, Options);
   SaveAndRestore TimerGuard(BackendFeedbackTimer, Time ? &Timer : nullptr);
   if (addPassesToBackendObserver(PM, MIR && !MIRUnavailable
@@ -517,7 +541,7 @@ Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
   Timer.mark("backend_pipeline_construction");
   PM.run(M);
   Timer.mark("backend_return");
-  if (Time && (MIR ? (!Result || !*Result) : (!SpillResult || !*SpillResult))) {
+  if (Time && !(MIR ? Result.MIR : Result.Spill).succeeded()) {
     // Expected errors have no result payload. Preserve executed phase timings
     // in a separate diagnostic record, without turning failure into spill=0.
     json::Object Timing;
@@ -532,41 +556,23 @@ Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
     errs() << "VPLAN-BACKEND-FAILED-TIMING: " << json::Value(std::move(Timing))
            << '\n';
   }
-  VPlanBackendResult Combined;
-  if (SpillResult && *SpillResult)
-    Combined = std::move(**SpillResult);
-  if (Result && *Result) {
-    auto Spill = std::move(Combined.Spill);
-    Combined = std::move(**Result);
-    Combined.Spill = std::move(Spill);
-  }
-  auto Finish = [](auto &Source, VPlanBackendObservation &Dest,
-                   StringRef Stage) {
-    Dest.Stage = Stage.str();
-    if (Source && !*Source) {
-      Dest.Status = VPlanBackendObservationStatus::Failed;
-      Dest.Failure = toString(Source->takeError());
-    } else if (!Source) {
-      Dest.Status = VPlanBackendObservationStatus::NotCollected;
-      Dest.Failure = "backend observer did not see candidate function";
-    }
-  };
-  Finish(SpillResult, Combined.Spill, "post-stack-slot-coloring");
-  Finish(Result, Combined.MIR, "post-frame-lowering");
+  for (auto *Slot : {&Result.Spill, &Result.MIR})
+    if (Slot->Status == VPlanBackendObservationStatus::NotCollected)
+      Slot->Failure = "backend observer did not see candidate function";
   if (SpillUnavailable) {
-    Combined.Spill.Status = VPlanBackendObservationStatus::Failed;
-    Combined.Spill.Failure = "backend feedback requires StackSlotColoring";
-    Combined.Spill.Spills.clear();
+    Result.Spill.Status = VPlanBackendObservationStatus::Failed;
+    Result.Spill.Failure = "backend feedback requires StackSlotColoring";
+    Result.Spill.Spills.clear();
   }
   if (!MIR) {
-    Combined.MIR.Status = VPlanBackendObservationStatus::NotRequested;
-    Combined.MIR.Failure.clear();
+    Result.MIR.Status = VPlanBackendObservationStatus::NotRequested;
+    Result.MIR.Failure.clear();
   } else if (MIRUnavailable) {
-    Combined.MIR.Status = VPlanBackendObservationStatus::Failed;
-    Combined.MIR.Failure = "MIR feedback requires frame lowering";
+    Result.MIR.Status = VPlanBackendObservationStatus::Failed;
+    Result.MIR.Failure = "MIR feedback requires frame lowering";
   }
-  Combined.Timings = std::move(Timer.Phases);
-  return Combined;
+  Result.Timings = std::move(Timer.Phases);
+  return Result;
 }
 
 std::unique_ptr<CSEConfigBase> RISCVPassConfig::getCSEConfig() const {
@@ -620,7 +626,7 @@ bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
 // Stop before post-RA copy propagation, LICM, and frame lowering.
 void RISCVPassConfig::addPostRewrite() {
   auto &TM = getTM<RISCVTargetMachine>();
-  if (auto *Sink = TM.getBackendSpillSink())
+  if (auto *Sink = TM.getBackendFeedbackSink())
     addPass(new RISCVVPlanSpill(*Sink, TM.BackendFeedbackTimer));
 }
 
@@ -721,7 +727,7 @@ void RISCVPassConfig::addPreSched2() {
   if (TM->getOptLevel() != CodeGenOptLevel::None)
     addPass(createRISCVLoadStoreOptPass());
   auto &TM = getTM<RISCVTargetMachine>();
-  if (TM.BackendObservation.CollectMIR)
+  if (TM.BackendObservation.collectsMIR())
     if (auto *Sink = TM.getBackendFeedbackSink())
       addPass(new RISCVVPlanMIR(*Sink, TM.BackendFeedbackTimer,
                                 TM.BackendObservation.CaptureMIRText));

@@ -21,6 +21,7 @@
 #include "llvm/Support/VPlanBackendResult.h"
 #include <functional>
 #include <memory>
+#include <tuple>
 
 namespace llvm {
 class BasicBlock;
@@ -46,23 +47,50 @@ LLVM_ABI VPlanBackendObservedLoop findVPlanBackendObservedLoop(Function &F,
 
 /// Identity is local to a planning invocation, not a persistent cache key.
 /// Geometry is explicit and local to this planning invocation.
-struct VPlanBackendCandidate {
+struct VPlanBackendCandidateIdentity {
   std::string ID;
-  unsigned PlanIndex;
-  ElementCount VF;
-  bool ScalarTail;
-  bool InterleaveOnlyWhenForced;
-  bool VectorizeOnlyWhenForced;
+  unsigned PlanIndex = 0;
+  ElementCount VF = ElementCount::getFixed(1);
   unsigned IC = 1;
   bool IsEpilogue = false;
-  // Epilogue probes materialize the selected main and the requested epilogue.
+  VPlanBackendCandidateKind Kind = VPlanBackendCandidateKind::Vector;
+  bool operator==(const VPlanBackendCandidateIdentity &B) const {
+    return std::tie(ID, PlanIndex, VF, IC, IsEpilogue, Kind) ==
+           std::tie(B.ID, B.PlanIndex, B.VF, B.IC, B.IsEpilogue, B.Kind);
+  }
+};
+
+struct VPlanBackendMaterializationContext {
+  bool ScalarTail = false;
+  bool InterleaveOnlyWhenForced = false;
+  bool VectorizeOnlyWhenForced = false;
   unsigned MainPlanIndex = 0;
   ElementCount MainVF = ElementCount::getFixed(1);
   unsigned MainIC = 1;
   ElementCount EpilogueVF = ElementCount::getFixed(0);
+  bool operator==(const VPlanBackendMaterializationContext &B) const {
+    return std::tie(ScalarTail, InterleaveOnlyWhenForced,
+                    VectorizeOnlyWhenForced, MainPlanIndex, MainVF, MainIC,
+                    EpilogueVF) ==
+           std::tie(B.ScalarTail, B.InterleaveOnlyWhenForced,
+                    B.VectorizeOnlyWhenForced, B.MainPlanIndex, B.MainVF,
+                    B.MainIC, B.EpilogueVF);
+  }
+};
+
+/// One execution request. Only the identity and materialization context belong
+/// in a raw observation key; options and callbacks describe this execution.
+struct VPlanBackendCandidate : VPlanBackendCandidateIdentity,
+                               VPlanBackendMaterializationContext {
   VPlanBackendObservationOptions Observation{};
   std::shared_ptr<VPlanBackendProbeControl> Control{};
-  VPlanBackendCandidateKind Kind = VPlanBackendCandidateKind::Vector;
+
+  VPlanBackendCandidate(std::string ID, unsigned PlanIndex, ElementCount VF,
+                        bool ScalarTail, bool InterleaveOnlyWhenForced,
+                        bool VectorizeOnlyWhenForced)
+      : VPlanBackendCandidateIdentity{std::move(ID), PlanIndex, VF},
+        VPlanBackendMaterializationContext{ScalarTail, InterleaveOnlyWhenForced,
+                                           VectorizeOnlyWhenForced} {}
 };
 
 /// Explicit per-pass state for materializing a candidate on a disposable clone.
@@ -213,6 +241,10 @@ LLVM_ABI bool vplanBackendFeedbackForceAll();
 LLVM_ABI bool vplanBackendFeedbackOutputEnabled();
 /// Append diagnostics only when a JSONL destination was requested.
 LLVM_ABI void writeVPlanBackendFeedback(const json::Object &Result);
+LLVM_ABI void setVPlanBackendCandidate(Function &F,
+                                       const VPlanBackendCandidate &Candidate,
+                                       uint64_t MaterializedWidth);
+LLVM_ABI bool vplanBackendRegionProbesEnabled();
 LLVM_ABI void markVPlanBackendLoop(Loop &L, StringRef ID, ScalarEvolution &SE);
 /// Mark one materialized iteration in a disposable vector or scalar probe.
 LLVM_ABI void markVPlanBackendRegion(BasicBlock &Entry, BasicBlock &Exit,

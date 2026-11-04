@@ -7,18 +7,20 @@
 #include "llvm/Support/VPlanBackendResult.h"
 namespace llvm {
 namespace vplan {
+Error readCandidateIdentity(const Function &F, VPlanBackendResult &Result);
+void observeBody(MachineFunction &MF, VPlanBackendResult &Result, bool MIR,
+                 bool Text);
 Expected<VPlanBackendResult> collectVectorSpills(MachineFunction &MF);
 Error collectVectorSpillAccess(const MachineInstr &MI,
                                std::vector<VPlanVectorSpillAccess> &Accesses);
 } // namespace vplan
 class RISCVVPlanSpill : public MachineFunctionPass {
-  std::optional<Expected<VPlanBackendResult>> &Sink;
+  VPlanBackendResult &Sink;
   VPlanFeedbackTimer *Timer;
 
 public:
   static char ID;
-  RISCVVPlanSpill(std::optional<Expected<VPlanBackendResult>> &Sink,
-                  VPlanFeedbackTimer *Timer);
+  RISCVVPlanSpill(VPlanBackendResult &Sink, VPlanFeedbackTimer *Timer);
   StringRef getPassName() const override {
     return "RISC-V VPlan vector spill observer";
   }

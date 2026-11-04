@@ -9,9 +9,11 @@
 #include <vector>
 namespace llvm {
 enum class VPlanBackendCandidateKind : uint8_t { Vector, ScalarBaseline };
+enum class VPlanBackendStopAfter { Spill, MIR };
 struct VPlanBackendObservationOptions {
   // Every executed probe collects spills; MIR extends the same pipeline.
-  bool CollectMIR = false;
+  VPlanBackendStopAfter StopAfter = VPlanBackendStopAfter::Spill;
+  bool collectsMIR() const { return StopAfter == VPlanBackendStopAfter::MIR; }
   bool CaptureMIRText = false;
 };
 /// The pricing inputs of a body instruction, independent of CodeGen lifetimes.

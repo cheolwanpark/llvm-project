@@ -21,7 +21,11 @@ B  = L − Ev + Sv
 trip count/tail/outside-loop profitability 수식은 기존 정책을 유지한다. Ev는 기존 register-pressure 정책이
 계산한 값이며, 그 정책이 spill을 추가하지 않으면 0이다.
 
-`VPlanBackendCostModel`이 비용 준비, gate, 질의, 검증과 비용 테이블을 소유한다.
+`VPlanBackendCostModel`은 비용 준비와 비용 테이블을 조정한다.
+`VPlanBackendPricing.cpp`는 exact arithmetic, facts 가격화와 scalar/vector MIR
+비용 조합을 담당하며 평가 중 보고 상태를 변경하지 않는다. 별도 `PruningState`는
+후보 순서, 하한과 지배 판정 및 취소 요청을 관리하고 provider가 실행과 join을
+소유한다. LV의 attempt는 비용표, 선택, epilogue와 임시 보고를 함께 채택/폐기한다.
 `VPExactCost`는 quarter-cost 분자와 양의 분모를 유지하고 비교 전에 절삭하지
 않는다. Cross product는 128비트 정수로 비교한다. 필요한 비용의 산술 overflow는
 아래 whole-loop fallback을 적용하고 pruning 증명의 overflow는 probe를 생략하지 않는다.
@@ -109,7 +113,8 @@ witness 검증을 통과해야 한다. 원본은 innermost/unique latch를 요�
 loop 제거 시에도 아래 marker recovery 조건으로 관측할 수 있다. Suffix unroll이 관측
 폭을 바꾸면 원래 scalar iteration 하나로 정확히 정규화한다. 두 경로에서 모두 증명
 불가능한 mapping은 실패이며 비용 0이 아니다.
-관측은 한 시도 안에서만 공유하고 persistent/cross-loop cache를 만들지 않는다.
+관측은 원본 loop invocation 안에서 문맥이 일치하는 시도 사이에 공유하며
+persistent/cross-loop cache를 만들지 않는다.
 
 Known TC, scalar tail, epilogue와 최종 profitability는 exact scalar rational을
 사용하며 ranking 전에 integer/quarter-cost로 절삭하지 않는다. 강제 VF/IC 경로와
@@ -249,7 +254,13 @@ candidate identity, VF/IC, 역할, main/epilogue와 CFG 문맥이 일치할 때�
 MIR 전체 문맥과 축소한 TTI CFG의 동등성을 가정하지 않는다. 관측이 없거나
 문맥이 다르면 다시 수집한다. IC 계산은 native를 유지한다.
 
+요청은 candidate identity, materialization context, 실행 control/options를 구분한다.
+Cache에는 identity와 문맥만 저장하고 필요한 slot의 terminal status를 따로 확인한다.
+Marker 설정과 CFG 축소 문맥도 일치해야 하며 StopAfter 차이만으로 재사용을 막지 않는다.
+`StopAfter = Spill | MIR`에 따라 하나의 backend pipeline을 실행하며 두 observer는
+candidate identity로 초기화한 하나의 query-local 결과의 자기 slot만 기록한다.
 Spill/MIR 관측은 독립적인 status, stage, iteration mapping과 geometry를 소유한다.
+Materialized width는 suffix 후 observed width와 별도로 보존한다.
 MIR 요청도 먼저 post-stack-slot-coloring vector spill을 저장하고 기존
 post-frame-lowering MIR observer까지 진행한다. 한 관측의 실패는 다른 성공
 결과를 지우지 않는다. Scalar MIR 실패 후 TTI scalar 기준을 계산하고 아직

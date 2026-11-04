@@ -23,8 +23,7 @@ namespace llvm {
 class RISCVTargetMachine : public CodeGenTargetMachineImpl {
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
   mutable StringMap<std::unique_ptr<RISCVSubtarget>> SubtargetMap;
-  std::optional<Expected<VPlanBackendResult>> *BackendFeedbackSink = nullptr;
-  std::optional<Expected<VPlanBackendResult>> *BackendSpillSink = nullptr;
+  VPlanBackendResult *BackendFeedbackSink = nullptr;
 
 public:
   VPlanFeedbackTimer *BackendFeedbackTimer = nullptr;
@@ -58,10 +57,7 @@ public:
   Expected<VPlanBackendResult>
   getVPlanBackendFeedback(Module &M, bool Time = false,
                           VPlanBackendObservationOptions Options = {}) override;
-  std::optional<Expected<VPlanBackendResult>> *getBackendSpillSink() const {
-    return BackendSpillSink;
-  }
-  std::optional<Expected<VPlanBackendResult>> *getBackendFeedbackSink() const {
+  VPlanBackendResult *getBackendFeedbackSink() const {
     return BackendFeedbackSink;
   }
 

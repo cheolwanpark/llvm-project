@@ -76,6 +76,9 @@ struct VPMIRCost {
 LLVM_ABI_FOR_TEST Expected<VPMIRCost>
 priceVPlanMIR(const VPlanBackendObservation &Observation,
               const TargetMIRInfo &Info, unsigned Width);
+VPExactCost composeVPlanMIRCost(const VPMIRCost &Cost,
+                                InstructionCost EstimatedSpill,
+                                bool UseEstimatedSpill);
 struct VPBackendCostEntry {
   const VPlan *Plan;
   ElementCount VF;
@@ -97,6 +100,7 @@ struct VPBackendScalarCostEntry {
 /// failure discard every score before native selection can observe the table.
 class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
   friend class VPlanBackendCostModelTestAccess;
+  struct PruningState;
   struct PreparedCandidate {
     VPlan *Plan;
     VPlanBackendCandidate Candidate;
@@ -130,7 +134,7 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
   VPlanBackendMode Mode;
   std::optional<VPBackendScalarCostEntry> ScalarEntry;
   SmallVector<json::Object, 0> Rows;
-  mutable SmallVector<VPlanBackendResult, 0> Observed;
+  SmallVector<VPlanBackendResult, 0> Observed;
   bool Failed = false;
   std::string Failure;
 
@@ -142,6 +146,7 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
                  std::optional<VPlanBackendProbeResult> Result,
                  VPlanFeedbackTimer &Timer,
                  const EvaluatedCost *Evaluated = nullptr);
+  void recordObservation(const VPlanBackendProbeResult &Result);
   bool addBatch(ArrayRef<PreparedCandidate> Candidates,
                 std::optional<VPBackendPruningContext> Context = std::nullopt);
   bool prepareScalar(LoopVectorizationPlanner &LVP);

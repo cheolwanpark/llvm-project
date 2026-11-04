@@ -3,6 +3,7 @@
 #include "RISCVVPlanMIR.h"
 #include "RISCVInstrInfo.h"
 #include "RISCVSubtarget.h"
+#include "RISCVVPlanSpill.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/IR/Function.h"
@@ -109,7 +110,7 @@ VPlanMIRInstruction llvm::vplan::collectMIRInstruction(const MachineInstr &MI,
   return O;
 }
 char RISCVVPlanMIR::ID = 0;
-RISCVVPlanMIR::RISCVVPlanMIR(std::optional<Expected<VPlanBackendResult>> &Sink,
+RISCVVPlanMIR::RISCVVPlanMIR(VPlanBackendResult &Sink,
                              VPlanFeedbackTimer *Timer, bool Text)
     : MachineFunctionPass(ID), Sink(Sink), Timer(Timer), Text(Text) {
   static const PassInfo PI("RISC-V VPlan MIR body observer", "riscv-vplan-mir",
@@ -128,12 +129,7 @@ bool RISCVVPlanMIR::runOnMachineFunction(MachineFunction &MF) {
   if (Timer)
     Timer->mark("post_rvv_to_frame_lowering");
   if (MF.getFunction().hasFnAttribute("vplan.backend.candidate")) {
-    if (Sink) {
-      if (!*Sink)
-        consumeError(Sink->takeError());
-      Sink.emplace(createStringError("ambiguous backend candidate function"));
-    } else
-      Sink.emplace(vplan::collectMIRBody(MF, Text));
+    vplan::observeBody(MF, Sink, true, Text);
   }
   if (Timer)
     Timer->mark("mir_collection");

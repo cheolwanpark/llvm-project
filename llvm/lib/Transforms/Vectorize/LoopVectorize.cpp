@@ -8736,7 +8736,8 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                           VPlanBackendCandidateKind::ScalarBaseline) {
     const auto &C = BackendProbe->Candidate;
     if (C.VF != ElementCount::getFixed(1) || C.IC != 1 || C.IsEpilogue ||
-        !C.Observation.CollectMIR || !L->isInnermost() || !L->getLoopLatch()) {
+        !C.Observation.collectsMIR() || !L->isInnermost() ||
+        !L->getLoopLatch()) {
       BackendProbe->Error = "invalid scalar baseline probe";
       return false;
     }
@@ -8744,12 +8745,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     // post-LV suffix may simplify/unroll it. The shared observer decides whether
     // the resulting loop or marked region has a supported shape and width.
     Function &F = *L->getHeader()->getParent();
-    F.addFnAttr("vplan.backend.candidate", C.ID);
-    F.addFnAttr("vplan.backend.ic", "1");
-    F.addFnAttr("vplan.backend.role", "scalar-baseline");
-    F.addFnAttr("vplan.backend.vf", "1");
-    F.addFnAttr("vplan.backend.scalable", "0");
-    F.addFnAttr("vplan.backend.width", "1");
+    setVPlanBackendCandidate(F, C, 1);
     markVPlanBackendLoop(*L, C.ID, *SE);
     markVPlanBackendRegion(*L->getHeader(), *L->getLoopLatch(), C.ID);
     BackendProbe->Emitted = true;
@@ -8979,7 +8975,8 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   std::unique_ptr<VPlanCostReport> NativeReport;
   auto RestoreNativeReport = [&] {
     if (NativeReport) {
-      CostReport->discard();
+      if (CostReport)
+        CostReport->discard();
       CostReport = std::move(NativeReport);
       Config.CostReport = CostReport.get();
     }
@@ -9010,47 +9007,59 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   std::string FallbackReason;
   json::Array BackendAttempts;
   auto TrySelection = [&](VPlanBackendMode Mode) {
-    if (CostReport) {
-      if (!NativeReport)
-        NativeReport = std::move(CostReport);
-      else
-        CostReport->discard();
-      CostReport = std::make_unique<VPlanCostReport>(
-          *L, Config, ReportInvocation, ReportLoopIndex,
-          NativeReport->isDetailed());
-      Config.CostReport = CostReport.get();
-    }
-    BackendCosts = std::make_unique<VPlanBackendCostModel>(
-        *BackendFeedback, *TTI, *F, *L->getHeader(), Config.CostReport, Mode);
-    if (BackendCosts->prepare(
-            LVP, Config, UserIC, ReportInvocation, ReportLoopIndex,
-            InterleaveOnlyWhenForced, VectorizeOnlyWhenForced,
-            hasForcedEpilogueVF() ? ElementCount(EpilogueVectorizationForceVF)
-                                  : ElementCount::getFixed(0))) {
-      Config.BackendCosts = BackendCosts.get();
-      std::tie(VF, BestPlanPtr) = LVP.computeBestVF();
-      if (!BackendCosts->failed() && BestPlanPtr && VF.Width.isVector()) {
-        auto *C = BackendCosts->lookup(*BestPlanPtr, VF.Width);
-        assert(C && "prepared main cost missing");
-        PreparedEpilogue =
-            LVP.selectBestEpiloguePlan(*BestPlanPtr, VF.Width, C->IC);
+    // Until adoption, every selection artifact belongs to this attempt.
+    struct Attempt {
+      std::unique_ptr<VPlanCostReport> Report;
+      std::unique_ptr<VPlanBackendCostModel> Costs;
+      std::unique_ptr<VPlan> Epilogue;
+      VectorizationFactor VF = VectorizationFactor::Disabled();
+      VPlan *Plan = nullptr;
+      ~Attempt() {
+        if (Report)
+          Report->discard();
       }
-      if (!BackendCosts->failed()) {
+    } A;
+    if (CostReport && !NativeReport)
+      NativeReport = std::move(CostReport);
+    if (NativeReport)
+      A.Report = std::make_unique<VPlanCostReport>(*L, Config, ReportInvocation,
+                                                   ReportLoopIndex,
+                                                   NativeReport->isDetailed());
+    Config.CostReport = A.Report.get();
+    A.Costs = std::make_unique<VPlanBackendCostModel>(
+        *BackendFeedback, *TTI, *F, *L->getHeader(), Config.CostReport, Mode);
+    if (A.Costs->prepare(LVP, Config, UserIC, ReportInvocation, ReportLoopIndex,
+                         InterleaveOnlyWhenForced, VectorizeOnlyWhenForced,
+                         hasForcedEpilogueVF()
+                             ? ElementCount(EpilogueVectorizationForceVF)
+                             : ElementCount::getFixed(0))) {
+      Config.BackendCosts = A.Costs.get();
+      std::tie(A.VF, A.Plan) = LVP.computeBestVF();
+      if (!A.Costs->failed() && A.Plan && A.VF.Width.isVector()) {
+        auto *C = A.Costs->lookup(*A.Plan, A.VF.Width);
+        assert(C && "prepared main cost missing");
+        A.Epilogue = LVP.selectBestEpiloguePlan(*A.Plan, A.VF.Width, C->IC);
+      }
+      if (!A.Costs->failed()) {
         if (vplanBackendFeedbackOutputEnabled())
-          BackendAttempts.push_back(BackendCosts->attemptSummary());
-        BackendCosts->commit(RequestedMode, FallbackReason, BackendAttempts);
+          BackendAttempts.push_back(A.Costs->attemptSummary());
+        A.Costs->commit(RequestedMode, FallbackReason, BackendAttempts);
+        BackendCosts = std::move(A.Costs);
+        PreparedEpilogue = std::move(A.Epilogue);
+        CostReport = std::move(A.Report);
+        VF = A.VF;
+        BestPlanPtr = A.Plan;
         return true; // Scalar selection is a successful model evaluation too.
       }
     }
     if (!FallbackReason.empty())
       FallbackReason += "; ";
-    FallbackReason += (Mode.name() + ": " + BackendCosts->failure()).str();
+    FallbackReason += (Mode.name() + ": " + A.Costs->failure()).str();
     if (vplanBackendFeedbackOutputEnabled())
-      BackendAttempts.push_back(BackendCosts->attemptSummary());
+      BackendAttempts.push_back(A.Costs->attemptSummary());
     Config.BackendCosts = nullptr;
-    PreparedEpilogue.reset();
     LVP.resetVFSelection();
-    BackendCosts.reset();
+    Config.CostReport = NativeReport.get();
     return false;
   };
   bool Selected = false;
@@ -9086,14 +9095,8 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     NativeReport->discard();
   if (BackendProbe) {
     const auto &C = BackendProbe->Candidate;
-    F->addFnAttr("vplan.backend.candidate", C.ID);
-    F->addFnAttr("vplan.backend.ic", std::to_string(C.IC));
-    F->addFnAttr("vplan.backend.role", C.IsEpilogue ? "epilogue" : "main");
-    F->addFnAttr("vplan.backend.vf", std::to_string(C.VF.getKnownMinValue()));
-    F->addFnAttr("vplan.backend.scalable", C.VF.isScalable() ? "1" : "0");
-    F->addFnAttr("vplan.backend.width",
-                 std::to_string(estimateElementCount(
-                     C.VF * C.IC, Config.getVScaleForTuning())));
+    setVPlanBackendCandidate(
+        *F, C, estimateElementCount(C.VF * C.IC, Config.getVScaleForTuning()));
   }
   unsigned IC = 1;
 

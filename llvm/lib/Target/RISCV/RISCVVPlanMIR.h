@@ -11,14 +11,13 @@ VPlanMIRInstruction collectMIRInstruction(const MachineInstr &MI, bool Text);
 Expected<VPlanBackendResult> collectMIRBody(MachineFunction &MF, bool Text);
 } // namespace vplan
 class RISCVVPlanMIR : public MachineFunctionPass {
-  std::optional<Expected<VPlanBackendResult>> &Sink;
+  VPlanBackendResult &Sink;
   VPlanFeedbackTimer *Timer;
   bool Text;
 
 public:
   static char ID;
-  RISCVVPlanMIR(std::optional<Expected<VPlanBackendResult>> &Sink,
-                VPlanFeedbackTimer *Timer, bool Text);
+  RISCVVPlanMIR(VPlanBackendResult &Sink, VPlanFeedbackTimer *Timer, bool Text);
   StringRef getPassName() const override {
     return "RISC-V VPlan MIR body observer";
   }

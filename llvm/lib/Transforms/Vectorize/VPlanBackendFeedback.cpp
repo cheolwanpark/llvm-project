@@ -255,7 +255,9 @@ void llvm::markVPlanBackendRegion(BasicBlock &Entry, BasicBlock &Exit,
   // ineligible, without suppressing markers or the ordinary loop proof.
   if ((F.getFnAttribute("vplan.backend.scalable").getValueAsString() != "0" &&
        !F.getVScaleValue()) ||
-      F.getFnAttribute("vplan.backend.width")
+      (F.hasFnAttribute("vplan.backend.materialized-width")
+           ? F.getFnAttribute("vplan.backend.materialized-width")
+           : F.getFnAttribute("vplan.backend.width"))
           .getValueAsString()
           .getAsInteger(10, Width) ||
       !Width || Width > UINT32_MAX)
@@ -413,11 +415,31 @@ void llvm::finalizeVPlanBackendIterationMapping(Function &F,
   }
   uint64_t Width = 0;
   if (!Ratio ||
-      F.getFnAttribute("vplan.backend.width")
+      (F.hasFnAttribute("vplan.backend.materialized-width")
+           ? F.getFnAttribute("vplan.backend.materialized-width")
+           : F.getFnAttribute("vplan.backend.width"))
           .getValueAsString()
           .getAsInteger(10, Width) ||
       Width > UINT32_MAX / Ratio)
     return;
   F.addFnAttr("vplan.backend.width", std::to_string(Width * Ratio));
   F.addFnAttr("vplan.backend.iteration-mapping", "1");
+}
+
+bool llvm::vplanBackendRegionProbesEnabled() { return RegionProbes; }
+
+void llvm::setVPlanBackendCandidate(Function &F, const VPlanBackendCandidate &C,
+                                    uint64_t MaterializedWidth) {
+  F.addFnAttr("vplan.backend.candidate", C.ID);
+  F.addFnAttr("vplan.backend.ic", std::to_string(C.IC));
+  F.addFnAttr("vplan.backend.role",
+              C.Kind == VPlanBackendCandidateKind::ScalarBaseline
+                  ? "scalar-baseline"
+              : C.IsEpilogue ? "epilogue"
+                             : "main");
+  F.addFnAttr("vplan.backend.vf", std::to_string(C.VF.getKnownMinValue()));
+  F.addFnAttr("vplan.backend.scalable", C.VF.isScalable() ? "1" : "0");
+  F.addFnAttr("vplan.backend.materialized-width",
+              std::to_string(MaterializedWidth));
+  F.addFnAttr("vplan.backend.width", std::to_string(MaterializedWidth));
 }

@@ -42,18 +42,6 @@ public:
   spillCost(bool Vector, bool IsLoad,
             TargetTransformInfo::SpillReloadUnits U) const override;
 };
-class XiangShanMIRInfo final : public TargetMIRInfo {
-  XiangShanCostSheet Sheet;
-public:
-  StringRef getModelName() const override { return Sheet.getModelName(); }
-  StringRef getRevision() const override { return Sheet.getRevision(); }
-  StringRef getCPU() const override { return Sheet.getCPU(); }
-  unsigned getNominalVLEN() const override { return Sheet.getNominalVLEN(); }
-  Expected<MIRInstructionCost> getInstructionCost(
-      const VPlanMIRInstruction &MI) const override {
-    return Sheet.getInstructionCost(MI);
-  }
-};
 class SaturnCostSheet : public RISCVCostSheet {
 public:
   SaturnCostSheet() : RISCVCostSheet(256, "saturn-shuttle-v256d128") {}

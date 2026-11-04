@@ -226,7 +226,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   if (Candidate.Kind == VPlanBackendCandidateKind::ScalarBaseline &&
       (Candidate.VF != ElementCount::getFixed(1) || Candidate.IC != 1 ||
        Candidate.IsEpilogue || Candidate.EpilogueVF.isVector() ||
-       !Candidate.Observation.CollectMIR))
+       !Candidate.Observation.collectsMIR()))
     return createStringError("invalid scalar baseline probe identity");
   if (ScopedPassCancellation::check())
     return createStringError("backend probe cancelled");
@@ -276,7 +276,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   if (PruningTrace)
     BeforePruning = getProbeIRSize(F, FAM);
   DumpPruningIR("before");
-  PruningResult Pruning = Candidate.Observation.CollectMIR
+  PruningResult Pruning = Candidate.Observation.collectsMIR()
                               ? PruningResult{0, "mir-observation"}
                           : PruneLoopRegions ? pruneLoopRegions(F, FAM)
                                              : PruningResult{0, "disabled"};
@@ -485,7 +485,7 @@ runControlledProbe(const VPlanBackendCandidate &C,
     setCandidateIdentity(Unavailable, C);
     Unavailable.Spill.Failure = R.Failure;
     Unavailable.MIR.Stage = "post-frame-lowering";
-    if (C.Observation.CollectMIR)
+    if (C.Observation.collectsMIR())
       Unavailable.MIR.Failure = R.Failure;
     else
       Unavailable.MIR.Status = VPlanBackendObservationStatus::NotRequested;
@@ -503,8 +503,10 @@ class FeedbackProvider {
   struct CachedObservation {
     const Function *F;
     const BasicBlock *Header;
-    VPlanBackendCandidate Candidate;
+    VPlanBackendCandidateIdentity Identity;
+    VPlanBackendMaterializationContext Context;
     bool PrunedContext;
+    bool RegionMarkers;
     VPlanBackendProbeResult Result;
   };
   SmallVector<CachedObservation, 0> Observations;
@@ -533,26 +535,21 @@ public:
     SmallVector<VPlanBackendCandidate> Missing;
     SmallVector<unsigned> Indices;
     auto Pruned = [](const VPlanBackendCandidate &C) {
-      return bool(PruneLoopRegions) && !C.Observation.CollectMIR;
+      return bool(PruneLoopRegions) && !C.Observation.collectsMIR();
     };
     for (const auto &C : Candidates) {
       auto Found = llvm::find_if(Observations, [&](const CachedObservation &O) {
-        const auto &K = O.Candidate;
         return O.F == &F && O.Header == &Header &&
-               O.PrunedContext == Pruned(C) && K.ID == C.ID &&
-               K.PlanIndex == C.PlanIndex && K.VF == C.VF && K.IC == C.IC &&
-               K.Kind == C.Kind && K.IsEpilogue == C.IsEpilogue &&
-               K.ScalarTail == C.ScalarTail &&
-               K.MainPlanIndex == C.MainPlanIndex && K.MainVF == C.MainVF &&
-               K.MainIC == C.MainIC && K.EpilogueVF == C.EpilogueVF &&
-               K.InterleaveOnlyWhenForced == C.InterleaveOnlyWhenForced &&
-               K.VectorizeOnlyWhenForced == C.VectorizeOnlyWhenForced &&
-               (!C.Observation.CollectMIR || K.Observation.CollectMIR) &&
-               O.Result.Observation &&
-               (C.Observation.CollectMIR
-                    ? O.Result.Observation->MIR.Status
-                    : O.Result.Observation->Spill.Status) !=
-                   VPlanBackendObservationStatus::NotCollected;
+               O.PrunedContext == Pruned(C) &&
+               O.RegionMarkers == vplanBackendRegionProbesEnabled() &&
+               O.Identity == C && O.Context == C && O.Result.Observation &&
+               [&] {
+                 auto Status = C.Observation.collectsMIR()
+                                   ? O.Result.Observation->MIR.Status
+                                   : O.Result.Observation->Spill.Status;
+                 return Status == VPlanBackendObservationStatus::Succeeded ||
+                        Status == VPlanBackendObservationStatus::Failed;
+               }();
       });
       if (Found != Observations.end()) {
         Results.push_back(Found->Result);
@@ -574,10 +571,9 @@ public:
       auto &R = (*Collected)[I];
       // Save raw outcomes before any model can discard its cost table.
       if (R.Observation) {
-        auto Key = Missing[I];
-        Key.Control.reset();
-        Observations.push_back(
-            {&F, &Header, std::move(Key), Pruned(Missing[I]), R});
+        Observations.push_back({&F, &Header, Missing[I], Missing[I],
+                                Pruned(Missing[I]),
+                                vplanBackendRegionProbesEnabled(), R});
       }
       Results[Indices[I]] = std::move(R);
     }
