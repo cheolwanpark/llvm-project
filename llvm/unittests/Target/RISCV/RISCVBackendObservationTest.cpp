@@ -110,15 +110,17 @@ TEST_F(RISCVBackendObservation, BranchBodyAndIndependentStages) {
   store(Right, SpillFI);
   store(Join, SpillFI, false);
   store(Join, OrdinaryFI, false);
+  MF->getLoopBackedgeTracking()->CaptureFailures = true;
   VPlanBackendResult Result;
+  Result.CaptureFailures = true;
   ASSERT_FALSE(bool(vplan::readCandidateIdentity(*F, Result)));
   vplan::observeBody(*MF, Result, false, false);
-  ASSERT_TRUE(Result.Spill.succeeded()) << Result.Spill.Failure;
+  ASSERT_TRUE(Result.Spill.succeeded());
   ASSERT_EQ(Result.Spill.Loops.size(), 1u);
   EXPECT_EQ(Result.Spill.Loops.front().Spills.size(), 2u);
   EXPECT_EQ(Result.Spill.Loops.front().IterationWidth, 4u);
   vplan::observeBody(*MF, Result, true, false);
-  ASSERT_TRUE(Result.MIR.succeeded()) << Result.MIR.Failure;
+  ASSERT_TRUE(Result.MIR.succeeded());
   ASSERT_EQ(Result.MIR.Loops.size(), 1u);
   ASSERT_TRUE(Result.MIR.Loops.front().MIRBody);
   EXPECT_EQ(llvm::count_if(*Result.MIR.Loops.front().MIRBody,
@@ -133,7 +135,12 @@ TEST_F(RISCVBackendObservation, BranchBodyAndIndependentStages) {
   EXPECT_TRUE(Result.Spill.succeeded());
   EXPECT_EQ(Result.Spill.Loops.front().Spills.size(), 2u);
   EXPECT_FALSE(Result.MIR.succeeded());
-  EXPECT_FALSE(Result.MIR.MappingFailure.empty());
+  ASSERT_TRUE(Result.MIR.Failure);
+  EXPECT_EQ(Result.MIR.Failure->Group, VPlanBackendFailureGroup::Tracking);
+  ASSERT_EQ(Result.MIR.Exclusions.size(), 1u);
+  EXPECT_EQ(Result.MIR.Exclusions.front().TrackingID, LoopID);
+  EXPECT_FALSE(Result.MIR.Exclusions.front().ObservationID);
+  EXPECT_EQ(Result.MIR.Exclusions.front().Detail, "no observable native loop");
   EXPECT_TRUE(llvm::all_of(Result.MIR.Loops, [](const auto &Loop) {
     return Loop.Spills.empty() && !Loop.MIRBody;
   }));
@@ -210,4 +217,36 @@ TEST_F(RISCVBackendObservation, SegmentAccessesFollowPhysicalEncoding) {
     EXPECT_EQ(Accesses[0].MinBytes + Accesses[1].MinBytes, 24u);
     EXPECT_TRUE(Accesses[0].IsLoad && Accesses[0].FromSegment);
   }
+}
+
+TEST_F(RISCVBackendObservation, FailedLoopLeavesIndependentZeroObservation) {
+  auto *Setup = block(Entry), *Bad = block(Body), *Good = block(Body);
+  Setup->addSuccessor(Bad);
+  Bad->addSuccessor(Bad);
+  Bad->addSuccessor(Good);
+  Good->addSuccessor(Good);
+  bindBackedge(Bad, Bad);
+  bindBackedge(Good, Good);
+  // A mismatched vector data group makes the complete first loop unusable.
+  auto *MI = store(Bad, SpillFI);
+  MI->getOperand(0).setReg(RISCV::V8M2);
+  VPlanBackendResult Owned;
+  Owned.CaptureFailures = true;
+  ASSERT_FALSE(bool(vplan::readCandidateIdentity(*F, Owned)));
+  vplan::observeBody(*MF, Owned, false, false);
+  std::optional<VPlanBackendResult> Result(std::move(Owned));
+  ASSERT_TRUE(bool(Result));
+  ASSERT_TRUE(Result->Spill.succeeded());
+  ASSERT_EQ(Result->Spill.Exclusions.size(), 1u);
+  const auto &Failure = Result->Spill.Exclusions.front();
+  EXPECT_EQ(Failure.Group, VPlanBackendFailureGroup::Collection);
+  EXPECT_EQ(Failure.Candidate, "body");
+  EXPECT_EQ(Failure.Stage, "post-stack-slot-coloring");
+  EXPECT_EQ(Failure.TrackingID, LoopID);
+  EXPECT_EQ(Failure.ObservationID, 1u);
+  EXPECT_EQ(Failure.Detail, "vector spill opcode/register group mismatch");
+  ASSERT_EQ(Result->Spill.Loops.size(), 1u);
+  EXPECT_EQ(Result->Spill.Loops.front().SelectedBlockCount, 1u);
+  EXPECT_TRUE(Result->Spill.Loops.front().Spills.empty());
+  EXPECT_EQ(Result->Spill.Loops.front().TrackingID, LoopID);
 }

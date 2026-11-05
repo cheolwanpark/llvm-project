@@ -184,3 +184,65 @@ TEST(VPlanBackendPricing, IndependentLoopsUseExactUniformMean) {
   ASSERT_TRUE(bool(Zero)) << toString(Zero.takeError());
   EXPECT_EQ(Zero->Body, VPExactCost());
 }
+
+TEST(VPlanBackendPricing, FailedLoopIsExcludedWithoutChangingRawFacts) {
+  VPlanBackendObservation O;
+  O.Status = VPlanBackendObservationStatus::Succeeded;
+  O.Stage = "post-frame-lowering";
+  O.IterationMapping = true;
+  O.Loops = {{1, 3, 1, {}, {}}, {2, 8, 1, {}, {}}};
+  for (auto &L : O.Loops)
+    L.MIRBody.emplace(1);
+  O.Loops.front().MIRBody->front().Opcode = "invalid";
+  O.Loops.back().MIRBody->front().Spill = true;
+  O.Loops.front().TrackingID = 7;
+  SmallVector<VPlanBackendFailure> Failures;
+  auto Cost = priceVPlanMIR(O, FractionPrices(), 4, &Failures);
+  ASSERT_TRUE(bool(Cost)) << toString(Cost.takeError());
+  ASSERT_EQ(Cost->Loops.size(), 1u);
+  EXPECT_EQ(Cost->Loops.front().ID, 2u);
+  EXPECT_EQ(Cost->Body, VPExactCost::ratio(10, 3));
+  EXPECT_EQ(Cost->Body, Cost->Spill);
+  EXPECT_EQ(O.Loops.size(), 2u);
+  ASSERT_EQ(Failures.size(), 1u);
+  EXPECT_EQ(Failures.front().Group, VPlanBackendFailureGroup::Pricing);
+  EXPECT_EQ(Failures.front().Detail, "invalid geometry");
+  EXPECT_EQ(Failures.front().Stage, "post-frame-lowering");
+  EXPECT_EQ(Failures.front().TrackingID, 7u);
+  EXPECT_EQ(Failures.front().ObservationID, 1u);
+  // Even an all-excluded result retains the local error before the primary.
+  O.Loops.back().MIRBody->front().Opcode = "invalid";
+  Failures.clear();
+  auto Failed = priceVPlanMIR(O, FractionPrices(), 4, &Failures);
+  EXPECT_FALSE(bool(Failed));
+  consumeError(Failed.takeError());
+  EXPECT_EQ(Failures.size(), 2u);
+  O.Loops.back().MIRBody->front().Opcode.clear();
+  O.Loops.front().MIRBody->front().Opcode.clear();
+  Cost = priceVPlanMIR(O, FractionPrices(), 4);
+  ASSERT_TRUE(bool(Cost)) << toString(Cost.takeError());
+  EXPECT_EQ(Cost->Loops.size(), 2u); // W=3 need not be a multiple of Wtti=4.
+}
+
+TEST(VPlanBackendPricing, ReportOverflowDoesNotRejectNormalizedSpills) {
+  class LargePrices : public ClassPrices {
+  public:
+    InstructionCost getRegisterClassSpillReloadCost(
+        unsigned, bool, TargetTransformInfo::SpillReloadUnits,
+        TargetTransformInfo::TargetCostKind) const override {
+      return INT64_MAX / 8;
+    }
+  };
+  TargetTransformInfo TTI(std::make_unique<LargePrices>());
+  LLVMContext C;
+  VPlanBackendObservation O;
+  O.Status = VPlanBackendObservationStatus::Succeeded;
+  O.IterationMapping = true;
+  for (unsigned ID = 1; ID <= 3; ++ID)
+    O.Loops.push_back({ID, 4, 1, {{false, 8, true, 8, 0, true, 1, false}}, {}});
+  InstructionCost Raw;
+  auto Cost = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
+  ASSERT_TRUE(bool(Cost)) << toString(Cost.takeError());
+  EXPECT_TRUE(Cost->isValid());
+  EXPECT_FALSE(Raw.isValid());
+}

@@ -685,7 +685,7 @@ bool ShrinkWrapImpl::postShrinkWrapping(bool HasCandidate, MachineFunction &MF,
     return false;
   }
 
-  Mapping.commit([&] { return checkMachineLoopBackedges(MF); });
+  Mapping.commit();
   Save = NewSave;
   Restore = NewRestore;
 

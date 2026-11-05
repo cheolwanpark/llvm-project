@@ -137,8 +137,8 @@ public:
   void backendCost(const VPBackendCostEntry &Cost,
                    const VPRegisterUsageBound &Bound,
                    const VPlanBackendResult *Observation,
-                   ArrayRef<VPSpillCost> AccessCosts, unsigned Width,
-                   StringRef ProfileName, InstructionCost Raw,
+                   ArrayRef<VPSpillCost> AccessCosts, unsigned PricedLoops,
+                   unsigned Width, StringRef ProfileName, InstructionCost Raw,
                    VPExactCost Spill, VPlanBackendMode Mode);
   unsigned registerPlan(const VPlan &Plan);
   unsigned planID(const VPlan &Plan) { return registerPlan(Plan); }

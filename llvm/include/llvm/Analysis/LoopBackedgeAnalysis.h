@@ -13,29 +13,21 @@
 #include "llvm/Support/Error.h"
 namespace llvm {
 class Loop;
-class LoopInfo;
 using ValueToValueMapTy = ValueMap<const Value *, WeakTrackingVH>;
-LLVM_ABI Error checkLoopBackedges(Function &F);
-LLVM_ABI void validateLoopBackedges(Function &F);
 /// Caller has replaced the path From->Through->To with From->To, preserving
 /// the iteration it closes. Preserve labels on logical edges that still exist.
 LLVM_ABI void redirectTrackedEdge(BasicBlock &From, BasicBlock &Through,
                                   BasicBlock &To);
-LLVM_ABI void rebindTrackedLoop(LoopBackedgeTracking &T, uint64_t Q,
-                                const Loop &L);
 LLVM_ABI void cloneTrackedLoops(LoopBackedgeTracking &T,
                                 const LoopBackedgeTable<BasicBlock> &Before,
                                 const ValueToValueMapTy &VMap,
-                                const Loop *Exclude = nullptr,
-                                LoopInfo *LI = nullptr);
-LLVM_ABI bool containsTrackedLoop(const LoopBackedgeTracking &T, const Loop &L);
+                                const Loop *Exclude = nullptr);
 /// A successful uniform serial expansion changes only the direct iteration.
 /// Nested target clones are registered separately by the unroller's clone map.
 class LLVM_ABI LoopBackedgeUnroll {
-  Function &F;
   LoopBackedgeTracking *Tracking;
   LoopBackedgeRewrite<BasicBlock> Rewrite;
-  uint64_t DirectID = 0;
+  SmallVector<uint64_t> DirectIDs;
 
 public:
   explicit LoopBackedgeUnroll(Loop &L);
@@ -65,85 +57,72 @@ template <class Block> struct TrackedLoopBody {
 /// The caller supplies analyses of the current, completed CFG, independently
 /// at each observation boundary. This deliberately does not recover lost IDs.
 template <class Block, class FunctionT, class DomTreeT, class LoopInfoT>
-Expected<SmallVector<TrackedLoopBody<Block>>>
-mapTrackedLoops(const LoopBackedgeTable<Block> &T, FunctionT &F, DomTreeT &DT,
-                LoopInfoT &LI) {
+Expected<SmallVector<TrackedLoopBody<Block>>> mapTrackedLoops(
+    const LoopBackedgeTable<Block> &T, FunctionT &F, DomTreeT &DT,
+    LoopInfoT &LI, SmallVectorImpl<uint64_t> *Conflicts = nullptr,
+    SmallVectorImpl<std::pair<uint64_t, std::string>> *Excluded = nullptr) {
   if (!T.Failure.empty())
     return createStringError(T.Failure);
-  if (T.Widths.empty())
-    return createStringError("missing-target-loop");
-  SmallPtrSet<const Block *, 32> Live, Selected;
+  SmallPtrSet<const Block *, 32> Live;
   for (const auto &BB : F)
     Live.insert(&BB);
+  DenseMap<const Block *, SmallVector<uint64_t>> Loops;
   for (const auto &E : T.Backedges) {
-    if (!T.Widths.count(E.second))
-      return createStringError("unregistered-loop-id");
-    if (!Live.contains(E.first.first) || !Live.contains(E.first.second))
-      return createStringError("lost-backedge");
+    auto [From, To] = E.first;
+    if (!Live.contains(From) || !Live.contains(To))
+      continue;
+    if (!is_contained(children<const Block *>(From), To))
+      continue;
+    auto *L = LI.getLoopFor(To);
+    if (!L || L->getHeader() != To || !L->contains(From) ||
+        !DT.dominates(To, From))
+      continue;
+    auto &IDs = Loops[To];
+    for (auto Q : E.second) {
+      if (!T.Widths.count(Q))
+        return createStringError("unregistered-loop-id");
+      if (!is_contained(IDs, Q))
+        IDs.push_back(Q);
+    }
   }
-  SmallVector<uint64_t> IDs;
-  for (const auto &W : T.Widths)
-    IDs.push_back(W.first);
-  llvm::sort(IDs);
+  // Propagate contradictions across aliases, never across independent widths.
+  DenseSet<uint64_t> Invalid = T.Undefined;
+  bool Changed;
+  do {
+    Changed = false;
+    for (const auto &Entry : Loops) {
+      auto Width = T.Widths.lookup(Entry.second.front());
+      if (any_of(Entry.second, [&](auto Q) {
+            auto W = T.Widths.lookup(Q);
+            return Invalid.contains(Q) || !W || W > UINT32_MAX || W != Width;
+          }))
+        for (auto Q : Entry.second)
+          Changed |= Invalid.insert(Q).second;
+    }
+  } while (Changed);
+  if (Conflicts)
+    Conflicts->append(Invalid.begin(), Invalid.end());
   SmallVector<TrackedLoopBody<Block>> Result;
-  for (uint64_t Q : IDs) {
-    const Block *Header = nullptr;
-    unsigned EdgeCount = 0;
-    for (const auto &E : T.Backedges) {
-      if (E.second != Q)
-        continue;
-      const Block *From = E.first.first, *To = E.first.second;
-      bool Exists = false;
-      for (auto *Succ : children<const Block *>(From))
-        Exists |= Succ == To;
-      if (!Exists)
-        return createStringError("lost-backedge");
-      if (!DT.dominates(To, From))
-        return createStringError("ambiguous-loop");
-      if (Header && Header != To)
-        return createStringError("ambiguous-loop");
-      Header = To;
-      ++EdgeCount;
-    }
-    if (!Header)
-      return createStringError("lost-backedge");
-    auto *L = LI.getLoopFor(Header);
-    if (!L || L->getHeader() != Header)
-      return createStringError("ambiguous-loop");
-    ReversePostOrderTraversal<const Block *> RPO(Header);
-    SmallVector<const Block *> BodyRPO;
-    for (auto *BB : RPO)
-      if (L->contains(BB))
-        BodyRPO.push_back(BB);
-    if (containsIrreducibleCFG<const Block *>(BodyRPO, LI))
-      return createStringError("ambiguous-loop");
-    unsigned ActualEdges = 0;
-    for (auto *BB : L->blocks())
-      for (auto *Succ : children<const Block *>(BB)) {
-        if (Succ != Header)
-          continue;
-        auto I = T.Backedges.find({BB, Header});
-        if (I == T.Backedges.end())
-          return createStringError("lost-backedge");
-        if (I->second != Q)
-          return createStringError("conflicting-loop-ids");
-        // IR switches can contain the same successor more than once.
-        ++ActualEdges;
-        break;
-      }
-    if (ActualEdges != EdgeCount)
-      return createStringError("ambiguous-loop");
-    uint64_t Width = T.Widths.lookup(Q);
-    if (!Width || Width > UINT32_MAX)
-      return createStringError("width-overflow");
-    TrackedLoopBody<Block> Body{Q, Width, {}};
-    for (const auto *BB : L->blocks()) {
-      if (!Selected.insert(BB).second)
-        return createStringError("overlapping-loop-bodies");
-      Body.Blocks.push_back(BB);
-    }
+  // Function order makes observation instance identities deterministic.
+  for (const auto &BB : F) {
+    auto I = Loops.find(&BB);
+    if (I == Loops.end() || Invalid.contains(I->second.front()))
+      continue;
+    uint64_t Q = *llvm::min_element(I->second);
+    TrackedLoopBody<Block> Body{Q, T.Widths.lookup(Q), {}};
+    for (auto *B : LI.getLoopFor(&BB)->blocks())
+      Body.Blocks.push_back(B);
     Result.push_back(std::move(Body));
   }
+  if (Excluded)
+    for (const auto &W : T.Widths) {
+      if (Invalid.contains(W.first) || !W.second || W.second > UINT32_MAX)
+        Excluded->emplace_back(W.first, "undefined iteration width");
+      else if (none_of(Loops, [&](const auto &L) {
+                 return is_contained(L.second, W.first);
+               }))
+        Excluded->emplace_back(W.first, "no observable native loop");
+    }
   return Result;
 }
 } // namespace llvm

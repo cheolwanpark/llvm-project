@@ -18,7 +18,6 @@
 
 #include "BranchFolding.h"
 #include "llvm/ADT/BitVector.h"
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -239,10 +238,6 @@ bool BranchFolder::OptimizeFunction(MachineFunction &MF,
                                     const TargetRegisterInfo *tri,
                                     MachineLoopInfo *mli, bool AfterPlacement) {
   if (!tii) return false;
-  LoopBackedgeRewrite<MachineBasicBlock> Mapping(MF.getLoopBackedgeTracking());
-  auto FinishMapping = scope_exit([&] {
-    Mapping.commit([&] { return checkMachineLoopBackedges(MF); });
-  });
 
   TriedMerging.clear();
 

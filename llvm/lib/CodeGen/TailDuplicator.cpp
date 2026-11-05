@@ -12,19 +12,21 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/TailDuplicator.h"
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
+#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineLoopBackedgeTracking.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MachineSSAUpdater.h"
@@ -169,9 +171,34 @@ bool TailDuplicator::tailDuplicateAndUpdate(
     SmallVectorImpl<MachineBasicBlock*> *DuplicatedPreds,
     function_ref<void(MachineBasicBlock *)> *RemovalCallback,
     SmallVectorImpl<MachineBasicBlock *> *CandidatePtr) {
-  LoopBackedgeRewrite<MachineBasicBlock> Mapping(MF->getLoopBackedgeTracking());
+  auto *Tracking = MF->getLoopBackedgeTracking();
+  SmallVector<
+      std::pair<const MachineBasicBlock *, MachineLoopBackedgeTracking::Labels>>
+      Boundaries;
+  SmallVector<MachineBasicBlock *> Successors;
+  if (Tracking) {
+    Successors.append(MBB->succ_begin(), MBB->succ_end());
+    for (const auto &E : Tracking->Backedges)
+      if (E.first.second == MBB)
+        Boundaries.push_back({E.first.first, E.second});
+  }
   auto FinishMapping = scope_exit([&] {
-    Mapping.commit([&] { return checkMachineLoopBackedges(*MF); });
+    if (!Tracking || Boundaries.empty())
+      return;
+    SmallPtrSet<const MachineBasicBlock *, 32> Live;
+    for (auto &BB : *MF)
+      Live.insert(&BB);
+    MachineDominatorTree DT(*MF);
+    // Only successors supplied by this tail duplication can carry its moved
+    // iteration boundary. Never label unrelated helper backedges.
+    for (const auto &B : Boundaries) {
+      if (!Live.contains(B.first))
+        continue;
+      for (auto *Succ : Successors)
+        if (Live.contains(Succ) && B.first->isSuccessor(Succ) &&
+            DT.dominates(Succ, B.first))
+          Tracking->bind({B.first, Succ}, B.second);
+    }
   });
   // Save the successors list.
   SmallSetVector<MachineBasicBlock *, 8> Succs(MBB->succ_begin(),
@@ -634,7 +661,8 @@ bool TailDuplicator::shouldTailDuplicate(bool IsSimple,
     // CFI instructions are marked as non-duplicable, because Darwin compact
     // unwind info emission can't handle multiple prologue setups. In case of
     // DWARF, allow them be duplicated, so that their existence doesn't prevent
-    // tail duplication of some basic blocks, that would be duplicated otherwise.
+    // tail duplication of some basic blocks, that would be duplicated
+    // otherwise.
     if (MI.isNotDuplicable() &&
         (TailBB.getParent()->getTarget().getTargetTriple().isOSDarwin() ||
         !MI.isCFIInstruction()))

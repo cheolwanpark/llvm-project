@@ -50,10 +50,10 @@ selection are unchanged by this flag. Saturn/K1 TTI remains native. Native IC,
 probe optimization and final codegen always stay outside the tuned comparison
 scope. CPU/exact-VLEN selection and prices are in the target sheets.
 
-For N tracked iterations, selection uses the uniform mean
-`Wtti × Σ(Cq/Wq) / N`. Each `Wq` already includes IC and proven serial unrolling;
-neither factor is divided out again. This is an explicit static cost policy,
-not an execution-frequency estimate. The same coefficients apply to MIR R and S,
+For N successfully priced native loops, selection uses the uniform mean
+`Wtti × Σ(Cq/Wq) / N`. Each `Wq` includes IC and proven serial unrolling;
+neither factor is divided out again. `Wq` need not be a multiple of `Wtti`. This
+is an explicit static cost policy, not an execution-frequency estimate. The same coefficients apply to MIR R and S,
 while configured TTI Et is already in candidate units. Non-MIR spill accesses are
 aggregated and priced independently per loop and homogeneous physical group,
 class and direction before exact scaling; aggregate hooks need not be linear.
@@ -74,7 +74,7 @@ the effective model and fallback ledger.
 
 ```text
 clone → activate private-function tracking → materialize and register body
-  → configured CFG reduction → native post-LV suffix → validate IR evidence
+  → configured CFG reduction → native post-LV suffix → verify IR
   → instruction selection / pre-RA optimization and scheduling
   → RVV allocation / rewrite → VSETVLI insertion → scalar allocation / rewrite
   → StackSlotColoring → vector-spill observer
@@ -86,12 +86,15 @@ observations are taken at `post-stack-slot-coloring`, before copy propagation,
 post-RA LICM and frame lowering. MIR uses `post-frame-lowering`: after RISC-V
 post-RA pseudo expansion, KCFI and load/store optimization in `addPreSched2`,
 before final scheduling and RVV pseudo expansion. There is no post-frame retry.
-Unsupported allocators, disabled StackSlotColoring, limited/profile-dependent
-pipelines or unproven termination are failures, never zero spills.
+PGO, GlobalISel and user start/stop pipelines remain outside the supported
+research scope. FastISel flags use RISC-V's existing SelectionDAG path. Allocator
+names do not restrict support: each slot uses its actual observation result.
+Missing StackSlotColoring or frame lowering affects the corresponding slot;
+missing observations never become zero spills.
 
 Each query has one identity-initialized result with independent Spill and MIR
-slots. Each slot owns status, stage, scope evidence and per-loop widths/payloads. Status
-distinguishes not requested, not collected, failed and succeeded. A succeeded
+slots. Each slot owns status, stage, scope evidence and per-loop widths/payloads.
+Status distinguishes not requested, not collected, failed and succeeded. A succeeded
 empty payload for a validated loop is an observed zero, including empty MIR
 payload. An empty loop collection, gate skip or failure is not an observed zero.
 One failed slot must not erase the other's valid observation; an unrequested MIR
@@ -120,14 +123,15 @@ scalar baseline starts at 1. IDs are local to the probe. Body membership,
 nesting and instruction origins are not persistent tracking state. Inactive
 native paths do not allocate tracking tables.
 
-Each observer obtains current dominance and LoopInfo independently. Every
-registered ID must identify one natural loop: its labeled edges must exist,
-share a header dominating their sources, and account for that loop's complete
-backedge set. Missing IDs, conflicting labels, invalid widths, irreducible or
-ambiguous correspondence and overlap between selected loop bodies fail the
-observation. A deleted last backedge does not silently unregister its iteration.
-Owned results contain each iteration's ID, width, selected block count and raw
-facts, with no IR/MIR object pointers.
+Each observer obtains current dominance and LoopInfo independently. Surviving
+actual backedges identify current native loops; missing edges, eliminated loops
+and undefined widths are excluded. The observer does not require all registered
+IDs, all backedges, old headers, reducible helper CFGs, or disjoint historical
+bodies to survive. Same-loop/same-width aliases count once. Several independent
+loops sharing q count separately. Width contradictions invalidate affected IDs
+and aliases, including dependent clones, rather than unrelated targets.
+Owned results use a unique stage-local `id` for joins and retain q as
+`tracking_id`.
 
 Membership is **the current natural loop's static block sum**. Both sides of a
 branch and every inner helper-loop block are counted once. Preheaders and exits
@@ -146,34 +150,33 @@ The tracking rules at completed transformations are:
 | Serial partial unroll | Multiply only that iteration's width by the successful expansion factor, with checked overflow; unknown trip count alone is permitted |
 | Enclosing-loop simple unroll | Register cloned inner targets separately without multiplying their widths by the outer factor |
 | Runtime remainder | Register independently before recursive remainder unroll and preserve its own width |
-| Partial latch/tail duplication | Preserve one iteration ID across its resulting latches; validate reducibility and correspondence |
+| Partial latch/tail duplication | Preserve one iteration ID across its resulting latches; preserve the resulting iteration boundary |
 | SelectionDAG branches/switches | Bind actual final machine successor edges, independently of PHI presence; source IRBB identity alone is insufficient |
 | Custom insertion, atomic retry, stack probing and restore splitting | Transfer the original boundary through continuations; generated helper backedges do not acquire target IDs |
 | Instruction movement, RA, spills, VSETVLI and instruction-local rewrites | No instruction ancestry propagation; observe the resulting current location |
 
-Boundary updates use completed transformation correspondence; transient edge
-removal is not itself a permanent failure. Speculative CFG rollback restores
-tracking state too. A committed transformation whose mapping cannot be proved
-records failure without disabling the native pass or undoing its optimization.
-IR is checked after the suffix and before ISel; machine mapping is checked after
-bridging and independently at both observers.
+Boundary updates use completed transformation correspondence. Deletion removes
+connections without sticky failure; speculative CFG rollback restores tracking
+state too. No pass-boundary completeness verifier rejects surviving targets.
+Width overflow makes only affected q undefined and stays undefined through
+cloning. Unroll-and-jam multiplies the inner target width by the actual factor;
+enclosing simple unroll/peel clones independent inner targets without changing
+their widths. Finite trip counts are supported while a loop remains. Full-unrolled bodies and
+peeled finite prefixes are excluded, with no usable target reported unavailable.
+Default/peeling software-pipeline kernels retain W; MVE kernels use
+W × NumUnroll while the original fallback loop retains its independent W.
 
-Full unroll, initially finite materialization, finite runtime remainders and
-peeling prefixes are outside this observation policy. They are reported as
-unsupported finite bodies, rather than silently averaging only surviving loops.
-Unroll-and-jam that changes a target iteration domain is unsupported. Neither a
-constant trip count nor identical widths proves equivalence of independent IDs.
-GlobalISel, FastISel and software pipelining remain unsupported for observation;
-final native codegen options retain their meanings. Mapping failure never
-permits zero substitution or an extra backend retry.
+Collection errors exclude a complete loop from that stage. Model-local pricing
+errors exclude a complete loop only from that model, preserving raw facts for
+reuse. MIR R/S share the same included set, and the mean uses only successfully
+priced loops. N=0 is unavailable. Unknown-opcode prices and estimated-spill
+substitution retain their existing meaning. Report-only raw-sum overflow is
+represented as JSON null and cannot reject valid normalized selection costs.
 
-Uniform averaging covers all registered repeated targets, including surviving
-alternative clones and repeated backend remainders. It does not assert dynamic
-weights or turn a backend remainder into an LV vector epilogue. Scalar and vector
-observations use the same composition policy and exact rational arithmetic.
-Later transformations may change scope or invalidate MIR without erasing the
-independently owned successful Spill snapshot. These are tracking and pricing
-contracts, not measured coverage or accuracy claims.
+Uniform averaging estimates the surviving repeated targets rather than total
+execution cost or dynamic path weights. Later exclusions cannot erase an earlier
+successful Spill snapshot. These are contracts, not measured coverage or
+accuracy claims.
 
 ## Scalar, main and epilogue context
 
@@ -285,12 +288,62 @@ remain `not-evaluated` rather than fabricated values.
 
 JSONL distinguishes requested/effective model, ordered fallback attempts,
 collection versus use, gate skips and pruning. Independent-observation schema
-`backedge-loop-observations-v3` contains `spill_observation` and `mir_observation`.
-Slots use `rvv-vector-spill-v3` or `mir-body-observation-v3`, with a `loops` array
-containing `id`, `iteration_width`, `selected_block_count` and `spills` or `body`.
+`backedge-loop-observations-v4` contains `spill_observation` and `mir_observation`.
+Slots use `rvv-vector-spill-v5` or `mir-body-observation-v5`, with a `loops` array
+containing `id`, `tracking_id`, `iteration_width`, `selected_block_count` and
+`spills` or `body`. Priced loop arrays may be subsets of raw observations; join
+them by stage-local `id` and use the priced set size for its mean.
 There are no single-width/payload compatibility aliases or ancestry statistics.
-Stage-level fields retain status/failure, mapping/normalization status/failure,
-materialized width, total selected blocks and mapping/normalization revisions.
+Stage-level fields retain independent slot status, stage, `iteration_mapping`,
+materialized width, total selected blocks and mapping/normalization policy
+revisions (both 3). Mapping and normalization have no separate status or failure
+fields.
+
+The only failure/exclusion report is `schema=vplan-backend-failures-v1`,
+`status=backend-failures`, appended through `-vplan-backend-jsonl`. One row per
+original LV loop is emitted only when records exist and contains `function`,
+`invocation`, `loop`, `requested_model`, `effective_model` and ordered `attempts`. Each attempt retains `model`,
+`use_estimated_spill`, `use_default_tti`, `status` (`failed` or `succeeded`), owned
+`observations`, and `failures`. An exclusion can accompany a successful requested
+model; actual fallback means requested and effective models differ. Native fallback
+uses `effective_model=native` and the same ledger, discarding attempted cost rows.
+
+Failure groups appear in this order; empty groups are omitted:
+
+| ID | Owning checks |
+|---|---|
+| `availability` | Unsupported input/configuration, unavailable provider/model, missing observer/stage |
+| `integrity` | Candidate/function/role/materialization identity, malformed owned payload, invalid service result |
+| `tracking` | No observable native target loop, lost correspondence, undefined/conflicting/overflowing width |
+| `collection` | Uninterpretable spill accesses, register groups, memory operands or collected facts |
+| `pricing` | Instruction/TTI prices, normalization, composition, ranking or cost arithmetic |
+| `execution` | Snapshot restoration, invalid IR, TargetMachine/pipeline construction or backend diagnostics |
+
+Each group contains `id`, `count`, and `items`; `count` is the number of deduplicated
+items. An item owns `candidate`, `stage`, `detail` and, when known, `tracking_id`
+(q) and `observation_id`. Stages are `input`, `materialization`, `probe`,
+`selection`, `post-stack-slot-coloring`, and `post-frame-lowering`. Unknown IDs
+are omitted. Detailed errors remain intact within stable groups; classification
+is explicit at checks or subsystem boundaries, never inferred from text.
+
+Results and evaluated costs own records until consumption. Consumed candidates
+retain failures in either requested slot and local tracking, collection and
+pricing exclusions, including partial success and all-excluded results. Per-attempt
+records sort/deduplicate by group, candidate, stage, optional IDs and detail;
+cache reuse and propagation do not multiply evidence. Distinct attempts retain
+distinct contexts. Cancelled, dominated and unconsumed work creates no ledger
+entries. Gate/pruning skips, serial execution, cache misses, unknown opcode prices
+and successful scalar selection are not failures. Exclusion capture is enabled
+only for JSONL; primary errors still propagate when reporting is disabled.
+Only LV emits the combined failure row after choosing the effective model.
+
+Selected, candidate, scalar and pruned rows also carry `invocation`. Join final
+outcomes by `(case, configuration, function, invocation, loop)`. Native fallback
+outcomes report unknown VF and emission as JSON null. Candidate IDs and q/observation
+IDs are local identities, qualified by configuration, attempt and observation
+stage. No separate fallback rows, concatenated reasons, candidate `cost_failure`,
+observation failure strings or text fallback summary are emitted. Unrelated cost,
+pruning and timing diagnostics retain their existing formats.
 
 Mapping reports `mapping_kind=backedge-loops`,
 `region_granularity=natural-loop-block-set`, `body_cost_semantics=static-block-sum`
@@ -301,9 +354,7 @@ spill prices and exact mean contributions. Aggregate R/S and the final selection
 cost are exact fractions, not a raw sum scaled by a single synthetic width.
 Scalar baseline rows have `role=scalar-baseline` and are excluded from vector
 totals. Divide a quarter-cost numerator by four times its denominator to obtain
-textual model units. Probe-local loop IDs and object addresses are not persistent
-identities. Reports consume already computed facts/prices without re-probing or
-re-pricing.
+textual model units.
 
 Pruned unobserved candidates have bounds, not invented body costs. Physical
 execution may be not-started, cancelled or completed without changing logical

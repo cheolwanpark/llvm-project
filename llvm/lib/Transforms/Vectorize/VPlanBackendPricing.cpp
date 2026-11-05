@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #include "VPlanBackendCostModel.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -73,47 +74,78 @@ std::optional<uint64_t> VPExactCost::ceilDivide(VPExactCost B) const {
   return Q.getZExtValue();
 }
 
-Expected<VPMIRCost> llvm::priceVPlanMIR(const VPlanBackendObservation &O,
-                                        const TargetMIRInfo &Info,
-                                        unsigned Width) {
+Expected<VPMIRCost>
+llvm::priceVPlanMIR(const VPlanBackendObservation &O, const TargetMIRInfo &Info,
+                    unsigned Width,
+                    SmallVectorImpl<VPlanBackendFailure> *Failures) {
   if (!O.succeeded() || !O.IterationMapping ||
       O.Stage != "post-frame-lowering" || O.Loops.empty() || !Width)
-    return createStringError("invalid MIR body/stage/iteration mapping");
+    return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                             "invalid MIR body/stage/iteration mapping", "",
+                             O.Stage);
   VPMIRCost R;
   R.Model = Info.getModelName().str();
   R.Revision = Info.getRevision().str();
   R.CPU = Info.getCPU().str();
   R.NominalVLEN = Info.getNominalVLEN();
+  SmallDenseSet<uint64_t, 8> IDs;
   for (const auto &L : O.Loops) {
-    if (!L.ID || !L.MIRBody || !L.IterationWidth ||
-        L.IterationWidth > UINT32_MAX || L.IterationWidth % Width)
-      return createStringError("invalid MIR loop iteration mapping");
-    VPMIRLoopCost P;
-    P.ID = L.ID;
-    P.IterationWidth = L.IterationWidth;
-    for (const auto &MI : *L.MIRBody) {
-      auto Cost = Info.getInstructionCost(MI);
-      if (!Cost)
-        return Cost.takeError();
-      VPExactCost C =
-          VPExactCost::ratio(Cost->Numerator, Cost->Denominator) * 4;
-      if (!C.isValid())
-        return createStringError("invalid MIR direct cost");
-      P.RawBody = P.RawBody + C;
-      if (MI.Spill)
-        P.RawSpill = P.RawSpill + C;
-      P.Instructions.push_back(std::move(*Cost));
+    if (!L.ID || !IDs.insert(L.ID).second || !L.MIRBody || !L.IterationWidth ||
+        L.IterationWidth > UINT32_MAX)
+      return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                               "invalid MIR loop iteration mapping", "",
+                               O.Stage);
+    auto PriceLoop = [&]() -> Expected<VPMIRLoopCost> {
+      VPMIRLoopCost P;
+      P.ID = L.ID;
+      P.IterationWidth = L.IterationWidth;
+      for (const auto &MI : *L.MIRBody) {
+        auto Cost = Info.getInstructionCost(MI);
+        if (!Cost)
+          return Cost.takeError();
+        VPExactCost C =
+            VPExactCost::ratio(Cost->Numerator, Cost->Denominator) * 4;
+        if (!C.isValid())
+          return vplanBackendError(VPlanBackendFailureGroup::Pricing,
+                                   "invalid MIR direct cost", "", O.Stage);
+        P.RawBody = P.RawBody + C;
+        if (MI.Spill)
+          P.RawSpill = P.RawSpill + C;
+        P.Instructions.push_back(std::move(*Cost));
+      }
+      P.Body = P.RawBody.normalize(Width, L.IterationWidth);
+      P.Spill = P.RawSpill.normalize(Width, L.IterationWidth);
+      if (!P.Body.isValid() || !P.Spill.isValid())
+        return vplanBackendError(VPlanBackendFailureGroup::Pricing,
+                                 "MIR loop cost overflow", "", O.Stage);
+      return P;
+    };
+    auto P = PriceLoop();
+    if (!P) {
+      auto Failure = takeVPlanBackendFailure(
+          P.takeError(), VPlanBackendFailureGroup::Pricing, "", O.Stage);
+      if (L.TrackingID)
+        Failure.TrackingID = L.TrackingID;
+      Failure.ObservationID = L.ID;
+      if (Failures)
+        Failures->push_back(std::move(Failure));
+      continue;
     }
-    P.Body = P.RawBody.normalize(Width, L.IterationWidth)
-                 .normalize(1, O.Loops.size());
-    P.Spill = P.RawSpill.normalize(Width, L.IterationWidth)
-                  .normalize(1, O.Loops.size());
+    R.Loops.push_back(std::move(*P));
+  }
+  if (R.Loops.empty())
+    return vplanBackendError(VPlanBackendFailureGroup::Pricing,
+                             "no-priced-target-loop", "", O.Stage);
+  for (auto &P : R.Loops) {
+    P.Body = P.Body.normalize(1, R.Loops.size());
+    P.Spill = P.Spill.normalize(1, R.Loops.size());
     R.Body = R.Body + P.Body;
     R.Spill = R.Spill + P.Spill;
-    R.Loops.push_back(std::move(P));
   }
   if (!R.Body.isValid() || !R.Spill.isValid())
-    return createStringError("invalid or overflowing MIR direct cost");
+    return vplanBackendError(VPlanBackendFailureGroup::Pricing,
+                             "invalid or overflowing MIR direct cost", "",
+                             O.Stage);
   return R;
 }
 bool VPExactCost::operator<(VPExactCost B) const {
@@ -152,67 +184,113 @@ Expected<VPExactCost> llvm::priceVPlanVectorSpills(
     const VPlanBackendObservation &O, const TargetTransformInfo &TTI,
     LLVMContext &Context, unsigned Width, InstructionCost &RawCost,
     SmallVectorImpl<VPSpillCost> *AccessCosts, bool UseDefaultTTI,
-    SmallVectorImpl<VPSpillLoopCost> *LoopCosts) {
+    SmallVectorImpl<VPSpillLoopCost> *LoopCosts,
+    SmallVectorImpl<VPlanBackendFailure> *Failures) {
   if (!O.succeeded() || !O.IterationMapping ||
       O.Stage != "post-stack-slot-coloring" || O.Loops.empty() || !Width)
-    return createStringError("invalid backend loop/iteration mapping");
+    return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                             "invalid backend loop/iteration mapping", "",
+                             O.Stage);
   int64_t TotalRawQuarters = 0;
+  bool RawValid = true;
+  SmallVector<VPSpillLoopCost> Included;
+  SmallVector<VPSpillCost> IncludedAccesses;
+  SmallDenseSet<uint64_t, 8> IDs;
   VPExactCost Total;
   for (const auto &L : O.Loops) {
     uint64_t Wobs = L.IterationWidth;
-    if (!L.ID || !Wobs || Wobs > UINT32_MAX || Wobs % Width)
-      return createStringError("invalid backend iteration width");
-    SmallVector<VPSpillCost> Prices;
-    int64_t RawQuarters = 0;
-    for (const auto &A : L.Spills) {
-      if (!A.MinBytes || A.MinBytes > UINT32_MAX || !A.Alignment ||
-          !isPowerOf2_64(A.Alignment) ||
-          A.Alignment > Value::MaximumAlignment || !A.WholeRegister ||
-          !isPowerOf2_32(A.RegisterGroup) || A.RegisterGroup > 8)
-        return createStringError("unsupported vector spill access");
-      Type *Ty = VectorType::get(Type::getInt8Ty(Context),
-                                 ElementCount::get(A.MinBytes, A.Scalable));
-      unsigned ClassID = TTI.getRegisterClassForType(true, Ty);
-      auto I = llvm::find_if(Prices, [&](const VPSpillCost &P) {
-        return P.ClassID == ClassID && P.IsLoad == A.IsLoad &&
-               P.Registers / P.Accesses == A.RegisterGroup;
-      });
-      if (I == Prices.end()) {
-        Prices.push_back({ClassID, A.IsLoad});
-        I = std::prev(Prices.end());
+    if (!L.ID || !IDs.insert(L.ID).second || !Wobs || Wobs > UINT32_MAX)
+      return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                               "invalid backend iteration width", "", O.Stage);
+    SmallVector<VPSpillCost> LoopAccesses;
+    auto PriceLoop = [&]() -> Expected<VPSpillLoopCost> {
+      SmallVector<VPSpillCost> Prices;
+      int64_t RawQuarters = 0;
+      for (const auto &A : L.Spills) {
+        if (!A.MinBytes || A.MinBytes > UINT32_MAX || !A.Alignment ||
+            !isPowerOf2_64(A.Alignment) ||
+            A.Alignment > Value::MaximumAlignment || !A.WholeRegister ||
+            !isPowerOf2_32(A.RegisterGroup) || A.RegisterGroup > 8)
+          return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                                   "unsupported vector spill access", "",
+                                   O.Stage);
+        Type *Ty = VectorType::get(Type::getInt8Ty(Context),
+                                   ElementCount::get(A.MinBytes, A.Scalable));
+        unsigned ClassID = TTI.getRegisterClassForType(true, Ty);
+        auto I = llvm::find_if(Prices, [&](const VPSpillCost &P) {
+          return P.ClassID == ClassID && P.IsLoad == A.IsLoad &&
+                 P.Registers / P.Accesses == A.RegisterGroup;
+        });
+        if (I == Prices.end()) {
+          Prices.push_back({ClassID, A.IsLoad});
+          I = std::prev(Prices.end());
+        }
+        if (I->Registers > uint64_t(INT64_MAX) - A.RegisterGroup ||
+            I->Accesses == uint64_t(INT64_MAX))
+          return vplanBackendError(VPlanBackendFailureGroup::Pricing,
+                                   "spill units overflow", "", O.Stage);
+        I->Registers += A.RegisterGroup;
+        ++I->Accesses;
       }
-      if (I->Registers > uint64_t(INT64_MAX) - A.RegisterGroup ||
-          I->Accesses == uint64_t(INT64_MAX))
-        return createStringError("spill units overflow");
-      I->Registers += A.RegisterGroup;
-      ++I->Accesses;
+      VPlanCostProfileScope Scope(!UseDefaultTTI);
+      for (auto &P : Prices) {
+        auto Cost = TTI.getRegisterClassSpillReloadCost(
+            P.ClassID, P.IsLoad, {P.Registers, P.Accesses},
+            TargetTransformInfo::TCK_RecipThroughput);
+        if (!Cost.isValid() || Cost < 0 ||
+            AddOverflow(RawQuarters, Cost.getQuarterValue(), RawQuarters))
+          return vplanBackendError(VPlanBackendFailureGroup::Pricing,
+                                   "invalid or overflowing vector spill cost",
+                                   "", O.Stage);
+        if (AccessCosts)
+          LoopAccesses.push_back(
+              {P.ClassID, P.IsLoad, P.Registers, P.Accesses, Cost, L.ID, Wobs});
+      }
+      auto Raw = InstructionCost(RawQuarters / 4) +
+                 InstructionCost(RawQuarters % 4) / 4;
+      auto Normalized =
+          VPExactCost::ratio(RawQuarters, 1).normalize(Width, Wobs);
+      if (!Normalized.isValid())
+        return vplanBackendError(VPlanBackendFailureGroup::Pricing,
+                                 "spill loop cost overflow", "", O.Stage);
+      if (RawValid)
+        RawValid =
+            !AddOverflow(TotalRawQuarters, RawQuarters, TotalRawQuarters);
+      return VPSpillLoopCost{L.ID, Wobs, Raw, Normalized};
+    };
+    auto P = PriceLoop();
+    if (!P) {
+      auto Failure = takeVPlanBackendFailure(
+          P.takeError(), VPlanBackendFailureGroup::Pricing, "", O.Stage);
+      if (L.TrackingID)
+        Failure.TrackingID = L.TrackingID;
+      Failure.ObservationID = L.ID;
+      if (Failures)
+        Failures->push_back(std::move(Failure));
+      continue;
     }
-    VPlanCostProfileScope Scope(!UseDefaultTTI);
-    for (auto &P : Prices) {
-      auto Cost = TTI.getRegisterClassSpillReloadCost(
-          P.ClassID, P.IsLoad, {P.Registers, P.Accesses},
-          TargetTransformInfo::TCK_RecipThroughput);
-      if (!Cost.isValid() || Cost < 0 ||
-          AddOverflow(RawQuarters, Cost.getQuarterValue(), RawQuarters))
-        return createStringError("invalid or overflowing vector spill cost");
-      if (AccessCosts)
-        AccessCosts->push_back(
-            {P.ClassID, P.IsLoad, P.Registers, P.Accesses, Cost, L.ID, Wobs});
-    }
-    auto Raw =
-        InstructionCost(RawQuarters / 4) + InstructionCost(RawQuarters % 4) / 4;
-    auto Normalized = VPExactCost::ratio(RawQuarters, 1)
-                          .normalize(Width, Wobs)
-                          .normalize(1, O.Loops.size());
-    Total = Total + Normalized;
-    if (!Total.isValid() ||
-        AddOverflow(TotalRawQuarters, RawQuarters, TotalRawQuarters))
-      return createStringError("vector spill normalization overflow");
-    if (LoopCosts)
-      LoopCosts->push_back({L.ID, Wobs, Raw, Normalized});
+    Included.push_back(std::move(*P));
+    IncludedAccesses.append(LoopAccesses);
   }
-  RawCost = InstructionCost(TotalRawQuarters / 4) +
-            InstructionCost(TotalRawQuarters % 4) / 4;
+  if (Included.empty())
+    return vplanBackendError(VPlanBackendFailureGroup::Pricing,
+                             "no-priced-target-loop", "", O.Stage);
+  for (auto &P : Included) {
+    P.Cost = P.Cost.normalize(1, Included.size());
+    Total = Total + P.Cost;
+  }
+  if (!Total.isValid())
+    return vplanBackendError(VPlanBackendFailureGroup::Pricing,
+                             "vector spill normalization overflow", "",
+                             O.Stage);
+  RawCost = RawValid ? InstructionCost(TotalRawQuarters / 4) +
+                           InstructionCost(TotalRawQuarters % 4) / 4
+                     : InstructionCost::getInvalid();
+  if (AccessCosts)
+    AccessCosts->append(IncludedAccesses);
+  if (LoopCosts)
+    LoopCosts->append(Included);
+
   return Total;
 }
 VPExactCost llvm::composeVPlanMIRCost(const VPMIRCost &Cost,

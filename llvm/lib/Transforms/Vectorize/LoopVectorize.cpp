@@ -6733,16 +6733,10 @@ DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
   // Regions are dissolved after optimizing for VF and UF, which completely
   // removes unneeded loop regions first.
   const bool HasTailFolded = hasTailFolded(BestVPlan);
-  SmallVector<VPBasicBlock *> ProbeBody;
-  if (Config.BackendProbe)
-    for (auto *BB : VPBlockUtils::blocksOnly<VPBasicBlock>(
-             vp_depth_first_deep(BestVPlan.getVectorLoopRegion()->getEntry())))
-      ProbeBody.push_back(BB);
   RUN_VPLAN_PASS(VPlanTransforms::dissolveLoopRegions, BestVPlan);
   // Expand BranchOnTwoConds after dissolution, when latch has direct access to
   // its successors.
-  RUN_VPLAN_PASS(VPlanTransforms::expandBranchOnTwoConds, BestVPlan,
-                 Config.BackendProbe ? &ProbeBody : nullptr);
+  RUN_VPLAN_PASS(VPlanTransforms::expandBranchOnTwoConds, BestVPlan);
   // Convert loops with variable-length stepping after regions are dissolved.
   RUN_VPLAN_PASS(VPlanTransforms::convertToVariableLengthStep, BestVPlan);
   // Remove dead back-edges for single-iteration loops with BranchOnCond(true).
@@ -6859,25 +6853,15 @@ DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
     Loop *Generated =
         HeaderVPBB ? LI->getLoopFor(State.CFG.VPBB2IRBB.lookup(HeaderVPBB))
                    : nullptr;
-    SmallVector<BasicBlock *> Body;
-    if (Generated) {
+    if (Generated)
       SE.forgetLoop(Generated);
-      Body.append(Generated->block_begin(), Generated->block_end());
-    } else {
-      // These are the actual VPlan body blocks, including finite bodies whose
-      // backedge was removed by materialization. No entry/exit corridor search.
-      for (auto *VPBB : ProbeBody)
-        if (auto *BB = State.CFG.VPBB2IRBB.lookup(VPBB))
-          if (!is_contained(Body, BB))
-            Body.push_back(BB);
-    }
     Function &F = MaterializedFunction;
     uint64_t Width = uint64_t(BestVF.getKnownMinValue()) * BestUF;
     if (BestVF.isScalable()) {
       unsigned VScale = F.getVScaleValue();
       Width = VScale && Width <= UINT32_MAX / VScale ? Width * VScale : 0;
     }
-    registerVPlanBackendRegion(F, Body, Generated, SE, Width);
+    registerVPlanBackendRegion(F, Generated, Width);
   }
 
   ILV.printDebugTracesAtEnd();
@@ -8743,9 +8727,10 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                           VPlanBackendCandidateKind::ScalarBaseline) {
     const auto &C = BackendProbe->Candidate;
     if (C.VF != ElementCount::getFixed(1) || C.IC != 1 || C.IsEpilogue ||
-        !C.Observation.collectsMIR() || !L->isInnermost() ||
-        !L->getLoopLatch()) {
-      BackendProbe->Error = "invalid scalar baseline probe";
+        !C.Observation.collectsMIR() || !L->isInnermost()) {
+      BackendProbe->Error = VPlanBackendFailure{
+          VPlanBackendFailureGroup::Integrity, "invalid scalar baseline probe",
+          BackendProbe->Candidate.ID, "materialization", {}, {}};
       return false;
     }
     // Retain the original loop and its complete function context. The native
@@ -8753,7 +8738,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     // whether the related body has valid normalization evidence.
     Function &F = *L->getHeader()->getParent();
     setVPlanBackendCandidate(F, C);
-    registerVPlanBackendRegion(F, L->getBlocks(), L, *SE, 1);
+    registerVPlanBackendRegion(F, L, 1);
     BackendProbe->Emitted = true;
     // Candidate attributes change IR, but do not request extra vector passes.
     return false;
@@ -8998,7 +8983,9 @@ bool LoopVectorizePass::processLoop(Loop *L) {
         (C.IsEpilogue &&
          (C.PlanIndex >= Plans.size() || !Plans[C.PlanIndex]->hasVF(C.VF) ||
           Plans[C.PlanIndex]->hasScalarTail() != C.ScalarTail))) {
-      BackendProbe->Error = "candidate was not regenerated on clone";
+      BackendProbe->Error = VPlanBackendFailure{
+          VPlanBackendFailureGroup::Integrity, "candidate was not regenerated on clone",
+          BackendProbe->Candidate.ID, "materialization", {}, {}};
       return {VectorizationFactor::Disabled(), nullptr};
     }
     return {VectorizationFactor(RequestedVF, InstructionCost::getInvalid(),
@@ -9009,7 +8996,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   VPlan *BestPlanPtr = nullptr;
   std::unique_ptr<VPlan> PreparedEpilogue;
   const auto RequestedMode = VPlanBackendMode::requested();
-  std::string FallbackReason;
   json::Array BackendAttempts;
   auto TrySelection = [&](VPlanBackendMode Mode) {
     // Until adoption, every selection artifact belongs to this attempt.
@@ -9048,7 +9034,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       if (!A.Costs->failed()) {
         if (vplanBackendFeedbackOutputEnabled())
           BackendAttempts.push_back(A.Costs->attemptSummary());
-        A.Costs->commit(RequestedMode, FallbackReason, BackendAttempts);
+        A.Costs->commit();
         BackendCosts = std::move(A.Costs);
         PreparedEpilogue = std::move(A.Epilogue);
         CostReport = std::move(A.Report);
@@ -9057,9 +9043,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
         return true; // Scalar selection is a successful model evaluation too.
       }
     }
-    if (!FallbackReason.empty())
-      FallbackReason += "; ";
-    FallbackReason += (Mode.name() + ": " + A.Costs->failure()).str();
     if (vplanBackendFeedbackOutputEnabled())
       BackendAttempts.push_back(A.Costs->attemptSummary());
     Config.BackendCosts = nullptr;
@@ -9078,22 +9061,29 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       Selected = TrySelection({false, false, RequestedMode.DefaultTTI});
     if (!Selected && RequestedMode.needsProbe())
       Selected = TrySelection({false, true, RequestedMode.DefaultTTI});
-    if (!Selected) {
+    if (!Selected)
       RestoreNativeReport();
-      if (vplanBackendFeedbackOutputEnabled())
-        writeVPlanBackendFeedback(
-            json::Object{{"model", "native"},
-                         {"requested_model", RequestedMode.name()},
-                         {"effective_model", "native"},
-                         {"status", "native-fallback"},
-                         {"attempts", std::move(BackendAttempts)},
-                         {"function", F->getName()},
-                         {"loop", ReportLoopIndex},
-                         {"reason", FallbackReason}});
-    }
   }
+  emitVPlanBackendFailures(
+      F->getName(), ReportInvocation, ReportLoopIndex, RequestedMode,
+      BackendCosts ? BackendCosts->modelName() : StringRef("native"),
+      BackendAttempts);
   if (!Selected)
     std::tie(VF, BestPlanPtr) = SelectPlan();
+  if (!Selected && !BackendAttempts.empty() &&
+      vplanBackendFeedbackOutputEnabled())
+    writeVPlanBackendFeedback(
+        json::Object{{"status", "selected"},
+                     {"model", "native"},
+                     {"requested_model", RequestedMode.name()},
+                     {"effective_model", "native"},
+                     {"function", F->getName()},
+                     {"invocation", ReportInvocation},
+                     {"loop", ReportLoopIndex},
+                     {"vf", nullptr},
+                     {"ic", nullptr},
+                     {"emitted", nullptr}});
+
   if (BackendProbe && !BestPlanPtr)
     return false;
   if (NativeReport)
@@ -9271,7 +9261,9 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   if (BackendProbe) {
     const auto &C = BackendProbe->Candidate;
     if (IC != (C.IsEpilogue ? C.MainIC : C.IC)) {
-      BackendProbe->Error = "materialized interleave count mismatch";
+      BackendProbe->Error = VPlanBackendFailure{
+          VPlanBackendFailureGroup::Integrity, "materialized interleave count mismatch",
+          BackendProbe->Candidate.ID, "materialization", {}, {}};
       return false;
     }
   }
@@ -9348,7 +9340,9 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     const auto &C = BackendProbe->Candidate;
     if (C.IsEpilogue) {
       if (!LVP.hasPlanWithVF(C.VF)) {
-        BackendProbe->Error = "requested epilogue plan missing";
+        BackendProbe->Error = VPlanBackendFailure{
+          VPlanBackendFailureGroup::Integrity, "requested epilogue plan missing",
+          BackendProbe->Candidate.ID, "materialization", {}, {}};
         return false;
       }
       EpiPlan.reset(LVP.getPlanFor(C.VF).duplicate());
@@ -9362,7 +9356,9 @@ bool LoopVectorizePass::processLoop(Loop *L) {
   if (BackendProbe &&
       (EpiPlan ? EpiPlan->getSingleVF() : ElementCount::getFixed(0)) !=
           BackendProbe->Candidate.EpilogueVF) {
-    BackendProbe->Error = "materialized vector epilogue mismatch";
+    BackendProbe->Error = VPlanBackendFailure{
+          VPlanBackendFailureGroup::Integrity, "materialized vector epilogue mismatch",
+          BackendProbe->Candidate.ID, "materialization", {}, {}};
     return false;
   }
   if (Config.BackendCosts)

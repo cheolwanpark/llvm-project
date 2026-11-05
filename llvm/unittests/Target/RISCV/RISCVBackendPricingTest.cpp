@@ -208,7 +208,7 @@ TEST_F(RISCVBackendPricing, RawReuseRequiresMatchingMaterializationContext) {
     Candidate.Control = std::make_shared<VPlanBackendProbeControl>();
     auto R = Service.get(*F, *Header, Candidate);
     ASSERT_TRUE(bool(R)) << toString(R.takeError());
-    EXPECT_EQ(R->Spill.succeeded(), Succeeds) << R->Spill.Failure;
+    EXPECT_EQ(R->Spill.succeeded(), Succeeds);
     EXPECT_EQ(Candidate.Control->Started, Starts);
   };
   Service.beginInvocation();

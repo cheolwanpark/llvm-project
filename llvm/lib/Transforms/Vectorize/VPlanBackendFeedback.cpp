@@ -78,7 +78,7 @@ llvm::vplanBackendObservationStatusName(VPlanBackendObservationStatus Status) {
 static json::Object summarizeObservation(const VPlanBackendObservation &O) {
   bool MIR = O.Stage == "post-frame-lowering";
   json::Object Result{
-      {"schema", MIR ? "mir-body-observation-v3" : "rvv-vector-spill-v3"},
+      {"schema", MIR ? "mir-body-observation-v5" : "rvv-vector-spill-v5"},
       {"stage", O.Stage},
       {"iteration_mapping", O.IterationMapping},
       {"composition", "uniform-loop-mean"},
@@ -86,15 +86,6 @@ static json::Object summarizeObservation(const VPlanBackendObservation &O) {
   Result["mapping_kind"] = "backedge-loops";
   Result["region_granularity"] = "natural-loop-block-set";
   Result["body_cost_semantics"] = "static-block-sum";
-  Result["mapping_status"] = O.MappingSucceeded         ? "succeeded"
-                             : O.MappingFailure.empty() ? "not_collected"
-                                                        : "failed";
-  Result["mapping_failure"] = O.MappingFailure;
-  Result["normalization_status"] = O.NormalizationSucceeded ? "succeeded"
-                                   : O.NormalizationFailure.empty()
-                                       ? "not_collected"
-                                       : "failed";
-  Result["normalization_failure"] = O.NormalizationFailure;
   Result["selected_block_count"] = O.SelectedBlockCount;
   Result["materialized_width"] = O.MaterializedWidth;
   Result["mapping_policy_revision"] = O.MappingPolicyRevision;
@@ -102,6 +93,7 @@ static json::Object summarizeObservation(const VPlanBackendObservation &O) {
   json::Array Loops;
   for (const auto &L : O.Loops) {
     json::Object Loop{{"id", L.ID},
+                      {"tracking_id", L.TrackingID},
                       {"iteration_width", L.IterationWidth},
                       {"selected_block_count", L.SelectedBlockCount}};
     if (!MIR) {
@@ -146,11 +138,9 @@ static json::Object summarizeObservation(const VPlanBackendObservation &O) {
   }
   Result["loops"] = std::move(Loops);
   Result["status"] = vplanBackendObservationStatusName(O.Status);
-  Result["failure"] = O.Failure;
   return Result;
 }
-json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R,
-                                               bool /*MIR*/) {
+json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R) {
   auto SpillObservation = summarizeObservation(R.Spill);
   auto MIRObservation = summarizeObservation(R.MIR);
   json::Object Result;
@@ -164,7 +154,7 @@ json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R,
                                                           : "main";
   Result["spill_observation"] = std::move(SpillObservation);
   Result["mir_observation"] = std::move(MIRObservation);
-  Result["observation_schema"] = "backedge-loop-observations-v3";
+  Result["observation_schema"] = "backedge-loop-observations-v4";
   return Result;
 }
 
@@ -192,9 +182,7 @@ void llvm::writeVPlanBackendFeedback(const json::Object &Result) {
     reportFatalUsageError("failed to write VPlan backend feedback");
 }
 
-void llvm::registerVPlanBackendRegion(Function &F, ArrayRef<BasicBlock *> Body,
-                                      Loop *L, ScalarEvolution &SE,
-                                      uint64_t Width) {
+void llvm::registerVPlanBackendRegion(Function &F, Loop *L, uint64_t Width) {
   auto *T = LoopBackedgeTracking::get(&F);
   if (!T)
     return;
@@ -211,6 +199,8 @@ void llvm::registerVPlanBackendRegion(Function &F, ArrayRef<BasicBlock *> Body,
 
 void llvm::setVPlanBackendCandidate(Function &F,
                                     const VPlanBackendCandidate &C) {
+  if (auto *T = LoopBackedgeTracking::get(&F))
+    T->CaptureFailures = C.Observation.CaptureFailures;
   F.addFnAttr("vplan.backend.candidate", C.ID);
   F.addFnAttr("vplan.backend.ic", std::to_string(C.IC));
   F.addFnAttr("vplan.backend.role",
@@ -220,4 +210,54 @@ void llvm::setVPlanBackendCandidate(Function &F,
                              : "main");
   F.addFnAttr("vplan.backend.vf", std::to_string(C.VF.getKnownMinValue()));
   F.addFnAttr("vplan.backend.scalable", C.VF.isScalable() ? "1" : "0");
+}
+
+json::Array
+llvm::summarizeVPlanBackendFailures(ArrayRef<VPlanBackendFailure> Failures) {
+  std::vector<VPlanBackendFailure> Sorted(Failures.begin(), Failures.end());
+  llvm::sort(Sorted);
+  Sorted.erase(std::unique(Sorted.begin(), Sorted.end()), Sorted.end());
+  json::Array Groups;
+  for (unsigned G = 0; G != 6; ++G) {
+    json::Array Items;
+    for (const auto &F : Sorted) {
+      if (unsigned(F.Group) != G)
+        continue;
+      json::Object Item{
+          {"candidate", F.Candidate}, {"stage", F.Stage}, {"detail", F.Detail}};
+      if (F.TrackingID)
+        Item["tracking_id"] = *F.TrackingID;
+      if (F.ObservationID)
+        Item["observation_id"] = *F.ObservationID;
+      Items.push_back(std::move(Item));
+    }
+    if (!Items.empty())
+      Groups.push_back(json::Object{
+          {"id", vplanBackendFailureGroupName(VPlanBackendFailureGroup(G))},
+          {"count", Items.size()},
+          {"items", std::move(Items)}});
+  }
+  return Groups;
+}
+void llvm::emitVPlanBackendFailures(StringRef Function, unsigned Invocation,
+                                    unsigned Loop, VPlanBackendMode Requested,
+                                    StringRef Effective,
+                                    const json::Array &Attempts) {
+  if (!vplanBackendFeedbackOutputEnabled() ||
+      llvm::none_of(Attempts, [](const json::Value &A) {
+        auto *Groups = A.getAsObject()->getArray("failures");
+        return Groups && !Groups->empty();
+      }))
+    return;
+  writeVPlanBackendFeedback(
+      json::Object{{"schema", "vplan-backend-failures-v1"},
+                   {"status", "backend-failures"},
+                   {"function", Function},
+                   {"invocation", Invocation},
+                   {"loop", Loop},
+                   {"requested_model", Requested.name()},
+                   {"effective_model", Effective},
+                   {"requested_estimated_spill", Requested.EstimatedSpill},
+                   {"requested_default_tti", Requested.DefaultTTI},
+                   {"attempts", json::Array(Attempts)}});
 }

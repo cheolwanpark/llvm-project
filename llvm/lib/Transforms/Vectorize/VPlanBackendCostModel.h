@@ -88,7 +88,8 @@ struct VPMIRCost {
 };
 LLVM_ABI_FOR_TEST Expected<VPMIRCost>
 priceVPlanMIR(const VPlanBackendObservation &Observation,
-              const TargetMIRInfo &Info, unsigned Width);
+              const TargetMIRInfo &Info, unsigned Width,
+              SmallVectorImpl<VPlanBackendFailure> *Failures = nullptr);
 VPExactCost composeVPlanMIRCost(const VPMIRCost &Cost,
                                 InstructionCost EstimatedSpill,
                                 bool UseEstimatedSpill);
@@ -129,7 +130,8 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
     InstructionCost Raw;
     SmallVector<VPSpillCost> AccessCosts;
     SmallVector<VPSpillLoopCost> SpillLoops;
-    std::string Error;
+    std::optional<VPlanBackendFailure> Error;
+    SmallVector<VPlanBackendFailure> Failures;
   };
   EvaluatedCost
   evaluateObservation(const PreparedCandidate &P,
@@ -149,7 +151,7 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
   SmallVector<json::Object, 0> Rows;
   SmallVector<VPlanBackendResult, 0> Observed;
   bool Failed = false;
-  std::string Failure;
+  SmallVector<VPlanBackendFailure> Failures;
 
   PreparedCandidate prepareCost(VPlan &Plan, VPlanBackendCandidate Candidate,
                                 InstructionCost Native, InstructionCost Profile,
@@ -159,7 +161,8 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
                  std::optional<VPlanBackendProbeResult> Result,
                  VPlanFeedbackTimer &Timer,
                  const EvaluatedCost *Evaluated = nullptr);
-  void recordObservation(const VPlanBackendProbeResult &Result);
+  void recordObservation(const VPlanBackendProbeResult &Result,
+                         StringRef Candidate);
   bool addBatch(ArrayRef<PreparedCandidate> Candidates,
                 std::optional<VPBackendPruningContext> Context = std::nullopt);
   bool prepareScalar(LoopVectorizationPlanner &LVP);
@@ -190,25 +193,29 @@ public:
            InstructionCost EstimatedSpill = 0);
   const VPBackendCostEntry *lookup(const VPlan &Plan, ElementCount VF,
                                    bool Epilogue = false) const;
-  void fail(StringRef Reason);
+  void fail(VPlanBackendFailure Failure);
+  void fail(StringRef Reason,
+            VPlanBackendFailureGroup Group = VPlanBackendFailureGroup::Pricing,
+            StringRef Candidate = "", StringRef Stage = "selection") {
+    fail({Group, Reason.str(), Candidate.str(), Stage.str(), {}, {}});
+  }
   json::Object attemptSummary() const;
-  void commit(VPlanBackendMode Requested, StringRef Reason,
-              const json::Array &Attempts);
+  void commit();
   void selection(ElementCount VF, unsigned IC, ElementCount Epilogue,
                  bool Emitted) const;
   bool isPruned(const VPlan &P, ElementCount VF) const {
     return llvm::is_contained(Pruned, std::make_pair(&P, VF));
   }
   bool failed() const { return Failed; }
-  StringRef failure() const { return Failure; }
+  StringRef modelName() const { return Mode.name(); }
 };
 /// Strict adapter for the in-process facts; no cost rules live in the backend.
-LLVM_ABI_FOR_TEST Expected<VPExactCost>
-priceVPlanVectorSpills(const VPlanBackendObservation &Observation,
-                       const TargetTransformInfo &TTI, LLVMContext &Context,
-                       unsigned Width, InstructionCost &RawCost,
-                       SmallVectorImpl<VPSpillCost> *AccessCosts = nullptr,
-                       bool UseDefaultTTI = false,
-                       SmallVectorImpl<VPSpillLoopCost> *LoopCosts = nullptr);
+LLVM_ABI_FOR_TEST Expected<VPExactCost> priceVPlanVectorSpills(
+    const VPlanBackendObservation &Observation, const TargetTransformInfo &TTI,
+    LLVMContext &Context, unsigned Width, InstructionCost &RawCost,
+    SmallVectorImpl<VPSpillCost> *AccessCosts = nullptr,
+    bool UseDefaultTTI = false,
+    SmallVectorImpl<VPSpillLoopCost> *LoopCosts = nullptr,
+    SmallVectorImpl<VPlanBackendFailure> *Failures = nullptr);
 } // namespace llvm
 #endif

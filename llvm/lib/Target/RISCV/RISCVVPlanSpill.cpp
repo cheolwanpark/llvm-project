@@ -90,8 +90,10 @@ Error llvm::vplan::collectVectorSpillAccess(
       continue; // Scalar address registers need not have been allocated.
     Vector = true;
     if (!R.isPhysical() || MO.getSubReg())
-      return createStringError(
-          "vector spill data register is not fully allocated");
+      return vplanBackendError(
+          VPlanBackendFailureGroup::Collection,
+          "vector spill data register is not fully allocated", "",
+          "post-stack-slot-coloring");
   }
   if (!Vector)
     return Error::success();
@@ -101,16 +103,22 @@ Error llvm::vplan::collectVectorSpillAccess(
       MI.mayLoad() == MI.mayStore() || MI.isCall() || MI.isInlineAsm() ||
       MI.hasUnmodeledSideEffects() || !MI.getOperand(0).isReg() ||
       !MI.getOperand(0).getReg().isPhysical() || MI.getOperand(0).getSubReg())
-    return createStringError("unsupported vector spill access");
+    return vplanBackendError(VPlanBackendFailureGroup::Collection,
+                             "unsupported vector spill access", "",
+                             "post-stack-slot-coloring");
   const auto &MMO = **MI.memoperands_begin();
   if (MMO.isVolatile() || MMO.isAtomic() || MMO.isLoad() != MI.mayLoad() ||
       MMO.isStore() != MI.mayStore())
-    return createStringError("unsupported vector spill memory operand");
+    return vplanBackendError(VPlanBackendFailureGroup::Collection,
+                             "unsupported vector spill memory operand", "",
+                             "post-stack-slot-coloring");
   auto Reg = MI.getOperand(0).getReg();
   const auto *DataRC = TRI.getMinimalPhysRegClass(Reg);
   if (!DataRC || !RISCVRegisterInfo::isRVVRegClass(DataRC))
-    return createStringError(
-        "vector spill data operand is not a vector register");
+    return vplanBackendError(
+        VPlanBackendFailureGroup::Collection,
+        "vector spill data operand is not a vector register", "",
+        "post-stack-slot-coloring");
   auto Add = [&](unsigned G, TypeSize Size, bool Segment) {
     Accesses.push_back({MI.mayLoad(), Size.getKnownMinValue(),
                         Size.isScalable(), MMO.getAlign().value(),
@@ -123,22 +131,30 @@ Error llvm::vplan::collectVectorSpillAccess(
                       : RISCV::VRRegClass.contains(Reg)   ? 1
                                                           : 0;
     if (Actual != Group)
-      return createStringError("vector spill opcode/register group mismatch");
+      return vplanBackendError(VPlanBackendFailureGroup::Collection,
+                               "vector spill opcode/register group mismatch",
+                               "", "post-stack-slot-coloring");
     // Whole-register opcode determines the access, not the stack slot size.
     Add(Group, TypeSize::getScalable(Group * 8), false);
     return Error::success();
   }
   if (RISCVRI::getNF(DataRC->TSFlags) != Segment->first ||
       (1u << unsigned(RISCVRI::getLMul(DataRC->TSFlags))) != Segment->second)
-    return createStringError("segment spill opcode/register geometry mismatch");
+    return vplanBackendError(VPlanBackendFailureGroup::Collection,
+                             "segment spill opcode/register geometry mismatch",
+                             "", "post-stack-slot-coloring");
   unsigned NumRegs = Segment->first * Segment->second;
   auto Size = MMO.getSize();
   if (!NumRegs || NumRegs > 8 || !Size.isPrecise() ||
       !Size.getValue().isKnownMultipleOf(NumRegs))
-    return createStringError("unsupported segment spill size");
+    return vplanBackendError(VPlanBackendFailureGroup::Collection,
+                             "unsupported segment spill size", "",
+                             "post-stack-slot-coloring");
   auto VRegSize = Size.getValue().divideCoefficientBy(NumRegs);
   if (!VRegSize.getKnownMinValue())
-    return createStringError("empty segment spill size");
+    return vplanBackendError(VPlanBackendFailureGroup::Collection,
+                             "empty segment spill size", "",
+                             "post-stack-slot-coloring");
   unsigned Encoding = TRI.getEncodingValue(Reg);
   while (NumRegs) {
     unsigned G = RISCVRegisterInfo::getSegmentSpillGroup(NumRegs, Encoding);
@@ -166,9 +182,12 @@ Error llvm::vplan::readCandidateIdentity(const Function &F,
   bool Scalar = Role == "scalar-baseline";
   if (ID.empty() || VF <= 0 || VF > UINT32_MAX || IC <= 0 || IC > UINT32_MAX ||
       (Role != "main" && Role != "epilogue" && !Scalar))
-    return createStringError("invalid backend candidate identity");
+    return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                             "invalid backend candidate identity", ID, "input");
   if (Scalar && (VF != 1 || IC != 1 || attr(F, "vplan.backend.scalable") != 0))
-    return createStringError("invalid scalar baseline observation identity");
+    return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                             "invalid scalar baseline observation identity", ID,
+                             "input");
   Result.Candidate = ID.str();
   Result.VF = ElementCount::get(VF, attr(F, "vplan.backend.scalable") != 0);
   Result.IC = IC;
@@ -180,33 +199,64 @@ Error llvm::vplan::readCandidateIdentity(const Function &F,
 
 static Error collectBody(MachineFunction &MF, VPlanBackendResult &Result,
                          bool MIR, bool Text) {
+  auto &Observation = MIR ? Result.MIR : Result.Spill;
+  Observation.Stage = MIR ? "post-frame-lowering" : "post-stack-slot-coloring";
   VPlanBackendResult Identity;
-  if (auto E = vplan::readCandidateIdentity(MF.getFunction(), Identity))
-    return E;
+  if (auto E = vplan::readCandidateIdentity(MF.getFunction(), Identity)) {
+    auto Failure = takeVPlanBackendFailure(std::move(E),
+                                           VPlanBackendFailureGroup::Integrity,
+                                           Result.Candidate, Observation.Stage);
+    Failure.Stage = Observation.Stage;
+    return vplanBackendError(std::move(Failure));
+  }
   if (Identity.Candidate != Result.Candidate || Identity.VF != Result.VF ||
       Identity.IC != Result.IC || Identity.Kind != Result.Kind ||
       Identity.IsEpilogue != Result.IsEpilogue)
-    return createStringError("backend observation identity mismatch");
-  auto &Observation = MIR ? Result.MIR : Result.Spill;
+    return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                             "backend observation identity mismatch",
+                             Result.Candidate, Observation.Stage);
   auto Region = vplan::mapProbeBody(MF, Observation);
   if (!Region)
     return Region.takeError();
-  if (MIR)
-    Observation.Stage = "post-frame-lowering";
-  // Each natural loop is one independent nominal iteration. The mapper has
-  // already rejected overlapping bodies; facts remain separated for pricing.
+  // Commit only complete loop payloads. A bad loop does not erase survivors.
+  std::vector<VPlanBackendLoopObservation> Included;
+  uint64_t Blocks = 0;
   for (unsigned I = 0; I != Region->size(); ++I) {
-    auto &Loop = Observation.Loops[I];
-    if (MIR) Loop.MIRBody.emplace();
-    for (const auto *BB : (*Region)[I].Blocks)
-      for (const auto &MI : *BB) {
-        if (!isBodyInstruction(MI)) continue;
-        if (MIR)
-          Loop.MIRBody->push_back(vplan::collectMIRInstruction(MI, Text));
-        else if (auto E = vplan::collectVectorSpillAccess(MI, Loop.Spills))
-          return E;
-      }
+    auto Loop = std::move(Observation.Loops[I]);
+    auto Collect = [&]() -> Error {
+      if (MIR)
+        Loop.MIRBody.emplace();
+      for (const auto *BB : (*Region)[I].Blocks)
+        for (const auto &MI : *BB) {
+          if (!isBodyInstruction(MI))
+            continue;
+          if (MIR)
+            Loop.MIRBody->push_back(vplan::collectMIRInstruction(MI, Text));
+          else if (auto E = vplan::collectVectorSpillAccess(MI, Loop.Spills))
+            return E;
+        }
+      return Error::success();
+    };
+    if (auto E = Collect()) {
+      auto Failure = takeVPlanBackendFailure(
+          std::move(E), VPlanBackendFailureGroup::Collection, Result.Candidate,
+          Observation.Stage);
+      Failure.Stage = Observation.Stage;
+      Failure.TrackingID = Loop.TrackingID;
+      Failure.ObservationID = Loop.ID;
+      if (Result.CaptureFailures)
+        Observation.Exclusions.push_back(std::move(Failure));
+      continue;
+    }
+    Blocks += Loop.SelectedBlockCount;
+    Included.push_back(std::move(Loop));
   }
+  Observation.Loops = std::move(Included);
+  Observation.SelectedBlockCount = Blocks;
+  if (Observation.Loops.empty())
+    return vplanBackendError(VPlanBackendFailureGroup::Collection,
+                             "no-usable-target-loop", Result.Candidate,
+                             Observation.Stage);
   Observation.Status = VPlanBackendObservationStatus::Succeeded;
   return Error::success();
 }
@@ -234,7 +284,13 @@ void llvm::vplan::observeBody(MachineFunction &MF, VPlanBackendResult &Result,
   if (Slot.Status != VPlanBackendObservationStatus::NotCollected) {
     Slot = VPlanBackendObservation();
     Slot.Status = VPlanBackendObservationStatus::Failed;
-    Slot.Failure = "ambiguous backend candidate function";
+    Slot.Failure = VPlanBackendFailure{VPlanBackendFailureGroup::Integrity,
+                                       "ambiguous backend candidate function",
+                                       Result.Candidate,
+                                       MIR ? "post-frame-lowering"
+                                           : "post-stack-slot-coloring",
+                                       {},
+                                       {}};
   } else if (auto E = collectBody(MF, Result, MIR, Text)) {
     // Discard only this stage's provisional payload. Preserve scope evidence
     // and the other stage's independently owned result.
@@ -243,7 +299,9 @@ void llvm::vplan::observeBody(MachineFunction &MF, VPlanBackendResult &Result,
       Loop.MIRBody.reset();
     }
     Slot.Status = VPlanBackendObservationStatus::Failed;
-    Slot.Failure = toString(std::move(E));
+    Slot.Failure = takeVPlanBackendFailure(
+        std::move(E), VPlanBackendFailureGroup::Collection, Result.Candidate,
+        MIR ? "post-frame-lowering" : "post-stack-slot-coloring");
   }
   Slot.Stage = MIR ? "post-frame-lowering" : "post-stack-slot-coloring";
 }

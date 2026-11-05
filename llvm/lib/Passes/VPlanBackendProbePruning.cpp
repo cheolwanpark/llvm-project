@@ -3,11 +3,11 @@
 #include "VPlanBackendProbePruning.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Transforms/Utils/Local.h"
 using namespace llvm;
 // Private probe CFG reduction. See BACKEND_FEEDBACK.md.
@@ -30,7 +30,10 @@ ProbeIRSize llvm::getProbeIRSize(Function &F) {
     DominatorTree DT(F);
     LoopInfo LI(DT);
     auto Bodies = mapTrackedLoops(*T, F, DT, LI);
-    if (!Bodies) { consumeError(Bodies.takeError()); return Size; }
+    if (!Bodies) {
+      consumeError(Bodies.takeError());
+      return Size;
+    }
     for (const auto &Body : *Bodies)
       for (auto *BB : Body.Blocks) {
         Size.LoopInstructions += BB->size();
@@ -42,13 +45,19 @@ ProbeIRSize llvm::getProbeIRSize(Function &F) {
 
 static std::pair<Loop *, StringRef> findPruningLoop(Function &F, LoopInfo &LI) {
   auto *T = LoopBackedgeTracking::get(&F);
-  if (!T || T->Widths.empty()) return {nullptr, "missing-materialized-region"};
-  if (T->Widths.size() != 1) return {nullptr, "multiple-target-loops"};
+  if (!T || T->Widths.empty())
+    return {nullptr, "missing-materialized-region"};
   DominatorTree DT(F);
   LoopInfo CurrentLI(DT);
   auto Bodies = mapTrackedLoops(*T, F, DT, CurrentLI);
-  if (!Bodies) { consumeError(Bodies.takeError()); return {nullptr, "invalid-target-loop"}; }
-  const BasicBlock *Header = T->Backedges.begin()->first.second;
+  if (!Bodies) {
+    consumeError(Bodies.takeError());
+    return {nullptr, "invalid-target-loop"};
+  }
+  if (Bodies->size() != 1)
+    return {nullptr, "no-unique-target-loop"};
+  const BasicBlock *Header =
+      CurrentLI.getLoopFor(Bodies->front().Blocks.front())->getHeader();
   auto *L = LI.getLoopFor(Header);
   return {L, L ? "" : "no-repeated-materialized-body"};
 }
@@ -145,9 +154,10 @@ PruningResult llvm::pruneLoopRegions(Function &F,
                                      FunctionAnalysisManager &FAM) {
   auto &LI = FAM.getResult<LoopAnalysis>(F);
   auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
-  auto [Selected, Reason] = findPruningLoop(F, LI);
+  auto PruningLoop = findPruningLoop(F, LI);
+  Loop *Selected = PruningLoop.first;
   if (!Selected)
-    return {0, Reason};
+    return {0, PruningLoop.second};
   auto HasVectorRepresentation = [](Type *Ty) {
     return Ty->isVectorTy() || Ty->isAggregateType() || Ty->isTargetExtTy();
   };
@@ -317,6 +327,5 @@ PruningResult llvm::pruneLoopRegions(Function &F,
         HasReturnOutcomes ? ReturnOutcomes.lookup(BB) : ReturnValue, BB);
   }
   removeUnreachableBlocks(F);
-  validateLoopBackedges(F);
   return {Before - F.getInstructionCount(), "existing-return-regions"};
 }

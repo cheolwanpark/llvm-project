@@ -347,7 +347,9 @@ void VPlanCostReport::comparisonScore(VPExactCost Score,
 static void printMIRLoopPrices(raw_ostream &OS,
                                const VPlanBackendObservation &Observation,
                                const VPMIRCost &Cost) {
-  for (auto [L, P] : zip(Observation.Loops, Cost.Loops)) {
+  for (const auto &P : Cost.Loops) {
+    const auto &L = *llvm::find_if(Observation.Loops,
+                                   [&](const auto &L) { return L.ID == P.ID; });
     OS << "      mir-loop id=" << P.ID << " Wobs=" << P.IterationWidth
        << " weight=1/" << Cost.Loops.size() << " raw_R=";
     P.RawBody.print(OS);
@@ -404,9 +406,9 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
                                   const VPRegisterUsageBound &Bound,
                                   const VPlanBackendResult *Observation,
                                   ArrayRef<VPSpillCost> AccessCosts,
-                                  unsigned Width, StringRef ProfileName,
-                                  InstructionCost Raw, VPExactCost Spill,
-                                  VPlanBackendMode Mode) {
+                                  unsigned PricedLoops, unsigned Width,
+                                  StringRef ProfileName, InstructionCost Raw,
+                                  VPExactCost Spill, VPlanBackendMode Mode) {
   auto &C = candidate(*Cost.Plan, Cost.VF, Cost.IsEpilogue);
   C.ExactBodyCost = Cost.Body;
   raw_string_ostream OS(C.BackendSummary);
@@ -472,7 +474,7 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
      << " Ev=" << Cost.EstimatedVectorSpill << " raw_vector_spill_sum=" << Raw
      << " Wtti=" << Width << " loops=";
   if (Observation)
-    DS << Observation->Spill.Loops.size();
+    DS << PricedLoops;
   else
     DS << "not-observed";
   DS << " composition=uniform-loop-mean Sv=";
@@ -509,7 +511,7 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
        << " Q=" << P.Registers << " A=" << P.Accesses
        << " tti_profile=" << ProfileName << " cost=" << P.Cost
        << " Wtti=" << Width << " Wobs=" << P.IterationWidth << " weight=1/"
-       << Observation->Spill.Loops.size() << '\n';
+       << PricedLoops << '\n';
 }
 
 void VPlanCostReport::comparisonResult(bool Result, StringRef Reason) {

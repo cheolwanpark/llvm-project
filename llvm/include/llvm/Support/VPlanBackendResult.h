@@ -4,6 +4,7 @@
 #define LLVM_SUPPORT_VPLANBACKENDRESULT_H
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/TypeSize.h"
+#include "llvm/Support/VPlanBackendFailure.h"
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,6 +16,7 @@ struct VPlanBackendObservationOptions {
   VPlanBackendStopAfter StopAfter = VPlanBackendStopAfter::Spill;
   bool collectsMIR() const { return StopAfter == VPlanBackendStopAfter::MIR; }
   bool CaptureMIRText = false;
+  bool CaptureFailures = false;
 };
 /// The pricing inputs of a body instruction, independent of CodeGen lifetimes.
 /// Zero geometry denotes unavailable information, never a guessed value.
@@ -71,17 +73,18 @@ struct VPlanBackendLoopObservation {
   uint64_t ID = 0, IterationWidth = 0, SelectedBlockCount = 0;
   std::vector<VPlanVectorSpillAccess> Spills;
   std::optional<std::vector<VPlanMIRInstruction>> MIRBody;
+  uint64_t TrackingID =
+      0; // q; ID uniquely identifies this stage-local observation.
 };
 struct VPlanBackendObservation {
   VPlanBackendObservationStatus Status =
       VPlanBackendObservationStatus::NotCollected;
-  std::string Failure;
-  std::string MappingFailure, NormalizationFailure;
-  bool MappingSucceeded = false, NormalizationSucceeded = false;
+  std::optional<VPlanBackendFailure> Failure;
+  std::vector<VPlanBackendFailure> Exclusions;
   uint64_t SelectedBlockCount = 0, MaterializedWidth = 0;
   bool IterationMapping = false;
-  static constexpr unsigned MappingPolicyRevision = 2;
-  static constexpr unsigned NormalizationPolicyRevision = 2;
+  static constexpr unsigned MappingPolicyRevision = 3;
+  static constexpr unsigned NormalizationPolicyRevision = 3;
   std::string Stage = "post-stack-slot-coloring";
   std::vector<VPlanBackendLoopObservation> Loops;
   bool succeeded() const {
@@ -90,6 +93,8 @@ struct VPlanBackendObservation {
 };
 struct VPlanBackendResult {
   std::string Candidate;
+  std::optional<VPlanBackendFailure> Failure;
+  bool CaptureFailures = false;
   ElementCount VF = ElementCount::getFixed(0);
   unsigned IC = 0;
   bool IsEpilogue = false;

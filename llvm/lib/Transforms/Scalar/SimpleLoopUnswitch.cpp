@@ -6,11 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Analysis/LoopBackedgeAnalysis.h"
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Transforms/Scalar/SimpleLoopUnswitch.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -24,6 +23,7 @@
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/GuardUtils.h"
 #include "llvm/Analysis/LoopAnalysisManager.h"
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/MemorySSA.h"
@@ -2278,26 +2278,9 @@ static void unswitchNontrivialInvariants(
     IVConditionInfo &PartialIVInfo, DominatorTree &DT, LoopInfo &LI,
     AssumptionCache &AC, ScalarEvolution *SE, MemorySSAUpdater *MSSAU,
     LPMUpdater &LoopUpdater, bool InsertFreeze, bool InjectedCondition) {
-  Function &TrackingFunction = *L.getHeader()->getParent();
-  auto *Backedges = LoopBackedgeTracking::get(&TrackingFunction);
+  auto *Backedges = LoopBackedgeTracking::get(L.getHeader());
   LoopBackedgeRewrite<BasicBlock> BackedgeRewrite(Backedges);
-  DenseMap<uint64_t, WeakTrackingVH> TrackedHeaders;
-  if (Backedges)
-    for (const auto &E : Backedges->Backedges)
-      TrackedHeaders[E.second] = const_cast<BasicBlock *>(E.first.second);
-  auto CommitBackedges = make_scope_exit([&] {
-    if (Backedges && Backedges->Failure.empty()) {
-      for (const auto &Entry : TrackedHeaders) {
-        auto *Header = dyn_cast_or_null<BasicBlock>(Entry.second);
-        auto *Remaining = Header ? LI.getLoopFor(Header) : nullptr;
-        if (!Remaining || Remaining->getHeader() != Header)
-          Backedges->fail("unsupported-finite-body");
-        else
-          rebindTrackedLoop(*Backedges, Entry.first, *Remaining);
-      }
-    }
-    BackedgeRewrite.commit([&] { return checkLoopBackedges(TrackingFunction); });
-  });
+  auto CommitBackedges = scope_exit([&] { BackedgeRewrite.commit(); });
   auto *ParentBB = TI.getParent();
   CondBrInst *BI = dyn_cast<CondBrInst>(&TI);
   SwitchInst *SI = BI ? nullptr : cast<SwitchInst>(&TI);
@@ -2622,7 +2605,7 @@ static void unswitchNontrivialInvariants(
     buildClonedLoops(L, ExitBlocks, *VMap, LI, NonChildClonedLoops);
   if (Backedges)
     for (const auto &VMap : VMaps)
-      cloneTrackedLoops(*Backedges, *BackedgeRewrite.snapshot(), *VMap, nullptr, &LI);
+      cloneTrackedLoops(*Backedges, *BackedgeRewrite.snapshot(), *VMap);
 
   // Now that our cloned loops have been built, we can update the original loop.
   // First we delete the dead blocks from it and then we rebuild the loop
@@ -3615,8 +3598,8 @@ static NonTrivialUnswitchCandidate findBestNonTrivialUnswitchCandidate(
 // Insert a freeze on an unswitched branch if all is true:
 // 1. freeze-loop-unswitch-cond option is true
 // 2. The branch may not execute in the loop pre-transformation. If a branch may
-// not execute and could cause UB, it would always cause UB if it is hoisted outside
-// of the loop. Insert a freeze to prevent this case.
+// not execute and could cause UB, it would always cause UB if it is hoisted
+// outside of the loop. Insert a freeze to prevent this case.
 // 3. The branch condition may be poison or undef
 static bool shouldInsertFreeze(Loop &L, Instruction &TI, DominatorTree &DT,
                                AssumptionCache &AC) {
@@ -3785,8 +3768,8 @@ static bool unswitchLoop(Loop &L, DominatorTree &DT, LoopInfo &LI,
   // internally, and if any of the new loops are simplified enough to contain
   // trivial unswitching we want to prefer those.
 
-  // Try to unswitch the best invariant condition. We prefer this full unswitch to
-  // a partial unswitch when possible below the threshold.
+  // Try to unswitch the best invariant condition. We prefer this full unswitch
+  // to a partial unswitch when possible below the threshold.
   if (unswitchBestCondition(L, DT, LI, AC, AA, TTI, SE, MSSAU, LoopUpdater))
     return true;
 

@@ -9,13 +9,13 @@
 // Loop Peeling Utilities.
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/Loads.h"
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -1114,9 +1114,10 @@ void llvm::peelLoop(Loop *L, unsigned PeelCount, bool PeelLast, LoopInfo *LI,
          "when peeling the last iteration, the loop must be supported and can "
          "only peel a single iteration");
 
-  if (auto *T = LoopBackedgeTracking::get(L->getHeader()))
-    if (containsTrackedLoop(*T, *L))
-      T->fail("unsupported-finite-body");
+  auto *Tracking = LoopBackedgeTracking::get(L->getHeader());
+  std::optional<LoopBackedgeTable<BasicBlock>> Before;
+  if (Tracking)
+    Before = *Tracking;
   LoopBlocksDFS LoopBlocks(L);
   LoopBlocks.perform(LI);
 
@@ -1331,6 +1332,8 @@ void llvm::peelLoop(Loop *L, unsigned PeelCount, bool PeelLast, LoopInfo *LI,
     // Remap to use values from the current iteration instead of the
     // previous one.
     remapInstructionsInBlocks(NewBlocks, VMap);
+    if (Tracking)
+      cloneTrackedLoops(*Tracking, *Before, VMap, L);
 
     if (Iter == 0) {
       if (PeelLast) {

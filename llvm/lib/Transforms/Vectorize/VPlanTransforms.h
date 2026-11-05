@@ -376,8 +376,7 @@ struct VPlanTransforms {
 
   /// Expand BranchOnTwoConds instructions into explicit CFG with
   /// BranchOnCond instructions. Should be called after dissolveLoopRegions.
-  static void expandBranchOnTwoConds(
-      VPlan &Plan, SmallVectorImpl<VPBasicBlock *> *ProbeBody = nullptr);
+  static void expandBranchOnTwoConds(VPlan &Plan);
 
   /// Transform loops with variable-length stepping after region
   /// dissolution.

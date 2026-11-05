@@ -3,10 +3,11 @@
 #ifndef LLVM_IR_LOOPBACKEDGETRACKING_H
 #define LLVM_IR_LOOPBACKEDGETRACKING_H
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/Error.h"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -16,13 +17,13 @@ class Function;
 class LLVMContext;
 /// Only iteration identities, widths and actual CFG edges persist between
 /// transformations. Membership is reconstructed from current loop analysis.
-template <class Block> class LoopBackedgeRewrite;
 template <class Block> struct LoopBackedgeTable {
-  friend class LoopBackedgeRewrite<Block>;
   using ID = uint64_t;
   using Edge = std::pair<const Block *, const Block *>;
   DenseMap<ID, uint64_t> Widths;
-  DenseMap<Edge, ID> Backedges;
+  using Labels = SmallVector<ID, 1>;
+  DenseMap<Edge, Labels> Backedges;
+  DenseSet<ID> Undefined;
   std::string Failure;
   void fail(StringRef Reason) {
     if (Failure.empty())
@@ -32,8 +33,7 @@ template <class Block> struct LoopBackedgeTable {
     Widths = Source;
     NextID = 1;
     for (const auto &W : Widths) {
-      if (!W.first || W.first == UINT64_MAX || !W.second ||
-          W.second > UINT32_MAX) {
+      if (!W.first || W.first == UINT64_MAX) {
         fail("width-overflow");
         continue;
       }
@@ -43,16 +43,19 @@ template <class Block> struct LoopBackedgeTable {
   void eraseLoopEdges(ID Q) {
     SmallVector<Edge> Edges;
     for (const auto &E : Backedges)
-      if (E.second == Q)
+      if (is_contained(E.second, Q))
         Edges.push_back(E.first);
-    for (auto E : Edges)
-      Backedges.erase(E);
+    for (auto E : Edges) {
+      llvm::erase(Backedges[E], Q);
+      if (Backedges[E].empty())
+        Backedges.erase(E);
+    }
   }
   ID addLoop(uint64_t Width) {
     ID Q = NextID++;
     Widths[Q] = Width;
     if (!Width || Width > UINT32_MAX)
-      fail("width-overflow");
+      Undefined.insert(Q);
     return Q;
   }
   void bind(Edge E, ID Q) {
@@ -60,17 +63,26 @@ template <class Block> struct LoopBackedgeTable {
       fail("unregistered-loop-id");
       return;
     }
-    auto [I, New] = Backedges.try_emplace(E, Q);
-    if (!New && I->second != Q)
-      fail("conflicting-loop-ids");
+    auto &IDs = Backedges[E];
+    if (!is_contained(IDs, Q))
+      IDs.push_back(Q);
+    if (any_of(IDs, [&](ID Other) {
+          return Undefined.contains(Other) ||
+                 Widths.lookup(Other) != Widths.lookup(Q);
+        }))
+      Undefined.insert(IDs.begin(), IDs.end());
+  }
+  void bind(Edge E, Labels IDs) {
+    for (ID Q : IDs)
+      bind(E, Q);
   }
   void move(Edge Old, Edge New) {
     auto I = Backedges.find(Old);
     if (I == Backedges.end())
       return;
-    ID Q = I->second;
+    auto IDs = I->second;
     Backedges.erase(I);
-    bind(New, Q);
+    bind(New, IDs);
   }
   void transferIncoming(const Block *From, const Block *To) {
     SmallVector<Edge> Edges;
@@ -93,8 +105,6 @@ template <class Block> struct LoopBackedgeTable {
     for (const auto &E : Backedges)
       if (E.first.first == BB || E.first.second == BB)
         Edges.push_back(E.first);
-    if (!Edges.empty() && !RewriteDepth)
-      fail("lost-backedge");
     for (auto E : Edges)
       Backedges.erase(E);
   }
@@ -105,7 +115,7 @@ template <class Block> struct LoopBackedgeTable {
       return;
     }
     if (!Factor || I->second > UINT32_MAX / Factor) {
-      fail("width-overflow");
+      Undefined.insert(Q);
       return;
     }
     I->second *= Factor;
@@ -113,11 +123,10 @@ template <class Block> struct LoopBackedgeTable {
 
 private:
   ID NextID = 1;
-  unsigned RewriteDepth = 0;
 };
 /// A snapshot exists only while a semantic CFG rewrite is in progress. The
-/// caller must restore its CFG before rollback; commit validates the completed
-/// outer rewrite, never a temporarily disconnected intermediate graph.
+/// caller must restore its CFG before rollback. Completion does not validate
+/// tracking completeness or inspect a temporarily disconnected graph.
 template <class Block> class LoopBackedgeRewrite {
   LoopBackedgeTable<Block> *Table;
   std::optional<LoopBackedgeTable<Block>> Saved;
@@ -125,31 +134,18 @@ template <class Block> class LoopBackedgeRewrite {
 
 public:
   explicit LoopBackedgeRewrite(LoopBackedgeTable<Block> *T) : Table(T) {
-    if (Table) {
+    if (Table)
       Saved = *Table;
-      ++Table->RewriteDepth;
-    }
   }
   LoopBackedgeRewrite(const LoopBackedgeRewrite &) = delete;
   LoopBackedgeRewrite &operator=(const LoopBackedgeRewrite &) = delete;
-  ~LoopBackedgeRewrite() {
-    if (Table && !Finished) {
-      --Table->RewriteDepth;
-      Table->fail("unsupported-iteration-transform");
-    }
-  }
+  ~LoopBackedgeRewrite() = default;
   const LoopBackedgeTable<Block> *snapshot() const {
     return Saved ? &*Saved : nullptr;
   }
-  template <class Validator> void commit(Validator &&Validate) {
+  void commit() {
     assert(!Finished);
     Finished = true;
-    if (!Table)
-      return;
-    assert(Table->RewriteDepth == Saved->RewriteDepth + 1);
-    if (!--Table->RewriteDepth && Table->Failure.empty())
-      if (Error E = Validate())
-        Table->fail(toString(std::move(E)));
   }
   void rollback() {
     assert(!Finished);
@@ -162,6 +158,7 @@ class LLVM_ABI LoopBackedgeTracking : public LoopBackedgeTable<BasicBlock> {
 public:
   std::string Identity, Role;
   uint64_t MaterializedWidth = 0;
+  bool CaptureFailures = false;
   static LoopBackedgeTracking *get(const Function *F);
   static LoopBackedgeTracking *get(const BasicBlock *BB);
   static void deleted(BasicBlock &BB);

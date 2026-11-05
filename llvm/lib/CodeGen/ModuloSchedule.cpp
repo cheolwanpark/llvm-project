@@ -12,6 +12,7 @@
 #include "llvm/CodeGen/LiveIntervals.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineLoopBackedgeTracking.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/InitializePasses.h"
@@ -159,6 +160,8 @@ void ModuloScheduleExpander::generatePipelinedLoop() {
   NewKernel = KernelBB;
   KernelBB->transferSuccessors(BB);
   KernelBB->replaceSuccessor(BB, KernelBB);
+  if (auto *T = MF.getLoopBackedgeTracking())
+    T->move({KernelBB, BB}, {KernelBB, KernelBB});
 
   generateExistingPhis(KernelBB, PrologBBs.back(), KernelBB, KernelBB, VRMap,
                        VRMapPhi, InstrMap, MaxStageCount, MaxStageCount, false);
@@ -2023,9 +2026,18 @@ void PeelingModuloScheduleExpander::expand() {
   LoopInfo = TII->analyzeLoopForPipelining(BB);
   assert(LoopInfo);
 
+  auto *Tracking = MF.getLoopBackedgeTracking();
+  auto IDs = Tracking ? Tracking->Backedges.lookup({BB, BB})
+                      : MachineLoopBackedgeTracking::Labels{};
   rewriteKernel();
   peelPrologAndEpilogs();
   fixupBranches();
+  if (Tracking) {
+    for (auto Q : IDs)
+      Tracking->eraseLoopEdges(Q);
+    if (BB->isSuccessor(BB))
+      Tracking->bind({BB, BB}, IDs);
+  }
 }
 
 void PeelingModuloScheduleExpander::validateAgainstModuloScheduleExpander() {
@@ -2264,7 +2276,20 @@ void ModuloScheduleExpanderMVE::generatePipelinedLoop() {
   LoopInfo = TII->analyzeLoopForPipelining(OrigKernel);
   assert(LoopInfo && "Must be able to analyze loop!");
 
+  SmallVector<uint64_t, 1> KernelTrackingIDs;
   calcNumUnroll();
+  if (auto *T = MF.getLoopBackedgeTracking()) {
+    // The original loop remains a fallback/remainder with its original width.
+    auto Labels = T->Backedges.lookup({OrigKernel, OrigKernel});
+    for (auto Q : Labels) {
+      auto Clone = T->addLoop(T->Widths.lookup(Q));
+      if (T->Undefined.contains(Q))
+        T->Undefined.insert(Clone);
+      T->expand(Clone, NumUnroll);
+      // Bind after the new kernel has been created below.
+      KernelTrackingIDs.push_back(Clone);
+    }
+  }
 
   Check = MF.CreateMachineBasicBlock(OrigKernel->getBasicBlock());
   Prolog = MF.CreateMachineBasicBlock(OrigKernel->getBasicBlock());
@@ -2298,6 +2323,8 @@ void ModuloScheduleExpanderMVE::generatePipelinedLoop() {
   Prolog->addSuccessor(NewKernel);
 
   NewKernel->addSuccessor(NewKernel);
+  if (auto *T = MF.getLoopBackedgeTracking())
+    T->bind({NewKernel, NewKernel}, KernelTrackingIDs);
   NewKernel->addSuccessor(Epilog);
 
   Epilog->addSuccessor(NewPreheader);

@@ -30,7 +30,7 @@ The compiler does not provide a RISC-V libc or sysroot.
 | `-vplan-backend-prune-cfg=false` | Disable private vector-spill CFG reduction; normally ON |
 | `-vplan-backend-probe-threads=N` | Positive main-probe worker limit; 1 |
 | `-vplan-backend-force-all` | Query real-spill candidates despite gate/pruning; OFF |
-| `-vplan-backend-jsonl=FILE` | Append passive candidate/fallback diagnostics |
+| `-vplan-backend-jsonl=FILE` | Append passive candidate, selection and grouped failure diagnostics |
 | `-print-vplans` / `-print-detailed-vplans` | Summary / detailed cost report |
 | `-vplan-backend-time` | Serial probe/cost timing diagnostics |
 | `-vplan-backend-pruning-trace` / `-vplan-backend-pruning-dump-ir` | CFG diagnostics / private probe IR |
@@ -143,9 +143,9 @@ Focused backend contract checks:
 
 The shared lit driver checks cost equations and meaningful observation/selection
 fields. Unit checks cover exact arithmetic, target profiles, current-loop scope,
-independent iteration widths and observation stages, raw reuse, cancellation and injected
-whole-loop failures. Native
-report arithmetic/path regressions remain separate from these backend checks.
+independent iteration widths and observation stages, raw reuse, cancellation and
+injected whole-loop failures. Native report arithmetic/path regressions remain
+separate from these backend checks.
 
 Scale additional checks to the change. Run PassManager tests only for relevant
 pass-manager changes; do not run the full LLVM suite by default. Opt-only checks

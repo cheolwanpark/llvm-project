@@ -25,7 +25,6 @@
 namespace llvm {
 class BasicBlock;
 class Loop;
-class ScalarEvolution;
 
 struct VPlanBackendProbeResult;
 /// Completion runs on the calling compiler thread, after worker cleanup.
@@ -89,15 +88,16 @@ struct VPlanBackendProbe {
   const VPlanBackendCandidate &Candidate;
   BasicBlock *Header;
   bool Emitted = false;
-  std::string Error;
+  std::optional<VPlanBackendFailure> Error = std::nullopt;
 };
 
 /// A completed query, including diagnostics owned independently of its context.
-/// Errors are consumed into strings at the provider boundary so discarding an
-/// unneeded speculative suffix never leaves unchecked llvm::Errors behind.
+/// Errors are consumed into owned records at the provider boundary so
+/// discarding an unneeded speculative suffix never leaves unchecked
+/// llvm::Errors behind.
 struct VPlanBackendProbeResult {
   std::optional<VPlanBackendResult> Observation;
-  std::string Failure;
+  std::optional<VPlanBackendFailure> Failure;
   std::string Diagnostics;
   bool Cancelled = false;
 
@@ -107,12 +107,13 @@ struct VPlanBackendProbeResult {
     if (Result)
       Observation = std::move(*Result);
     else
-      Failure = toString(Result.takeError());
+      Failure = takeVPlanBackendFailure(
+          Result.takeError(), VPlanBackendFailureGroup::Execution, "", "probe");
   }
 
   Expected<VPlanBackendResult> takeResult() {
     if (!Observation)
-      return createStringError(Failure);
+      return vplanBackendError(*Failure);
     return std::move(*Observation);
   }
 };
@@ -152,12 +153,16 @@ public:
     if (Candidates.empty())
       return Batch();
     if (!QueryCandidates)
-      return createStringError("backend feedback provider unavailable");
+      return vplanBackendError(VPlanBackendFailureGroup::Availability,
+                               "backend feedback provider unavailable", "",
+                               "input");
     auto Results = QueryCandidates(F, Header, Candidates);
     if (!Results)
       return Results.takeError();
     if (Results->size() != Candidates.size())
-      return createStringError("backend feedback batch size mismatch");
+      return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                               "backend feedback batch size mismatch", "",
+                               "probe");
     return Results;
   }
 
@@ -224,18 +229,22 @@ LLVM_ABI StringRef vplanBackendModelName();
 LLVM_ABI bool vplanBackendFeedbackTimingEnabled();
 LLVM_ABI StringRef
 vplanBackendObservationStatusName(VPlanBackendObservationStatus Status);
-LLVM_ABI json::Object summarizeVPlanBackendResult(const VPlanBackendResult &R,
-                                                 bool MIR = true);
+LLVM_ABI json::Object summarizeVPlanBackendResult(const VPlanBackendResult &R);
 /// Diagnostic oracle: retain the gate's decision but query every candidate.
 LLVM_ABI bool vplanBackendFeedbackForceAll();
 LLVM_ABI bool vplanBackendFeedbackOutputEnabled();
 /// Append diagnostics only when a JSONL destination was requested.
 LLVM_ABI void writeVPlanBackendFeedback(const json::Object &Result);
+LLVM_ABI json::Array
+summarizeVPlanBackendFailures(ArrayRef<VPlanBackendFailure> Failures);
+LLVM_ABI void emitVPlanBackendFailures(StringRef Function, unsigned Invocation,
+                                       unsigned Loop,
+                                       VPlanBackendMode Requested,
+                                       StringRef Effective,
+                                       const json::Array &Attempts);
 LLVM_ABI void setVPlanBackendCandidate(Function &F,
-                                     const VPlanBackendCandidate &Candidate);
-LLVM_ABI void registerVPlanBackendRegion(Function &F,
-                                        ArrayRef<BasicBlock *> Body, Loop *L,
-                                        ScalarEvolution &SE, uint64_t Width);
+                                       const VPlanBackendCandidate &Candidate);
+LLVM_ABI void registerVPlanBackendRegion(Function &F, Loop *L, uint64_t Width);
 } // namespace llvm
 
 #endif

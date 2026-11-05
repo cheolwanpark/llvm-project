@@ -14,7 +14,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Transforms/Utils/BreakCriticalEdges.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -29,6 +28,7 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/LoopBackedgeTracking.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -232,7 +232,7 @@ llvm::SplitKnownCriticalEdge(Instruction *TI, unsigned SuccNum,
   if (auto *T = LoopBackedgeTracking::get(&F)) {
     auto I = T->Backedges.find({TIBB, DestBB});
     if (I != T->Backedges.end()) {
-      uint64_t Q = I->second;
+      auto Q = I->second;
       if (!is_contained(successors(TIBB), DestBB))
         T->Backedges.erase(I);
       T->bind({NewBB, DestBB}, Q);

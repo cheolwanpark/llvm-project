@@ -1373,7 +1373,7 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
     if (auto *T = LoopBackedgeTracking::get(BB)) {
       auto I = T->Backedges.find({BB, Succ});
       if (I != T->Backedges.end()) {
-        uint64_t Q = I->second;
+        auto Q = I->second;
         T->Backedges.erase(I);
         for (auto *Pred : predecessors(BB)) T->bind({Pred, Succ}, Q);
       }

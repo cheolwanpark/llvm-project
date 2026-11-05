@@ -1968,7 +1968,6 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   delete FastIS;
   SDB->clearDanglingDebugInfo();
   SDB->SPDescriptor.resetPerFunctionState();
-  validateMachineLoopBackedges(*MF);
 }
 
 void

@@ -280,6 +280,7 @@ add_llvm_component_library(LLVMSupport
   UnicodeCaseFold.cpp
   UnicodeNameToCodepoint.cpp
   UnicodeNameToCodepointGenerated.cpp
+  VPlanBackendFailure.cpp
   VersionTuple.cpp
   VirtualFileSystem.cpp
   VirtualOutputBackend.cpp

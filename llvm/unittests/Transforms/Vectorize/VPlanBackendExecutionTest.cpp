@@ -7,6 +7,7 @@
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetTransformInfoImpl.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
@@ -15,9 +16,12 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "gtest/gtest.h"
@@ -142,8 +146,7 @@ TEST(VPlanBackendExecution, RequiredFailureDiscardsButDominatedFailureDoesNot) {
     VPlanBackendCostModel Costs(Feedback, TTI, *F, *H);
     auto Winner = Access::candidate(P, 8, Dominated ? 8 : 80, true);
     auto Failure = Access::candidate(P, 4, 8, true);
-    EXPECT_EQ(Access::run(Costs, {Winner, Failure}), Dominated)
-        << Costs.failure().str();
+    EXPECT_EQ(Access::run(Costs, {Winner, Failure}), Dominated);
     EXPECT_EQ(Costs.failed(), !Dominated);
     EXPECT_EQ(Costs.isPruned(P, ElementCount::getFixed(4)), Dominated);
     EXPECT_EQ(Costs.lookup(P, ElementCount::getFixed(8)) != nullptr, Dominated);
@@ -242,6 +245,14 @@ TEST(VPlanBackendExecution, ReportingAndWholeLoopAttemptAreTransactional) {
     std::vector<bool> ReferenceProbes;
     for (bool Print : {false, true}) {
       SaveAndRestore Detailed(flag("print-detailed-vplans"), Print);
+      SmallString<128> FeedbackPath;
+      ASSERT_FALSE(bool(sys::fs::createTemporaryFile("backend-report", "jsonl",
+                                                     FeedbackPath)));
+      auto &Destination =
+          static_cast<cl::opt<std::string> *>(Options["vplan-backend-jsonl"])
+              ->getValue();
+      SaveAndRestore FeedbackOutput(Destination,
+                                    Print ? FeedbackPath.str().str() : "");
       LLVMContext C;
       SMDiagnostic E;
       auto M = parseAssemblyString(R"(
@@ -316,6 +327,27 @@ TEST(VPlanBackendExecution, ReportingAndWholeLoopAttemptAreTransactional) {
       testing::internal::CaptureStderr();
       FPM.run(*M->getFunction("map"), FAM);
       auto Report = testing::internal::GetCapturedStderr();
+      auto Feedback = MemoryBuffer::getFile(FeedbackPath);
+      ASSERT_TRUE(bool(Feedback));
+      unsigned FailureRows = 0;
+      for (auto Line : split((*Feedback)->getBuffer(), '\n')) {
+        if (Line.empty())
+          continue;
+        auto Value = json::parse(Line);
+        ASSERT_TRUE(bool(Value)) << toString(Value.takeError());
+        auto *Row = Value->getAsObject();
+        ASSERT_TRUE(Row);
+        EXPECT_TRUE(Row->getInteger("invocation"));
+        if (Row->getString("status") != "backend-failures")
+          continue;
+        ++FailureRows;
+        EXPECT_EQ(Row->getString("schema"), "vplan-backend-failures-v1");
+        EXPECT_EQ(Row->getString("effective_model"),
+                  Scenario == 2 ? "native" : "tti-v1");
+        EXPECT_FALSE(Row->get("reason"));
+      }
+      EXPECT_EQ(FailureRows, Print && Scenario != 0 ? 1u : 0u);
+      sys::fs::remove(FeedbackPath);
       std::string IR;
       raw_string_ostream OS(IR);
       M->print(OS, nullptr);
@@ -352,7 +384,7 @@ TEST(VPlanBackendExecution, ReportingAndWholeLoopAttemptAreTransactional) {
 
 // Exercise real IR transformations and their observable normalization, not the
 // ledger API or the number/order of propagation hooks.
-TEST(VPlanBackendExecution, UnrollUsesUniformExpansionAndRejectsFiniteBodies) {
+TEST(VPlanBackendExecution, UnrollUsesUniformExpansionAndDropsFiniteBodies) {
   for (unsigned Case = 0; Case != 5; ++Case) {
     SCOPED_TRACE(Case);
     LLVMContext C;
@@ -397,8 +429,8 @@ TEST(VPlanBackendExecution, UnrollUsesUniformExpansionAndRejectsFiniteBodies) {
     EXPECT_FALSE(verifyFunction(F, &errs()));
     auto Body = mapTrackedLoops(*T, F, DT, LI);
     if (Case < 2) {
-      ASSERT_FALSE(bool(Body));
-      EXPECT_EQ(toString(Body.takeError()), "unsupported-finite-body");
+      ASSERT_TRUE(bool(Body)) << toString(Body.takeError());
+      EXPECT_TRUE(Body->empty());
     } else {
       ASSERT_TRUE(bool(Body)) << toString(Body.takeError());
       if (Case == 4) {
@@ -459,10 +491,12 @@ TEST(VPlanBackendExecution, ObservationFollowsCurrentInstructionPlacement) {
   EXPECT_FALSE(verifyFunction(F));
 }
 
-TEST(VPlanBackendExecution, EnclosingUnrollKeepsIndependentInnerWidths) {
-  LLVMContext C;
-  SMDiagnostic Diagnostic;
-  auto M = parseAssemblyString(R"(
+TEST(VPlanBackendExecution, EnclosingTransformsPreserveOrJamInnerWidths) {
+  for (unsigned Mode = 0; Mode != 3; ++Mode) {
+    SCOPED_TRACE(Mode);
+    LLVMContext C;
+    SMDiagnostic Diagnostic;
+    auto M = parseAssemblyString(R"(
     define void @f(ptr %p, i64 %n) {
     entry: br label %outer
     outer:
@@ -482,32 +516,43 @@ TEST(VPlanBackendExecution, EnclosingUnrollKeepsIndependentInnerWidths) {
       br i1 %outer.done, label %exit, label %outer
     exit: ret void
     })",
-                               Diagnostic, C);
-  ASSERT_TRUE(M);
-  auto &F = *M->getFunction("f");
-  PassBuilder PB;
-  FunctionAnalysisManager FAM;
-  PB.registerFunctionAnalyses(FAM);
-  auto &LI = FAM.getResult<LoopAnalysis>(F);
-  auto &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
-  auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
-  auto &AC = FAM.getResult<AssumptionAnalysis>(F);
-  auto &TTI = FAM.getResult<TargetIRAnalysis>(F);
-  Loop *Outer = *LI.begin();
-  ASSERT_EQ(Outer->getSubLoops().size(), 1u);
-  ScopedLoopBackedgeTracking Scope(F);
-  auto &T = *LoopBackedgeTracking::get(&F);
-  registerTrackedLoop(T, *Outer->getSubLoops().front(), 8);
-  UnrollLoopOptions Options{};
-  Options.Count = 2;
-  Options.Force = true;
-  EXPECT_EQ(
-      UnrollLoop(Outer, Options, &LI, &SE, &DT, &AC, &TTI, nullptr, false),
-      LoopUnrollResult::FullyUnrolled);
-  ASSERT_FALSE(verifyFunction(F));
-  auto Bodies = mapTrackedLoops(T, F, DT, LI);
-  ASSERT_TRUE(bool(Bodies)) << toString(Bodies.takeError());
-  ASSERT_EQ(Bodies->size(), 2u);
-  for (const auto &Body : *Bodies)
-    EXPECT_EQ(Body.Width, 8u);
+                                 Diagnostic, C);
+    ASSERT_TRUE(M);
+    auto &F = *M->getFunction("f");
+    PassBuilder PB;
+    FunctionAnalysisManager FAM;
+    PB.registerFunctionAnalyses(FAM);
+    auto &LI = FAM.getResult<LoopAnalysis>(F);
+    auto &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
+    auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
+    auto &AC = FAM.getResult<AssumptionAnalysis>(F);
+    auto &TTI = FAM.getResult<TargetIRAnalysis>(F);
+    Loop *Outer = *LI.begin();
+    ASSERT_EQ(Outer->getSubLoops().size(), 1u);
+    ScopedLoopBackedgeTracking Scope(F);
+    auto &T = *LoopBackedgeTracking::get(&F);
+    registerTrackedLoop(T, *Outer->getSubLoops().front(), 8);
+    UnrollLoopOptions Options{};
+    Options.Count = 2;
+    Options.Force = true;
+    if (Mode == 0) {
+      EXPECT_EQ(
+          UnrollLoop(Outer, Options, &LI, &SE, &DT, &AC, &TTI, nullptr, false),
+          LoopUnrollResult::FullyUnrolled);
+    } else if (Mode == 1) {
+      ValueToValueMapTy VMap;
+      peelLoop(Outer, 1, false, &LI, &SE, DT, &AC, false, VMap);
+    } else {
+      OptimizationRemarkEmitter ORE(&F);
+      EXPECT_EQ(UnrollAndJamLoop(Outer, 2, 2, 2, false, &LI, &SE, &DT, &AC,
+                                 &TTI, &ORE),
+                LoopUnrollResult::FullyUnrolled);
+    }
+    ASSERT_FALSE(verifyFunction(F));
+    auto Bodies = mapTrackedLoops(T, F, DT, LI);
+    ASSERT_TRUE(bool(Bodies)) << toString(Bodies.takeError());
+    ASSERT_EQ(Bodies->size(), Mode == 2 ? 1u : 2u);
+    for (const auto &Body : *Bodies)
+      EXPECT_EQ(Body.Width, Mode == 2 ? 16u : 8u);
+  }
 }

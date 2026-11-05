@@ -20,10 +20,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -711,8 +711,8 @@ bool llvm::UnrollRuntimeLoopRemainder(
   BasicBlock *LatchExit = LatchBR->getSuccessor(ExitIndex);
 
   if (L->contains(LatchExit)) {
-    // Cloning the loop basic blocks (`CloneLoopBlocks`) requires that one of the
-    // targets of the Latch be an exit block out of the loop.
+    // Cloning the loop basic blocks (`CloneLoopBlocks`) requires that one of
+    // the targets of the Latch be an exit block out of the loop.
     LLVM_DEBUG(
         dbgs()
         << "One of the loop latch successors must be the exit block.\n");
@@ -725,8 +725,9 @@ bool llvm::UnrollRuntimeLoopRemainder(
   // Support only single exit and exiting block unless multi-exit loop
   // unrolling is enabled.
   if (!L->getExitingBlock() || OtherExits.size()) {
-    // We rely on LCSSA form being preserved when the exit blocks are transformed.
-    // (Note that only an off-by-default mode of the old PM disables PreserveLCCA.)
+    // We rely on LCSSA form being preserved when the exit blocks are
+    // transformed. (Note that only an off-by-default mode of the old PM
+    // disables PreserveLCCA.)
     if (!PreserveLCSSA)
       return false;
 
@@ -1087,10 +1088,6 @@ bool llvm::UnrollRuntimeLoopRemainder(
 
   if (auto *T = LoopBackedgeTracking::get(L->getHeader())) {
     cloneTrackedLoops(*T, *BackedgeSnapshot, VMap);
-    if (Count == 2 && any_of(T->Backedges, [&](const auto &E) {
-          return E.first.second == remainderLoop->getHeader();
-        }))
-      T->fail("unsupported-finite-body");
   }
 
   // For unroll factor 2 remainder loop will have 1 iteration.

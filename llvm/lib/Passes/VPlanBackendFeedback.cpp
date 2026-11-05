@@ -10,8 +10,8 @@
 #include "VPlanBackendProbe.h"
 #include "VPlanBackendProbePruning.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopBackedgeAnalysis.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
@@ -19,11 +19,11 @@
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/LoopBackedgeTracking.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/OptBisect.h"
 #include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/PrintPasses.h"
-#include "llvm/IR/LoopBackedgeTracking.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -184,16 +184,22 @@ struct ProbeTarget {
 
 Error checkInput(const TargetMachine *TM, const Function &F) {
   if (!TM)
-    return createStringError("backend feedback requires a TargetMachine");
+    return vplanBackendError(VPlanBackendFailureGroup::Availability,
+                             "backend feedback requires a TargetMachine", "",
+                             "input");
   if (!TM->getTargetTriple().isRISCV())
-    return createStringError(
-        "backend feedback observer currently supports RISC-V");
+    return vplanBackendError(
+        VPlanBackendFailureGroup::Availability,
+        "backend feedback observer currently supports RISC-V", "", "input");
   if (F.getParent()->getProfileSummary(/*IsCS=*/false) ||
       F.getParent()->getProfileSummary(/*IsCS=*/true) || TM->getPGOOption())
-    return createStringError(
-        "profile-dependent backend probes are unsupported");
+    return vplanBackendError(VPlanBackendFailureGroup::Availability,
+                             "profile-dependent backend probes are unsupported",
+                             "", "input");
   if (F.hasOptNone())
-    return createStringError("backend feedback does not support optnone");
+    return vplanBackendError(VPlanBackendFailureGroup::Availability,
+                             "backend feedback does not support optnone", "",
+                             "input");
   return Error::success();
 }
 
@@ -230,14 +236,19 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
       (Candidate.VF != ElementCount::getFixed(1) || Candidate.IC != 1 ||
        Candidate.IsEpilogue || Candidate.EpilogueVF.isVector() ||
        !Candidate.Observation.collectsMIR()))
-    return createStringError("invalid scalar baseline probe identity");
+    return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                             "invalid scalar baseline probe identity", "",
+                             "probe");
   if (ScopedPassCancellation::check())
-    return createStringError("backend probe cancelled");
+    return vplanBackendError(VPlanBackendFailureGroup::Execution,
+                             "backend probe cancelled", "", "probe");
   std::unique_ptr<TargetMachine> TM(Target.TheTarget.createTargetMachine(
       Target.TargetTriple, Target.CPU, Target.Features, Target.Options,
       Target.Relocation, Target.CodeModel, Target.OptLevel));
   if (!TM)
-    return createStringError("cannot create candidate TargetMachine");
+    return vplanBackendError(VPlanBackendFailureGroup::Execution,
+                             "cannot create candidate TargetMachine", "",
+                             "probe");
   PassBuilder PB(TM.get(), Pipeline.Tuning, std::nullopt, nullptr,
                  std::move(FileSystem));
   LoopAnalysisManager LAM;
@@ -260,12 +271,17 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   Materialize.addPass(std::move(LV));
   Materialize.run(F, FAM);
   Timer.mark("candidate_materialization");
-  if (!Probe.Emitted)
-    return createStringError(
-        Probe.Error.empty() ? "candidate was not materialized" : Probe.Error);
+  if (!Probe.Emitted) {
+    if (Probe.Error)
+      return vplanBackendError(*Probe.Error);
+    return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                             "candidate was not materialized", Candidate.ID,
+                             "materialization");
+  }
 
   if (ScopedPassCancellation::check())
-    return createStringError("backend probe cancelled");
+    return vplanBackendError(VPlanBackendFailureGroup::Execution,
+                             "backend probe cancelled", "", "probe");
   auto DumpPruningIR = [&](StringRef Stage) {
     if (PruningDumpIR) {
       Diagnostics << "VPLAN-BACKEND-PRUNING-IR: " << Candidate.ID << " "
@@ -288,7 +304,9 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   if (Removed) {
     FAM.invalidate(F, PreservedAnalyses::none());
     if (verifyFunction(F, &Diagnostics))
-      return createStringError("invalid pruned candidate function");
+      return vplanBackendError(VPlanBackendFailureGroup::Execution,
+                               "invalid pruned candidate function", "",
+                               "probe");
   }
   DumpPruningIR("after");
   if (PruningTrace)
@@ -296,7 +314,8 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   Timer.mark("probe_pruning");
 
   if (ScopedPassCancellation::check())
-    return createStringError("backend probe cancelled");
+    return vplanBackendError(VPlanBackendFailureGroup::Execution,
+                             "backend probe cancelled", "", "probe");
   // This is the same explicit post-LV continuation for both execution modes.
   auto Level = Target.OptLevel == CodeGenOptLevel::Aggressive
                    ? OptimizationLevel::O3
@@ -331,10 +350,11 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   }
   Timer.mark("ir_suffix");
   if (ScopedPassCancellation::check())
-    return createStringError("backend probe cancelled");
-  validateLoopBackedges(F);
+    return vplanBackendError(VPlanBackendFailureGroup::Execution,
+                             "backend probe cancelled", "", "probe");
   if (verifyModule(M, &Diagnostics))
-    return createStringError("invalid candidate module");
+    return vplanBackendError(VPlanBackendFailureGroup::Execution,
+                             "invalid candidate module", "", "probe");
   Timer.mark("iteration_mapping_and_verification");
   auto Result =
       TM->getVPlanBackendFeedback(M, Timer.Enabled, Candidate.Observation);
@@ -344,9 +364,12 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   if (!Result->Spill.succeeded() && !Result->MIR.succeeded())
     setCandidateIdentity(*Result, Candidate);
   if (Result->Candidate != Candidate.ID || Result->VF != Candidate.VF ||
-      Result->IC != Candidate.IC || Result->IsEpilogue != Candidate.IsEpilogue ||
+      Result->IC != Candidate.IC ||
+      Result->IsEpilogue != Candidate.IsEpilogue ||
       Result->Kind != Candidate.Kind)
-    return createStringError("backend observation identity mismatch");
+    return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                             "backend observation identity mismatch", "",
+                             "probe");
   return Result;
 }
 
@@ -446,13 +469,19 @@ struct ProbeSnapshot {
                           "vplan-backend-probe"),
           Context);
       if (!M)
-        return M.takeError();
+        return vplanBackendError(takeVPlanBackendFailure(
+            M.takeError(), VPlanBackendFailureGroup::Execution, Candidate.ID,
+            "probe"));
       (*M)->setModuleIdentifier(ModuleIdentifier);
       if (FunctionIndex >= (*M)->size())
-        return createStringError("backend snapshot function identity mismatch");
+        return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                                 "backend snapshot function identity mismatch",
+                                 "", "probe");
       auto *F = &*std::next((*M)->begin(), FunctionIndex);
       if (HeaderIndex >= F->size())
-        return createStringError("backend snapshot header identity mismatch");
+        return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                                 "backend snapshot header identity mismatch",
+                                 "", "probe");
       auto &Header = *std::next(F->begin(), HeaderIndex);
       VPlanFeedbackTimer Timer(false);
       // This profile-free, function-local pipeline uses no VFS inputs. Do not
@@ -462,7 +491,9 @@ struct ProbeSnapshot {
       if (Context.getDiagHandlerPtr()->HasErrors) {
         if (!Result)
           consumeError(Result.takeError());
-        return createStringError("backend probe emitted an error diagnostic");
+        return vplanBackendError(VPlanBackendFailureGroup::Execution,
+                                 "backend probe emitted an error diagnostic",
+                                 "", "probe");
       }
       return Result;
     };
@@ -478,7 +509,8 @@ runControlledProbe(const VPlanBackendCandidate &C,
   ScopedPassCancellation Scope(C.Control ? &C.Control->Cancellation : nullptr);
   auto R = [&]() -> VPlanBackendProbeResult {
     if (ScopedPassCancellation::check())
-      return {createStringError("backend probe cancelled")};
+      return {vplanBackendError(VPlanBackendFailureGroup::Execution,
+                                "backend probe cancelled", "", "probe")};
     if (C.Control)
       C.Control->Started = true;
     return Run();
@@ -487,11 +519,12 @@ runControlledProbe(const VPlanBackendCandidate &C,
   if (!R.Observation) {
     VPlanBackendResult Unavailable;
     setCandidateIdentity(Unavailable, C);
-    Unavailable.Spill.Failure = R.Failure;
+    if (R.Failure && R.Failure->Candidate.empty())
+      R.Failure->Candidate = C.ID;
+    Unavailable.Failure = std::move(R.Failure);
+    R.Failure.reset();
     Unavailable.MIR.Stage = "post-frame-lowering";
-    if (C.Observation.collectsMIR())
-      Unavailable.MIR.Failure = R.Failure;
-    else
+    if (!C.Observation.collectsMIR())
       Unavailable.MIR.Status = VPlanBackendObservationStatus::NotRequested;
     R.Observation = std::move(Unavailable);
   }
@@ -567,7 +600,9 @@ public:
       } else {
         Indices.push_back(Results.size());
         Missing.push_back(C);
-        Results.emplace_back(createStringError("uncollected candidate"));
+        Results.emplace_back(
+            vplanBackendError(VPlanBackendFailureGroup::Execution,
+                              "uncollected candidate", "", "probe"));
       }
     }
     if (Missing.empty())
@@ -596,8 +631,8 @@ public:
     std::string Reason = Threads > 1 ? serialReason(F) : std::string();
     if (!Reason.empty() && !Warned) {
       for (const auto &C : Candidates)
-        SerialMainQueries += !C.IsEpilogue &&
-                             C.Kind == VPlanBackendCandidateKind::Vector;
+        SerialMainQueries +=
+            !C.IsEpilogue && C.Kind == VPlanBackendCandidateKind::Vector;
       // No warning for an empty/gated loop or a single main query. The original
       // thread emits this once, when serial execution actually prevents
       // overlap.

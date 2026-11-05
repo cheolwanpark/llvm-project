@@ -7,8 +7,6 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/VPlanBackendResult.h"
 namespace llvm {
-class FunctionPass;
-FunctionPass *createRISCVVPlanMappingVerifier();
 class MachineBasicBlock;
 class MachineFunction;
 namespace vplan {

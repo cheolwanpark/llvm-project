@@ -68,7 +68,7 @@ TEST(LoopBackedge, CurrentBodyIncludesHelperAndSurvivesSplitting) {
   EXPECT_EQ(Merged->front().Blocks.size(), 4u);
 }
 
-TEST(LoopBackedge, MissingIterationIsFailureEvenWhenAnotherLoopRemains) {
+TEST(LoopBackedge, MissingIterationLeavesOtherLoopObservable) {
   LLVMContext C;
   SMDiagnostic Diagnostic;
   auto M = parseAssemblyString(R"(
@@ -98,11 +98,12 @@ TEST(LoopBackedge, MissingIterationIsFailureEvenWhenAnotherLoopRemains) {
   LI.releaseMemory();
   LI.analyze(DT);
   auto After = mapTrackedLoops(T, F, DT, LI);
-  ASSERT_FALSE(bool(After));
-  EXPECT_EQ(toString(After.takeError()), "lost-backedge");
+  ASSERT_TRUE(bool(After)) << toString(After.takeError());
+  ASSERT_EQ(After->size(), 1u);
+  EXPECT_EQ(After->front().Width, 4u);
 }
 
-TEST(LoopBackedge, IrreducibleHelperIsNotAValidBody) {
+TEST(LoopBackedge, IrreducibleHelperInsideNaturalLoopIsObservable) {
   LLVMContext C;
   SMDiagnostic Diagnostic;
   auto M = parseAssemblyString(R"(
@@ -124,6 +125,52 @@ TEST(LoopBackedge, IrreducibleHelperIsNotAValidBody) {
   auto &T = *LoopBackedgeTracking::get(&F);
   registerTrackedLoop(T, **LI.begin(), 4);
   auto Body = mapTrackedLoops(T, F, DT, LI);
-  ASSERT_FALSE(bool(Body));
-  EXPECT_EQ(toString(Body.takeError()), "ambiguous-loop");
+  ASSERT_TRUE(bool(Body)) << toString(Body.takeError());
+  ASSERT_EQ(Body->size(), 1u);
+  EXPECT_EQ(Body->front().Blocks.size(), 4u);
+}
+
+TEST(LoopBackedge, AliasesAndLocalWidthFailure) {
+  LLVMContext C;
+  SMDiagnostic Diagnostic;
+  auto M = parseAssemblyString(R"(
+    define void @f(i1 %c) {
+    entry: br label %first
+    first: br i1 %c, label %first, label %second
+    second: br i1 %c, label %second, label %exit
+    exit: ret void
+    }
+  )",
+                               Diagnostic, C);
+  ASSERT_TRUE(M);
+  auto &F = *M->getFunction("f");
+  DominatorTree DT(F);
+  LoopInfo LI(DT);
+  ScopedLoopBackedgeTracking Scope(F);
+  auto &T = *LoopBackedgeTracking::get(&F);
+  auto *First = F.getEntryBlock().getTerminator()->getSuccessor(0);
+  auto *Second = First->getTerminator()->getSuccessor(1);
+  auto Q = registerTrackedLoop(T, *LI.getLoopFor(First), 4);
+  // A shared q still represents two independently observable native loops.
+  T.bind({Second, Second}, Q);
+  auto Bodies = mapTrackedLoops(T, F, DT, LI);
+  ASSERT_TRUE(bool(Bodies)) << toString(Bodies.takeError());
+  EXPECT_EQ(Bodies->size(), 2u);
+  auto Alias = registerTrackedLoop(T, *LI.getLoopFor(First), 4);
+  Bodies = mapTrackedLoops(T, F, DT, LI);
+  ASSERT_TRUE(bool(Bodies)) << toString(Bodies.takeError());
+  EXPECT_EQ(Bodies->size(), 2u);
+  // A conflicting width excludes the shared iteration, including aliases.
+  T.expand(Alias, 2);
+  Bodies = mapTrackedLoops(T, F, DT, LI);
+  ASSERT_TRUE(bool(Bodies)) << toString(Bodies.takeError());
+  EXPECT_TRUE(Bodies->empty());
+  T.eraseLoopEdges(Q);
+  auto Independent = registerTrackedLoop(T, *LI.getLoopFor(Second), 8);
+  T.expand(Alias, UINT32_MAX);
+  Bodies = mapTrackedLoops(T, F, DT, LI);
+  ASSERT_TRUE(bool(Bodies)) << toString(Bodies.takeError());
+  ASSERT_EQ(Bodies->size(), 1u);
+  EXPECT_EQ(Bodies->front().ID, Independent);
+  EXPECT_EQ(Bodies->front().Width, 8u);
 }

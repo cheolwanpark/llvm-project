@@ -11,7 +11,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -23,6 +22,7 @@
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/MustExecute.h"
@@ -250,9 +250,17 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     }
   }
 
-  if (auto *T = LoopBackedgeTracking::get(L->getHeader()))
-    if (containsTrackedLoop(*T, *L))
-      T->fail("unsupported-iteration-transform");
+  auto *Tracking = LoopBackedgeTracking::get(L->getHeader());
+  std::optional<LoopBackedgeTable<BasicBlock>> Before;
+  SmallVector<uint64_t> JammedIDs;
+  if (Tracking) {
+    Before = *Tracking;
+    for (const auto &E : Before->Backedges)
+      if (E.first.second == SubLoop->getHeader())
+        for (auto Q : E.second)
+          if (!is_contained(JammedIDs, Q))
+            JammedIDs.push_back(Q);
+  }
 
   // Notify ScalarEvolution that the loop will be substantially changed,
   // if not outright eliminated.
@@ -433,6 +441,8 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
 
     // Remap all instructions in the most recent iteration
     remapInstructionsInBlocks(NewBlocks, LastValueMap);
+    if (Tracking)
+      cloneTrackedLoops(*Tracking, *Before, LastValueMap, SubLoop);
     for (BasicBlock *NewBlock : NewBlocks) {
       for (Instruction &I : *NewBlock) {
         if (auto *II = dyn_cast<AssumeInst>(&I))
@@ -534,6 +544,15 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     SubLoopBlocksFirst[It]->replacePhiUsesWith(SubLoopBlocksLast[It],
                                                SubLoopBlocksLast.back());
     movePHIs(SubLoopBlocksFirst[It], SubLoopBlocksFirst[0]);
+  }
+
+  if (Tracking) {
+    for (auto Q : JammedIDs)
+      Tracking->eraseLoopEdges(Q);
+    for (auto Q : JammedIDs)
+      Tracking->expand(Q, Count);
+    for (auto Q : JammedIDs)
+      Tracking->bind({SubLoopBlocksLast.back(), SubLoopBlocksFirst[0]}, Q);
   }
 
   // Aft blocks successors and phis
