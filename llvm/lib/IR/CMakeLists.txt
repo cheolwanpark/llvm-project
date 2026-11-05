@@ -5,6 +5,7 @@ add_llvm_component_library(LLVMCore
   Attributes.cpp
   AutoUpgrade.cpp
   BasicBlock.cpp
+  RelatedBlock.cpp
   BuiltinGCs.cpp
   BundleAttributes.cpp
   Comdat.cpp

@@ -26,6 +26,7 @@
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
+#include "llvm/CodeGen/MachineRelatedBlock.h"
 #include "llvm/IR/EHPersonalities.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/ArrayRecycler.h"
@@ -304,6 +305,7 @@ class LLVM_ABI MachineFunction {
   // Used to keep track of target-specific per-machine-function information for
   // the target implementation.
   MachineFunctionInfo *MFInfo;
+  std::unique_ptr<MachineRelatedBlockTracking> RelatedBlocks;
 
   // Keep track of objects allocated on the stack.
   MachineFrameInfo *FrameInfo;
@@ -450,6 +452,10 @@ class LLVM_ABI MachineFunction {
   void init();
 
 public:
+  MachineRelatedBlockTracking *getRelatedBlockTracking() const {
+    return RelatedBlocks.get();
+  }
+
   /// Description of the location of a variable whose Address is valid and
   /// unchanging during function execution. The Address may be:
   /// * A stack index, which can be negative for fixed stack objects.

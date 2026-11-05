@@ -30,7 +30,6 @@ add_llvm_component_library(LLVMVectorize
   VPlan.cpp
   VPlanAnalysis.cpp
   VPlanRegisterUsageBounds.cpp
-  VPlanBackendMarkerPolicy.cpp
   VPlanBackendFeedback.cpp
   VPlanBackendPricing.cpp
   VPlanBackendCostModel.cpp

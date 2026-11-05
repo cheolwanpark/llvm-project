@@ -202,6 +202,8 @@ void MachineFunction::handleChangeDesc(MachineInstr &MI,
 }
 
 void MachineFunction::init() {
+  if (auto *T = RelatedBlockTracking::get(&F))
+    RelatedBlocks = std::make_unique<MachineRelatedBlockTracking>(T->Region);
   // Assume the function starts in SSA form with correct liveness.
   Properties.setIsSSA();
   Properties.setTracksLiveness();
@@ -285,6 +287,7 @@ MachineFunction::~MachineFunction() {
 }
 
 void MachineFunction::clear() {
+  RelatedBlocks.reset();
   Properties.reset();
 
   // Clear JumpTableInfo first. Otherwise, every MBB we delete would do a
@@ -480,10 +483,12 @@ MachineInstr *MachineFunction::CreateMachineInstr(const MCInstrDesc &MCID,
 
 /// Create a new MachineInstr which is a copy of the 'Orig' instruction,
 /// identical in all ways except the instruction has no parent, prev, or next.
-MachineInstr *
-MachineFunction::CloneMachineInstr(const MachineInstr *Orig) {
-  return new (InstructionRecycler.Allocate<MachineInstr>(Allocator))
-             MachineInstr(*this, *Orig);
+MachineInstr *MachineFunction::CloneMachineInstr(const MachineInstr *Orig) {
+  auto *New = new (InstructionRecycler.Allocate<MachineInstr>(Allocator))
+      MachineInstr(*this, *Orig);
+  if (RelatedBlocks)
+    RelatedBlocks->save(*New, *Orig);
+  return New;
 }
 
 MachineInstr &MachineFunction::cloneMachineInstrBundle(
@@ -517,6 +522,8 @@ MachineInstr &MachineFunction::cloneMachineInstrBundle(
 /// This function also serves as the MachineInstr destructor - the real
 /// ~MachineInstr() destructor must be empty.
 void MachineFunction::deleteMachineInstr(MachineInstr *MI) {
+  if (RelatedBlocks)
+    RelatedBlocks->forget(MI);
   // Verify that a call site info is at valid state. This assertion should
   // be triggered during the implementation of support for the
   // call site info of a new architecture. If the assertion is triggered,
@@ -546,6 +553,8 @@ MachineFunction::CreateMachineBasicBlock(const BasicBlock *BB,
   MachineBasicBlock *MBB =
       new (BasicBlockRecycler.Allocate<MachineBasicBlock>(Allocator))
           MachineBasicBlock(*this, BB);
+  if (RelatedBlocks)
+    RelatedBlocks->create(*MBB, BB);
   // Set BBID for `-basic-block-sections=list` and `-basic-block-address-map` to
   // allow robust mapping of profiles to basic blocks.
   if (Target.Options.BBAddrMap ||
@@ -556,6 +565,8 @@ MachineFunction::CreateMachineBasicBlock(const BasicBlock *BB,
 
 /// Delete the given MachineBasicBlock.
 void MachineFunction::deleteMachineBasicBlock(MachineBasicBlock *MBB) {
+  if (RelatedBlocks)
+    RelatedBlocks->forget(MBB);
   assert(MBB->getParent() == this && "MBB parent mismatch!");
   // Clean up any references to MBB in jump tables before deleting it.
   if (JumpTableInfo)

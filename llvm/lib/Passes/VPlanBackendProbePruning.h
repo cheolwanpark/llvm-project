@@ -16,7 +16,7 @@ struct ProbeIRSize {
   unsigned LoopInstructions = 0, LoopBlocks = 0;
 };
 
-ProbeIRSize getProbeIRSize(Function &F, FunctionAnalysisManager &FAM);
+ProbeIRSize getProbeIRSize(Function &F);
 PruningResult pruneLoopRegions(Function &F, FunctionAnalysisManager &FAM);
 } // namespace llvm
 #endif

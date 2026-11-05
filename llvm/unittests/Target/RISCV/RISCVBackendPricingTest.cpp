@@ -7,12 +7,12 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Target/TargetMachine.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/SaveAndRestore.h"
+#include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
 #include "gtest/gtest.h"
 #include <array>
@@ -168,10 +168,9 @@ TEST(RISCVBackendSheets, SpillGroupsAndDirections) {
 // prices and report text are deliberately absent from this cache check.
 TEST_F(RISCVBackendPricing, RawReuseRequiresMatchingMaterializationContext) {
   auto &Options = cl::getRegisteredOptions();
-  auto &Prune = static_cast<cl::opt<bool> *>(Options["vplan-backend-prune-cfg"])->getValue();
-  auto &Markers = static_cast<cl::opt<bool> *>(Options["vplan-backend-region-probes"])->getValue();
+  auto &Prune = static_cast<cl::opt<bool> *>(Options["vplan-backend-prune-cfg"])
+                    ->getValue();
   SaveAndRestore SavedPrune(Prune, false);
-  SaveAndRestore SavedMarkers(Markers, true);
   SMDiagnostic Error;
   M = parseAssemblyString(R"(
     define void @f(ptr %p, i64 %n) vscale_range(2,2) {
@@ -228,8 +227,6 @@ TEST_F(RISCVBackendPricing, RawReuseRequiresMatchingMaterializationContext) {
   query(true, false);
   Candidate.Observation.StopAfter = VPlanBackendStopAfter::MIR;
   query(false); // MIR always keeps the full CFG.
-  Markers = false;
-  query(true);
   Service.beginInvocation();
   query(true);
 }

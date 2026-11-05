@@ -455,6 +455,7 @@ void BranchFolder::replaceTailWithBranchTo(MachineBasicBlock::iterator OldInst,
     }
   }
 
+  mergeRelatedBlocks(NewDest, *OldInst->getParent());
   TII->ReplaceTailWithBranchTo(OldInst, &NewDest);
   ++NumTailMerge;
 }
@@ -470,6 +471,7 @@ MachineBasicBlock *BranchFolder::SplitMBBAt(MachineBasicBlock &CurMBB,
   // Create the fall-through block.
   MachineFunction::iterator MBBI = CurMBB.getIterator();
   MachineBasicBlock *NewMBB = MF.CreateMachineBasicBlock(BB);
+  inheritRelatedBlocks(*NewMBB, CurMBB);
   CurMBB.getParent()->insert(++MBBI, NewMBB);
 
   // Move all the successors of this block to the specified block.

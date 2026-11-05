@@ -4166,7 +4166,8 @@ void VPlanTransforms::dissolveLoopRegions(VPlan &Plan) {
     R->dissolveToCFGLoop();
 }
 
-void VPlanTransforms::expandBranchOnTwoConds(VPlan &Plan) {
+void VPlanTransforms::expandBranchOnTwoConds(
+    VPlan &Plan, SmallVectorImpl<VPBasicBlock *> *ProbeBody) {
   SmallVector<VPInstruction *> WorkList;
   // The transform runs after dissolving loop regions, so all VPBasicBlocks
   // terminated with BranchOnTwoConds are reached via a shallow traversal.
@@ -4218,6 +4219,8 @@ void VPlanTransforms::expandBranchOnTwoConds(VPlan &Plan) {
 
     VPBasicBlock *InterimBB =
         Plan.createVPBasicBlock(BrOnTwoCondsBB->getName() + ".interim");
+    if (ProbeBody && is_contained(*ProbeBody, BrOnTwoCondsBB))
+      ProbeBody->push_back(InterimBB);
 
     VPBuilder(BrOnTwoCondsBB)
         .createNaryOp(VPInstruction::BranchOnCond, {Cond0}, DL);

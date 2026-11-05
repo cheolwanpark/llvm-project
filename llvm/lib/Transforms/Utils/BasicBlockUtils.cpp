@@ -344,6 +344,7 @@ bool llvm::MergeBlockIntoPredecessor(BasicBlock *BB, DomTreeUpdater *DTU,
     Start = PTI;
 
   // Move all definitions in the successor to the predecessor...
+  mergeRelatedBlocks(*PredBB, *BB);
   PredBB->splice(PTI->getIterator(), BB, BB->begin(), STI->getIterator());
 
   if (MSSAU)
@@ -1328,6 +1329,15 @@ SplitBlockPredecessorsImpl(BasicBlock *BB, ArrayRef<BasicBlock *> Preds,
   // Create new basic block, insert right before the original block.
   BasicBlock *NewBB = BasicBlock::Create(
       BB->getContext(), BB->getName() + Suffix, BB->getParent(), BB);
+
+  // This block factors the redirected predecessor edges. In particular a
+  // loop preheader inherits its outside predecessors, not the loop header.
+  // Later instruction transfers independently add their own ancestry.
+  if (RelatedBlockTracking::get(BB) && !Preds.empty()) {
+    inheritRelatedBlocks(*NewBB, *Preds.front());
+    for (auto *Pred : drop_begin(Preds))
+      mergeRelatedBlocks(*NewBB, *Pred);
+  }
 
   // The new block unconditionally branches to the old block.
   UncondBrInst *BI = UncondBrInst::Create(BB, NewBB);

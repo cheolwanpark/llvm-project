@@ -33,6 +33,7 @@
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
+#include "llvm/Analysis/RelatedBlockAnalysis.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
@@ -878,6 +879,7 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   L->getExitBlocks(ExitBlocks);
   std::vector<BasicBlock *> OriginalLoopBlocks = L->getBlocks();
 
+  RelatedBlockUnroll RelatedUnroll(*L, *SE, *LI);
   const unsigned MaxTripCount = SE->getSmallConstantMaxTripCount(L);
   const bool MaxOrZero = SE->isBackedgeTakenCountMaxOrZero(L);
   std::optional<unsigned> OriginalTripCount =
@@ -1672,6 +1674,8 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
       simplifyLoop(SubLoop, DT, LI, SE, AC, nullptr, PreserveLCSSA);
   }
 
+  RelatedUnroll.commit(ULO.Count, CompletelyUnroll,
+                       !CompletelyUnroll && ULO.Runtime);
   return CompletelyUnroll ? LoopUnrollResult::FullyUnrolled
                           : LoopUnrollResult::PartiallyUnrolled;
 }

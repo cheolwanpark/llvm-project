@@ -27,7 +27,6 @@ The compiler does not provide a RISC-V libc or sysroot.
 | `-use-mir` | Observe and price scalar/vector MIR bodies; OFF |
 | `-use-estimated-spill` | Use TTI spill estimates; OFF |
 | `-use-default-tti` | Select native comparison TTI independently of MIR sheet; OFF |
-| `-vplan-backend-region-probes=false` | Disable upfront identity markers; normally ON |
 | `-vplan-backend-prune-cfg=false` | Disable private vector-spill CFG reduction; normally ON |
 | `-vplan-backend-probe-threads=N` | Positive main-probe worker limit; 1 |
 | `-vplan-backend-force-all` | Query real-spill candidates despite gate/pruning; OFF |
@@ -92,9 +91,9 @@ reduction never applies to MIR. Candidate pruning requires compatible main
 candidates, disabled vector epilogues and unforced VFs. Force-all bypasses the
 gate and candidate pruning while leaving the CFG switch independent.
 
-Markers identify complete paths rather than instruction fences. They can affect
-optimization and allocation; recovered costs need not equal final assembly.
-Each observer proves its own scope. See [scope rules](BACKEND_FEEDBACK.md#experimental-region-probes).
+Observed costs sum related machine blocks, including branch alternatives and
+mixed-origin code. See [mapping and normalization](BACKEND_FEEDBACK.md#related-block-mapping)
+for scope limits and supported loop transformations.
 
 Parallelism is bounded within one compiler process. Workers own cloned IR,
 analyses and target machines; pricing and selection stay on the compiler thread.
@@ -120,17 +119,17 @@ cmake -S llvm -B .cache/build -G Ninja \
   -DCLANG_INCLUDE_TESTS=OFF
 ```
 
-
 Build only affected targets, with two jobs:
 
 ```sh
 cmake --build .cache/build --target clang clang-resource-headers opt llc \
-  FileCheck split-file not count llvm-readobj VectorizeTests RISCVTests --parallel 2
+  FileCheck split-file not count llvm-readobj IRTests VectorizeTests RISCVTests --parallel 2
 ```
 
-Focused backend contract checks (four unit files, four lit entry points):
+Focused backend contract checks:
 
 ```sh
+.cache/build/unittests/IR/IRTests --gtest_filter='RelatedBlock.*'
 .cache/build/unittests/Transforms/Vectorize/VectorizeTests --gtest_filter='VPlanBackendPricing.*:VPlanBackendExecution.*:BackendGate.*'
 .cache/build/unittests/Target/RISCV/RISCVTests --gtest_filter='RISCVBackendPricing.*:RISCVBackendSheets.*:RISCVBackendObservation.*'
 .cache/build/bin/llvm-lit -j 1 -v \
@@ -141,8 +140,9 @@ Focused backend contract checks (four unit files, four lit entry points):
 ```
 
 The shared lit driver checks cost equations and meaningful observation/selection
-fields. Unit checks cover exact arithmetic, target profiles, machine scope
-boundaries, raw reuse, cancellation and injected whole-loop failures. Native
+fields. Unit checks cover exact arithmetic, target profiles, block ancestry,
+independent mapping/normalization boundaries, raw reuse, cancellation and injected
+whole-loop failures. Native
 report arithmetic/path regressions remain separate from these backend checks.
 
 Scale additional checks to the change. Run PassManager tests only for relevant
@@ -161,9 +161,5 @@ native-TTI estimated selection, not master-OFF selection.
 Keep outputs under a distinct `.cache/` directory and record compiler hashes,
 source bytes and effective flags. Existing results never become current merely
 because binaries at their recorded paths were replaced. Reference comparisons
-use stored baseline results; follow AGENTS.md.
-The documented `.cache/post-frame-reference` directory is
-absent in this checkout and has not been verified during this refactoring.
-
-Historical TSVC coverage and timing are evidence about their recorded compiler
-versions, not current guarantees.
+use stored baseline results; follow [the repository guide](AGENTS.md#experiments-and-protected-data).
+The `.cache/post-frame-reference` directory is absent in this checkout.

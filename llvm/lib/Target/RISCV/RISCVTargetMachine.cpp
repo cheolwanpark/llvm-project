@@ -13,17 +13,18 @@
 #include "RISCVTargetMachine.h"
 #include "MCTargetDesc/RISCVBaseInfo.h"
 #include "RISCV.h"
+#include "RISCVCostSheet.h"
 #include "RISCVMachineFunctionInfo.h"
 #include "RISCVMachineScheduler.h"
 #include "RISCVTargetObjectFile.h"
 #include "RISCVTargetTransformInfo.h"
 #include "RISCVVPlanMIR.h"
+#include "RISCVVPlanMapping.h"
 #include "RISCVVPlanSpill.h"
-#include "TargetInfo/RISCVTargetInfo.h"
-#include "RISCVCostSheet.h"
-#include "XiangShanV2TargetTransformInfo.h"
 #include "SaturnTargetTransformInfo.h"
 #include "SpacemitK1TargetTransformInfo.h"
+#include "TargetInfo/RISCVTargetInfo.h"
+#include "XiangShanV2TargetTransformInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
@@ -499,6 +500,10 @@ TargetPassConfig *RISCVTargetMachine::createPassConfig(PassManagerBase &PM) {
 Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
     Module &M, bool Time, VPlanBackendObservationOptions Options) {
   bool MIR = Options.collectsMIR();
+  if (this->Options.EnableGlobalISel || this->Options.EnableFastISel ||
+      EnableMachinePipeliner)
+    return createStringError("related-block observation requires SelectionDAG "
+                             "without software pipelining");
   if (TargetPassConfig::hasLimitedCodeGenPipeline())
     return createStringError(
         "backend feedback requires an unrestricted codegen pipeline");
@@ -681,6 +686,8 @@ void RISCVPassConfig::addCodeGenPrepare() {
 }
 
 bool RISCVPassConfig::addInstSelector() {
+  if (getRISCVTargetMachine().getBackendFeedbackSink())
+    addPass(createRISCVVPlanMappingVerifier());
   addPass(createRISCVISelDag(getRISCVTargetMachine(), getOptLevel()));
 
   return false;

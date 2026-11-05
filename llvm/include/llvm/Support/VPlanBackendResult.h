@@ -70,12 +70,16 @@ struct VPlanBackendObservation {
   VPlanBackendObservationStatus Status =
       VPlanBackendObservationStatus::NotCollected;
   std::string Failure;
-  std::string StructuralFailure, MarkerFailure;
-  uint64_t IterationWidth = 0;
+  std::string MappingFailure, NormalizationFailure;
+  bool MappingSucceeded = false, NormalizationSucceeded = false;
+  uint64_t SelectedBlockCount = 0, MixedOriginBlockCount = 0;
+  uint64_t UnresolvedBlockCount = 0;
+  uint64_t MaterializedWidth = 0, IterationWidth = 0, TripCount = 0;
   bool IterationMapping = false;
-  // Nonzero for an experimental linear region delimited by pseudo probes.
-  // Each pair represents one materialized vector iteration.
-  uint64_t RegionProbeCount = 0;
+  std::string NormalizationBasis = "materialized-iteration";
+  std::string TripCountKind = "unknown";
+  static constexpr unsigned MappingPolicyRevision = 1;
+  static constexpr unsigned NormalizationPolicyRevision = 1;
   std::string Stage = "post-stack-slot-coloring";
   std::vector<VPlanVectorSpillAccess> Spills;
   std::optional<std::vector<VPlanMIRInstruction>> MIRBody;

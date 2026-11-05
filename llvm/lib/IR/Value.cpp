@@ -27,6 +27,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/IR/RelatedBlock.h"
 #include "llvm/IR/TypedPointerType.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/IR/ValueSymbolTable.h"
@@ -516,6 +517,7 @@ static bool contains(Value *Expr, Value *V) {
 #endif // NDEBUG
 
 void Value::doRAUW(Value *New, ReplaceMetadataUses ReplaceMetaUses) {
+  RelatedBlockTracking::replaced(*this, *New);
   assert(hasUseList() && "Cannot replace constant data");
   assert(New && "Value::replaceAllUsesWith(<null>) is invalid!");
   assert(!contains(New, this) &&

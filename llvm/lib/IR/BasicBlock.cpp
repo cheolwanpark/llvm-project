@@ -20,6 +20,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/RelatedBlock.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Compiler.h"
 
@@ -166,6 +167,7 @@ void BasicBlock::insertInto(Function *NewParent, BasicBlock *InsertBefore) {
 }
 
 BasicBlock::~BasicBlock() {
+  RelatedBlockTracking::deleted(*this);
   validateInstrOrdering();
 
   // If the address of the block is taken and it is being deleted (e.g. because
@@ -523,6 +525,7 @@ BasicBlock *BasicBlock::splitBasicBlock(iterator I, const Twine &BBName) {
 
   BasicBlock *New = BasicBlock::Create(getContext(), BBName, getParent(),
                                        this->getNextNode());
+  inheritRelatedBlocks(*New, *this);
 
   // Save DebugLoc of split point before invalidating iterator.
   DebugLoc Loc = I->getStableDebugLoc();
@@ -556,6 +559,7 @@ BasicBlock *BasicBlock::splitBasicBlockBefore(iterator I, const Twine &BBName) {
          "cannot split on multi incoming phis");
 
   BasicBlock *New = BasicBlock::Create(getContext(), BBName, getParent(), this);
+  inheritRelatedBlocks(*New, *this);
   // Save DebugLoc of split point before invalidating iterator.
   DebugLoc Loc = I->getDebugLoc();
   if (Loc)

@@ -249,6 +249,13 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     }
   }
 
+  if (auto *T = RelatedBlockTracking::get(L->getHeader()))
+    if (any_of(L->blocks(), [&](auto *BB) {
+          return T->Region.intersects(BB->getRelatedBlock());
+        }))
+      T->Region.Normalization.Failure =
+          "unroll-and-jam mixes iteration domains";
+
   // Notify ScalarEvolution that the loop will be substantially changed,
   // if not outright eliminated.
   if (SE) {

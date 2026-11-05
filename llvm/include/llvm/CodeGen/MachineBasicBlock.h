@@ -22,6 +22,7 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBundleIterator.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/RelatedBlock.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/Support/BranchProbability.h"
 #include "llvm/Support/Compiler.h"
@@ -116,6 +117,8 @@ public:
 class MachineBasicBlock
     : public ilist_node_with_parent<MachineBasicBlock, MachineFunction> {
 public:
+  LLVM_ABI RelatedBlockView getRelatedBlock() const;
+
   /// Pair of physical register and lane mask.
   /// This is not simply a std::pair typedef because the members should be named
   /// clearly as they both have an integer type.

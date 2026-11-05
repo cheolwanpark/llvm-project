@@ -4,14 +4,11 @@
 #include "RISCVInstrInfo.h"
 #include "RISCVSubtarget.h"
 #include "RISCVVPlanMIR.h"
-#include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/CodeGen/MachineDominators.h"
+#include "RISCVVPlanMapping.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
-#include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/Metadata.h"
 #include "llvm/PassInfo.h"
 #include "llvm/PassRegistry.h"
 using namespace llvm;
@@ -21,19 +18,6 @@ int64_t attr(const Function &F, StringRef Name) {
   int64_t N;
   return A.isStringAttribute() && !A.getValueAsString().getAsInteger(10, N) ? N
                                                                             : 0;
-}
-StringRef candidate(const MachineLoop &L) {
-  auto *ID = L.getLoopID();
-  if (!ID)
-    return {};
-  for (const auto &Op : drop_begin(ID->operands()))
-    if (auto *N = dyn_cast_or_null<MDNode>(Op))
-      if (N->getNumOperands() == 2)
-        if (auto *K = dyn_cast<MDString>(N->getOperand(0)))
-          if (K->getString() == "llvm.loop.vplan.backend.candidate")
-            if (auto *V = dyn_cast<MDString>(N->getOperand(1)))
-              return V->getString();
-  return {};
 }
 unsigned wholeGroup(unsigned Opcode) {
   switch (Opcode) {
@@ -166,168 +150,12 @@ Error llvm::vplan::collectVectorSpillAccess(
 }
 
 namespace {
-// The range is local to one observation stage. A null Last includes the entire
-// block; a loop range ends at its backedge, before any exit-only instructions.
-struct ObservedRegion {
-  SmallVector<const MachineBasicBlock *, 4> Blocks;
-  const MachineInstr *Last;
-  uint64_t Width;
-  uint64_t ProbeCount = 0;
-};
-
 bool isBodyInstruction(const MachineInstr &MI) {
   return !MI.isMetaInstruction() && !MI.isPseudoProbe() && !MI.isReturn() &&
          !MI.getFlag(MachineInstr::FrameSetup) &&
          !MI.getFlag(MachineInstr::FrameDestroy);
 }
 
-Expected<ObservedRegion> findLoopRegion(MachineFunction &MF) {
-  const Function &F = MF.getFunction();
-  auto Width = attr(F, "vplan.backend.width");
-  if (attr(F, "vplan.backend.iteration-mapping") != 1 || Width <= 0)
-    return createStringError("original scalar iteration mapping is unproven");
-  auto ID = F.getFnAttribute("vplan.backend.candidate").getValueAsString();
-  MachineDominatorTree DT(MF);
-  MachineLoopInfo LI(DT);
-  MachineLoop *Loop = nullptr;
-  for (auto *L : LI.getLoopsInPreorder())
-    if (candidate(*L) == ID) {
-      if (Loop)
-        return createStringError("multiple loops carry candidate identity");
-      Loop = L;
-    }
-  if (!Loop)
-    return createStringError("candidate machine loop identity lost");
-  if (!Loop->isInnermost() || !Loop->getLoopLatch())
-    return createStringError(
-        "candidate is not an innermost loop with one latch");
-  SmallVector<const MachineBasicBlock *, 4> Blocks;
-  SmallPtrSet<const MachineBasicBlock *, 8> Seen;
-  const auto *Header = Loop->getHeader();
-  const auto *Latch = Loop->getLoopLatch();
-  const auto *BB = Header;
-  while (true) {
-    if (!Loop->contains(BB) || !Seen.insert(BB).second)
-      return createStringError("candidate body is not a linear path");
-    if (BB != Header &&
-        (BB->pred_size() != 1 || *BB->pred_begin() != Blocks.back()))
-      return createStringError("candidate body has a side entry");
-    Blocks.push_back(BB);
-    if (BB == Latch)
-      break;
-    if (BB->succ_size() != 1)
-      return createStringError(
-          "candidate body has divergence or an early exit");
-    BB = *BB->succ_begin();
-  }
-  if (Blocks.size() != Loop->getNumBlocks())
-    return createStringError("candidate path does not cover the loop");
-  for (auto *Pred : Header->predecessors())
-    if (Loop->contains(Pred) && Pred != Latch)
-      return createStringError("candidate has an additional backedge");
-  for (const auto &MI : *Latch)
-    if (MI.isBranch())
-      for (const auto &MO : MI.operands())
-        if (MO.isMBB() && MO.getMBB() == Header)
-          return ObservedRegion{std::move(Blocks), &MI, uint64_t(Width)};
-  return createStringError("candidate backedge is unproven");
-}
-
-Expected<ObservedRegion> findMarkedRegion(MachineFunction &MF) {
-  const Function &F = MF.getFunction();
-  auto Width = attr(F, "vplan.backend.region-width");
-  uint64_t GUID;
-  if (Width <= 0 || Width > UINT32_MAX ||
-      F.getFnAttribute("vplan.backend.region-guid")
-          .getValueAsString()
-          .getAsInteger(10, GUID))
-    return createStringError("invalid region probe identity/width");
-
-  SmallPtrSet<const MachineBasicBlock *, 8> Marked;
-  uint64_t Begins = 0, Ends = 0;
-  for (const auto &MBB : MF)
-    for (const auto &MI : MBB) {
-      if (!MI.isPseudoProbe() || MI.getNumOperands() < 2 ||
-          !MI.getOperand(0).isImm() ||
-          uint64_t(MI.getOperand(0).getImm()) != GUID)
-        continue;
-      Marked.insert(&MBB);
-      if (!MI.getOperand(1).isImm())
-        return createStringError("invalid region probe index");
-      if (MI.getOperand(1).getImm() == 1)
-        ++Begins;
-      else if (MI.getOperand(1).getImm() == 2)
-        ++Ends;
-      else
-        return createStringError("invalid region probe index");
-    }
-  if (!Begins || Begins != Ends)
-    return createStringError("region probes missing or incomplete");
-  if (attr(F, "vplan.backend.region-count") <= 0 ||
-      Begins != uint64_t(attr(F, "vplan.backend.region-count")))
-    return createStringError("region probe count changed during codegen");
-  if (Begins > UINT32_MAX / uint64_t(Width))
-    return createStringError("region probe iteration width overflow");
-  if (attr(F, "vplan.backend.region-isolated") != 1)
-    return createStringError("region probe has incomplete IR scope");
-
-  // Establish execution order from CFG edges, never from block layout or
-  // marker instruction order. Markers are identities, not scheduling fences.
-  SmallVector<const MachineBasicBlock *, 4> Path;
-  SmallPtrSet<const MachineBasicBlock *, 8> Seen;
-  if (MF.empty())
-    return createStringError("region probe has no executable path");
-  const MachineBasicBlock *BB = &MF.front();
-  while (true) {
-    if (!Seen.insert(BB).second || BB->succ_size() > 1 ||
-        BB->pred_size() > (Path.empty() ? 0u : 1u))
-      return createStringError(
-          "region probe path has a branch, merge or cycle");
-    Path.push_back(BB);
-    if (BB->succ_empty())
-      break;
-    BB = *BB->succ_begin();
-  }
-  unsigned First = Path.size(), End = 0;
-  for (unsigned I = 0; I < Path.size(); ++I)
-    if (Marked.erase(Path[I])) {
-      First = std::min(First, I);
-      End = I + 1;
-    }
-  if (!Marked.empty() || First == Path.size())
-    return createStringError("region probes are not on one executable path");
-  SmallVector<const MachineBasicBlock *, 4> Blocks(Path.begin() + First,
-                                                   Path.begin() + End);
-  for (const auto &MBB : MF) {
-    if (is_contained(Blocks, &MBB))
-      continue;
-    for (const auto &MI : MBB)
-      if (isBodyInstruction(MI) && !MI.isUnconditionalBranch())
-        return createStringError(
-            "region probe has executable machine code outside its path");
-  }
-  return ObservedRegion{std::move(Blocks), nullptr, uint64_t(Width) * Begins,
-                        Begins};
-}
-
-Expected<ObservedRegion>
-findObservedRegion(MachineFunction &MF, VPlanBackendObservation &Observation) {
-  auto Region = findLoopRegion(MF);
-  if (Region)
-    return Region;
-  // Recover only a missing structural proof. Instruction/geometry errors from
-  // collection below do not trigger another selection or backend execution.
-  Observation.StructuralFailure = toString(Region.takeError());
-  if (!MF.getFunction().hasFnAttribute("vplan.backend.region-guid"))
-    return createStringError(Observation.StructuralFailure);
-  auto Marked = findMarkedRegion(MF);
-  if (!Marked) {
-    Observation.MarkerFailure = toString(Marked.takeError());
-    return createStringError("structural: " + Observation.StructuralFailure +
-                             "; marker: " + Observation.MarkerFailure);
-  }
-  return Marked;
-}
 } // namespace
 
 Error llvm::vplan::readCandidateIdentity(const Function &F,
@@ -360,20 +188,15 @@ static Error collectBody(MachineFunction &MF, VPlanBackendResult &Result,
       Identity.IsEpilogue != Result.IsEpilogue)
     return createStringError("backend observation identity mismatch");
   auto &Observation = MIR ? Result.MIR : Result.Spill;
-  auto Region = findObservedRegion(MF, Observation);
+  auto Region = vplan::mapProbeBody(MF, Observation);
   if (!Region)
     return Region.takeError();
-  Observation.IterationWidth = Region->Width;
-  Observation.IterationMapping = true;
-  Observation.RegionProbeCount = Region->ProbeCount;
   if (MIR) {
     Observation.Stage = "post-frame-lowering";
     Observation.MIRBody.emplace();
   }
-  // Markers identify the block, not instruction fences: scheduling may cluster
-  // them. Both payloads traverse the same region and omit frame/return
-  // overhead.
-  for (const auto *BB : Region->Blocks)
+  // Static block sum: every selected block and instruction is visited once.
+  for (const auto *BB : *Region)
     for (const auto &MI : *BB) {
       if (isBodyInstruction(MI)) {
         if (MIR)
@@ -383,8 +206,6 @@ static Error collectBody(MachineFunction &MF, VPlanBackendResult &Result,
                      vplan::collectVectorSpillAccess(MI, Observation.Spills))
           return E;
       }
-      if (&MI == Region->Last)
-        break;
     }
   Observation.Status = VPlanBackendObservationStatus::Succeeded;
   return Error::success();
@@ -415,11 +236,10 @@ void llvm::vplan::observeBody(MachineFunction &MF, VPlanBackendResult &Result,
     Slot.Status = VPlanBackendObservationStatus::Failed;
     Slot.Failure = "ambiguous backend candidate function";
   } else if (auto E = collectBody(MF, Result, MIR, Text)) {
-    auto Structural = std::move(Slot.StructuralFailure);
-    auto Marker = std::move(Slot.MarkerFailure);
-    Slot = VPlanBackendObservation();
-    Slot.StructuralFailure = std::move(Structural);
-    Slot.MarkerFailure = std::move(Marker);
+    // Discard only this stage's provisional payload. Preserve scope evidence
+    // and the other stage's independently owned result.
+    Slot.Spills.clear();
+    Slot.MIRBody.reset();
     Slot.Status = VPlanBackendObservationStatus::Failed;
     Slot.Failure = toString(std::move(E));
   }

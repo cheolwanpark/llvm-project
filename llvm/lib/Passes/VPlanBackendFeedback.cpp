@@ -10,6 +10,8 @@
 #include "VPlanBackendProbe.h"
 #include "VPlanBackendProbePruning.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/RelatedBlockAnalysis.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
@@ -21,6 +23,7 @@
 #include "llvm/IR/OptBisect.h"
 #include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/PrintPasses.h"
+#include "llvm/IR/RelatedBlock.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -248,6 +251,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
   Timer.mark("target_and_analyses");
 
+  ScopedRelatedBlockTracking Tracking(F);
   VPlanBackendProbe Probe{Candidate, &Header};
   LoopVectorizePass LV(LoopVectorizeOptions(Candidate.InterleaveOnlyWhenForced,
                                             Candidate.VectorizeOnlyWhenForced));
@@ -255,6 +259,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   FunctionPassManager Materialize;
   Materialize.addPass(std::move(LV));
   Materialize.run(F, FAM);
+  RelatedBlockTracking::get(&F)->finishMaterialization();
   Timer.mark("candidate_materialization");
   if (!Probe.Emitted)
     return createStringError(
@@ -274,7 +279,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   };
   ProbeIRSize BeforePruning, AfterPruning;
   if (PruningTrace)
-    BeforePruning = getProbeIRSize(F, FAM);
+    BeforePruning = getProbeIRSize(F);
   DumpPruningIR("before");
   PruningResult Pruning = Candidate.Observation.collectsMIR()
                               ? PruningResult{0, "mir-observation"}
@@ -288,7 +293,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   }
   DumpPruningIR("after");
   if (PruningTrace)
-    AfterPruning = getProbeIRSize(F, FAM);
+    AfterPruning = getProbeIRSize(F);
   Timer.mark("probe_pruning");
 
   if (ScopedPassCancellation::check())
@@ -302,7 +307,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   Cleanup.run(F, FAM);
   DumpPruningIR("suffix");
   if (PruningTrace) {
-    ProbeIRSize SuffixSize = getProbeIRSize(F, FAM);
+    ProbeIRSize SuffixSize = getProbeIRSize(F);
     Diagnostics << "VPLAN-BACKEND-PRUNING: "
                 << json::Value(json::Object{
                        {"candidate", Candidate.ID},
@@ -328,7 +333,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   Timer.mark("ir_suffix");
   if (ScopedPassCancellation::check())
     return createStringError("backend probe cancelled");
-  finalizeVPlanBackendIterationMapping(F, FAM);
+  validateRelatedBlockNormalization(F, FAM.getResult<LoopAnalysis>(F));
   if (verifyModule(M, &Diagnostics))
     return createStringError("invalid candidate module");
   Timer.mark("iteration_mapping_and_verification");
@@ -506,8 +511,8 @@ class FeedbackProvider {
     VPlanBackendCandidateIdentity Identity;
     VPlanBackendMaterializationContext Context;
     bool PrunedContext;
-    bool RegionMarkers;
-    unsigned MarkerPolicyRevision;
+    unsigned MappingPolicyRevision;
+    unsigned NormalizationPolicyRevision;
     VPlanBackendProbeResult Result;
   };
   SmallVector<CachedObservation, 0> Observations;
@@ -542,8 +547,10 @@ public:
       auto Found = llvm::find_if(Observations, [&](const CachedObservation &O) {
         return O.F == &F && O.Header == &Header &&
                O.PrunedContext == Pruned(C) &&
-               O.RegionMarkers == vplanBackendRegionProbesEnabled() &&
-               O.MarkerPolicyRevision == VPlanBackendMarkerPolicy::Revision &&
+               O.MappingPolicyRevision ==
+                   VPlanBackendObservation::MappingPolicyRevision &&
+               O.NormalizationPolicyRevision ==
+                   VPlanBackendObservation::NormalizationPolicyRevision &&
                O.Identity == C && O.Context == C && O.Result.Observation &&
                [&] {
                  auto Status = C.Observation.collectsMIR()
@@ -573,10 +580,10 @@ public:
       auto &R = (*Collected)[I];
       // Save raw outcomes before any model can discard its cost table.
       if (R.Observation) {
-        Observations.push_back({&F, &Header, Missing[I], Missing[I],
-                                Pruned(Missing[I]),
-                                vplanBackendRegionProbesEnabled(),
-                                VPlanBackendMarkerPolicy::Revision, R});
+        Observations.push_back(
+            {&F, &Header, Missing[I], Missing[I], Pruned(Missing[I]),
+             VPlanBackendObservation::MappingPolicyRevision,
+             VPlanBackendObservation::NormalizationPolicyRevision, R});
       }
       Results[Indices[I]] = std::move(R);
     }

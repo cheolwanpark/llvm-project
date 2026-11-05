@@ -1832,6 +1832,7 @@ static void hoistConditionalLoadsStores(
     I->eraseMetadataIf([](unsigned MDKind, MDNode *Node) {
       return Node->getMetadataID() == Metadata::DIAssignIDKind;
     });
+    RelatedBlockTracking::replaced(*I, *MaskedLoadStore);
     MaskedLoadStore->copyMetadata(*I);
     I->eraseFromParent();
   }
@@ -4494,6 +4495,7 @@ static bool mergeConditionalStoreToAddress(
   QB.SetInsertPoint(T);
   StoreInst *SI = cast<StoreInst>(QB.CreateStore(QPHI, Address));
   combineMetadataForCSE(QStore, PStore, true);
+  RelatedBlockTracking::replaced(*QStore, *SI);
   SI->copyMetadata(*QStore);
   // Update any dbg.assign intrinsics to track the merged value (QPHI) instead
   // of the original constant values, likely making these identical.

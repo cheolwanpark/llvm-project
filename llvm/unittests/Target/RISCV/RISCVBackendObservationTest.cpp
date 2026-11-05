@@ -20,6 +20,8 @@ protected:
   LLVMContext C;
   std::unique_ptr<RISCVTargetMachine> TM;
   std::unique_ptr<Module> M;
+  std::unique_ptr<ScopedRelatedBlockTracking> Tracking;
+  BasicBlock *Entry, *Body;
   std::unique_ptr<MachineModuleInfo> MMI;
   std::unique_ptr<MachineFunction> MF;
   Function *F;
@@ -44,8 +46,12 @@ protected:
     F->addFnAttr("vplan.backend.ic", "1");
     F->addFnAttr("vplan.backend.scalable", "0");
     F->addFnAttr("vplan.backend.role", "main");
-    F->addFnAttr("vplan.backend.width", "4");
-    F->addFnAttr("vplan.backend.iteration-mapping", "1");
+    Entry = BasicBlock::Create(C, "entry", F);
+    Body = BasicBlock::Create(C, "body", F);
+    UncondBrInst::Create(Body, Entry);
+    UncondBrInst::Create(Body, Body);
+    Tracking = std::make_unique<ScopedRelatedBlockTracking>(*F);
+    RelatedBlockTracking::get(F)->seed({Body}, "body", "main", 4, false);
     MMI = std::make_unique<MachineModuleInfo>(TM.get());
     auto *ST = TM->getSubtargetImpl(*F);
     MF = std::make_unique<MachineFunction>(*F, *TM, *ST, MMI->getContext(), 0);
@@ -67,123 +73,72 @@ protected:
         MachinePointerInfo::getFixedStack(*MF, FI), MachineMemOperand::MOStore,
         Vector ? TypeSize::getScalable(8) : TypeSize::getFixed(4), Align(8)));
   }
-  void marker(MachineBasicBlock *B, unsigned Index) {
-    BuildMI(*B, B->end(), DebugLoc(), TII->get(TargetOpcode::PSEUDO_PROBE))
-        .addImm(123).addImm(Index).addImm(0).addImm(0);
-  }
-  void region() {
-    F->addFnAttr("vplan.backend.region-guid", "123");
-    F->addFnAttr("vplan.backend.region-width", "4");
-    F->addFnAttr("vplan.backend.region-count", "2");
-    F->addFnAttr("vplan.backend.region-isolated", "1");
-  }
 };
-}
+} // namespace
 
-TEST_F(RISCVBackendObservation, StructuralChainHasStageSpecificPayloads) {
-  auto *Entry = BasicBlock::Create(C, "entry", F);
-  auto *Body = BasicBlock::Create(C, "loop", F);
-  UncondBrInst::Create(Body, Entry);
-  auto *Backedge = UncondBrInst::Create(Body, Body);
-  auto *Tag = MDNode::get(C, {MDString::get(C, "llvm.loop.vplan.backend.candidate"),
-                             MDString::get(C, "body")});
-  auto *ID = MDNode::getDistinct(C, {nullptr, Tag});
-  ID->replaceOperandWith(0, ID);
-  Backedge->setMetadata(LLVMContext::MD_loop, ID);
-  auto *Setup = block(Entry), *Header = block(Body), *Latch = block(Body);
+TEST_F(RISCVBackendObservation, BranchBodyAndIndependentStages) {
+  auto *Setup = block(Entry), *Header = block(Body);
+  auto *Left = block(Body), *Right = block(Body), *Join = block(Body);
   Setup->addSuccessor(Header);
-  Header->addSuccessor(Latch);
-  Latch->addSuccessor(Header);
-  store(Setup, SpillFI); // Setup is not part of the repeated body.
-  store(Header, SpillFI);
-  BuildMI(*Header, Header->end(), DebugLoc(), TII->get(RISCV::PseudoBR)).addMBB(Latch);
-  store(Latch, SpillFI, false);
-  store(Latch, OrdinaryFI, false);
-  BuildMI(*Latch, Latch->end(), DebugLoc(), TII->get(RISCV::PseudoBR)).addMBB(Header);
-  auto Spill = vplan::collectVectorSpills(*MF);
-  auto MIR = vplan::collectMIRBody(*MF, false);
-  ASSERT_TRUE(bool(Spill)) << toString(Spill.takeError());
-  ASSERT_TRUE(bool(MIR)) << toString(MIR.takeError());
-  ASSERT_EQ(Spill->Spill.Spills.size(), 1u);
-  EXPECT_EQ(Spill->Spill.Spills[0].MinBytes, 8u);
-  EXPECT_EQ(Spill->Spill.IterationWidth, MIR->MIR.IterationWidth);
-  ASSERT_TRUE(MIR->MIR.MIRBody);
-  EXPECT_EQ(llvm::count_if(*MIR->MIR.MIRBody, [](const auto &I) { return I.Spill; }), 2);
-  // Each stage owns its slot even when geometry fails at the other stage.
-  for (bool FailMIR : {false, true}) {
-    VPlanBackendResult Slots;
-    ASSERT_FALSE(bool(vplan::readCandidateIdentity(*F, Slots)));
-    F->addFnAttr("vplan.backend.iteration-mapping", FailMIR ? "1" : "0");
-    vplan::observeBody(*MF, Slots, false, false);
-    F->addFnAttr("vplan.backend.iteration-mapping", FailMIR ? "0" : "1");
-    vplan::observeBody(*MF, Slots, true, false);
-    EXPECT_EQ(Slots.Spill.succeeded(), FailMIR);
-    EXPECT_EQ(Slots.MIR.succeeded(), !FailMIR);
-    EXPECT_EQ((FailMIR ? Slots.MIR : Slots.Spill).Status,
-              VPlanBackendObservationStatus::Failed);
-  }
-  F->addFnAttr("vplan.backend.iteration-mapping", "1");
-  // An exit before the latch cannot be represented by one repeated path.
-  auto *Exit = block();
-  Header->addSuccessor(Exit);
-  auto EarlyExit = vplan::collectVectorSpills(*MF);
-  EXPECT_FALSE(bool(EarlyExit));
-  consumeError(EarlyExit.takeError());
-  Header->removeSuccessor(Exit);
-  Setup->addSuccessor(Latch);
-  auto Bad = vplan::collectVectorSpills(*MF);
-  EXPECT_FALSE(bool(Bad));
-  consumeError(Bad.takeError());
-  Setup->removeSuccessor(Latch);
-  // Native cloning can leave two loops carrying the same candidate identity.
-  // Neither observer may silently select the first copy.
-  auto *Copy = block(Body);
-  Setup->addSuccessor(Copy);
-  Copy->addSuccessor(Copy);
-  store(Copy, SpillFI);
-  BuildMI(*Copy, Copy->end(), DebugLoc(), TII->get(RISCV::PseudoBR)).addMBB(Copy);
-  auto Duplicated = vplan::collectMIRBody(*MF, false);
-  EXPECT_FALSE(bool(Duplicated));
-  consumeError(Duplicated.takeError());
+  Header->addSuccessor(Left);
+  Header->addSuccessor(Right);
+  Left->addSuccessor(Join);
+  Right->addSuccessor(Join);
+  Join->addSuccessor(Header);
+  store(Setup, SpillFI); // Non-target setup is excluded.
+  store(Left, SpillFI);
+  store(Right, SpillFI);
+  store(Join, SpillFI, false);
+  store(Join, OrdinaryFI, false);
+  VPlanBackendResult Result;
+  ASSERT_FALSE(bool(vplan::readCandidateIdentity(*F, Result)));
+  vplan::observeBody(*MF, Result, false, false);
+  ASSERT_TRUE(Result.Spill.succeeded()) << Result.Spill.Failure;
+  EXPECT_EQ(Result.Spill.Spills.size(), 2u); // Both alternatives, once each.
+  EXPECT_EQ(Result.Spill.IterationWidth, 4u);
+  vplan::observeBody(*MF, Result, true, false);
+  ASSERT_TRUE(Result.MIR.succeeded()) << Result.MIR.Failure;
+  EXPECT_EQ(llvm::count_if(*Result.MIR.MIRBody,
+                           [](const auto &I) { return I.Spill; }),
+            3);
+
+  // A later lowering introduces unresolved executable ancestry. Re-observe
+  // only the later stage: the already owned spill facts must survive failure.
+  auto *Unknown = block();
+  store(Unknown, SpillFI);
+  Result.MIR = VPlanBackendObservation();
+  vplan::observeBody(*MF, Result, true, false);
+  EXPECT_TRUE(Result.Spill.succeeded());
+  EXPECT_EQ(Result.Spill.Spills.size(), 2u);
+  EXPECT_FALSE(Result.MIR.succeeded());
+  EXPECT_FALSE(Result.MIR.MappingFailure.empty());
+  EXPECT_FALSE(Result.MIR.MIRBody);
   MF.reset();
-  EXPECT_EQ(Spill->Candidate, "body"); // Owned facts outlive MachineFunction.
+  EXPECT_EQ(Result.Candidate, "body");
 }
 
-// These mutations cannot be reliably produced by native optimization. Exercise
-// the real collectors on machine CFGs instead of mocking their scope proof.
-TEST_F(RISCVBackendObservation, MarkerCompletenessAndNominalWidth) {
-  region();
-  auto *A = block(), *B = block();
-  A->addSuccessor(B);
-  marker(A, 1);
-  marker(A, 1); // Scheduling need not interleave begin/end markers.
-  store(A, SpillFI);
-  marker(B, 2);
-  marker(B, 2);
-  store(B, SpillFI);
+TEST_F(RISCVBackendObservation, MovedAndClonedCodeRetainsBodyMembership) {
+  auto *Source = block(Body), *Destination = block(Entry);
+  auto *MI = store(Source, SpillFI);
+  // Native tail duplication uses clone + insert, while sinking can use a
+  // remove + insert. Both must carry source ancestry through detached code.
+  Destination->push_back(MF->CloneMachineInstr(MI));
+  MI->removeFromParent();
+  Destination->push_back(MI);
   auto Result = vplan::collectVectorSpills(*MF);
   ASSERT_TRUE(bool(Result)) << toString(Result.takeError());
-  EXPECT_EQ(Result->Spill.IterationWidth, 8u);
   EXPECT_EQ(Result->Spill.Spills.size(), 2u);
-  EXPECT_FALSE(Result->Spill.StructuralFailure.empty());
-  auto rejects = [&] {
-    auto Bad = vplan::collectVectorSpills(*MF);
-    EXPECT_FALSE(bool(Bad));
-    consumeError(Bad.takeError());
-  };
-  F->addFnAttr("vplan.backend.region-count", "1");
-  rejects();
-  F->addFnAttr("vplan.backend.region-count", "2");
-  F->addFnAttr("vplan.backend.region-width", "4294967295");
-  rejects();
-  F->addFnAttr("vplan.backend.region-width", "4");
-  B->addSuccessor(A);
-  rejects();
-  B->removeSuccessor(A);
-  auto *Outside = block();
-  B->addSuccessor(Outside);
-  store(Outside, SpillFI);
-  rejects();
+  EXPECT_EQ(Result->Spill.IterationWidth, 4u);
+  EXPECT_EQ(Result->Spill.MixedOriginBlockCount, 1u);
+}
+
+TEST_F(RISCVBackendObservation, ResetEndsMachineTrackingLifetime) {
+  auto *B = block(Body);
+  Tracking.reset();
+  EXPECT_EQ(B->getRelatedBlock().State, RelatedBlockState::Known);
+
+  MF->reset();
+  EXPECT_EQ(block(Body)->getRelatedBlock().State, RelatedBlockState::Disabled);
 }
 
 TEST_F(RISCVBackendObservation, SegmentAccessesFollowPhysicalEncoding) {

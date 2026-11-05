@@ -1,5 +1,4 @@
-//===- VPlanBackendFeedback.h - Candidate backend queries ---------*- C++
-//-*-===//
+//===- VPlanBackendFeedback.h - Candidate backend queries ---------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -27,7 +26,6 @@ namespace llvm {
 class BasicBlock;
 class Loop;
 class ScalarEvolution;
-class LoopInfo;
 
 struct VPlanBackendProbeResult;
 /// Completion runs on the calling compiler thread, after worker cleanup.
@@ -36,14 +34,6 @@ struct VPlanBackendProbeControl {
   bool Started = false; // Worker-owned until completion.
   std::function<void(const VPlanBackendProbeResult &)> Completed;
 };
-
-/// Exactly one matching observation marker is required, even on the same loop.
-struct VPlanBackendObservedLoop {
-  Loop *Selected;
-  StringRef Reason;
-};
-LLVM_ABI VPlanBackendObservedLoop findVPlanBackendObservedLoop(Function &F,
-                                                               LoopInfo &LI);
 
 /// Identity is local to a planning invocation, not a persistent cache key.
 /// Geometry is explicit and local to this planning invocation.
@@ -235,36 +225,17 @@ LLVM_ABI bool vplanBackendFeedbackTimingEnabled();
 LLVM_ABI StringRef
 vplanBackendObservationStatusName(VPlanBackendObservationStatus Status);
 LLVM_ABI json::Object summarizeVPlanBackendResult(const VPlanBackendResult &R,
-                                                  bool MIR = true);
+                                                 bool MIR = true);
 /// Diagnostic oracle: retain the gate's decision but query every candidate.
 LLVM_ABI bool vplanBackendFeedbackForceAll();
 LLVM_ABI bool vplanBackendFeedbackOutputEnabled();
 /// Append diagnostics only when a JSONL destination was requested.
 LLVM_ABI void writeVPlanBackendFeedback(const json::Object &Result);
 LLVM_ABI void setVPlanBackendCandidate(Function &F,
-                                       const VPlanBackendCandidate &Candidate,
-                                       uint64_t MaterializedWidth);
-struct VPlanBackendMarkerContext {
-  const BasicBlock &Entry, &Exit;
-  StringRef Candidate;
-};
-struct VPlanBackendMarkerDecision {
-  bool Insert;
-  StringRef Reason;
-};
-class VPlanBackendMarkerPolicy {
-public:
-  static constexpr unsigned Revision = 1;
-  LLVM_ABI VPlanBackendMarkerDecision
-  assess(const VPlanBackendMarkerContext &Context) const;
-};
-LLVM_ABI bool vplanBackendRegionProbesEnabled();
-LLVM_ABI void markVPlanBackendLoop(Loop &L, StringRef ID, ScalarEvolution &SE);
-/// Mark one materialized iteration in a disposable vector or scalar probe.
-LLVM_ABI void markVPlanBackendRegion(BasicBlock &Entry, BasicBlock &Exit,
-                                     StringRef ID);
-LLVM_ABI void finalizeVPlanBackendIterationMapping(Function &F,
-                                                   FunctionAnalysisManager &AM);
+                                     const VPlanBackendCandidate &Candidate);
+LLVM_ABI void registerVPlanBackendRegion(Function &F,
+                                        ArrayRef<BasicBlock *> Body, Loop *L,
+                                        ScalarEvolution &SE, uint64_t Width);
 } // namespace llvm
 
 #endif

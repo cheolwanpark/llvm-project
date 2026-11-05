@@ -22,6 +22,7 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/IR/DebugProgramInstruction.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/RelatedBlock.h"
 #include "llvm/IR/SymbolTableListTraits.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Compiler.h"
@@ -61,6 +62,7 @@ class DbgMarker;
 class BasicBlock final : public Value, // Basic blocks are data objects also
                          public ilist_node_with_parent<BasicBlock, Function> {
 public:
+  LLVM_ABI RelatedBlockView getRelatedBlock() const;
   using InstListType = SymbolTableList<Instruction, ilist_iterator_bits<true>,
                                        ilist_parent<BasicBlock>>;
 

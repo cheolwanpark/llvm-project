@@ -6697,17 +6697,10 @@ DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
     ++LoopsPartialAliasVectorized;
   }
 
+  Function &MaterializedFunction = *OrigLoop->getHeader()->getParent();
+
   // Retrieving VectorPH now when it's easier while VPlan still has Regions.
   VPBasicBlock *VectorPH = cast<VPBasicBlock>(BestVPlan.getVectorPreheader());
-
-  // Retain body identity before VPlan can remove its backedge. Mark every
-  // emitted backend candidate, independently of later loop/mapping analysis.
-  VPBasicBlock *ProbeEntry = nullptr, *ProbeExit = nullptr;
-  if (Config.BackendProbe) {
-    auto *Region = BestVPlan.getVectorLoopRegion();
-    ProbeEntry = Region->getEntryBasicBlock();
-    ProbeExit = Region->getExitingBasicBlock();
-  }
 
   RUN_VPLAN_PASS(VPlanTransforms::materializeConstantVectorTripCount, BestVPlan,
                  BestVF, BestUF, PSE);
@@ -6740,10 +6733,16 @@ DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
   // Regions are dissolved after optimizing for VF and UF, which completely
   // removes unneeded loop regions first.
   const bool HasTailFolded = hasTailFolded(BestVPlan);
+  SmallVector<VPBasicBlock *> ProbeBody;
+  if (Config.BackendProbe)
+    for (auto *BB : VPBlockUtils::blocksOnly<VPBasicBlock>(
+             vp_depth_first_deep(BestVPlan.getVectorLoopRegion()->getEntry())))
+      ProbeBody.push_back(BB);
   RUN_VPLAN_PASS(VPlanTransforms::dissolveLoopRegions, BestVPlan);
   // Expand BranchOnTwoConds after dissolution, when latch has direct access to
   // its successors.
-  RUN_VPLAN_PASS(VPlanTransforms::expandBranchOnTwoConds, BestVPlan);
+  RUN_VPLAN_PASS(VPlanTransforms::expandBranchOnTwoConds, BestVPlan,
+                 Config.BackendProbe ? &ProbeBody : nullptr);
   // Convert loops with variable-length stepping after regions are dissolved.
   RUN_VPLAN_PASS(VPlanTransforms::convertToVariableLengthStep, BestVPlan);
   // Remove dead back-edges for single-iteration loops with BranchOnCond(true).
@@ -6856,21 +6855,29 @@ DenseMap<const SCEV *, Value *> LoopVectorizationPlanner::executePlan(
       Config.BackendProbe &&
       Config.BackendProbe->Candidate.IsEpilogue ==
           (EpilogueVecKind == EpilogueVectorizationKind::Epilogue);
-  if (ObserveBackendRole && HeaderVPBB) {
-    if (auto *Generated =
-            LI->getLoopFor(State.CFG.VPBB2IRBB.lookup(HeaderVPBB))) {
+  if (ObserveBackendRole) {
+    Loop *Generated =
+        HeaderVPBB ? LI->getLoopFor(State.CFG.VPBB2IRBB.lookup(HeaderVPBB))
+                   : nullptr;
+    SmallVector<BasicBlock *> Body;
+    if (Generated) {
       SE.forgetLoop(Generated);
-      markVPlanBackendLoop(*Generated, Config.BackendProbe->Candidate.ID, SE);
+      Body.append(Generated->block_begin(), Generated->block_end());
+    } else {
+      // These are the actual VPlan body blocks, including finite bodies whose
+      // backedge was removed by materialization. No entry/exit corridor search.
+      for (auto *VPBB : ProbeBody)
+        if (auto *BB = State.CFG.VPBB2IRBB.lookup(VPBB))
+          if (!is_contained(Body, BB))
+            Body.push_back(BB);
     }
-  }
-
-  // Insert before either observer tries loop-first, then marker-based region
-  // discovery. Marker recovery may reject a complex region later.
-  if (ObserveBackendRole && ProbeEntry && ProbeExit) {
-    auto *Entry = State.CFG.VPBB2IRBB.lookup(ProbeEntry);
-    auto *Exit = State.CFG.VPBB2IRBB.lookup(ProbeExit);
-    if (Entry && Exit)
-      markVPlanBackendRegion(*Entry, *Exit, Config.BackendProbe->Candidate.ID);
+    Function &F = MaterializedFunction;
+    uint64_t Width = uint64_t(BestVF.getKnownMinValue()) * BestUF;
+    if (BestVF.isScalable()) {
+      unsigned VScale = F.getVScaleValue();
+      Width = VScale && Width <= UINT32_MAX / VScale ? Width * VScale : 0;
+    }
+    registerVPlanBackendRegion(F, Body, Generated, SE, Width);
   }
 
   ILV.printDebugTracesAtEnd();
@@ -8742,15 +8749,13 @@ bool LoopVectorizePass::processLoop(Loop *L) {
       return false;
     }
     // Retain the original loop and its complete function context. The native
-    // post-LV suffix may simplify/unroll it. The shared observer decides whether
-    // the resulting loop or marked region has a supported shape and width.
+    // post-LV suffix may simplify/unroll it. The shared observer decides
+    // whether the related body has valid normalization evidence.
     Function &F = *L->getHeader()->getParent();
-    setVPlanBackendCandidate(F, C, 1);
-    markVPlanBackendLoop(*L, C.ID, *SE);
-    markVPlanBackendRegion(*L->getHeader(), *L->getLoopLatch(), C.ID);
+    setVPlanBackendCandidate(F, C);
+    registerVPlanBackendRegion(F, L->getBlocks(), L, *SE, 1);
     BackendProbe->Emitted = true;
-    // Marker insertion is recorded separately as a non-CFG change in runImpl,
-    // preserving the scalar ShouldRunExtraVectorPasses behavior.
+    // Candidate attributes change IR, but do not request extra vector passes.
     return false;
   }
   assert((EnableVPlanNativePath || L->isInnermost()) &&
@@ -9095,8 +9100,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     NativeReport->discard();
   if (BackendProbe) {
     const auto &C = BackendProbe->Candidate;
-    setVPlanBackendCandidate(
-        *F, C, estimateElementCount(C.VF * C.IC, Config.getVScaleForTuning()));
+    setVPlanBackendCandidate(*F, C);
   }
   unsigned IC = 1;
 
@@ -9506,8 +9510,8 @@ LoopVectorizeResult LoopVectorizePass::runImpl(Function &F) {
 
     Changed |= CFGChanged |= processLoop(L);
     if (BackendProbe && BackendProbe->Emitted &&
-        BackendProbe->Candidate.Kind == VPlanBackendCandidateKind::ScalarBaseline &&
-        F.hasFnAttribute("vplan.backend.region-guid"))
+        BackendProbe->Candidate.Kind ==
+            VPlanBackendCandidateKind::ScalarBaseline)
       Changed = true;
     ++ReportLoopIndex;
 

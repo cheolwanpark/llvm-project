@@ -183,6 +183,15 @@ llvm::SplitKnownCriticalEdge(Instruction *TI, unsigned SuccNum,
   Function &F = *TIBB->getParent();
   Function::iterator FBBI = TIBB->getIterator();
   F.insert(++FBBI, NewBB);
+  if (auto *T = RelatedBlockTracking::get(&F)) {
+    auto A = TIBB->getRelatedBlock(), B = DestBB->getRelatedBlock();
+    if (A.State == RelatedBlockState::Known &&
+        B.State == RelatedBlockState::Known &&
+        T->Region.intersects(A) == T->Region.intersects(B)) {
+      inheritRelatedBlocks(*NewBB, *TIBB);
+      mergeRelatedBlocks(*NewBB, *DestBB);
+    }
+  }
 
   // Branch to the new block, breaking the edge.
   TI->setSuccessor(SuccNum, NewBB);

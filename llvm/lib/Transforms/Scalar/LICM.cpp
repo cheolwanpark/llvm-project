@@ -1823,6 +1823,9 @@ public:
       Value *Ptr = maybeInsertLCSSAPHI(SomePtr, ExitBlock);
       BasicBlock::iterator InsertPos = LoopInsertPts[i];
       StoreInst *NewSI = new StoreInst(LiveInValue, Ptr, InsertPos);
+      if (RelatedBlockTracking::get(ExitBlock))
+        for (const auto *Use : Uses)
+          RelatedBlockTracking::replaced(*Use, *NewSI);
       if (UnorderedAtomic)
         NewSI->setOrdering(AtomicOrdering::Unordered);
       NewSI->setAlignment(Alignment);
@@ -2205,6 +2208,9 @@ bool llvm::promoteLoopAccessesToScalars(
     PreheaderLoad =
         new LoadInst(AccessTy, SomePtr, SomePtr->getName() + ".promoted",
                      Preheader->getTerminator()->getIterator());
+    if (RelatedBlockTracking::get(Preheader))
+      for (const auto *Use : LoopUses)
+        RelatedBlockTracking::replaced(*Use, *PreheaderLoad);
     if (SawUnorderedAtomic)
       PreheaderLoad->setOrdering(AtomicOrdering::Unordered);
     PreheaderLoad->setAlignment(Alignment);

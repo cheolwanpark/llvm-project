@@ -59,9 +59,9 @@ substitution symmetrically. Preserve exact scalar rational ranking and tails.
 
 Follow [whole-loop fallback](BACKEND_FEEDBACK.md#probe와-fallback), retaining the
 requested TTI/spill policy and independently valid observations. Raw reuse
-requires candidate, geometry and materialization context matches, including CFG
-and marker policy. Recompute pruning per model. Never turn failure into zero
-spill, add post-frame retries or introduce benchmark-specific exceptions.
+requires candidate, geometry and materialization context matches, including CFG,
+mapping and normalization policy. Recompute pruning per model. Never turn failure
+into zero spill, add post-frame retries or introduce benchmark-specific exceptions.
 Reports are passive; native fallback discards attempted backend cost reports.
 
 ## Experiments and protected data

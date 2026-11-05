@@ -33,7 +33,7 @@ def run(name, flags=(), src=source, diagnostic=True, user_probes=False):
     (root / (name + '.ll')).write_text(result.stdout)
     assert result.returncode == 0, (name, result.stderr)
     if not user_probes:
-        assert 'llvm.pseudoprobe' not in result.stdout, 'private markers escaped'
+        assert 'llvm.pseudoprobe' not in result.stdout, 'unexpected instrumentation'
     rows = [json.loads(line) for line in report.read_text().splitlines()] if report.exists() else []
     return result.stdout, rows, result.stderr
 
@@ -193,19 +193,18 @@ def scopes():
     for trips in (64, 16):
         path = root / f'trips-{trips}.ll'
         path.write_text(source.read_text().replace('%next, 64', f'%next, {trips}'))
-        off, failed, _ = run(f'{trips}-off', flags + ['-vplan-backend-region-probes=false'], path)
-        on, recovered, _ = run(f'{trips}-on', flags, path)
-        assert off == on
-        assert any(r['status'] == 'estimated-fallback' for r in failed)
-        observed = [r['observation']['spill_observation'] for r in candidates(recovered)]
-        assert len(observed) == 1
+        _, rows, _ = run(f'{trips}-mapped', flags, path)
+        observed = [r['observation']['spill_observation'] for r in candidates(rows)]
+        assert len(observed) == 1, rows
         obs = observed[0]
-        assert obs['status'] == 'succeeded' and obs['scope'] == 'probe-region'
+        assert obs['status'] == 'succeeded'
+        assert obs['mapping_kind'] == 'related-blocks'
+        assert obs['body_cost_semantics'] == 'static-block-sum'
         assert obs['iteration_width'] == trips
-        assert obs['region_probe_count'] == trips // 16
-    # User instrumentation vetoes our insertion. Structural observation still
-    # works; the veto is not itself a reason to discard a mapped loop.
-    path = root / 'instrumented.ll'
+        assert obs['normalization_basis'] == ('full-unroll-exact' if trips == 64
+                                               else 'materialized-iteration')
+    # Upstream instrumentation remains independent of body membership.
+    path = root / 'instrumented-input.ll'
     text = (source.parent / 'backend-pipeline.ll').read_text()
     text = text.replace('  %p = getelementptr',
         '  call void @llvm.pseudoprobe(i64 7, i64 1, i32 0, i64 -1)\n  %p = getelementptr')
@@ -215,7 +214,7 @@ def scopes():
                       '-vplan-backend-force-all'], path, user_probes=True)
     observed = [r['observation']['spill_observation'] for r in candidates(rows)]
     assert observed and all(o['status'] == 'succeeded' for o in observed)
-    assert all(o.get('scope') != 'probe-region' for o in observed)
+    assert all(o['mapping_kind'] == 'related-blocks' for o in observed)
     assert all('i64 7, i64 1' in line for line in ir.splitlines()
                if 'call void @llvm.pseudoprobe' in line)
 

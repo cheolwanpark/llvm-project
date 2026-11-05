@@ -3117,6 +3117,8 @@ static void combineMetadata(Instruction *K, const Instruction *J,
 
 void llvm::combineMetadataForCSE(Instruction *K, const Instruction *J,
                                  bool DoesKMove) {
+  // Sharing void instructions (notably stores) need not perform RAUW.
+  RelatedBlockTracking::replaced(*J, *K);
   combineMetadata(K, J, DoesKMove);
 }
 

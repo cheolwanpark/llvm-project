@@ -7,8 +7,8 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/RelatedBlock.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
 using namespace llvm;
 // Private probe CFG reduction. See BACKEND_FEEDBACK.md.
 cl::opt<bool> llvm::PruneLoopRegions(
@@ -23,18 +23,34 @@ cl::opt<bool> llvm::PruningDumpIR(
     "vplan-backend-pruning-dump-ir", cl::Hidden, cl::init(false),
     cl::desc("Dump experimental probe IR before/after pruning and suffix"));
 
-// Passive diagnostics: count every instruction in the marked body, including
-// nested blocks. Zero means no unique marked loop.
-ProbeIRSize llvm::getProbeIRSize(Function &F, FunctionAnalysisManager &FAM) {
+// Passive diagnostics count live descendants, including finite expansions.
+// Observation status distinguishes an absent region from an observed zero.
+ProbeIRSize llvm::getProbeIRSize(Function &F) {
   ProbeIRSize Size{F.getInstructionCount(), unsigned(F.size()), 0, 0};
-  auto [Selected, Reason] =
-      findVPlanBackendObservedLoop(F, FAM.getResult<LoopAnalysis>(F));
-  if (Selected)
-    for (BasicBlock *BB : Selected->blocks()) {
-      Size.LoopInstructions += BB->size();
-      ++Size.LoopBlocks;
-    }
+  if (auto *T = RelatedBlockTracking::get(&F))
+    for (auto &BB : F)
+      if (T->Region.intersects(BB.getRelatedBlock())) {
+        Size.LoopInstructions += BB.size();
+        ++Size.LoopBlocks;
+      }
   return Size;
+}
+
+/// Find the live descendant loop used for private probe CFG pruning.
+static std::pair<Loop *, StringRef> findPruningLoop(Function &F, LoopInfo &LI) {
+  auto *T = RelatedBlockTracking::get(&F);
+  if (!T || T->Region.Origins.empty())
+    return {nullptr, "missing-materialized-region"};
+  Loop *Selected = nullptr;
+  for (auto *L : LI.getLoopsInPreorder()) {
+    if (!is_contained(L->getHeader()->getRelatedBlock().Origins,
+                      T->Region.Origins.front()))
+      continue;
+    if (Selected)
+      return {nullptr, "multiple-descendant-loops"};
+    Selected = L;
+  }
+  return {Selected, Selected ? "" : "no-repeated-materialized-body"};
 }
 
 // A large function can retain a syntactically present but infeasible loop that
@@ -129,7 +145,7 @@ PruningResult llvm::pruneLoopRegions(Function &F,
                                      FunctionAnalysisManager &FAM) {
   auto &LI = FAM.getResult<LoopAnalysis>(F);
   auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
-  auto [Selected, Reason] = findVPlanBackendObservedLoop(F, LI);
+  auto [Selected, Reason] = findPruningLoop(F, LI);
   if (!Selected)
     return {0, Reason};
   auto HasVectorRepresentation = [](Type *Ty) {

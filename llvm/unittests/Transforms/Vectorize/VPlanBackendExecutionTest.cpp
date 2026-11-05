@@ -5,6 +5,13 @@
 #include "../lib/Transforms/Vectorize/VPlan.h"
 #include "../lib/Transforms/Vectorize/VPlanBackendCostModel.h"
 #include "llvm/Analysis/TargetTransformInfoImpl.h"
+#include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/IR/RelatedBlock.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Transforms/Utils/UnrollLoop.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Module.h"
@@ -316,3 +323,96 @@ TEST(VPlanBackendExecution, ReportingAndWholeLoopAttemptAreTransactional) {
   }
 }
 #endif
+
+// Exercise real IR transformations and their observable normalization, not the
+// ledger API or the number/order of propagation hooks.
+TEST(VPlanBackendExecution, UnrollNormalizationUsesBodyTripEvidence) {
+  for (unsigned Case = 0; Case != 4; ++Case) {
+    SCOPED_TRACE(Case);
+    LLVMContext C;
+    SMDiagnostic Error;
+    std::string Limit = Case == 0 ? "4" : Case == 2 ? "10" : "%trip";
+    std::string Setup = Case == 1
+                            ? "%bound = and i64 %n, 3\n%trip = add nuw i64 %bound, 1\n"
+                            : "%trip = add i64 %n, 0\n";
+    auto M = parseAssemblyString(
+        "define void @f(ptr %p, i64 %n) {\nentry:\n" + Setup +
+        "br label %loop\nloop:\n"
+        "%i = phi i64 [0, %entry], [%next, %loop]\n"
+        "%q = getelementptr i32, ptr %p, i64 %i\n"
+        "store i32 7, ptr %q\n"
+        "%next = add nuw i64 %i, 1\n"
+        "%done = icmp eq i64 %next, " + Limit +
+        "\nbr i1 %done, label %exit, label %loop\nexit: ret void\n}", Error, C);
+    ASSERT_TRUE(M);
+    auto &F = *M->getFunction("f");
+    PassBuilder PB;
+    FunctionAnalysisManager FAM;
+    PB.registerFunctionAnalyses(FAM);
+    auto &LI = FAM.getResult<LoopAnalysis>(F);
+    auto &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
+    auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
+    auto &AC = FAM.getResult<AssumptionAnalysis>(F);
+    auto &TTI = FAM.getResult<TargetIRAnalysis>(F);
+    Loop *L = *LI.begin();
+    ScopedRelatedBlockTracking Scope(F);
+    auto *T = RelatedBlockTracking::get(&F);
+    T->seed(L->getBlocks(), "body", "main", 16, false);
+    UnrollLoopOptions Options{};
+    Options.Count = Case < 2 ? 4 : 2;
+    Options.Force = true;
+    auto Result = UnrollLoop(L, Options, &LI, &SE, &DT, &AC, &TTI, nullptr, false);
+    ASSERT_NE(Result, LoopUnrollResult::Unmodified);
+    EXPECT_FALSE(verifyFunction(F, &errs()));
+    const auto &N = T->Region.Normalization;
+    EXPECT_EQ(N.Failure.empty(), Case != 3);
+    if (Case != 3) {
+      EXPECT_EQ(N.IterationWidth, Case < 2 ? 64u : 32u);
+      EXPECT_EQ(N.TripCountKind, Case == 1 ? "upper-bound" : "exact");
+      EXPECT_EQ(LI.empty(), Case < 2);
+    } else {
+      EXPECT_EQ(N.TripCountKind, "unknown");
+    }
+    EXPECT_TRUE(any_of(F, [&](const auto &BB) {
+      return T->Region.intersects(BB.getRelatedBlock());
+    }));
+  }
+}
+
+TEST(VPlanBackendExecution, SharedStoreRetainsEverySource) {
+  LLVMContext C;
+  SMDiagnostic Error;
+  auto M = parseAssemblyString(R"(
+    define void @f(ptr %p, i1 %cond) {
+    entry: br i1 %cond, label %left, label %right
+    left:
+      store i32 7, ptr %p
+      br label %exit
+    right:
+      store i32 7, ptr %p
+      br label %exit
+    exit: ret void
+    })", Error, C);
+  ASSERT_TRUE(M);
+  auto &F = *M->getFunction("f");
+  auto *Right = F.getEntryBlock().getTerminator()->getSuccessor(1);
+  ScopedRelatedBlockTracking Scope(F);
+  auto *T = RelatedBlockTracking::get(&F);
+  T->seed({Right}, "body", "main", 1, true);
+  PassBuilder PB;
+  FunctionAnalysisManager FAM;
+  PB.registerFunctionAnalyses(FAM);
+  FunctionPassManager PM;
+  PM.addPass(SimplifyCFGPass(SimplifyCFGOptions().hoistCommonInsts(true)));
+  PM.run(F, FAM);
+  EXPECT_FALSE(verifyFunction(F, &errs()));
+  unsigned Stores = 0;
+  for (auto &BB : F)
+    for (auto &I : BB)
+      if (isa<StoreInst>(I)) {
+        ++Stores;
+        EXPECT_TRUE(T->Region.intersects(BB.getRelatedBlock()));
+        EXPECT_EQ(BB.getRelatedBlock().State, RelatedBlockState::Known);
+      }
+  EXPECT_EQ(Stores, 1u);
+}
