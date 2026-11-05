@@ -18,6 +18,7 @@
 
 #include "BranchFolding.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -238,6 +239,10 @@ bool BranchFolder::OptimizeFunction(MachineFunction &MF,
                                     const TargetRegisterInfo *tri,
                                     MachineLoopInfo *mli, bool AfterPlacement) {
   if (!tii) return false;
+  LoopBackedgeRewrite<MachineBasicBlock> Mapping(MF.getLoopBackedgeTracking());
+  auto FinishMapping = scope_exit([&] {
+    Mapping.commit([&] { return checkMachineLoopBackedges(MF); });
+  });
 
   TriedMerging.clear();
 
@@ -455,7 +460,8 @@ void BranchFolder::replaceTailWithBranchTo(MachineBasicBlock::iterator OldInst,
     }
   }
 
-  mergeRelatedBlocks(NewDest, *OldInst->getParent());
+  if (auto *T = NewDest.getParent()->getLoopBackedgeTracking())
+    T->transferOutgoing(OldInst->getParent(), &NewDest);
   TII->ReplaceTailWithBranchTo(OldInst, &NewDest);
   ++NumTailMerge;
 }
@@ -471,7 +477,7 @@ MachineBasicBlock *BranchFolder::SplitMBBAt(MachineBasicBlock &CurMBB,
   // Create the fall-through block.
   MachineFunction::iterator MBBI = CurMBB.getIterator();
   MachineBasicBlock *NewMBB = MF.CreateMachineBasicBlock(BB);
-  inheritRelatedBlocks(*NewMBB, CurMBB);
+
   CurMBB.getParent()->insert(++MBBI, NewMBB);
 
   // Move all the successors of this block to the specified block.
@@ -1436,6 +1442,8 @@ ReoptimizeBlock:
       // TODO: Is it ever worth rewriting predecessors which don't already
       // jump to a landing pad, and so can safely jump to the fallthrough?
     } else if (MBB->isSuccessor(&*FallThrough)) {
+      if (auto *T = MF.getLoopBackedgeTracking())
+        T->bypass(*MBB, *FallThrough);
       // Rewrite all predecessors of the old block to go to the fallthrough
       // instead.
       while (!MBB->pred_empty()) {
@@ -1514,6 +1522,8 @@ ReoptimizeBlock:
       PrevBB.removeSuccessor(PrevBB.succ_begin());
       assert(PrevBB.succ_empty());
       PrevBB.transferSuccessors(MBB);
+      if (auto *T = MF.getLoopBackedgeTracking())
+        T->transferIncoming(MBB, &PrevBB);
       MadeChange = true;
       return MadeChange;
     }
@@ -1698,6 +1708,8 @@ ReoptimizeBlock:
             TII->insertBranch(PrevBB, PriorTBB, PriorFBB, PriorCond, PrevDl);
           }
 
+          if (auto *T = MF.getLoopBackedgeTracking())
+            T->bypass(*MBB, *CurTBB);
           // Iterate through all the predecessors, revectoring each in-turn.
           size_t PI = 0;
           bool DidChange = false;

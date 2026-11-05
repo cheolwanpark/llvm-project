@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -249,12 +250,9 @@ llvm::UnrollAndJamLoop(Loop *L, unsigned Count, unsigned TripCount,
     }
   }
 
-  if (auto *T = RelatedBlockTracking::get(L->getHeader()))
-    if (any_of(L->blocks(), [&](auto *BB) {
-          return T->Region.intersects(BB->getRelatedBlock());
-        }))
-      T->Region.Normalization.Failure =
-          "unroll-and-jam mixes iteration domains";
+  if (auto *T = LoopBackedgeTracking::get(L->getHeader()))
+    if (containsTrackedLoop(*T, *L))
+      T->fail("unsupported-iteration-transform");
 
   // Notify ScalarEvolution that the loop will be substantially changed,
   // if not outright eliminated.

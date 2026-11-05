@@ -6,6 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Transforms/Scalar/SimpleLoopUnswitch.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -2276,6 +2278,26 @@ static void unswitchNontrivialInvariants(
     IVConditionInfo &PartialIVInfo, DominatorTree &DT, LoopInfo &LI,
     AssumptionCache &AC, ScalarEvolution *SE, MemorySSAUpdater *MSSAU,
     LPMUpdater &LoopUpdater, bool InsertFreeze, bool InjectedCondition) {
+  Function &TrackingFunction = *L.getHeader()->getParent();
+  auto *Backedges = LoopBackedgeTracking::get(&TrackingFunction);
+  LoopBackedgeRewrite<BasicBlock> BackedgeRewrite(Backedges);
+  DenseMap<uint64_t, WeakTrackingVH> TrackedHeaders;
+  if (Backedges)
+    for (const auto &E : Backedges->Backedges)
+      TrackedHeaders[E.second] = const_cast<BasicBlock *>(E.first.second);
+  auto CommitBackedges = make_scope_exit([&] {
+    if (Backedges && Backedges->Failure.empty()) {
+      for (const auto &Entry : TrackedHeaders) {
+        auto *Header = dyn_cast_or_null<BasicBlock>(Entry.second);
+        auto *Remaining = Header ? LI.getLoopFor(Header) : nullptr;
+        if (!Remaining || Remaining->getHeader() != Header)
+          Backedges->fail("unsupported-finite-body");
+        else
+          rebindTrackedLoop(*Backedges, Entry.first, *Remaining);
+      }
+    }
+    BackedgeRewrite.commit([&] { return checkLoopBackedges(TrackingFunction); });
+  });
   auto *ParentBB = TI.getParent();
   CondBrInst *BI = dyn_cast<CondBrInst>(&TI);
   SwitchInst *SI = BI ? nullptr : cast<SwitchInst>(&TI);
@@ -2598,6 +2620,9 @@ static void unswitchNontrivialInvariants(
   SmallVector<Loop *, 4> NonChildClonedLoops;
   for (std::unique_ptr<ValueToValueMapTy> &VMap : VMaps)
     buildClonedLoops(L, ExitBlocks, *VMap, LI, NonChildClonedLoops);
+  if (Backedges)
+    for (const auto &VMap : VMaps)
+      cloneTrackedLoops(*Backedges, *BackedgeRewrite.snapshot(), *VMap, nullptr, &LI);
 
   // Now that our cloned loops have been built, we can update the original loop.
   // First we delete the dead blocks from it and then we rebuild the loop

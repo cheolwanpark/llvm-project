@@ -1,4 +1,5 @@
-//===- VPlanBackendFeedback.cpp - Candidate backend queries ----------------===//
+//===- VPlanBackendFeedback.cpp - Candidate backend queries
+//----------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -7,7 +8,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Vectorize/VPlanBackendFeedback.h"
-#include "llvm/Analysis/RelatedBlockAnalysis.h"
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -73,25 +76,15 @@ llvm::vplanBackendObservationStatusName(VPlanBackendObservationStatus Status) {
 }
 
 static json::Object summarizeObservation(const VPlanBackendObservation &O) {
-  json::Array Accesses;
-  for (const auto &A : O.Spills)
-    Accesses.push_back(json::Object{{"load", A.IsLoad},
-                                    {"bytes", A.MinBytes},
-                                    {"scalable", A.Scalable},
-                                    {"alignment", A.Alignment},
-                                    {"address_space", A.AddressSpace},
-                                    {"whole_register", A.WholeRegister},
-                                    {"register_group", A.RegisterGroup},
-                                    {"segment_lowering", A.FromSegment}});
   bool MIR = O.Stage == "post-frame-lowering";
   json::Object Result{
-      {"schema", MIR ? "mir-body-observation-v2" : "rvv-vector-spill-v2"},
+      {"schema", MIR ? "mir-body-observation-v3" : "rvv-vector-spill-v3"},
       {"stage", O.Stage},
-      {"iteration_width", O.IterationWidth},
       {"iteration_mapping", O.IterationMapping},
-      {"spills", std::move(Accesses)}};
-  Result["mapping_kind"] = "related-blocks";
-  Result["region_granularity"] = "machine-block-set";
+      {"composition", "uniform-loop-mean"},
+      {"loop_count", O.Loops.size()}};
+  Result["mapping_kind"] = "backedge-loops";
+  Result["region_granularity"] = "natural-loop-block-set";
   Result["body_cost_semantics"] = "static-block-sum";
   Result["mapping_status"] = O.MappingSucceeded         ? "succeeded"
                              : O.MappingFailure.empty() ? "not_collected"
@@ -103,53 +96,64 @@ static json::Object summarizeObservation(const VPlanBackendObservation &O) {
                                        : "failed";
   Result["normalization_failure"] = O.NormalizationFailure;
   Result["selected_block_count"] = O.SelectedBlockCount;
-  Result["mixed_origin_block_count"] = O.MixedOriginBlockCount;
-  Result["unresolved_block_count"] = O.UnresolvedBlockCount;
-  Result["normalization_basis"] = O.NormalizationBasis;
-  Result["trip_count_kind"] = O.TripCountKind;
-  Result["trip_count_domain"] = "materialized-body";
-  Result["trip_count_value"] = O.TripCount;
   Result["materialized_width"] = O.MaterializedWidth;
   Result["mapping_policy_revision"] = O.MappingPolicyRevision;
   Result["normalization_policy_revision"] = O.NormalizationPolicyRevision;
-  if (MIR)
-    Result.erase("spills");
-  if (O.MIRBody) {
-    json::Array Body;
-    for (const auto &MI : *O.MIRBody) {
-      json::Array Groups;
-      for (auto G : MI.RegisterGroups8)
-        Groups.push_back(G);
-      json::Object Op{{"opcode", MI.Opcode},
-                      {"base_opcode", MI.BaseOpcode},
-                      {"vector", MI.Vector},
-                      {"pseudo", MI.Pseudo},
-                      {"configuration", MI.Configuration},
-                      {"load", MI.Load},
-                      {"store", MI.Store},
-                      {"spill_slot", MI.Spill},
-                      {"lmul8", MI.LMUL8},
-                      {"sew", MI.SEW},
-                      {"index_emul8", MI.IndexEMUL8},
-                      {"index_eew", MI.IndexEEW},
-                      {"register_groups8", std::move(Groups)}};
-      if (!MI.Text.empty())
-        Op["mir"] = MI.Text;
-      Body.push_back(std::move(Op));
+  json::Array Loops;
+  for (const auto &L : O.Loops) {
+    json::Object Loop{{"id", L.ID},
+                      {"iteration_width", L.IterationWidth},
+                      {"selected_block_count", L.SelectedBlockCount}};
+    if (!MIR) {
+      json::Array Accesses;
+      for (const auto &A : L.Spills)
+        Accesses.push_back(json::Object{{"load", A.IsLoad},
+                                        {"bytes", A.MinBytes},
+                                        {"scalable", A.Scalable},
+                                        {"alignment", A.Alignment},
+                                        {"address_space", A.AddressSpace},
+                                        {"whole_register", A.WholeRegister},
+                                        {"register_group", A.RegisterGroup},
+                                        {"segment_lowering", A.FromSegment}});
+      Loop["spills"] = std::move(Accesses);
     }
-    Result["body"] = std::move(Body);
+    if (L.MIRBody) {
+      json::Array Body;
+      for (const auto &MI : *L.MIRBody) {
+        json::Array Groups;
+        for (auto G : MI.RegisterGroups8)
+          Groups.push_back(G);
+        json::Object Op{{"opcode", MI.Opcode},
+                        {"base_opcode", MI.BaseOpcode},
+                        {"vector", MI.Vector},
+                        {"pseudo", MI.Pseudo},
+                        {"configuration", MI.Configuration},
+                        {"load", MI.Load},
+                        {"store", MI.Store},
+                        {"spill_slot", MI.Spill},
+                        {"lmul8", MI.LMUL8},
+                        {"sew", MI.SEW},
+                        {"index_emul8", MI.IndexEMUL8},
+                        {"index_eew", MI.IndexEEW},
+                        {"register_groups8", std::move(Groups)}};
+        if (!MI.Text.empty())
+          Op["mir"] = MI.Text;
+        Body.push_back(std::move(Op));
+      }
+      Loop["body"] = std::move(Body);
+    }
+    Loops.push_back(std::move(Loop));
   }
+  Result["loops"] = std::move(Loops);
   Result["status"] = vplanBackendObservationStatusName(O.Status);
   Result["failure"] = O.Failure;
   return Result;
 }
 json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R,
-                                               bool MIR) {
+                                               bool /*MIR*/) {
   auto SpillObservation = summarizeObservation(R.Spill);
   auto MIRObservation = summarizeObservation(R.MIR);
-  // Keep the legacy projection without serializing its payload twice.
-  auto Result = json::Object(MIR && R.MIR.succeeded() ? MIRObservation
-                                                      : SpillObservation);
+  json::Object Result;
   Result["candidate"] = R.Candidate;
   Result["vf"] = R.VF.getKnownMinValue();
   Result["scalable"] = R.VF.isScalable();
@@ -160,7 +164,7 @@ json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R,
                                                           : "main";
   Result["spill_observation"] = std::move(SpillObservation);
   Result["mir_observation"] = std::move(MIRObservation);
-  Result["observation_schema"] = "related-block-observations-v3";
+  Result["observation_schema"] = "backedge-loop-observations-v3";
   return Result;
 }
 
@@ -189,24 +193,24 @@ void llvm::writeVPlanBackendFeedback(const json::Object &Result) {
 }
 
 void llvm::registerVPlanBackendRegion(Function &F, ArrayRef<BasicBlock *> Body,
-                                     Loop *L, ScalarEvolution &SE,
-                                     uint64_t Width) {
-  auto *T = RelatedBlockTracking::get(&F);
+                                      Loop *L, ScalarEvolution &SE,
+                                      uint64_t Width) {
+  auto *T = LoopBackedgeTracking::get(&F);
   if (!T)
     return;
-  T->seed(Body, F.getFnAttribute("vplan.backend.candidate").getValueAsString(),
-          F.getFnAttribute("vplan.backend.role").getValueAsString(), Width, !L);
-  if (L) {
-    auto Trip = getRelatedBlockTripCount(*L, SE);
-    auto &N = T->Region.Normalization;
-    N.TripCount = Trip.Value;
-    N.TripCountKind = !Trip.Value       ? "unknown"
-                      : Trip.UpperBound ? "upper-bound"
-                                        : "exact";
+  T->Identity =
+      F.getFnAttribute("vplan.backend.candidate").getValueAsString().str();
+  T->Role = F.getFnAttribute("vplan.backend.role").getValueAsString().str();
+  T->MaterializedWidth = Width;
+  if (!L) {
+    T->fail("unsupported-finite-body");
+    return;
   }
+  registerTrackedLoop(*T, *L, Width);
 }
 
-void llvm::setVPlanBackendCandidate(Function &F, const VPlanBackendCandidate &C) {
+void llvm::setVPlanBackendCandidate(Function &F,
+                                    const VPlanBackendCandidate &C) {
   F.addFnAttr("vplan.backend.candidate", C.ID);
   F.addFnAttr("vplan.backend.ic", std::to_string(C.IC));
   F.addFnAttr("vplan.backend.role",

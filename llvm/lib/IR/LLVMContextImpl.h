@@ -34,7 +34,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/RelatedBlock.h"
+#include "llvm/IR/LoopBackedgeTracking.h"
 #include "llvm/IR/TrackingMDRef.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
@@ -1538,9 +1538,9 @@ struct MDAttachment {
 
 class LLVMContextImpl {
 public:
-  using RelatedBlockRegistry =
-      DenseMap<const Function *, std::unique_ptr<RelatedBlockTracking>>;
-  std::unique_ptr<RelatedBlockRegistry> RelatedBlocks;
+  using LoopBackedgeRegistry =
+      DenseMap<const Function *, std::unique_ptr<LoopBackedgeTracking>>;
+  std::unique_ptr<LoopBackedgeRegistry> LoopBackedges;
   /// OwnedModules - The set of modules instantiated in this context, and which
   /// will be automatically deleted if this context is deleted.
   SmallPtrSet<Module *, 4> OwnedModules;

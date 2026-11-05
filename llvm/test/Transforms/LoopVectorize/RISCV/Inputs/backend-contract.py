@@ -81,15 +81,29 @@ def check_formula(row, mir, estimated):
     if mir:
         obs = row['observation']['mir_observation']
         assert obs['status'] == 'succeeded' and obs['stage'] == 'post-frame-lowering'
-        body = sum(Fraction(c['numerator'], c['denominator']) for c in row['mir_costs'])
-        spill = sum(Fraction(c['numerator'], c['denominator'])
-                    for op, c in zip(obs['body'], row['mir_costs']) if op['spill_slot'])
-        scale = Fraction(4 * row['tti_width'], obs['iteration_width'])
-        assert exact(row, 'mir_body') == body * scale
-        assert exact(row, 'mir_spill') == spill * scale
-        expected = body * scale
+        assert obs['schema'] == 'mir-body-observation-v3'
+        assert obs['mapping_kind'] == 'backedge-loops'
+        assert 'iteration_width' not in obs and 'body' not in obs
+        assert len(obs['loops']) == len(row['mir_loops']) > 0
+        body = spill = Fraction(0)
+        for loop, prices in zip(obs['loops'], row['mir_loops']):
+            assert loop['id'] == prices['id']
+            raw_body = sum(Fraction(c['numerator'], c['denominator'])
+                           for c in prices['instructions'])
+            raw_spill = sum(Fraction(c['numerator'], c['denominator'])
+                            for op, c in zip(loop['body'], prices['instructions'])
+                            if op['spill_slot'])
+            scale = Fraction(4 * row['tti_width'],
+                             loop['iteration_width'] * len(obs['loops']))
+            assert exact(prices, 'body') == raw_body * scale
+            assert exact(prices, 'spill') == raw_spill * scale
+            body += raw_body * scale
+            spill += raw_spill * scale
+        assert exact(row, 'mir_body') == body
+        assert exact(row, 'mir_spill') == spill
+        expected = body
         if estimated:
-            expected += row['estimated_total_spill_quarters'] - spill * scale
+            expected += row['estimated_total_spill_quarters'] - spill
     else:
         expected = row['profile_body_quarters']
         if not estimated:
@@ -107,7 +121,7 @@ def pipeline():
     assert observed
     for obs in observed:
         assert obs['spill_observation']['status'] == 'succeeded'
-        assert obs['spill_observation']['spills'] == []
+        assert all(not loop['spills'] for loop in obs['spill_observation']['loops'])
         assert obs['mir_observation']['status'] == 'not_requested'
     path = pressure()
     # Each algebraic mode once; default-TTI is an orthogonal policy boundary.
@@ -134,7 +148,8 @@ def pipeline():
             assert all(r['observation']['spill_observation']['status'] == 'succeeded'
                        for r in scored)
         elif not estimated:
-            assert any(r['observation']['spill_observation']['spills'] for r in scored)
+            assert any(loop['spills'] for r in scored
+                       for loop in r['observation']['spill_observation']['loops'])
     # MIR collection is still valid when the earlier spill observer cannot run.
     _, rows, _ = run('spill-unavailable', forced + ['-use-mir', '-disable-ssc'])
     for row in candidates(rows):
@@ -194,15 +209,15 @@ def scopes():
         path = root / f'trips-{trips}.ll'
         path.write_text(source.read_text().replace('%next, 64', f'%next, {trips}'))
         _, rows, _ = run(f'{trips}-mapped', flags, path)
-        observed = [r['observation']['spill_observation'] for r in candidates(rows)]
-        assert len(observed) == 1, rows
-        obs = observed[0]
-        assert obs['status'] == 'succeeded'
-        assert obs['mapping_kind'] == 'related-blocks'
-        assert obs['body_cost_semantics'] == 'static-block-sum'
-        assert obs['iteration_width'] == trips
-        assert obs['normalization_basis'] == ('full-unroll-exact' if trips == 64
-                                               else 'materialized-iteration')
+        # Required finite regions must reject observation, preserving the
+        # existing whole-loop fallback rather than inventing a zero body.
+        attempts = [attempt for row in rows for attempt in row.get('attempts', [])]
+        observed = [obs['spill_observation'] for attempt in attempts
+                    for obs in attempt.get('observations', [])]
+        assert observed, rows
+        assert any(o['status'] == 'failed' and
+                   'unsupported-finite-body' in o['failure'] for o in observed), rows
+        assert any('fallback' in r['status'] for r in rows), rows
     # Upstream instrumentation remains independent of body membership.
     path = root / 'instrumented-input.ll'
     text = (source.parent / 'backend-pipeline.ll').read_text()
@@ -214,7 +229,7 @@ def scopes():
                       '-vplan-backend-force-all'], path, user_probes=True)
     observed = [r['observation']['spill_observation'] for r in candidates(rows)]
     assert observed and all(o['status'] == 'succeeded' for o in observed)
-    assert all(o['mapping_kind'] == 'related-blocks' for o in observed)
+    assert all(o['mapping_kind'] == 'backedge-loops' for o in observed)
     assert all('i64 7, i64 1' in line for line in ir.splitlines()
                if 'call void @llvm.pseudoprobe' in line)
 

@@ -66,23 +66,24 @@ enum class VPlanBackendObservationStatus {
   Succeeded,
   Failed
 };
+/// One independently tracked iteration, owned by one observation stage.
+struct VPlanBackendLoopObservation {
+  uint64_t ID = 0, IterationWidth = 0, SelectedBlockCount = 0;
+  std::vector<VPlanVectorSpillAccess> Spills;
+  std::optional<std::vector<VPlanMIRInstruction>> MIRBody;
+};
 struct VPlanBackendObservation {
   VPlanBackendObservationStatus Status =
       VPlanBackendObservationStatus::NotCollected;
   std::string Failure;
   std::string MappingFailure, NormalizationFailure;
   bool MappingSucceeded = false, NormalizationSucceeded = false;
-  uint64_t SelectedBlockCount = 0, MixedOriginBlockCount = 0;
-  uint64_t UnresolvedBlockCount = 0;
-  uint64_t MaterializedWidth = 0, IterationWidth = 0, TripCount = 0;
+  uint64_t SelectedBlockCount = 0, MaterializedWidth = 0;
   bool IterationMapping = false;
-  std::string NormalizationBasis = "materialized-iteration";
-  std::string TripCountKind = "unknown";
-  static constexpr unsigned MappingPolicyRevision = 1;
-  static constexpr unsigned NormalizationPolicyRevision = 1;
+  static constexpr unsigned MappingPolicyRevision = 2;
+  static constexpr unsigned NormalizationPolicyRevision = 2;
   std::string Stage = "post-stack-slot-coloring";
-  std::vector<VPlanVectorSpillAccess> Spills;
-  std::optional<std::vector<VPlanMIRInstruction>> MIRBody;
+  std::vector<VPlanBackendLoopObservation> Loops;
   bool succeeded() const {
     return Status == VPlanBackendObservationStatus::Succeeded;
   }

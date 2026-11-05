@@ -15,7 +15,6 @@
 #ifndef LLVM_LIB_IR_SYMBOLTABLELISTTRAITSIMPL_H
 #define LLVM_LIB_IR_SYMBOLTABLELISTTRAITSIMPL_H
 
-#include "llvm/IR/RelatedBlock.h"
 #include "llvm/IR/SymbolTableListTraits.h"
 #include "llvm/IR/ValueSymbolTable.h"
 
@@ -70,8 +69,6 @@ void SymbolTableListTraits<ValueSubClass, Args...>::addNodeToList(
   assert(!V->getParent() && "Value already in a container!!");
   ItemParentClass *Owner = getListOwner();
   V->setParent(Owner);
-  if constexpr (std::is_same_v<ValueSubClass, Instruction>)
-    RelatedBlockTracking::inserted(*V);
   invalidateParentIListOrdering(Owner);
   if (V->hasName())
     if (ValueSymbolTable *ST = getSymTab(Owner))
@@ -81,8 +78,6 @@ void SymbolTableListTraits<ValueSubClass, Args...>::addNodeToList(
 template <typename ValueSubClass, typename... Args>
 void SymbolTableListTraits<ValueSubClass, Args...>::removeNodeFromList(
     ValueSubClass *V) {
-  if constexpr (std::is_same_v<ValueSubClass, Instruction>)
-    RelatedBlockTracking::removed(*V);
   V->setParent(nullptr);
   if (V->hasName())
     if (ValueSymbolTable *ST = getSymTab(getListOwner()))
@@ -101,10 +96,6 @@ void SymbolTableListTraits<ValueSubClass, Args...>::transferNodesFromList(
   ItemParentClass *OldIP = L2.getListOwner();
   if (NewIP == OldIP)
     return;
-
-  if constexpr (std::is_same_v<ValueSubClass, Instruction>)
-    if (first != last)
-      mergeRelatedBlocks(*NewIP, *OldIP);
 
   // We only have to update symbol table entries if we are transferring the
   // instructions to a different symtab object...

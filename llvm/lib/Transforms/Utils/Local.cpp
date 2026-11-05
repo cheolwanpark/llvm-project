@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
@@ -1369,6 +1370,15 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
     }
 
   if (BBKillable) {
+    if (auto *T = LoopBackedgeTracking::get(BB)) {
+      auto I = T->Backedges.find({BB, Succ});
+      if (I != T->Backedges.end()) {
+        uint64_t Q = I->second;
+        T->Backedges.erase(I);
+        for (auto *Pred : predecessors(BB)) T->bind({Pred, Succ}, Q);
+      }
+      T->transferIncoming(BB, Succ);
+    }
     // Everything that jumped to BB now goes to Succ.
     BB->replaceAllUsesWith(Succ);
 
@@ -1383,6 +1393,14 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
     assert(succ_empty(BB) && "The successor list of BB isn't empty before "
                              "applying corresponding DTU updates.");
   } else if (BBPhisMergeable) {
+    if (auto *T = LoopBackedgeTracking::get(BB)) {
+      for (auto *Pred : BBPreds) {
+        if (Pred == CommonPred) continue;
+        auto I = T->Backedges.find({BB, Succ});
+        if (I != T->Backedges.end()) T->bind({Pred, Succ}, I->second);
+        T->move({Pred, BB}, {Pred, Succ});
+      }
+    }
     //  Everything except CommonPred that jumped to BB now goes to Succ.
     BB->replaceUsesWithIf(Succ, [BBPreds, CommonPred](Use &U) -> bool {
       if (Instruction *UseInst = dyn_cast<Instruction>(U.getUser()))
@@ -3118,7 +3136,6 @@ static void combineMetadata(Instruction *K, const Instruction *J,
 void llvm::combineMetadataForCSE(Instruction *K, const Instruction *J,
                                  bool DoesKMove) {
   // Sharing void instructions (notably stores) need not perform RAUW.
-  RelatedBlockTracking::replaced(*J, *K);
   combineMetadata(K, J, DoesKMove);
 }
 

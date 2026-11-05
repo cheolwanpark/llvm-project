@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -22,6 +23,7 @@
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/LoopBackedgeTracking.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/CycleInfo.h"
@@ -344,7 +346,6 @@ bool llvm::MergeBlockIntoPredecessor(BasicBlock *BB, DomTreeUpdater *DTU,
     Start = PTI;
 
   // Move all definitions in the successor to the predecessor...
-  mergeRelatedBlocks(*PredBB, *BB);
   PredBB->splice(PTI->getIterator(), BB, BB->begin(), STI->getIterator());
 
   if (MSSAU)
@@ -398,6 +399,10 @@ bool llvm::MergeBlockIntoPredecessor(BasicBlock *BB, DomTreeUpdater *DTU,
   }
 
   // Finally, erase the old block and update dominator info.
+  if (auto *T = LoopBackedgeTracking::get(BB)) {
+    T->transferOutgoing(BB, PredBB);
+    T->transferIncoming(BB, PredBB);
+  }
   DeleteDeadBlock(BB, DTU);
 
   return true;
@@ -1330,15 +1335,6 @@ SplitBlockPredecessorsImpl(BasicBlock *BB, ArrayRef<BasicBlock *> Preds,
   BasicBlock *NewBB = BasicBlock::Create(
       BB->getContext(), BB->getName() + Suffix, BB->getParent(), BB);
 
-  // This block factors the redirected predecessor edges. In particular a
-  // loop preheader inherits its outside predecessors, not the loop header.
-  // Later instruction transfers independently add their own ancestry.
-  if (RelatedBlockTracking::get(BB) && !Preds.empty()) {
-    inheritRelatedBlocks(*NewBB, *Preds.front());
-    for (auto *Pred : drop_begin(Preds))
-      mergeRelatedBlocks(*NewBB, *Pred);
-  }
-
   // The new block unconditionally branches to the old block.
   UncondBrInst *BI = UncondBrInst::Create(BB, NewBB);
 
@@ -1399,6 +1395,20 @@ SplitBlockPredecessorsImpl(BasicBlock *BB, ArrayRef<BasicBlock *> Preds,
       Loop *IL = LI->getLoopFor(OldLatch);
       if (IL && IL->getLoopLatch() != OldLatch)
         OldLatch->getTerminator()->setMetadata(LLVMContext::MD_loop, nullptr);
+    }
+  }
+
+  if (auto *T = LoopBackedgeTracking::get(BB)) {
+    DominatorTree CurrentDT(*BB->getParent());
+    for (auto *Pred : Preds) {
+      auto I = T->Backedges.find({Pred, BB});
+      if (I == T->Backedges.end()) continue;
+      if (CurrentDT.dominates(BB, NewBB))
+        T->move({Pred, BB}, {NewBB, BB});
+      else if (CurrentDT.dominates(NewBB, Pred))
+        T->move({Pred, BB}, {Pred, NewBB});
+      else
+        T->fail("ambiguous-loop");
     }
   }
 

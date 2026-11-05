@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Transforms/Utils/LoopVersioning.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -107,6 +108,10 @@ void LoopVersioning::versionLoop(
       cloneLoopWithPreheader(PH, RuntimeCheckBB, VersionedLoop, VMap,
                              ".lver.orig", LI, DT, NonVersionedLoopBlocks);
   remapInstructionsInBlocks(NonVersionedLoopBlocks, VMap);
+  if (auto *T = LoopBackedgeTracking::get(VersionedLoop->getHeader())) {
+    auto Before = static_cast<const LoopBackedgeTable<BasicBlock> &>(*T);
+    cloneTrackedLoops(*T, Before, VMap);
+  }
 
   // Insert the conditional branch based on the result of the memchecks.
   Instruction *OrigTerm = RuntimeCheckBB->getTerminator();

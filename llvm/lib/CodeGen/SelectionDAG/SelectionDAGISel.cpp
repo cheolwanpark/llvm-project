@@ -1952,7 +1952,7 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
 
     if (FastIS)
       FastIS->finishBasicBlock();
-    FinishBasicBlock();
+    FinishBasicBlock(LLVMBB);
     FuncInfo->PHINodesToUpdate.clear();
     ElidedArgCopyInstrs.clear();
   }
@@ -1968,10 +1968,25 @@ void SelectionDAGISel::SelectAllBasicBlocks(const Function &Fn) {
   delete FastIS;
   SDB->clearDanglingDebugInfo();
   SDB->SPDescriptor.resetPerFunctionState();
+  validateMachineLoopBackedges(*MF);
 }
 
 void
-SelectionDAGISel::FinishBasicBlock() {
+SelectionDAGISel::FinishBasicBlock(const BasicBlock *IRBB) {
+  // Connect the actual machine predecessor implementing an IR successor.
+  // PHIs are not required: switches and PHI-free loops use the same bridge.
+  auto TrackSuccessors = [&](MachineBasicBlock *From) {
+    auto *MT = MF->getLoopBackedgeTracking();
+    if (!MT) return;
+    auto *IT = LoopBackedgeTracking::get(IRBB);
+    if (!IT) return;
+    for (const auto &E : IT->Backedges) {
+      if (E.first.first != IRBB) continue;
+      auto *To = FuncInfo->getMBB(E.first.second);
+      if (From->isSuccessor(To)) MT->bind({From, To}, E.second);
+    }
+  };
+  TrackSuccessors(FuncInfo->MBB);
   LLVM_DEBUG(dbgs() << "Total amount of phi nodes to update: "
                     << FuncInfo->PHINodesToUpdate.size() << "\n";
              for (unsigned i = 0, e = FuncInfo->PHINodesToUpdate.size(); i != e;
@@ -2004,6 +2019,7 @@ SelectionDAGISel::FinishBasicBlock() {
     CurDAG->setRoot(SDB->getRoot());
     SDB->clear();
     CodeGenAndEmitDAG();
+    TrackSuccessors(FuncInfo->MBB);
 
     // Clear the Per-BB State.
     SDB->SPDescriptor.resetPerBBState();
@@ -2031,6 +2047,7 @@ SelectionDAGISel::FinishBasicBlock() {
     CurDAG->setRoot(SDB->getRoot());
     SDB->clear();
     CodeGenAndEmitDAG();
+    TrackSuccessors(FuncInfo->MBB);
 
     // CodeGen Failure MBB if we have not codegened it yet.
     MachineBasicBlock *FailureMBB = SDB->SPDescriptor.getFailureMBB();
@@ -2041,6 +2058,7 @@ SelectionDAGISel::FinishBasicBlock() {
       CurDAG->setRoot(SDB->getRoot());
       SDB->clear();
       CodeGenAndEmitDAG();
+    TrackSuccessors(FuncInfo->MBB);
     }
 
     // Clear the Per-BB State.
@@ -2059,6 +2077,7 @@ SelectionDAGISel::FinishBasicBlock() {
       CurDAG->setRoot(SDB->getRoot());
       SDB->clear();
       CodeGenAndEmitDAG();
+    TrackSuccessors(FuncInfo->MBB);
     }
 
     BranchProbability UnhandledProb = BTB.Prob;
@@ -2096,6 +2115,7 @@ SelectionDAGISel::FinishBasicBlock() {
       CurDAG->setRoot(SDB->getRoot());
       SDB->clear();
       CodeGenAndEmitDAG();
+    TrackSuccessors(FuncInfo->MBB);
 
       if ((BTB.ContiguousRange || BTB.FallthroughUnreachable) && j + 2 == ej) {
         // Since we're not going to use the final bit test, remove it.
@@ -2144,6 +2164,7 @@ SelectionDAGISel::FinishBasicBlock() {
       CurDAG->setRoot(SDB->getRoot());
       SDB->clear();
       CodeGenAndEmitDAG();
+    TrackSuccessors(FuncInfo->MBB);
     }
 
     // Set the current basic block to the mbb we wish to insert the code into
@@ -2154,6 +2175,7 @@ SelectionDAGISel::FinishBasicBlock() {
     CurDAG->setRoot(SDB->getRoot());
     SDB->clear();
     CodeGenAndEmitDAG();
+    TrackSuccessors(FuncInfo->MBB);
 
     // Update PHI Nodes
     for (unsigned pi = 0, pe = FuncInfo->PHINodesToUpdate.size();
@@ -2191,6 +2213,7 @@ SelectionDAGISel::FinishBasicBlock() {
     CurDAG->setRoot(SDB->getRoot());
     SDB->clear();
     CodeGenAndEmitDAG();
+    TrackSuccessors(FuncInfo->MBB);
 
     // Remember the last block, now that any splitting is done, for use in
     // populating PHI nodes in successors.

@@ -567,7 +567,8 @@ Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
   if (SpillUnavailable) {
     Result.Spill.Status = VPlanBackendObservationStatus::Failed;
     Result.Spill.Failure = "backend feedback requires StackSlotColoring";
-    Result.Spill.Spills.clear();
+    for (auto &Loop : Result.Spill.Loops)
+      Loop.Spills.clear();
   }
   if (!MIR) {
     Result.MIR.Status = VPlanBackendObservationStatus::NotRequested;

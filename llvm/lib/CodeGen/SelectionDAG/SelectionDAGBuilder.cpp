@@ -2716,7 +2716,7 @@ void SelectionDAGBuilder::FindMergedConditions(const Value *Cond,
   MachineFunction::iterator BBI(CurBB);
   MachineFunction &MF = DAG.getMachineFunction();
   MachineBasicBlock *TmpBB = MF.CreateMachineBasicBlock(CurBB->getBasicBlock());
-  inheritRelatedBlocks(*TmpBB, *CurBB);
+
   CurBB->getParent()->insert(++BBI, TmpBB);
 
   if (Opc == Instruction::Or) {
@@ -12653,7 +12653,7 @@ void SelectionDAGBuilder::lowerWorkItem(SwitchWorkListItem W, Value *Cond,
           DefaultMBB->getBasicBlock()->getFirstNonPHIOrDbg());
     } else {
       Fallthrough = CurMF->CreateMachineBasicBlock(CurMBB->getBasicBlock());
-      inheritRelatedBlocks(*Fallthrough, *CurMBB);
+
       CurMF->insert(BBI, Fallthrough);
       // Put Cond in a virtual register to make it available from the new blocks.
       ExportFromCurrentBlock(Cond);
@@ -12826,7 +12826,7 @@ void SelectionDAGBuilder::splitWorkItem(SwitchWorkList &WorkList,
     LeftMBB = FirstLeft->MBB;
   } else {
     LeftMBB = FuncInfo.MF->CreateMachineBasicBlock(W.MBB->getBasicBlock());
-    inheritRelatedBlocks(*LeftMBB, *W.MBB);
+
     FuncInfo.MF->insert(BBI, LeftMBB);
     WorkList.push_back(
         {LeftMBB, FirstLeft, LastLeft, W.GE, Pivot, W.DefaultProb / 2});
@@ -12843,7 +12843,7 @@ void SelectionDAGBuilder::splitWorkItem(SwitchWorkList &WorkList,
     RightMBB = FirstRight->MBB;
   } else {
     RightMBB = FuncInfo.MF->CreateMachineBasicBlock(W.MBB->getBasicBlock());
-    inheritRelatedBlocks(*RightMBB, *W.MBB);
+
     FuncInfo.MF->insert(BBI, RightMBB);
     WorkList.push_back(
         {RightMBB, FirstRight, LastRight, Pivot, W.LT, W.DefaultProb / 2});
@@ -12912,7 +12912,7 @@ MachineBasicBlock *SelectionDAGBuilder::peelDominantCaseCluster(
   ++BBI;
   MachineBasicBlock *PeeledSwitchMBB =
       FuncInfo.MF->CreateMachineBasicBlock(SwitchMBB->getBasicBlock());
-  inheritRelatedBlocks(*PeeledSwitchMBB, *SwitchMBB);
+
   FuncInfo.MF->insert(BBI, PeeledSwitchMBB);
 
   ExportFromCurrentBlock(SI.getCondition());

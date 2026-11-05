@@ -25,7 +25,6 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/ProfDataUtils.h"
-#include "llvm/IR/RelatedBlock.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
@@ -61,7 +60,6 @@ Instruction::Instruction(Type *ty, unsigned it, AllocInfo AllocInfo,
 }
 
 Instruction::~Instruction() {
-  RelatedBlockTracking::deleted(*this);
   assert(!getParent() && "Instruction still linked in the program!");
 
   // Replace any extant metadata uses of this instruction with poison to
@@ -1539,6 +1537,5 @@ Instruction *Instruction::clone() const {
 
   New->SubclassOptionalData = SubclassOptionalData;
   New->copyMetadata(*this);
-  RelatedBlockTracking::cloned(*New, *this);
   return New;
 }

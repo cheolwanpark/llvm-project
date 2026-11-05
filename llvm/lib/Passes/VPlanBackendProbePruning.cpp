@@ -7,7 +7,7 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IntrinsicInst.h"
-#include "llvm/IR/RelatedBlock.h"
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Transforms/Utils/Local.h"
 using namespace llvm;
 // Private probe CFG reduction. See BACKEND_FEEDBACK.md.
@@ -23,34 +23,34 @@ cl::opt<bool> llvm::PruningDumpIR(
     "vplan-backend-pruning-dump-ir", cl::Hidden, cl::init(false),
     cl::desc("Dump experimental probe IR before/after pruning and suffix"));
 
-// Passive diagnostics count live descendants, including finite expansions.
-// Observation status distinguishes an absent region from an observed zero.
+// Passive diagnostics use current natural-loop membership.
 ProbeIRSize llvm::getProbeIRSize(Function &F) {
   ProbeIRSize Size{F.getInstructionCount(), unsigned(F.size()), 0, 0};
-  if (auto *T = RelatedBlockTracking::get(&F))
-    for (auto &BB : F)
-      if (T->Region.intersects(BB.getRelatedBlock())) {
-        Size.LoopInstructions += BB.size();
+  if (auto *T = LoopBackedgeTracking::get(&F)) {
+    DominatorTree DT(F);
+    LoopInfo LI(DT);
+    auto Bodies = mapTrackedLoops(*T, F, DT, LI);
+    if (!Bodies) { consumeError(Bodies.takeError()); return Size; }
+    for (const auto &Body : *Bodies)
+      for (auto *BB : Body.Blocks) {
+        Size.LoopInstructions += BB->size();
         ++Size.LoopBlocks;
       }
+  }
   return Size;
 }
 
-/// Find the live descendant loop used for private probe CFG pruning.
 static std::pair<Loop *, StringRef> findPruningLoop(Function &F, LoopInfo &LI) {
-  auto *T = RelatedBlockTracking::get(&F);
-  if (!T || T->Region.Origins.empty())
-    return {nullptr, "missing-materialized-region"};
-  Loop *Selected = nullptr;
-  for (auto *L : LI.getLoopsInPreorder()) {
-    if (!is_contained(L->getHeader()->getRelatedBlock().Origins,
-                      T->Region.Origins.front()))
-      continue;
-    if (Selected)
-      return {nullptr, "multiple-descendant-loops"};
-    Selected = L;
-  }
-  return {Selected, Selected ? "" : "no-repeated-materialized-body"};
+  auto *T = LoopBackedgeTracking::get(&F);
+  if (!T || T->Widths.empty()) return {nullptr, "missing-materialized-region"};
+  if (T->Widths.size() != 1) return {nullptr, "multiple-target-loops"};
+  DominatorTree DT(F);
+  LoopInfo CurrentLI(DT);
+  auto Bodies = mapTrackedLoops(*T, F, DT, CurrentLI);
+  if (!Bodies) { consumeError(Bodies.takeError()); return {nullptr, "invalid-target-loop"}; }
+  const BasicBlock *Header = T->Backedges.begin()->first.second;
+  auto *L = LI.getLoopFor(Header);
+  return {L, L ? "" : "no-repeated-materialized-body"};
 }
 
 // A large function can retain a syntactically present but infeasible loop that
@@ -317,5 +317,6 @@ PruningResult llvm::pruneLoopRegions(Function &F,
         HasReturnOutcomes ? ReturnOutcomes.lookup(BB) : ReturnValue, BB);
   }
   removeUnreachableBlocks(F);
+  validateLoopBackedges(F);
   return {Before - F.getInstructionCount(), "existing-return-regions"};
 }

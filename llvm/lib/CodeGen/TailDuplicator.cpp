@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/TailDuplicator.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -168,6 +169,10 @@ bool TailDuplicator::tailDuplicateAndUpdate(
     SmallVectorImpl<MachineBasicBlock*> *DuplicatedPreds,
     function_ref<void(MachineBasicBlock *)> *RemovalCallback,
     SmallVectorImpl<MachineBasicBlock *> *CandidatePtr) {
+  LoopBackedgeRewrite<MachineBasicBlock> Mapping(MF->getLoopBackedgeTracking());
+  auto FinishMapping = scope_exit([&] {
+    Mapping.commit([&] { return checkMachineLoopBackedges(*MF); });
+  });
   // Save the successors list.
   SmallSetVector<MachineBasicBlock *, 8> Succs(MBB->succ_begin(),
                                                MBB->succ_end());
@@ -810,6 +815,10 @@ bool TailDuplicator::duplicateSimpleBB(
     auto DL = PredBB->findBranchDebugLoc();
     TII->removeBranch(*PredBB);
 
+    if (auto *T = MF->getLoopBackedgeTracking()) {
+      T->duplicateTail(*TailBB, *PredBB);
+      T->move({PredBB, TailBB}, {PredBB, NewTarget});
+    }
     if (!PredBB->isSuccessor(NewTarget))
       PredBB->replaceSuccessor(TailBB, NewTarget);
     else {
@@ -931,6 +940,9 @@ bool TailDuplicator::tailDuplicate(bool IsSimple, MachineBasicBlock *TailBB,
 
     NumTailDupAdded += TailBB->size() - 1; // subtract one for removed branch
 
+    // This duplicates a tail, not an independent target iteration.
+    if (auto *T = MF->getLoopBackedgeTracking())
+      T->duplicateTail(*TailBB, *PredBB);
     // Update the CFG.
     PredBB->removeSuccessor(PredBB->succ_begin());
     assert(PredBB->succ_empty() &&
@@ -1004,6 +1016,8 @@ bool TailDuplicator::tailDuplicate(bool IsSimple, MachineBasicBlock *TailBB,
       PrevBB->removeSuccessor(PrevBB->succ_begin());
       assert(PrevBB->succ_empty());
       PrevBB->transferSuccessors(TailBB);
+      if (auto *T = MF->getLoopBackedgeTracking())
+        T->transferIncoming(TailBB, PrevBB);
 
       // Update branches in PrevBB based on Tail's layout successor.
       if (ShouldUpdateTerminators)

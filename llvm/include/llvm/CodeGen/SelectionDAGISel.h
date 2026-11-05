@@ -543,7 +543,7 @@ private:
   void SelectBasicBlock(BasicBlock::const_iterator Begin,
                         BasicBlock::const_iterator End,
                         bool &HadTailCall);
-  void FinishBasicBlock();
+  void FinishBasicBlock(const BasicBlock *IRBB);
 
   void CodeGenAndEmitDAG();
 

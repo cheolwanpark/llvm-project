@@ -668,7 +668,7 @@ bool MachineCSEImpl::ProcessBlockCSE(MachineBasicBlock *MBB) {
 
     // Actually perform the elimination.
     if (DoCSE) {
-      mergeRelatedBlocks(*CSMI->getParent(), *MI.getParent());
+
       for (const std::pair<Register, Register> &CSEPair : CSEPairs) {
         Register OldReg = CSEPair.first;
         Register NewReg = CSEPair.second;

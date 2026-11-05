@@ -500,9 +500,9 @@ bool RISCVExpandAtomicPseudo::expandAtomicBinOp(
 
   MachineFunction *MF = MBB.getParent();
   auto LoopMBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*LoopMBB, MBB);
+
   auto DoneMBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*DoneMBB, MBB);
+
 
   // Insert new MBBs.
   MF->insert(++MBB.getIterator(), LoopMBB);
@@ -712,13 +712,13 @@ bool RISCVExpandAtomicPseudo::expandAtomicMinMaxOp(
   DebugLoc DL = MI.getDebugLoc();
   MachineFunction *MF = MBB.getParent();
   auto LoopHeadMBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*LoopHeadMBB, MBB);
+
   auto LoopIfBodyMBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*LoopIfBodyMBB, MBB);
+
   auto LoopTailMBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*LoopTailMBB, MBB);
+
   auto DoneMBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*DoneMBB, MBB);
+
 
   // Insert new MBBs.
   MF->insert(++MBB.getIterator(), LoopHeadMBB);
@@ -829,11 +829,11 @@ bool RISCVExpandAtomicPseudo::expandAtomicCmpXchg(
   DebugLoc DL = MI.getDebugLoc();
   MachineFunction *MF = MBB.getParent();
   auto LoopHeadMBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*LoopHeadMBB, MBB);
+
   auto LoopTailMBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*LoopTailMBB, MBB);
+
   auto DoneMBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*DoneMBB, MBB);
+
 
   Register DestReg = MI.getOperand(0).getReg();
   Register ScratchReg = MI.getOperand(1).getReg();

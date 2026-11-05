@@ -46,7 +46,7 @@ public:
 /// Callers retain all eligibility, forced-selection and tie-breaking policies.
 template <typename CostT>
 CostT vplanCostForTripCount(unsigned Width, CostT Body, CostT Scalar,
-                           unsigned TC, bool ScalarTail) {
+                            unsigned TC, bool ScalarTail) {
   if (ScalarTail)
     return Body * (TC / Width) + Scalar * (TC % Width);
   return Body * divideCeil(TC, Width);
@@ -57,21 +57,34 @@ struct VPBackendPruningContext {
   unsigned MaxTripCount;
   bool UseScalar;
 };
-LLVM_ABI_FOR_TEST bool vplanStrictlyCheaper(
-    VPExactCost A, unsigned WidthA, VPExactCost B, unsigned WidthB,
-    VPExactCost Scalar, unsigned MaxTripCount, bool ScalarTail);
+LLVM_ABI_FOR_TEST bool vplanStrictlyCheaper(VPExactCost A, unsigned WidthA,
+                                            VPExactCost B, unsigned WidthB,
+                                            VPExactCost Scalar,
+                                            unsigned MaxTripCount,
+                                            bool ScalarTail);
 
 struct VPSpillCost {
   unsigned ClassID;
   bool IsLoad;
   uint64_t Registers = 0, Accesses = 0;
   InstructionCost Cost = 0;
+  uint64_t LoopID = 0, IterationWidth = 0;
+};
+struct VPSpillLoopCost {
+  uint64_t ID = 0, IterationWidth = 0;
+  InstructionCost Raw = 0;
+  VPExactCost Cost;
+};
+struct VPMIRLoopCost {
+  uint64_t ID = 0, IterationWidth = 0;
+  VPExactCost RawBody, RawSpill, Body, Spill;
+  std::vector<MIRInstructionCost> Instructions;
 };
 struct VPMIRCost {
   std::string Model, Revision, CPU;
   unsigned NominalVLEN = 0;
-  VPExactCost RawBody, RawSpill, Body, Spill;
-  std::vector<MIRInstructionCost> Instructions;
+  VPExactCost Body, Spill;
+  std::vector<VPMIRLoopCost> Loops;
 };
 LLVM_ABI_FOR_TEST Expected<VPMIRCost>
 priceVPlanMIR(const VPlanBackendObservation &Observation,
@@ -94,7 +107,6 @@ struct VPBackendScalarCostEntry {
   InstructionCost EstimatedSpill = 0;
   std::string Source, Profile, Revision;
   std::optional<VPMIRCost> MIR;
-  uint64_t ObservedWidth = 0;
 };
 /// All state belongs to one original loop. Preparation is transactional: on
 /// failure discard every score before native selection can observe the table.
@@ -116,6 +128,7 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
     std::optional<VPMIRCost> MIR;
     InstructionCost Raw;
     SmallVector<VPSpillCost> AccessCosts;
+    SmallVector<VPSpillLoopCost> SpillLoops;
     std::string Error;
   };
   EvaluatedCost
@@ -195,6 +208,7 @@ priceVPlanVectorSpills(const VPlanBackendObservation &Observation,
                        const TargetTransformInfo &TTI, LLVMContext &Context,
                        unsigned Width, InstructionCost &RawCost,
                        SmallVectorImpl<VPSpillCost> *AccessCosts = nullptr,
-                       bool UseDefaultTTI = false);
+                       bool UseDefaultTTI = false,
+                       SmallVectorImpl<VPSpillLoopCost> *LoopCosts = nullptr);
 } // namespace llvm
 #endif

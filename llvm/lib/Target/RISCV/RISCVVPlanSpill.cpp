@@ -191,22 +191,22 @@ static Error collectBody(MachineFunction &MF, VPlanBackendResult &Result,
   auto Region = vplan::mapProbeBody(MF, Observation);
   if (!Region)
     return Region.takeError();
-  if (MIR) {
+  if (MIR)
     Observation.Stage = "post-frame-lowering";
-    Observation.MIRBody.emplace();
-  }
-  // Static block sum: every selected block and instruction is visited once.
-  for (const auto *BB : *Region)
-    for (const auto &MI : *BB) {
-      if (isBodyInstruction(MI)) {
+  // Each natural loop is one independent nominal iteration. The mapper has
+  // already rejected overlapping bodies; facts remain separated for pricing.
+  for (unsigned I = 0; I != Region->size(); ++I) {
+    auto &Loop = Observation.Loops[I];
+    if (MIR) Loop.MIRBody.emplace();
+    for (const auto *BB : (*Region)[I].Blocks)
+      for (const auto &MI : *BB) {
+        if (!isBodyInstruction(MI)) continue;
         if (MIR)
-          Observation.MIRBody->push_back(
-              vplan::collectMIRInstruction(MI, Text));
-        else if (auto E =
-                     vplan::collectVectorSpillAccess(MI, Observation.Spills))
+          Loop.MIRBody->push_back(vplan::collectMIRInstruction(MI, Text));
+        else if (auto E = vplan::collectVectorSpillAccess(MI, Loop.Spills))
           return E;
       }
-    }
+  }
   Observation.Status = VPlanBackendObservationStatus::Succeeded;
   return Error::success();
 }
@@ -238,8 +238,10 @@ void llvm::vplan::observeBody(MachineFunction &MF, VPlanBackendResult &Result,
   } else if (auto E = collectBody(MF, Result, MIR, Text)) {
     // Discard only this stage's provisional payload. Preserve scope evidence
     // and the other stage's independently owned result.
-    Slot.Spills.clear();
-    Slot.MIRBody.reset();
+    for (auto &Loop : Slot.Loops) {
+      Loop.Spills.clear();
+      Loop.MIRBody.reset();
+    }
     Slot.Status = VPlanBackendObservationStatus::Failed;
     Slot.Failure = toString(std::move(E));
   }

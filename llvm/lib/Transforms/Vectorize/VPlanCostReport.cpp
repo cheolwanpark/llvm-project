@@ -344,41 +344,60 @@ void VPlanCostReport::comparisonScore(VPExactCost Score,
   }
 }
 
-void VPlanCostReport::backendScalarCost(
-    const VPBackendScalarCostEntry &Cost,
-    const VPlanBackendResult *Observation) {
+static void printMIRLoopPrices(raw_ostream &OS,
+                               const VPlanBackendObservation &Observation,
+                               const VPMIRCost &Cost) {
+  for (auto [L, P] : zip(Observation.Loops, Cost.Loops)) {
+    OS << "      mir-loop id=" << P.ID << " Wobs=" << P.IterationWidth
+       << " weight=1/" << Cost.Loops.size() << " raw_R=";
+    P.RawBody.print(OS);
+    OS << " raw_S=";
+    P.RawSpill.print(OS);
+    OS << " R_contribution=";
+    P.Body.print(OS);
+    OS << " S_contribution=";
+    P.Spill.print(OS);
+    OS << '\n';
+    for (auto [MI, IC] : zip(*L.MIRBody, P.Instructions)) {
+      OS << "        mir-op " << MI.Opcode << " rule=" << IC.Rule
+         << " spill=" << MI.Spill << " unknown=" << IC.Unknown
+         << " cost=" << IC.Numerator << '/' << IC.Denominator << '\n';
+      if (!MI.Text.empty())
+        OS << "          " << MI.Text;
+    }
+  }
+}
+
+void VPlanCostReport::backendScalarCost(const VPBackendScalarCostEntry &Cost,
+                                        const VPlanBackendResult *Observation) {
   ExactScalarBaseline = Cost.Body;
   ScalarSource = Cost.Source;
   raw_string_ostream OS(ScalarDetails);
-  OS << "  backend-scalar source=" << Cost.Source
-     << " profile=" << Cost.Profile << " revision=" << Cost.Revision
-     << " vf=f1 ic=1 cost=";
+  OS << "  backend-scalar source=" << Cost.Source << " profile=" << Cost.Profile
+     << " revision=" << Cost.Revision << " vf=f1 ic=1 cost=";
   Cost.Body.print(OS);
   OS << " quarters_numerator=" << Cost.Body.numerator()
      << " quarters_denominator=" << Cost.Body.denominator();
   if (Cost.MIR) {
     const auto &M = *Cost.MIR;
     OS << " cpu=" << M.CPU << " nominal_vlen=" << M.NominalVLEN
-       << " stage=" << Observation->MIR.Stage << " Wobs=" << Cost.ObservedWidth
+       << " stage=" << Observation->MIR.Stage << " loops=" << M.Loops.size()
+       << " composition=uniform-loop-mean"
        << " R=";
     M.Body.print(OS);
     OS << " S=";
     M.Spill.print(OS);
-    OS << " Et=" << Cost.EstimatedSpill << " unknown_instruction_count="
-       << count_if(M.Instructions, [](const MIRInstructionCost &I) {
-            return I.Unknown;
-          });
+    unsigned Unknown = 0;
+    for (const auto &L : M.Loops)
+      Unknown += count_if(L.Instructions, [](const MIRInstructionCost &I) {
+        return I.Unknown;
+      });
+    OS << " Et=" << Cost.EstimatedSpill
+       << " unknown_instruction_count=" << Unknown;
   }
   OS << '\n';
   if (Detailed && Cost.MIR)
-    for (auto [MI, IC] :
-         zip(*Observation->MIR.MIRBody, Cost.MIR->Instructions)) {
-      OS << "    scalar-mir-op " << MI.Opcode << " rule=" << IC.Rule
-         << " spill=" << MI.Spill << " unknown=" << IC.Unknown
-         << " cost=" << IC.Numerator << '/' << IC.Denominator << '\n';
-      if (!MI.Text.empty())
-        OS << "      " << MI.Text;
-    }
+    printMIRLoopPrices(OS, Observation->MIR, *Cost.MIR);
 }
 
 void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
@@ -425,11 +444,8 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
        << " nominal_vlen=" << M.NominalVLEN
        << " cost_schema=direct-instruction-cost-v1 tti_profile=" << ProfileName
        << " revision=" << M.Revision << " stage=" << Observation->MIR.Stage
-       << " Wtti=" << Width << " Wobs=" << Observation->MIR.IterationWidth;
-    DS << " raw_R=";
-    M.RawBody.print(DS);
-    DS << " raw_S=";
-    M.RawSpill.print(DS);
+       << " Wtti=" << Width << " loops=" << M.Loops.size()
+       << " composition=uniform-loop-mean";
     DS << " R=";
     M.Body.print(DS);
     DS << " S=";
@@ -438,15 +454,9 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
        << (Mode.EstimatedSpill ? " B=R-S+Et=" : " B=R=");
     Cost.Body.print(DS);
     DS << " spill_scope=scalar-and-vector gate=bypassed-for-mir-body"
-          " scalar_baseline=" << ScalarSource << " ic_policy=native-cost\n";
-    for (auto [MI, IC] : zip(*Observation->MIR.MIRBody, M.Instructions)) {
-      DS << "      mir-op " << MI.Opcode << " rule=" << IC.Rule
-         << " spill=" << MI.Spill << " unknown=" << IC.Unknown;
-      DS << " cost=" << IC.Numerator << "/" << IC.Denominator;
-      DS << '\n';
-      if (!MI.Text.empty())
-        DS << "        " << MI.Text;
-    }
+          " scalar_baseline="
+       << ScalarSource << " ic_policy=native-cost\n";
+    printMIRLoopPrices(DS, Observation->MIR, M);
     return;
   }
   if (Mode.EstimatedSpill) {
@@ -459,13 +469,13 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
     return;
   }
   DS << " ic=" << Cost.IC << " native=" << Cost.Native << " L=" << Cost.Profile
-     << " Ev=" << Cost.EstimatedVectorSpill << " raw_vector_spill=" << Raw
-     << " Wtti=" << Width << " Wobs=";
+     << " Ev=" << Cost.EstimatedVectorSpill << " raw_vector_spill_sum=" << Raw
+     << " Wtti=" << Width << " loops=";
   if (Observation)
-    DS << Observation->Spill.IterationWidth;
+    DS << Observation->Spill.Loops.size();
   else
     DS << "not-observed";
-  DS << " Sv=";
+  DS << " composition=uniform-loop-mean Sv=";
   Spill.print(DS);
   DS << " B=L-Ev+Sv=";
   Cost.Body.print(DS);
@@ -483,21 +493,23 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
   }
   DS << "      spill_source=observed stage=" << Observation->Spill.Stage
      << " iteration_mapping=" << Observation->Spill.IterationMapping << '\n';
-  for (const auto &A : Observation->Spill.Spills)
-    DS << "      vector-spill direction=" << (A.IsLoad ? "load" : "store")
-       << " class=vector bytes=" << A.MinBytes << " scalable=" << A.Scalable
-       << " group=" << A.RegisterGroup << " alignment=" << A.Alignment
-       << " address_space=" << A.AddressSpace
-       << " whole_register=" << A.WholeRegister
-       << " segment_lowering=" << A.FromSegment << '\n';
+  for (const auto &L : Observation->Spill.Loops)
+    for (const auto &A : L.Spills)
+      DS << "      vector-spill loop=" << L.ID << " Wobs=" << L.IterationWidth
+         << " direction=" << (A.IsLoad ? "load" : "store")
+         << " class=vector bytes=" << A.MinBytes << " scalable=" << A.Scalable
+         << " group=" << A.RegisterGroup << " alignment=" << A.Alignment
+         << " address_space=" << A.AddressSpace
+         << " whole_register=" << A.WholeRegister
+         << " segment_lowering=" << A.FromSegment << '\n';
   for (const auto &P : AccessCosts)
-    DS << "      spill-price class=" << P.ClassID
+    DS << "      spill-price loop=" << P.LoopID << " class=" << P.ClassID
        << " direction=" << (P.IsLoad ? "load" : "store")
        << " group=" << (P.Accesses ? P.Registers / P.Accesses : 0)
        << " Q=" << P.Registers << " A=" << P.Accesses
        << " tti_profile=" << ProfileName << " cost=" << P.Cost
-       << " Wtti=" << Width << " Wobs=" << Observation->Spill.IterationWidth
-       << '\n';
+       << " Wtti=" << Width << " Wobs=" << P.IterationWidth << " weight=1/"
+       << Observation->Spill.Loops.size() << '\n';
 }
 
 void VPlanCostReport::comparisonResult(bool Result, StringRef Reason) {

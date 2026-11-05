@@ -20,6 +20,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/InstructionSimplify.h"
@@ -692,6 +693,9 @@ bool llvm::UnrollRuntimeLoopRemainder(
   // Guaranteed by LoopSimplifyForm.
   BasicBlock *Latch = L->getLoopLatch();
   BasicBlock *Header = L->getHeader();
+  std::optional<LoopBackedgeTable<BasicBlock>> BackedgeSnapshot;
+  if (auto *T = LoopBackedgeTracking::get(Header))
+    BackedgeSnapshot = *T;
 
   CondBrInst *LatchBR = dyn_cast<CondBrInst>(Latch->getTerminator());
 
@@ -1080,6 +1084,14 @@ bool llvm::UnrollRuntimeLoopRemainder(
     LI->verify(*DT);
   }
 #endif
+
+  if (auto *T = LoopBackedgeTracking::get(L->getHeader())) {
+    cloneTrackedLoops(*T, *BackedgeSnapshot, VMap);
+    if (Count == 2 && any_of(T->Backedges, [&](const auto &E) {
+          return E.first.second == remainderLoop->getHeader();
+        }))
+      T->fail("unsupported-finite-body");
+  }
 
   // For unroll factor 2 remainder loop will have 1 iteration.
   if (Count == 2 && DT && LI && SE) {

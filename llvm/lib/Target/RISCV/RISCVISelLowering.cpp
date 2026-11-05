@@ -24442,11 +24442,11 @@ static MachineBasicBlock *emitReadCounterWidePseudo(MachineInstr &MI,
   MachineFunction::iterator It = ++BB->getIterator();
 
   MachineBasicBlock *LoopMBB = MF.CreateMachineBasicBlock(LLVMBB);
-  inheritRelatedBlocks(*LoopMBB, *BB);
+
   MF.insert(It, LoopMBB);
 
   MachineBasicBlock *DoneMBB = MF.CreateMachineBasicBlock(LLVMBB);
-  inheritRelatedBlocks(*DoneMBB, *BB);
+
   MF.insert(It, DoneMBB);
 
   // Transfer the remainder of BB and its successor edges to DoneMBB.
@@ -24653,11 +24653,11 @@ EmitLoweredCascadedSelect(MachineInstr &First, MachineInstr &Second,
   const BasicBlock *LLVM_BB = ThisMBB->getBasicBlock();
   MachineFunction *F = ThisMBB->getParent();
   MachineBasicBlock *FirstMBB = F->CreateMachineBasicBlock(LLVM_BB);
-  inheritRelatedBlocks(*FirstMBB, *ThisMBB);
+
   MachineBasicBlock *SecondMBB = F->CreateMachineBasicBlock(LLVM_BB);
-  inheritRelatedBlocks(*SecondMBB, *ThisMBB);
+
   MachineBasicBlock *SinkMBB = F->CreateMachineBasicBlock(LLVM_BB);
-  inheritRelatedBlocks(*SinkMBB, *ThisMBB);
+
   MachineFunction::iterator It = ++ThisMBB->getIterator();
   F->insert(It, FirstMBB);
   F->insert(It, SecondMBB);
@@ -24807,9 +24807,9 @@ static MachineBasicBlock *emitSelectPseudo(MachineInstr &MI,
   MachineBasicBlock *HeadMBB = BB;
   MachineFunction *F = BB->getParent();
   MachineBasicBlock *TailMBB = F->CreateMachineBasicBlock(LLVM_BB);
-  inheritRelatedBlocks(*TailMBB, *BB);
+
   MachineBasicBlock *IfFalseMBB = F->CreateMachineBasicBlock(LLVM_BB);
-  inheritRelatedBlocks(*IfFalseMBB, *BB);
+
 
   F->insert(I, IfFalseMBB);
   F->insert(I, TailMBB);
@@ -25012,9 +25012,9 @@ static MachineBasicBlock *emitFROUND(MachineInstr &MI, MachineBasicBlock *MBB,
 
   MachineFunction *F = MBB->getParent();
   MachineBasicBlock *CvtMBB = F->CreateMachineBasicBlock(BB);
-  inheritRelatedBlocks(*CvtMBB, *MBB);
+
   MachineBasicBlock *DoneMBB = F->CreateMachineBasicBlock(BB);
-  inheritRelatedBlocks(*DoneMBB, *MBB);
+
 
   F->insert(I, CvtMBB);
   F->insert(I, DoneMBB);
@@ -27924,10 +27924,10 @@ RISCVTargetLowering::emitDynamicProbedAlloc(MachineInstr &MI,
   MachineFunction::iterator MBBInsertPoint = std::next(MBB->getIterator());
   MachineBasicBlock *LoopTestMBB =
       MF.CreateMachineBasicBlock(MBB->getBasicBlock());
-  inheritRelatedBlocks(*LoopTestMBB, *MBB);
+
   MF.insert(MBBInsertPoint, LoopTestMBB);
   MachineBasicBlock *ExitMBB = MF.CreateMachineBasicBlock(MBB->getBasicBlock());
-  inheritRelatedBlocks(*ExitMBB, *MBB);
+
   MF.insert(MBBInsertPoint, ExitMBB);
   Register SPReg = RISCV::X2;
   Register ScratchReg =

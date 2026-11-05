@@ -38,7 +38,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/ProfDataUtils.h"
-#include "llvm/IR/RelatedBlock.h"
+#include "llvm/IR/LoopBackedgeTracking.h"
 #include "llvm/IR/SymbolTableListTraits.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
@@ -516,7 +516,7 @@ Function::Function(FunctionType *Ty, LinkageTypes Linkage, unsigned AddrSpace,
 }
 
 Function::~Function() {
-  RelatedBlockTracking::deleted(*this);
+  LoopBackedgeTracking::deleted(*this);
   validateBlockNumbers();
 
   dropAllReferences();    // After this it is safe to delete instructions.

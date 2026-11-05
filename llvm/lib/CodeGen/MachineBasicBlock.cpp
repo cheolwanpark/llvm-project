@@ -152,8 +152,6 @@ void ilist_callback_traits<MachineBasicBlock>::removeNodeFromList(
 void ilist_traits<MachineInstr>::addNodeToList(MachineInstr *N) {
   assert(!N->getParent() && "machine instruction already in a basic block");
   N->setParent(Parent);
-  if (auto *T = Parent->getParent()->getRelatedBlockTracking())
-    T->insert(*N);
 
   // Add the instruction's register operands to their corresponding
   // use/def lists.
@@ -169,8 +167,6 @@ void ilist_traits<MachineInstr>::removeNodeFromList(MachineInstr *N) {
 
   // Remove from the use/def lists.
   if (MachineFunction *MF = N->getMF()) {
-    if (auto *T = MF->getRelatedBlockTracking())
-      T->save(*N, *N);
     MF->handleRemoval(*N);
     N->removeRegOperandsFromUseLists(MF->getRegInfo());
   }
@@ -191,8 +187,6 @@ void ilist_traits<MachineInstr>::transferNodesFromList(ilist_traits &FromList,
     return;
 
   assert(Parent != FromList.Parent && "Two lists have the same parent?");
-  if (First != Last)
-    mergeRelatedBlocks(*Parent, *FromList.Parent);
 
   // If splicing between two blocks within the same function, just update the
   // parent pointers.
@@ -954,6 +948,9 @@ void MachineBasicBlock::transferSuccessors(MachineBasicBlock *FromMBB) {
   if (this == FromMBB)
     return;
 
+  if (auto *T = getParent()->getLoopBackedgeTracking())
+    T->transferOutgoing(FromMBB, this);
+
   while (!FromMBB->succ_empty()) {
     MachineBasicBlock *Succ = *FromMBB->succ_begin();
 
@@ -973,6 +970,9 @@ void
 MachineBasicBlock::transferSuccessorsAndUpdatePHIs(MachineBasicBlock *FromMBB) {
   if (this == FromMBB)
     return;
+
+  if (auto *T = getParent()->getLoopBackedgeTracking())
+    T->transferOutgoing(FromMBB, this);
 
   while (!FromMBB->succ_empty()) {
     MachineBasicBlock *Succ = *FromMBB->succ_begin();
@@ -1083,7 +1083,6 @@ MachineBasicBlock *MachineBasicBlock::splitAt(MachineInstr &MI,
   }
 
   MachineBasicBlock *SplitBB = MF->CreateMachineBasicBlock(getBasicBlock());
-  inheritRelatedBlocks(*SplitBB, *this);
 
   MF->insert(++MachineFunction::iterator(this), SplitBB);
   SplitBB->splice(SplitBB->begin(), this, SplitPoint, end());
@@ -1206,15 +1205,6 @@ MachineBasicBlock *MachineBasicBlock::SplitCriticalEdge(
   MachineBasicBlock *PrevFallthrough = getNextNode();
 
   MachineBasicBlock *NMBB = MF->CreateMachineBasicBlock();
-  if (auto *T = MF->getRelatedBlockTracking()) {
-    auto A = getRelatedBlock(), B = Succ->getRelatedBlock();
-    if (A.State == RelatedBlockState::Known &&
-        B.State == RelatedBlockState::Known &&
-        T->Region.intersects(A) == T->Region.intersects(B)) {
-      inheritRelatedBlocks(*NMBB, *this);
-      mergeRelatedBlocks(*NMBB, *Succ);
-    }
-  }
   NMBB->setCallFrameSize(Succ->getCallFrameSize());
 
   // Is there an indirect jump with jump table?
@@ -1272,6 +1262,8 @@ MachineBasicBlock *MachineBasicBlock::SplitCriticalEdge(
     }
   }
 
+  if (auto *T = MF->getLoopBackedgeTracking())
+    T->move({this, Succ}, {NMBB, Succ});
   ReplaceUsesOfBlockWith(Succ, NMBB);
 
   // Since we replaced all uses of Succ with NMBB, that should also be treated
@@ -1560,6 +1552,9 @@ void MachineBasicBlock::ReplaceUsesOfBlockWith(MachineBasicBlock *Old,
         MO.setMBB(New);
   }
 
+  // This utility supplies an explicit old-to-new branch destination.
+  if (auto *T = getParent()->getLoopBackedgeTracking())
+    T->move({this, Old}, {this, New});
   // Update the successor information.
   replaceSuccessor(Old, New);
 }

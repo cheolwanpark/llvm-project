@@ -513,8 +513,11 @@ tryToSplitRestore(MachineBasicBlock *MBB,
 
   // After splitting, all predecessors of the restore point should be dirty
   // blocks.
-  for (MachineBasicBlock *SuccBB : DirtyPreds)
+  for (MachineBasicBlock *SuccBB : DirtyPreds) {
+    if (auto *T = MF->getLoopBackedgeTracking())
+      T->move({SuccBB, MBB}, {NMBB, MBB});
     SuccBB->ReplaceUsesOfBlockWith(MBB, NMBB);
+  }
 
   NMBB->addSuccessor(MBB);
 
@@ -670,6 +673,7 @@ bool ShrinkWrapImpl::postShrinkWrapping(bool HasCandidate, MachineFunction &MF,
 
   // Now we know that splitting a restore point can isolate the restore point
   // from clean blocks and doing so can shrink the save point.
+  LoopBackedgeRewrite<MachineBasicBlock> Mapping(MF.getLoopBackedgeTracking());
   MachineBasicBlock *NewRestore =
       tryToSplitRestore(InitRestore, DirtyPreds, TII);
 
@@ -677,9 +681,11 @@ bool ShrinkWrapImpl::postShrinkWrapping(bool HasCandidate, MachineFunction &MF,
   // targets.
   if (!TFI->canUseAsEpilogue(*NewRestore)) {
     rollbackRestoreSplit(MF, NewRestore, InitRestore, DirtyPreds, TII);
+    Mapping.rollback();
     return false;
   }
 
+  Mapping.commit([&] { return checkMachineLoopBackedges(MF); });
   Save = NewSave;
   Restore = NewRestore;
 

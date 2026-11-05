@@ -9,6 +9,7 @@
 // Loop Peeling Utilities.
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
@@ -1113,12 +1114,9 @@ void llvm::peelLoop(Loop *L, unsigned PeelCount, bool PeelLast, LoopInfo *LI,
          "when peeling the last iteration, the loop must be supported and can "
          "only peel a single iteration");
 
-  if (auto *T = RelatedBlockTracking::get(L->getHeader()))
-    if (any_of(L->blocks(), [&](auto *BB) {
-          return T->Region.intersects(BB->getRelatedBlock());
-        }))
-      T->Region.Normalization.Failure =
-          "peeling mixes finite and repeated iteration domains";
+  if (auto *T = LoopBackedgeTracking::get(L->getHeader()))
+    if (containsTrackedLoop(*T, *L))
+      T->fail("unsupported-finite-body");
   LoopBlocksDFS LoopBlocks(L);
   LoopBlocks.perform(LI);
 

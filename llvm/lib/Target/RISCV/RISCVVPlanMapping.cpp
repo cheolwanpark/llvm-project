@@ -1,75 +1,65 @@
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #include "RISCVVPlanMapping.h"
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/RelatedBlockAnalysis.h"
+#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Pass.h"
 #include "llvm/PassInfo.h"
 #include "llvm/PassRegistry.h"
 #include "llvm/Support/Debug.h"
-#define DEBUG_TYPE "vplan-related-blocks"
+#define DEBUG_TYPE "vplan-backedge-loops"
 using namespace llvm;
-Expected<SmallVector<const MachineBasicBlock *>>
+Expected<SmallVector<TrackedLoopBody<MachineBasicBlock>>>
 llvm::vplan::mapProbeBody(MachineFunction &MF, VPlanBackendObservation &O) {
-  auto *T = MF.getRelatedBlockTracking();
+  auto *T = MF.getLoopBackedgeTracking();
   auto FailMapping = [&](StringRef Reason)
-      -> Expected<SmallVector<const MachineBasicBlock *>> {
+      -> Expected<SmallVector<TrackedLoopBody<MachineBasicBlock>>> {
     O.MappingFailure = Reason.str();
     return createStringError(Reason);
   };
   if (!T)
-    return FailMapping("related-block tracking disabled");
-  const auto &R = T->Region;
+    return FailMapping("backedge-tracking-disabled");
   const auto &F = MF.getFunction();
-  if (R.Identity.empty() || R.Origins.empty() ||
+  O.MaterializedWidth = T->MaterializedWidth;
+  if (T->Identity.empty() ||
       F.getFnAttribute("vplan.backend.candidate").getValueAsString() !=
-          R.Identity ||
-      F.getFnAttribute("vplan.backend.role").getValueAsString() != R.Role)
+          T->Identity ||
+      F.getFnAttribute("vplan.backend.role").getValueAsString() != T->Role)
     return FailMapping("materialized region identity mismatch");
-  const auto &N = R.Normalization;
-  O.MaterializedWidth = N.MaterializedWidth;
-  O.IterationWidth = N.IterationWidth;
-  O.TripCount = N.TripCount;
-  O.TripCountKind = N.TripCountKind;
-  O.NormalizationBasis = N.Basis;
-  O.NormalizationFailure = N.Failure;
-  O.NormalizationSucceeded =
-      N.Failure.empty() && N.IterationWidth && N.IterationWidth <= UINT32_MAX;
-  if (!O.NormalizationSucceeded && O.NormalizationFailure.empty())
-    O.NormalizationFailure = "invalid iteration width";
-  SmallVector<const MachineBasicBlock *> Blocks;
-  for (const auto &BB : MF) {
-    auto V = BB.getRelatedBlock();
-    if (V.State != RelatedBlockState::Known &&
-        any_of(BB,
-               [](const MachineInstr &I) { return !I.isMetaInstruction(); })) {
-      ++O.UnresolvedBlockCount;
-      LLVM_DEBUG(dbgs() << "Unresolved machine ancestry at " << O.Stage << "\n";
-                 BB.print(dbgs());
-                 if (const auto *IR = BB.getBasicBlock()) dbgs()
-                 << "IR ancestry state: "
-                 << unsigned(IR->getRelatedBlock().State) << "\n");
-    }
-    if (!R.intersects(V))
-      continue;
-    Blocks.push_back(&BB);
-    if (any_of(V.Origins,
-               [&](auto ID) { return !is_contained(R.Origins, ID); }))
-      ++O.MixedOriginBlockCount;
+  SmallVector<uint64_t> IDs;
+  for (const auto &W : T->Widths)
+    IDs.push_back(W.first);
+  llvm::sort(IDs);
+  for (uint64_t ID : IDs) {
+    VPlanBackendLoopObservation Loop;
+    Loop.ID = ID;
+    Loop.IterationWidth = T->Widths.lookup(ID);
+    O.Loops.push_back(std::move(Loop));
   }
-  O.SelectedBlockCount = Blocks.size();
-  if (O.UnresolvedBlockCount)
-    return FailMapping("unresolved executable block ancestry");
-  if (Blocks.empty())
-    return FailMapping("materialized body absent without removal certificate");
+  MachineDominatorTree DT(MF);
+  MachineLoopInfo LI(DT);
+  auto Bodies = mapTrackedLoops(*T, MF, DT, LI);
+  if (!Bodies) {
+    auto Reason = toString(Bodies.takeError());
+    if (Reason == "width-overflow" ||
+        Reason == "unsupported-iteration-transform" ||
+        Reason == "unsupported-finite-body")
+      O.NormalizationFailure = Reason;
+    return FailMapping(Reason);
+  }
+  for (unsigned I = 0; I != Bodies->size(); ++I) {
+    O.Loops[I].SelectedBlockCount = (*Bodies)[I].Blocks.size();
+    O.SelectedBlockCount += O.Loops[I].SelectedBlockCount;
+  }
   O.MappingSucceeded = true;
-  if (!O.NormalizationSucceeded)
-    return createStringError(O.NormalizationFailure);
+  O.NormalizationSucceeded = true;
   O.IterationMapping = true;
-  return Blocks;
+  return Bodies;
 }
 
 namespace {
@@ -90,14 +80,7 @@ public:
     AU.setPreservesAll();
   }
   bool runOnFunction(Function &F) override {
-    if (RelatedBlockTracking::get(&F)) {
-      DominatorTree DT(F);
-      LoopInfo LI(DT);
-      validateRelatedBlockNormalization(F, LI);
-      LLVM_DEBUG(for (const auto &BB : F) if (BB.getRelatedBlock().State !=
-                                              RelatedBlockState::Known) dbgs()
-                     << "Unresolved IR before ISel: " << BB;);
-    }
+    validateLoopBackedges(F);
     return false;
   }
 };

@@ -14,6 +14,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Transforms/Utils/BreakCriticalEdges.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
@@ -183,15 +184,6 @@ llvm::SplitKnownCriticalEdge(Instruction *TI, unsigned SuccNum,
   Function &F = *TIBB->getParent();
   Function::iterator FBBI = TIBB->getIterator();
   F.insert(++FBBI, NewBB);
-  if (auto *T = RelatedBlockTracking::get(&F)) {
-    auto A = TIBB->getRelatedBlock(), B = DestBB->getRelatedBlock();
-    if (A.State == RelatedBlockState::Known &&
-        B.State == RelatedBlockState::Known &&
-        T->Region.intersects(A) == T->Region.intersects(B)) {
-      inheritRelatedBlocks(*NewBB, *TIBB);
-      mergeRelatedBlocks(*NewBB, *DestBB);
-    }
-  }
 
   // Branch to the new block, breaking the edge.
   TI->setSuccessor(SuccNum, NewBB);
@@ -234,6 +226,16 @@ llvm::SplitKnownCriticalEdge(Instruction *TI, unsigned SuccNum,
 
       // Record the number of split identical edges to DestBB.
       NumSplitIdenticalEdges++;
+    }
+  }
+
+  if (auto *T = LoopBackedgeTracking::get(&F)) {
+    auto I = T->Backedges.find({TIBB, DestBB});
+    if (I != T->Backedges.end()) {
+      uint64_t Q = I->second;
+      if (!is_contained(successors(TIBB), DestBB))
+        T->Backedges.erase(I);
+      T->bind({NewBB, DestBB}, Q);
     }
   }
 

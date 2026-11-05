@@ -11,7 +11,7 @@
 #include "VPlanBackendProbePruning.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/RelatedBlockAnalysis.h"
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
@@ -23,7 +23,7 @@
 #include "llvm/IR/OptBisect.h"
 #include "llvm/IR/PassTimingInfo.h"
 #include "llvm/IR/PrintPasses.h"
-#include "llvm/IR/RelatedBlock.h"
+#include "llvm/IR/LoopBackedgeTracking.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -251,7 +251,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
   Timer.mark("target_and_analyses");
 
-  ScopedRelatedBlockTracking Tracking(F);
+  ScopedLoopBackedgeTracking Tracking(F);
   VPlanBackendProbe Probe{Candidate, &Header};
   LoopVectorizePass LV(LoopVectorizeOptions(Candidate.InterleaveOnlyWhenForced,
                                             Candidate.VectorizeOnlyWhenForced));
@@ -259,7 +259,6 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   FunctionPassManager Materialize;
   Materialize.addPass(std::move(LV));
   Materialize.run(F, FAM);
-  RelatedBlockTracking::get(&F)->finishMaterialization();
   Timer.mark("candidate_materialization");
   if (!Probe.Emitted)
     return createStringError(
@@ -333,7 +332,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   Timer.mark("ir_suffix");
   if (ScopedPassCancellation::check())
     return createStringError("backend probe cancelled");
-  validateRelatedBlockNormalization(F, FAM.getResult<LoopAnalysis>(F));
+  validateLoopBackedges(F);
   if (verifyModule(M, &Diagnostics))
     return createStringError("invalid candidate module");
   Timer.mark("iteration_mapping_and_verification");

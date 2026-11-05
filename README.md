@@ -91,9 +91,11 @@ reduction never applies to MIR. Candidate pruning requires compatible main
 candidates, disabled vector epilogues and unforced VFs. Force-all bypasses the
 gate and candidate pruning while leaving the CFG switch independent.
 
-Observed costs sum related machine blocks, including branch alternatives and
-mixed-origin code. See [mapping and normalization](BACKEND_FEEDBACK.md#related-block-mapping)
-for scope limits and supported loop transformations.
+Observed costs sum the current natural-loop blocks, including branch alternatives
+and inner helper loops. Independently tracked iterations are normalized by their
+own widths and combined with equal weights. See
+[mapping and normalization](BACKEND_FEEDBACK.md#backedge-loop-mapping) for finite
+body exclusions and supported transformation rules.
 
 Parallelism is bounded within one compiler process. Workers own cloned IR,
 analyses and target machines; pricing and selection stay on the compiler thread.
@@ -129,7 +131,7 @@ cmake --build .cache/build --target clang clang-resource-headers opt llc \
 Focused backend contract checks:
 
 ```sh
-.cache/build/unittests/IR/IRTests --gtest_filter='RelatedBlock.*'
+.cache/build/unittests/IR/IRTests --gtest_filter='LoopBackedge.*'
 .cache/build/unittests/Transforms/Vectorize/VectorizeTests --gtest_filter='VPlanBackendPricing.*:VPlanBackendExecution.*:BackendGate.*'
 .cache/build/unittests/Target/RISCV/RISCVTests --gtest_filter='RISCVBackendPricing.*:RISCVBackendSheets.*:RISCVBackendObservation.*'
 .cache/build/bin/llvm-lit -j 1 -v \
@@ -140,8 +142,8 @@ Focused backend contract checks:
 ```
 
 The shared lit driver checks cost equations and meaningful observation/selection
-fields. Unit checks cover exact arithmetic, target profiles, block ancestry,
-independent mapping/normalization boundaries, raw reuse, cancellation and injected
+fields. Unit checks cover exact arithmetic, target profiles, current-loop scope,
+independent iteration widths and observation stages, raw reuse, cancellation and injected
 whole-loop failures. Native
 report arithmetic/path regressions remain separate from these backend checks.
 

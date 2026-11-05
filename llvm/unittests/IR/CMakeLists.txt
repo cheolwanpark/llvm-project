@@ -14,7 +14,7 @@ add_llvm_unittest(IRTests
   AsmWriterTest.cpp
   AttributesTest.cpp
   BasicBlockTest.cpp
-  RelatedBlockTest.cpp
+  LoopBackedgeTest.cpp
   BasicBlockDbgInfoTest.cpp
   CFGBuilder.cpp
   ConstantFPRangeTest.cpp

@@ -2661,10 +2661,10 @@ static void emitStackProbeInline(MachineBasicBlock::iterator MBBI, DebugLoc DL,
   MachineFunction::iterator MBBInsertPoint = std::next(MBB.getIterator());
   MachineBasicBlock *LoopTestMBB =
       MF.CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*LoopTestMBB, MBB);
+
   MF.insert(MBBInsertPoint, LoopTestMBB);
   MachineBasicBlock *ExitMBB = MF.CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*ExitMBB, MBB);
+
   MF.insert(MBBInsertPoint, ExitMBB);
   MachineInstr::MIFlag Flags = MachineInstr::FrameSetup;
   Register ScratchReg = RISCV::X7;

@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -1832,7 +1833,6 @@ static void hoistConditionalLoadsStores(
     I->eraseMetadataIf([](unsigned MDKind, MDNode *Node) {
       return Node->getMetadataID() == Metadata::DIAssignIDKind;
     });
-    RelatedBlockTracking::replaced(*I, *MaskedLoadStore);
     MaskedLoadStore->copyMetadata(*I);
     I->eraseFromParent();
   }
@@ -3708,6 +3708,7 @@ foldCondBranchOnValueKnownInPredecessorImpl(CondBrInst *BI, DomTreeUpdater *DTU,
     BB->removePredecessor(EdgeBB);
     UncondBrInst *EdgeBI = cast<UncondBrInst>(EdgeBB->getTerminator());
     EdgeBI->setSuccessor(0, RealDest);
+    redirectTrackedEdge(*EdgeBB, *BB, *RealDest);
     EdgeBI->setDebugLoc(BI->getDebugLoc());
 
     if (DTU) {
@@ -4098,6 +4099,7 @@ static bool performBranchToCommonDestFolding(CondBrInst *BI, CondBrInst *PBI,
 
   // Now, update the CFG.
   PBI->setSuccessor(PBI->getSuccessor(0) != BB, UniqueSucc);
+  redirectTrackedEdge(*PredBlock, *BB, *UniqueSucc);
 
   if (DTU)
     DTU->applyUpdates({{DominatorTree::Insert, PredBlock, UniqueSucc},
@@ -4495,7 +4497,6 @@ static bool mergeConditionalStoreToAddress(
   QB.SetInsertPoint(T);
   StoreInst *SI = cast<StoreInst>(QB.CreateStore(QPHI, Address));
   combineMetadataForCSE(QStore, PStore, true);
-  RelatedBlockTracking::replaced(*QStore, *SI);
   SI->copyMetadata(*QStore);
   // Update any dbg.assign intrinsics to track the merged value (QPHI) instead
   // of the original constant values, likely making these identical.

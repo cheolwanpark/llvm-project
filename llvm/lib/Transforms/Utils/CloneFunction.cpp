@@ -143,7 +143,6 @@ BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB, ValueToValueMapTy &VMap,
                                   const Twine &NameSuffix, Function *F,
                                   ClonedCodeInfo *CodeInfo, bool MapAtoms) {
   BasicBlock *NewBB = BasicBlock::Create(BB->getContext(), "", F);
-  inheritRelatedBlocks(*NewBB, *BB);
   if (BB->hasName())
     NewBB->setName(BB->getName() + NameSuffix);
 

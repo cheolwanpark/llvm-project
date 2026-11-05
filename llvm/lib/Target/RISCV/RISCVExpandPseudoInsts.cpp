@@ -213,9 +213,9 @@ bool RISCVExpandPseudo::expandCCOp(MachineBasicBlock &MBB,
   DebugLoc DL = MI.getDebugLoc();
 
   MachineBasicBlock *TrueBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*TrueBB, MBB);
+
   MachineBasicBlock *MergeBB = MF->CreateMachineBasicBlock(MBB.getBasicBlock());
-  inheritRelatedBlocks(*MergeBB, MBB);
+
 
   MF->insert(++MBB.getIterator(), TrueBB);
   MF->insert(++TrueBB->getIterator(), MergeBB);

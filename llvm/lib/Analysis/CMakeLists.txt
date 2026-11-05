@@ -112,7 +112,7 @@ add_llvm_component_library(LLVMAnalysis
   LoopNestAnalysis.cpp
   LoopUnrollAnalyzer.cpp
   LoopInfo.cpp
-  RelatedBlockAnalysis.cpp
+  LoopBackedgeAnalysis.cpp
   LoopPass.cpp
   MLInlineAdvisor.cpp
   MemDerefPrinter.cpp
