@@ -880,7 +880,6 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   std::vector<BasicBlock *> OriginalLoopBlocks = L->getBlocks();
 
   LoopBackedgeUnroll BackedgeUnroll(*L);
-  const unsigned RequestedCount = ULO.Count;
   const unsigned MaxTripCount = SE->getSmallConstantMaxTripCount(L);
   const bool MaxOrZero = SE->isBackedgeTakenCountMaxOrZero(L);
   std::optional<unsigned> OriginalTripCount =
@@ -932,10 +931,6 @@ llvm::UnrollLoop(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   // we're eliminating the backedge without knowing exactly which iteration
   // of the unrolled body exits.
   const bool CompletelyUnroll = ULO.Count == MaxTripCount;
-
-  if (CompletelyUnroll && BackedgeUnroll.suppressFullUnroll(
-                              *L, RequestedCount, ULO.Count, MaxTripCount))
-    return LoopUnrollResult::Unmodified;
 
   const bool PreserveOnlyFirst = CompletelyUnroll && MaxOrZero;
 

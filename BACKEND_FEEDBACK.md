@@ -161,16 +161,6 @@ cloning. Unroll-and-jam multiplies the inner target width by the actual factor;
 enclosing simple unroll/peel clones independent inner targets without changing
 their widths. Finite trip counts are supported while a loop remains. Full-unrolled bodies and
 peeled finite prefixes are excluded, with no usable target reported unavailable.
-The experimental `-vplan-backend-probe-suppress-full-unroll` policy defaults to
-false. The common serial/worker probe entry sets it only on the private tracking
-table. After the unroller clamps the requested factor to the maximum trip count,
-it rejects a full-unroll transformation before CFG mutation only when the current
-header has directly tracked q IDs. Existing partial/runtime attempts, unrelated
-loops and native final codegen keep their policies; rejected full unrolls do not
-trigger a search for smaller factors. This guard does not cover unroll-and-jam,
-single-iteration remainder simplification or other loop deletion. Diagnostic
-events retain candidate/role, header/q, requested/applied factor, max trip count
-and width. Missing events do not identify a failure's cause.
 Default/peeling software-pipeline kernels retain W; MVE kernels use
 W × NumUnroll while the original fallback loop retains its independent W.
 
@@ -218,8 +208,6 @@ Raw observations survive only within the original-loop invocation. Reuse require
 matching candidate identity, role, VF/IC, main/epilogue and scalar-tail geometry,
 materialization context, CFG reduction, mapping policy revision and normalization
 policy revision (including current-loop static sum and uniform-loop composition).
-The private full-unroll suppression policy also belongs to the raw reuse key
-and is recorded in observation reports.
 Cached snapshots retain every loop width and its geometry evidence.
 Required slot availability is checked separately. Stop stage alone does not
 prevent reuse. MIR's full context cannot be treated as equivalent to a reduced

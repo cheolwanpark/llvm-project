@@ -32,8 +32,6 @@ class LLVM_ABI LoopBackedgeUnroll {
 public:
   explicit LoopBackedgeUnroll(Loop &L);
   ~LoopBackedgeUnroll();
-  bool suppressFullUnroll(const Loop &L, unsigned RequestedCount,
-                          unsigned Count, unsigned MaxTripCount);
   const LoopBackedgeTable<BasicBlock> *snapshot() const {
     return Rewrite.snapshot();
   }
