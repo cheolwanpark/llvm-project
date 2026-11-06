@@ -28,6 +28,7 @@ The compiler does not provide a RISC-V libc or sysroot.
 | `-use-estimated-spill` | Use TTI spill estimates; OFF |
 | `-vplan-backend-prune-cfg=false` | Disable private vector-spill CFG reduction; normally ON |
 | `-vplan-backend-probe-threads=N` | Positive main-probe worker limit; 1 |
+| `-vplan-backend-probe-suppress-full-unroll` | Suppress full unroll of directly tracked private-probe loops; OFF |
 | `-vplan-backend-force-all` | Query real-spill candidates despite gate/pruning; OFF |
 | `-vplan-backend-jsonl=FILE` | Append passive candidate, selection and grouped failure diagnostics |
 | `-print-vplans` / `-print-detailed-vplans` | Summary / detailed cost report |
@@ -96,6 +97,13 @@ analyses and target machines; pricing and selection stay on the compiler thread.
 Scalar and automatic epilogue probes remain serial. Incompatible diagnostics
 force serial execution and report the reason. Required failures trigger
 [whole-loop fallback](BACKEND_FEEDBACK.md#probe와-fallback).
+
+The experimental full-unroll switch applies only to directly tracked private
+probe loops and defaults to OFF. JSONL or detailed-report runs emit suppression
+events on stderr. Suppression can change register allocation and report zero
+spill where native full-unrolled code spills; it is an ablation option, not a
+validated accuracy improvement. See the [mapping contract](BACKEND_FEEDBACK.md#backedge-loop-mapping)
+for its scope and limitations.
 
 ## Build and verification
 

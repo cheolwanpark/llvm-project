@@ -143,6 +143,7 @@ json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R) {
   auto MIRObservation = summarizeObservation(R.MIR);
   json::Object Result;
   Result["candidate"] = R.Candidate;
+  Result["probe_suppress_full_unroll"] = R.SuppressFullUnroll;
   Result["vf"] = R.VF.getKnownMinValue();
   Result["scalable"] = R.VF.isScalable();
   Result["ic"] = R.IC;

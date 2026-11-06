@@ -96,6 +96,11 @@ VPlanBackendFeedback::Batch VPlanBackendProbePool::run(
 }
 
 namespace {
+cl::opt<bool> SuppressFullUnroll(
+    "vplan-backend-probe-suppress-full-unroll", cl::Hidden, cl::init(false),
+    cl::desc(
+        "Suppress full unrolling of tracked loops in private VPlan probes"));
+
 cl::opt<unsigned> ProbeThreads(
     "vplan-backend-probe-threads", cl::Hidden, cl::init(1),
     cl::desc("Maximum concurrent VPlan backend probes (default 1)"),
@@ -215,6 +220,7 @@ struct ProbePipeline {
 
 void setCandidateIdentity(VPlanBackendResult &Result,
                           const VPlanBackendCandidate &Candidate) {
+  Result.SuppressFullUnroll = SuppressFullUnroll;
   Result.Candidate = Candidate.ID;
   Result.VF = Candidate.VF;
   Result.IC = Candidate.IC;
@@ -259,6 +265,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   Timer.mark("target_and_analyses");
 
   ScopedLoopBackedgeTracking Tracking(F);
+  LoopBackedgeTracking::get(&F)->SuppressFullUnroll = SuppressFullUnroll;
   VPlanBackendProbe Probe{Candidate, &Header};
   LoopVectorizePass LV(LoopVectorizeOptions(Candidate.InterleaveOnlyWhenForced,
                                             Candidate.VectorizeOnlyWhenForced));
@@ -319,6 +326,26 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   FunctionPassManager Cleanup;
   Pipeline.BuildSuffix(PB, Level, Cleanup);
   Cleanup.run(F, FAM);
+  const auto &Table = *LoopBackedgeTracking::get(&F);
+  if (vplanBackendFeedbackOutputEnabled() ||
+      Candidate.Observation.CaptureMIRText) {
+    json::Array Events;
+    for (const auto &E : Table.FullUnrollSuppressions)
+      Events.push_back(json::Object{{"header", E.Header},
+                                    {"tracking_id", E.TrackingID},
+                                    {"requested_count", E.RequestedCount},
+                                    {"count", E.Count},
+                                    {"max_trip_count", E.MaxTripCount},
+                                    {"width", E.Width}});
+    Diagnostics << "VPLAN-BACKEND-FULL-UNROLL: "
+                << json::Value(
+                       json::Object{{"candidate", Candidate.ID},
+                                    {"function", F.getName()},
+                                    {"role", Table.Role},
+                                    {"enabled", bool(SuppressFullUnroll)},
+                                    {"events", std::move(Events)}})
+                << '\n';
+  }
   DumpPruningIR("suffix");
   if (PruningTrace) {
     ProbeIRSize SuffixSize = getProbeIRSize(F);
@@ -357,6 +384,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   Timer.mark("backend_total");
   if (!Result)
     return Result.takeError();
+  Result->SuppressFullUnroll = SuppressFullUnroll;
   if (!Result->Spill.succeeded() && !Result->MIR.succeeded())
     setCandidateIdentity(*Result, Candidate);
   if (Result->Candidate != Candidate.ID || Result->VF != Candidate.VF ||
@@ -539,6 +567,7 @@ class FeedbackProvider {
     VPlanBackendCandidateIdentity Identity;
     VPlanBackendMaterializationContext Context;
     bool PrunedContext;
+    bool SuppressFullUnroll;
     unsigned MappingPolicyRevision;
     unsigned NormalizationPolicyRevision;
     VPlanBackendProbeResult Result;
@@ -575,6 +604,7 @@ public:
       auto Found = llvm::find_if(Observations, [&](const CachedObservation &O) {
         return O.F == &F && O.Header == &Header &&
                O.PrunedContext == Pruned(C) &&
+               O.SuppressFullUnroll == bool(SuppressFullUnroll) &&
                O.MappingPolicyRevision ==
                    VPlanBackendObservation::MappingPolicyRevision &&
                O.NormalizationPolicyRevision ==
@@ -612,6 +642,7 @@ public:
       if (R.Observation) {
         Observations.push_back(
             {&F, &Header, Missing[I], Missing[I], Pruned(Missing[I]),
+             bool(SuppressFullUnroll),
              VPlanBackendObservation::MappingPolicyRevision,
              VPlanBackendObservation::NormalizationPolicyRevision, R});
       }

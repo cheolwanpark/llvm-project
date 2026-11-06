@@ -67,6 +67,18 @@ LoopBackedgeUnroll::LoopBackedgeUnroll(Loop &L)
       }
 }
 LoopBackedgeUnroll::~LoopBackedgeUnroll() { Rewrite.commit(); }
+bool LoopBackedgeUnroll::suppressFullUnroll(const Loop &L,
+                                            unsigned RequestedCount,
+                                            unsigned Count,
+                                            unsigned MaxTripCount) {
+  if (!Tracking || !Tracking->SuppressFullUnroll || DirectIDs.empty())
+    return false;
+  for (auto Q : DirectIDs)
+    Tracking->FullUnrollSuppressions.push_back(
+        {L.getHeader()->getName().str(), Q, RequestedCount, Count, MaxTripCount,
+         Tracking->Widths.lookup(Q)});
+  return true;
+}
 void LoopBackedgeUnroll::commit(Loop *Remaining, uint64_t Factor, bool Full) {
   if (!Tracking)
     return;

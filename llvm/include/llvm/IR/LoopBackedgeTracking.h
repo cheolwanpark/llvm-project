@@ -156,9 +156,16 @@ public:
 };
 class LLVM_ABI LoopBackedgeTracking : public LoopBackedgeTable<BasicBlock> {
 public:
+  struct FullUnrollSuppression {
+    std::string Header;
+    uint64_t TrackingID, RequestedCount, Count, MaxTripCount, Width;
+  };
   std::string Identity, Role;
   uint64_t MaterializedWidth = 0;
   bool CaptureFailures = false;
+  // Private probe policy; ordinary functions have no tracking table.
+  bool SuppressFullUnroll = false;
+  SmallVector<FullUnrollSuppression> FullUnrollSuppressions;
   static LoopBackedgeTracking *get(const Function *F);
   static LoopBackedgeTracking *get(const BasicBlock *BB);
   static void deleted(BasicBlock &BB);

@@ -99,6 +99,7 @@ struct VPlanBackendObservation {
 };
 struct VPlanBackendResult {
   std::string Candidate;
+  bool SuppressFullUnroll = false;
   std::optional<VPlanBackendFailure> Failure;
   bool CaptureFailures = false;
   ElementCount VF = ElementCount::getFixed(0);

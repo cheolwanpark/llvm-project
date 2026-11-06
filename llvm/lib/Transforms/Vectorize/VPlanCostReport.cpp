@@ -383,6 +383,7 @@ void VPlanCostReport::backendScalarCost(const VPBackendScalarCostEntry &Cost,
   if (Cost.MIR) {
     const auto &M = *Cost.MIR;
     OS << " cpu=" << M.CPU << " nominal_vlen=" << M.NominalVLEN
+       << " probe_suppress_full_unroll=" << Observation->SuppressFullUnroll
        << " stage=" << Observation->MIR.Stage << " loops=" << M.Loops.size()
        << " composition=uniform-loop-mean"
        << " R=";
@@ -425,6 +426,7 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
     OS << "    backend-observations spill="
        << vplanBackendObservationStatusName(Observation->Spill.Status)
        << " mir=" << vplanBackendObservationStatusName(Observation->MIR.Status)
+       << " probe_suppress_full_unroll=" << Observation->SuppressFullUnroll
        << " real_spill_used=" << (!Mode.MIR && !Mode.EstimatedSpill)
        << " unused_reason="
        << (Mode.EstimatedSpill ? "estimated-spill-requested"
