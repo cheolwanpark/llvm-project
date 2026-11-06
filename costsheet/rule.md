@@ -33,3 +33,10 @@ exactly once: Wobs already incorporates IC and proven suffix unrolling. Preserve
 rational scalar/vector/tail costs through ranking. Integer target prices can yield
 fractional normalized costs. Quarter-cost numerators divided by `4*denominator`
 give model units. Never pre-price units or round before comparisons.
+
+Observed spill prices use the same aggregate TTI hook in TTI and MIR modes.
+For native RISC-V, Ot is the sum of physical register groups over stores and
+reloads; scalar g=1. Do not multiply Ot by D. This controls ablation prices rather
+than claiming measured-cycle accuracy. MIR removes its original spill subtotal S
+before adding Ot (observed) or Et (estimated). Normalize composed terms over the
+same valid loop set and widths; do not combine independently averaged subsets.

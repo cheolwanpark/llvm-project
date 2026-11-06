@@ -443,7 +443,6 @@ public:
   bool addRegAssignAndRewriteOptimized() override;
   void addPreRegAlloc() override;
   void addPostRegAlloc() override;
-  void addPostRewrite() override;
   void addFastRegAlloc() override;
   bool addILPOpts() override;
 
@@ -459,17 +458,21 @@ Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
     Module &M, bool Time, VPlanBackendObservationOptions Options) {
   bool MIR = Options.collectsMIR();
   if (this->Options.EnableGlobalISel)
-    return vplanBackendError(VPlanBackendFailureGroup::Availability, "backend feedback requires SelectionDAG", "", "probe");
+    return vplanBackendError(VPlanBackendFailureGroup::Availability,
+                             "backend feedback requires SelectionDAG", "",
+                             "probe");
   if (TargetPassConfig::hasLimitedCodeGenPipeline())
-    return vplanBackendError(VPlanBackendFailureGroup::Availability, "backend feedback requires an unrestricted codegen pipeline", "", "probe");
+    return vplanBackendError(
+        VPlanBackendFailureGroup::Availability,
+        "backend feedback requires an unrestricted codegen pipeline", "",
+        "probe");
   legacy::PassManager PM;
   RISCVPassConfig Config(*this, PM);
   bool SpillUnavailable =
       Config.isPassSubstitutedOrOverridden(&StackSlotColoringID);
-  if (SpillUnavailable && !MIR)
-    return vplanBackendError(VPlanBackendFailureGroup::Availability, "backend feedback requires StackSlotColoring", "", "probe");
-  bool MIRUnavailable =
-      MIR && Config.isPassSubstitutedOrOverridden(&PrologEpilogCodeInserterID);
+
+  bool FrameLoweringUnavailable =
+      Config.isPassSubstitutedOrOverridden(&PrologEpilogCodeInserterID);
   VPlanBackendResult Result;
   Result.CaptureFailures = Options.CaptureFailures;
   Result.MIR.Stage = "post-frame-lowering";
@@ -485,13 +488,19 @@ Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
   SaveAndRestore Guard(BackendFeedbackSink, &Result);
   SaveAndRestore ObservationGuard(BackendObservation, Options);
   SaveAndRestore TimerGuard(BackendFeedbackTimer, Time ? &Timer : nullptr);
-  if (addPassesToBackendObserver(PM, MIR && !MIRUnavailable
-                                         ? &RISCVVPlanMIR::ID
-                                         : &RISCVVPlanSpill::ID))
-    return vplanBackendError(VPlanBackendFailureGroup::Execution, "cannot configure candidate instruction selection", "", "probe");
+  if (FrameLoweringUnavailable)
+    return vplanBackendError(VPlanBackendFailureGroup::Availability,
+                             "backend feedback requires frame lowering", "",
+                             "probe");
+  if (addPassesToBackendObserver(PM, &RISCVVPlanMIR::ID))
+    return vplanBackendError(VPlanBackendFailureGroup::Execution,
+                             "cannot configure candidate instruction selection",
+                             "", "probe");
   // TargetPassConfig resolves command-line selector overrides while building.
   if (this->Options.EnableGlobalISel)
-    return vplanBackendError(VPlanBackendFailureGroup::Availability, "backend feedback requires SelectionDAG", "", "probe");
+    return vplanBackendError(VPlanBackendFailureGroup::Availability,
+                             "backend feedback requires SelectionDAG", "",
+                             "probe");
   Timer.mark("backend_pipeline_construction");
   PM.run(M);
   Timer.mark("backend_return");
@@ -512,23 +521,28 @@ Expected<VPlanBackendResult> RISCVTargetMachine::getVPlanBackendFeedback(
   }
   for (auto *Slot : {&Result.Spill, &Result.MIR})
     if (Slot->Status == VPlanBackendObservationStatus::NotCollected)
-      Slot->Failure = VPlanBackendFailure{VPlanBackendFailureGroup::Availability,
-          "backend observer did not see candidate function", Result.Candidate,
-          Slot->Stage, {}, {}};
+      Slot->Failure =
+          VPlanBackendFailure{VPlanBackendFailureGroup::Availability,
+                              "backend observer did not see candidate function",
+                              Result.Candidate,
+                              Slot->Stage,
+                              {},
+                              {}};
   if (SpillUnavailable) {
     Result.Spill.Status = VPlanBackendObservationStatus::Failed;
-    Result.Spill.Failure = VPlanBackendFailure{VPlanBackendFailureGroup::Availability,
-        "backend feedback requires StackSlotColoring", Result.Candidate, Result.Spill.Stage, {}, {}};
+    Result.Spill.Failure =
+        VPlanBackendFailure{VPlanBackendFailureGroup::Availability,
+                            "backend feedback requires StackSlotColoring",
+                            Result.Candidate,
+                            Result.Spill.Stage,
+                            {},
+                            {}};
     for (auto &Loop : Result.Spill.Loops)
       Loop.Spills.clear();
   }
   if (!MIR) {
     Result.MIR.Status = VPlanBackendObservationStatus::NotRequested;
     Result.MIR.Failure.reset();
-  } else if (MIRUnavailable) {
-    Result.MIR.Status = VPlanBackendObservationStatus::Failed;
-    Result.MIR.Failure = VPlanBackendFailure{VPlanBackendFailureGroup::Availability,
-        "MIR feedback requires frame lowering", Result.Candidate, Result.MIR.Stage, {}, {}};
   }
   Result.Timings = std::move(Timer.Phases);
   return Result;
@@ -579,14 +593,6 @@ bool RISCVPassConfig::addRegAssignAndRewriteOptimized() {
     addPass(createRISCVDeadRegisterDefinitionsPass());
   bool Result = TargetPassConfig::addRegAssignAndRewriteOptimized();
   return Result;
-}
-
-// The optimized pipeline invokes this hook immediately after StackSlotColoring.
-// Stop before post-RA copy propagation, LICM, and frame lowering.
-void RISCVPassConfig::addPostRewrite() {
-  auto &TM = getTM<RISCVTargetMachine>();
-  if (auto *Sink = TM.getBackendFeedbackSink())
-    addPass(new RISCVVPlanSpill(*Sink, TM.BackendFeedbackTimer));
 }
 
 void RISCVPassConfig::addIRPasses() {
@@ -686,10 +692,10 @@ void RISCVPassConfig::addPreSched2() {
   if (TM->getOptLevel() != CodeGenOptLevel::None)
     addPass(createRISCVLoadStoreOptPass());
   auto &TM = getTM<RISCVTargetMachine>();
-  if (TM.BackendObservation.collectsMIR())
-    if (auto *Sink = TM.getBackendFeedbackSink())
-      addPass(new RISCVVPlanMIR(*Sink, TM.BackendFeedbackTimer,
-                                TM.BackendObservation.CaptureMIRText));
+  if (auto *Sink = TM.getBackendFeedbackSink())
+    addPass(new RISCVVPlanMIR(*Sink, TM.BackendFeedbackTimer,
+                              TM.BackendObservation.CaptureMIRText,
+                              TM.BackendObservation.collectsMIR()));
 }
 
 void RISCVPassConfig::addPreEmitPass() {

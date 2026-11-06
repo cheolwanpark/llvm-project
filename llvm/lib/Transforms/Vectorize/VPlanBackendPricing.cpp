@@ -179,14 +179,15 @@ void VPExactCost::print(raw_ostream &OS, unsigned Divisor) const {
     OS << '/' << Den;
 }
 
-Expected<VPExactCost> llvm::priceVPlanVectorSpills(
-    const VPlanBackendObservation &O, const TargetTransformInfo &TTI,
-    LLVMContext &Context, unsigned Width, InstructionCost &RawCost,
-    SmallVectorImpl<VPSpillCost> *AccessCosts,
-    SmallVectorImpl<VPSpillLoopCost> *LoopCosts,
-    SmallVectorImpl<VPlanBackendFailure> *Failures) {
+Expected<VPExactCost>
+llvm::priceVPlanSpills(const VPlanBackendObservation &O,
+                       const TargetTransformInfo &TTI, LLVMContext &Context,
+                       unsigned Width, InstructionCost &RawCost,
+                       SmallVectorImpl<VPSpillCost> *AccessCosts,
+                       SmallVectorImpl<VPSpillLoopCost> *LoopCosts,
+                       SmallVectorImpl<VPlanBackendFailure> *Failures) {
   if (!O.succeeded() || !O.IterationMapping ||
-      O.Stage != "post-stack-slot-coloring" || O.Loops.empty() || !Width)
+      O.Stage != "post-frame-lowering" || O.Loops.empty() || !Width)
     return vplanBackendError(VPlanBackendFailureGroup::Integrity,
                              "invalid backend loop/iteration mapping", "",
                              O.Stage);
@@ -206,16 +207,33 @@ Expected<VPExactCost> llvm::priceVPlanVectorSpills(
       SmallVector<VPSpillCost> Prices;
       int64_t RawQuarters = 0;
       for (const auto &A : L.Spills) {
-        if (!A.MinBytes || A.MinBytes > UINT32_MAX || !A.Alignment ||
+        if (!A.MinBytes || A.MinBytes > UINT32_MAX / 8 || !A.Alignment ||
             !isPowerOf2_64(A.Alignment) ||
             A.Alignment > Value::MaximumAlignment || !A.WholeRegister ||
             !isPowerOf2_32(A.RegisterGroup) || A.RegisterGroup > 8)
           return vplanBackendError(VPlanBackendFailureGroup::Integrity,
-                                   "unsupported vector spill access", "",
-                                   O.Stage);
-        Type *Ty = VectorType::get(Type::getInt8Ty(Context),
-                                   ElementCount::get(A.MinBytes, A.Scalable));
-        unsigned ClassID = TTI.getRegisterClassForType(true, Ty);
+                                   "unsupported spill access", "", O.Stage);
+        bool Vector = A.Kind == VPlanSpillAccess::RegisterKind::Vector;
+        Type *Ty = Type::getIntNTy(Context, A.MinBytes * 8);
+        if (Vector)
+          Ty = VectorType::get(Type::getInt8Ty(Context),
+                               ElementCount::get(A.MinBytes, A.Scalable));
+        else if (A.Kind == VPlanSpillAccess::RegisterKind::FloatingPoint) {
+          if (A.MinBytes == 2)
+            Ty = Type::getHalfTy(Context);
+          else if (A.MinBytes == 4)
+            Ty = Type::getFloatTy(Context);
+          else if (A.MinBytes == 8)
+            Ty = Type::getDoubleTy(Context);
+          else
+            return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                                     "invalid floating spill width", "",
+                                     O.Stage);
+        }
+        if (!Vector && A.RegisterGroup != 1)
+          return vplanBackendError(VPlanBackendFailureGroup::Integrity,
+                                   "invalid scalar spill group", "", O.Stage);
+        unsigned ClassID = TTI.getRegisterClassForType(Vector, Ty);
         auto I = llvm::find_if(Prices, [&](const VPSpillCost &P) {
           return P.ClassID == ClassID && P.IsLoad == A.IsLoad &&
                  P.Registers / P.Accesses == A.RegisterGroup;
@@ -239,8 +257,8 @@ Expected<VPExactCost> llvm::priceVPlanVectorSpills(
         if (!Cost.isValid() || Cost < 0 ||
             AddOverflow(RawQuarters, Cost.getQuarterValue(), RawQuarters))
           return vplanBackendError(VPlanBackendFailureGroup::Pricing,
-                                   "invalid or overflowing vector spill cost",
-                                   "", O.Stage);
+                                   "invalid or overflowing spill cost", "",
+                                   O.Stage);
         if (AccessCosts)
           LoopAccesses.push_back(
               {P.ClassID, P.IsLoad, P.Registers, P.Accesses, Cost, L.ID, Wobs});
@@ -280,8 +298,7 @@ Expected<VPExactCost> llvm::priceVPlanVectorSpills(
   }
   if (!Total.isValid())
     return vplanBackendError(VPlanBackendFailureGroup::Pricing,
-                             "vector spill normalization overflow", "",
-                             O.Stage);
+                             "spill normalization overflow", "", O.Stage);
   RawCost = RawValid ? InstructionCost(TotalRawQuarters / 4) +
                            InstructionCost(TotalRawQuarters % 4) / 4
                      : InstructionCost::getInvalid();
@@ -293,9 +310,6 @@ Expected<VPExactCost> llvm::priceVPlanVectorSpills(
   return Total;
 }
 VPExactCost llvm::composeVPlanMIRCost(const VPMIRCost &Cost,
-                                      InstructionCost EstimatedSpill,
-                                      bool UseEstimatedSpill) {
-  return UseEstimatedSpill
-             ? Cost.Body - Cost.Spill + VPExactCost(EstimatedSpill)
-             : Cost.Body;
+                                      VPExactCost ReplacementSpill) {
+  return Cost.Body - Cost.Spill + ReplacementSpill;
 }

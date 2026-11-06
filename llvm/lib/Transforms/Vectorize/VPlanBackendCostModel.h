@@ -53,7 +53,7 @@ CostT vplanCostForTripCount(unsigned Width, CostT Body, CostT Scalar,
 }
 
 struct VPBackendPruningContext {
-  InstructionCost Scalar;
+  VPExactCost Scalar;
   unsigned MaxTripCount;
   bool UseScalar;
 };
@@ -91,14 +91,13 @@ priceVPlanMIR(const VPlanBackendObservation &Observation,
               const TargetMIRInfo &Info, unsigned Width,
               SmallVectorImpl<VPlanBackendFailure> *Failures = nullptr);
 VPExactCost composeVPlanMIRCost(const VPMIRCost &Cost,
-                                InstructionCost EstimatedSpill,
-                                bool UseEstimatedSpill);
+                                VPExactCost ReplacementSpill);
 struct VPBackendCostEntry {
   const VPlan *Plan;
   ElementCount VF;
   unsigned IC;
   bool IsEpilogue;
-  InstructionCost Native, Profile, EstimatedVectorSpill;
+  InstructionCost Native, Profile;
   VPExactCost Body;
   InstructionCost EstimatedSpill;
   std::optional<VPMIRCost> MIR;
@@ -108,6 +107,7 @@ struct VPBackendScalarCostEntry {
   InstructionCost EstimatedSpill = 0;
   std::string Source, Profile, Revision;
   std::optional<VPMIRCost> MIR;
+  VPExactCost ObservedSpill;
 };
 /// All state belongs to one original loop. Preparation is transactional: on
 /// failure discard every score before native selection can observe the table.
@@ -117,7 +117,7 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
   struct PreparedCandidate {
     VPlan *Plan;
     VPlanBackendCandidate Candidate;
-    InstructionCost Native, Profile, Ev;
+    InstructionCost Native, Profile;
     InstructionCost EstimatedSpill;
     unsigned Width;
     VPRegisterUsageBound Bound;
@@ -155,7 +155,7 @@ class LLVM_ABI_FOR_TEST VPlanBackendCostModel {
 
   PreparedCandidate prepareCost(VPlan &Plan, VPlanBackendCandidate Candidate,
                                 InstructionCost Native, InstructionCost Profile,
-                                InstructionCost Ev, unsigned Width,
+                                unsigned Width,
                                 InstructionCost EstimatedSpill = 0) const;
   bool applyCost(const PreparedCandidate &Prepared,
                  std::optional<VPlanBackendProbeResult> Result,
@@ -189,7 +189,7 @@ public:
                        ElementCount MainVF, unsigned MainIC, VPlan &Plan,
                        ElementCount VF);
   bool add(VPlan &Plan, VPlanBackendCandidate Candidate, InstructionCost Native,
-           InstructionCost Profile, InstructionCost Ev, unsigned Width,
+           InstructionCost Profile, unsigned Width,
            InstructionCost EstimatedSpill = 0);
   const VPBackendCostEntry *lookup(const VPlan &Plan, ElementCount VF,
                                    bool Epilogue = false) const;
@@ -210,11 +210,12 @@ public:
   StringRef modelName() const { return Mode.name(); }
 };
 /// Strict adapter for the in-process facts; no cost rules live in the backend.
-LLVM_ABI_FOR_TEST Expected<VPExactCost> priceVPlanVectorSpills(
-    const VPlanBackendObservation &Observation, const TargetTransformInfo &TTI,
-    LLVMContext &Context, unsigned Width, InstructionCost &RawCost,
-    SmallVectorImpl<VPSpillCost> *AccessCosts = nullptr,
-    SmallVectorImpl<VPSpillLoopCost> *LoopCosts = nullptr,
-    SmallVectorImpl<VPlanBackendFailure> *Failures = nullptr);
+LLVM_ABI_FOR_TEST Expected<VPExactCost>
+priceVPlanSpills(const VPlanBackendObservation &Observation,
+                 const TargetTransformInfo &TTI, LLVMContext &Context,
+                 unsigned Width, InstructionCost &RawCost,
+                 SmallVectorImpl<VPSpillCost> *AccessCosts = nullptr,
+                 SmallVectorImpl<VPSpillLoopCost> *LoopCosts = nullptr,
+                 SmallVectorImpl<VPlanBackendFailure> *Failures = nullptr);
 } // namespace llvm
 #endif

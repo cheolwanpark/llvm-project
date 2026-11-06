@@ -110,6 +110,13 @@ TEST_F(RISCVBackendObservation, BranchBodyAndIndependentStages) {
   store(Left, SpillFI);
   store(Right, SpillFI);
   store(Join, SpillFI, false);
+  BuildMI(*Join, Join->end(), DebugLoc(), TII->get(RISCV::FSD))
+      .addReg(RISCV::F0_D)
+      .addFrameIndex(SpillFI)
+      .addImm(0)
+      .addMemOperand(MF->getMachineMemOperand(
+          MachinePointerInfo::getFixedStack(*MF, SpillFI),
+          MachineMemOperand::MOStore, TypeSize::getFixed(8), Align(8)));
   store(Join, OrdinaryFI, false);
   MF->getLoopBackedgeTracking()->CaptureFailures = true;
   VPlanBackendResult Result;
@@ -118,15 +125,19 @@ TEST_F(RISCVBackendObservation, BranchBodyAndIndependentStages) {
   vplan::observeBody(*MF, Result, false, false);
   ASSERT_TRUE(Result.Spill.succeeded());
   ASSERT_EQ(Result.Spill.Loops.size(), 1u);
-  EXPECT_EQ(Result.Spill.Loops.front().Spills.size(), 2u);
+  EXPECT_EQ(Result.Spill.Loops.front().Spills.size(), 4u);
   EXPECT_EQ(Result.Spill.Loops.front().IterationWidth, 4u);
+  EXPECT_EQ(count_if(Result.Spill.Loops.front().Spills, [](const auto &A) {
+              return A.Kind == VPlanSpillAccess::RegisterKind::FloatingPoint &&
+                     A.RegisterGroup == 1;
+            }), 1);
   vplan::observeBody(*MF, Result, true, false);
   ASSERT_TRUE(Result.MIR.succeeded());
   ASSERT_EQ(Result.MIR.Loops.size(), 1u);
   ASSERT_TRUE(Result.MIR.Loops.front().MIRBody);
   EXPECT_EQ(llvm::count_if(*Result.MIR.Loops.front().MIRBody,
                            [](const auto &I) { return I.Spill; }),
-            3);
+            4);
 
   // Lose the target boundary only after the spill snapshot was collected.
   // The later MIR failure must preserve the independently owned spill facts.
@@ -134,7 +145,7 @@ TEST_F(RISCVBackendObservation, BranchBodyAndIndependentStages) {
   Result.MIR = VPlanBackendObservation();
   vplan::observeBody(*MF, Result, true, false);
   EXPECT_TRUE(Result.Spill.succeeded());
-  EXPECT_EQ(Result.Spill.Loops.front().Spills.size(), 2u);
+  EXPECT_EQ(Result.Spill.Loops.front().Spills.size(), 4u);
   EXPECT_FALSE(Result.MIR.succeeded());
   ASSERT_TRUE(Result.MIR.Failure);
   EXPECT_EQ(Result.MIR.Failure->Group, VPlanBackendFailureGroup::Tracking);
@@ -147,7 +158,7 @@ TEST_F(RISCVBackendObservation, BranchBodyAndIndependentStages) {
   }));
   MF.reset();
   EXPECT_EQ(Result.Candidate, "body");
-  EXPECT_EQ(Result.Spill.Loops.front().Spills.size(), 2u);
+  EXPECT_EQ(Result.Spill.Loops.front().Spills.size(), 4u);
 }
 
 TEST_F(RISCVBackendObservation, MovedAndClonedCodeUsesCurrentLocation) {
@@ -213,8 +224,8 @@ TEST_F(RISCVBackendObservation, SegmentAccessesFollowPhysicalEncoding) {
                 MachineMemOperand::MOLoad, TypeSize::getScalable(24),
                 Align(16)))
             .getInstr();
-    std::vector<VPlanVectorSpillAccess> Accesses;
-    auto E = vplan::collectVectorSpillAccess(*MI, Accesses);
+    std::vector<VPlanSpillAccess> Accesses;
+    auto E = vplan::collectSpillAccess(*MI, Accesses);
     ASSERT_FALSE(bool(E)) << toString(std::move(E));
     ASSERT_EQ(Accesses.size(), 2u);
     EXPECT_EQ(Accesses[0].RegisterGroup, Parity ? 1u : 2u);
@@ -246,7 +257,7 @@ TEST_F(RISCVBackendObservation, FailedLoopLeavesIndependentZeroObservation) {
   const auto &Failure = Result->Spill.Exclusions.front();
   EXPECT_EQ(Failure.Group, VPlanBackendFailureGroup::Collection);
   EXPECT_EQ(Failure.Candidate, "body");
-  EXPECT_EQ(Failure.Stage, "post-stack-slot-coloring");
+  EXPECT_EQ(Failure.Stage, "post-frame-lowering");
   EXPECT_EQ(Failure.TrackingID, LoopID);
   EXPECT_EQ(Failure.ObservationID, 1u);
   EXPECT_EQ(Failure.Detail, "vector spill opcode/register group mismatch");
@@ -260,18 +271,24 @@ TEST_F(RISCVBackendObservation, MatrixPricesFollowReachingConfiguration) {
   auto *Setup = block(Entry), *B = block(Body);
   Setup->addSuccessor(B);
   BuildMI(*Setup, Setup->end(), DebugLoc(), TII->get(RISCV::VSETVLI))
-      .addReg(RISCV::X0, RegState::Define).addReg(RISCV::X0)
+      .addReg(RISCV::X0, RegState::Define)
+      .addReg(RISCV::X0)
       .addImm(RISCVVType::encodeVTYPE(RISCVVType::LMUL_1, 32, true, true));
   auto matrix = [&](unsigned Opcode) {
     return BuildMI(*B, B->end(), DebugLoc(), TII->get(Opcode))
-        .addReg(RISCV::V8, RegState::Define).addReg(RISCV::V8)
-        .addReg(RISCV::V4).addReg(RISCV::V20).getInstr();
+        .addReg(RISCV::V8, RegState::Define)
+        .addReg(RISCV::V8)
+        .addReg(RISCV::V4)
+        .addReg(RISCV::V20)
+        .getInstr();
   };
   F->addFnAttr("target-features", "+v,+experimental-zvvmm");
   auto Info = TM->getTargetMIRInfo(*F);
-  auto Base = Info->getInstructionCost(vplan::collectMIRInstruction(*matrix(RISCV::VMMACC_VV), false));
+  auto Base = Info->getInstructionCost(
+      vplan::collectMIRInstruction(*matrix(RISCV::VMMACC_VV), false));
   ASSERT_TRUE(bool(Base)) << toString(Base.takeError());
-  auto Wide = Info->getInstructionCost(vplan::collectMIRInstruction(*matrix(RISCV::VWMMACC_VV), false));
+  auto Wide = Info->getInstructionCost(
+      vplan::collectMIRInstruction(*matrix(RISCV::VWMMACC_VV), false));
   ASSERT_TRUE(bool(Wide)) << toString(Wide.takeError());
   EXPECT_EQ(Wide->Numerator * Base->Denominator,
             2 * Base->Numerator * Wide->Denominator);

@@ -230,8 +230,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
          VPlanFeedbackTimer &Timer, raw_ostream &Diagnostics) {
   if (Candidate.Kind == VPlanBackendCandidateKind::ScalarBaseline &&
       (Candidate.VF != ElementCount::getFixed(1) || Candidate.IC != 1 ||
-       Candidate.IsEpilogue || Candidate.EpilogueVF.isVector() ||
-       !Candidate.Observation.collectsMIR()))
+       Candidate.IsEpilogue || Candidate.EpilogueVF.isVector()))
     return vplanBackendError(VPlanBackendFailureGroup::Integrity,
                              "invalid scalar baseline probe identity", "",
                              "probe");
@@ -292,18 +291,6 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   if (PruningTrace)
     BeforePruning = getProbeIRSize(F);
   DumpPruningIR("before");
-  PruningResult Pruning = Candidate.Observation.collectsMIR()
-                              ? PruningResult{0, "mir-observation"}
-                          : PruneLoopRegions ? pruneLoopRegions(F, FAM)
-                                             : PruningResult{0, "disabled"};
-  unsigned Removed = Pruning.Removed;
-  if (Removed) {
-    FAM.invalidate(F, PreservedAnalyses::none());
-    if (verifyFunction(F, &Diagnostics))
-      return vplanBackendError(VPlanBackendFailureGroup::Execution,
-                               "invalid pruned candidate function", "",
-                               "probe");
-  }
   DumpPruningIR("after");
   if (PruningTrace)
     AfterPruning = getProbeIRSize(F);
@@ -326,14 +313,14 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
                 << json::Value(json::Object{
                        {"candidate", Candidate.ID},
                        {"function", F.getName()},
-                       {"enabled", bool(PruneLoopRegions)},
-                       {"reason", Pruning.Reason},
-                       {"applied", Removed != 0},
+                       {"enabled", false},
+                       {"reason", "common-post-frame-observation"},
+                       {"applied", false},
                        {"before", BeforePruning.Instructions},
                        {"before_blocks", BeforePruning.Blocks},
                        {"before_loop", BeforePruning.LoopInstructions},
                        {"before_loop_blocks", BeforePruning.LoopBlocks},
-                       {"removed", Removed},
+                       {"removed", 0},
                        {"after", AfterPruning.Instructions},
                        {"after_blocks", AfterPruning.Blocks},
                        {"after_loop", AfterPruning.LoopInstructions},
@@ -369,9 +356,9 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   return Result;
 }
 
-/// Execute one query on the calling compiler thread, retaining the live context,
-/// diagnostic handler, VFS and phase timing. Finish before the caller decides
-/// whether to query another candidate.
+/// Execute one query on the calling compiler thread, retaining the live
+/// context, diagnostic handler, VFS and phase timing. Finish before the caller
+/// decides whether to query another candidate.
 Expected<VPlanBackendResult>
 runSerial(const Function &F, const BasicBlock &Header,
           const VPlanBackendCandidate &Candidate, TargetMachine *LiveTarget,
@@ -538,7 +525,6 @@ class FeedbackProvider {
     const BasicBlock *Header;
     VPlanBackendCandidateIdentity Identity;
     VPlanBackendMaterializationContext Context;
-    bool PrunedContext;
     unsigned MappingPolicyRevision;
     unsigned NormalizationPolicyRevision;
     VPlanBackendProbeResult Result;
@@ -568,13 +554,9 @@ public:
     VPlanBackendFeedback::Batch Results;
     SmallVector<VPlanBackendCandidate> Missing;
     SmallVector<unsigned> Indices;
-    auto Pruned = [](const VPlanBackendCandidate &C) {
-      return bool(PruneLoopRegions) && !C.Observation.collectsMIR();
-    };
     for (const auto &C : Candidates) {
       auto Found = llvm::find_if(Observations, [&](const CachedObservation &O) {
         return O.F == &F && O.Header == &Header &&
-               O.PrunedContext == Pruned(C) &&
                O.MappingPolicyRevision ==
                    VPlanBackendObservation::MappingPolicyRevision &&
                O.NormalizationPolicyRevision ==
@@ -611,7 +593,7 @@ public:
       // Save raw outcomes before any model can discard its cost table.
       if (R.Observation) {
         Observations.push_back(
-            {&F, &Header, Missing[I], Missing[I], Pruned(Missing[I]),
+            {&F, &Header, Missing[I], Missing[I],
              VPlanBackendObservation::MappingPolicyRevision,
              VPlanBackendObservation::NormalizationPolicyRevision, R});
       }
@@ -628,7 +610,7 @@ public:
       for (const auto &C : Candidates)
         SerialMainQueries +=
             !C.IsEpilogue && C.Kind == VPlanBackendCandidateKind::Vector;
-      // No warning for an empty/gated loop or a single main query. The original
+      // No warning for an empty/pruned loop or a single main query. The original
       // thread emits this once, when serial execution actually prevents
       // overlap.
       if (SerialMainQueries > 1) {

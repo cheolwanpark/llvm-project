@@ -11,11 +11,12 @@ VPlanMIRInstruction collectMIRInstruction(const MachineInstr &MI, bool Text);
 class RISCVVPlanMIR : public MachineFunctionPass {
   VPlanBackendResult &Sink;
   VPlanFeedbackTimer *Timer;
-  bool Text;
+  bool Text, CollectMIR;
 
 public:
   static char ID;
-  RISCVVPlanMIR(VPlanBackendResult &Sink, VPlanFeedbackTimer *Timer, bool Text);
+  RISCVVPlanMIR(VPlanBackendResult &Sink, VPlanFeedbackTimer *Timer, bool Text,
+                bool CollectMIR);
   StringRef getPassName() const override {
     return "RISC-V VPlan MIR body observer";
   }

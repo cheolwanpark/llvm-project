@@ -27,13 +27,18 @@ namespace llvm {
 class VPlanBackendCostModelTestAccess {
 public:
   using Prepared = VPlanBackendCostModel::PreparedCandidate;
+  static void setMIRInfo(VPlanBackendCostModel &M,
+                         std::unique_ptr<TargetMIRInfo> Info) {
+    M.MIRInfo = std::move(Info);
+  }
   static Prepared candidate(VPlan &P, unsigned VF, unsigned Cost, bool Query) {
     VPlanBackendCandidate C{
         std::to_string(VF), 0, ElementCount::getFixed(VF), true, false, false};
-    return {&P, C, Cost, Cost, 0, 0, VF, {}, Query, true};
+    return {&P, C, Cost, Cost, 0, VF, {}, Query, true};
   }
   static bool run(VPlanBackendCostModel &M, ArrayRef<Prepared> Cs) {
-    return M.addBatch(Cs, VPBackendPruningContext{100, 0, true});
+    return M.addBatch(Cs, VPBackendPruningContext{
+                              VPExactCost(InstructionCost(100)), 0, true});
   }
 };
 } // namespace llvm
@@ -363,5 +368,74 @@ TEST(VPlanBackendExecution, EnclosingTransformsPreserveOrJamInnerWidths) {
     ASSERT_EQ(Bodies->size(), Mode == 2 ? 1u : 2u);
     for (const auto &Body : *Bodies)
       EXPECT_EQ(Body.Width, Mode == 2 ? 16u : 8u);
+  }
+}
+
+namespace {
+class LoopPrices : public TargetMIRInfo {
+public:
+  StringRef getModelName() const override { return "test"; }
+  StringRef getRevision() const override { return "test"; }
+  Expected<MIRInstructionCost>
+  getInstructionCost(const VPlanMIRInstruction &I) const override {
+    if (I.Opcode == "unpriceable")
+      return createStringError("unavailable instruction price");
+    return MIRInstructionCost{"test", false, I.Spill ? 3 : 7, 1};
+  }
+};
+} // namespace
+
+TEST(VPlanBackendExecution, ComposesMatchingLoopsAndPreservesFallbackFacts) {
+  LLVMContext C;
+  Module M("common-loops", C);
+  auto *F = Function::Create(FunctionType::get(Type::getVoidTy(C), false),
+                             GlobalValue::ExternalLinkage, "f", M);
+  auto *H = BasicBlock::Create(C, "loop", F);
+  UncondBrInst::Create(H, H);
+  VPlan P(H, Type::getInt32Ty(C));
+  TargetTransformInfo TTI(M.getDataLayout());
+  VPlanBackendCandidate Candidate{"body", 0,     ElementCount::getFixed(4),
+                                  true,   false, false};
+  for (bool Common : {true, false}) {
+    VPlanBackendResult Facts;
+    Facts.Candidate = Candidate.ID;
+    Facts.VF = Candidate.VF;
+    Facts.IC = 1;
+    Facts.Spill.Status = Facts.MIR.Status =
+        VPlanBackendObservationStatus::Succeeded;
+    Facts.Spill.IterationMapping = Facts.MIR.IterationMapping = true;
+    for (unsigned ID : {1u, 2u}) {
+      VPlanBackendLoopObservation L{ID, 4, 1, {}, {}};
+      L.Spills.push_back({false, 8, true, 8, 0, true,
+                          ID == 2  ? 8u
+                          : Common ? 1u
+                                   : 3u,
+                          false});
+      Facts.Spill.Loops.push_back(L);
+      L.Spills.clear();
+      L.MIRBody.emplace(2);
+      L.MIRBody->back().Spill = true;
+      if (ID == 2)
+        L.MIRBody->front().Opcode = "unpriceable";
+      Facts.MIR.Loops.push_back(L);
+    }
+    VPlanBackendFeedback Feedback([&](const Function &, const BasicBlock &,
+                                      ArrayRef<VPlanBackendCandidate>)
+                                      -> Expected<VPlanBackendFeedback::Batch> {
+      return VPlanBackendFeedback::Batch{VPlanBackendProbeResult(Facts)};
+    });
+    VPlanBackendCostModel MIR(Feedback, TTI, *F, *H, nullptr, {true, false});
+    VPlanBackendCostModelTestAccess::setMIRInfo(MIR,
+                                                std::make_unique<LoopPrices>());
+    EXPECT_EQ(MIR.add(P, Candidate, 20, 20, 4, 2), Common);
+    if (Common)
+      EXPECT_EQ(MIR.lookup(P, Candidate.VF)->Body,
+                VPExactCost(InstructionCost(8)));
+    // TTI can still price the independently valid spill loop excluded by MIR.
+    VPlanBackendCostModel Fallback(Feedback, TTI, *F, *H, nullptr,
+                                   {false, false});
+    ASSERT_TRUE(Fallback.add(P, Candidate, 20, 20, 4, 2));
+    EXPECT_EQ(Fallback.lookup(P, Candidate.VF)->Body,
+              VPExactCost::ratio(Common ? 90 : 104, 1));
   }
 }

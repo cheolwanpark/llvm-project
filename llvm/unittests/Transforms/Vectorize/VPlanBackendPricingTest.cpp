@@ -64,12 +64,20 @@ TEST(VPlanBackendPricing, SpillClassesDirectionsAndPhysicalGroups) {
                             {false, 8, true, 8, 0, true, 1, true},
                             {true, 32, true, 8, 0, true, 4, false}};
   InstructionCost Raw;
-  auto Price = priceVPlanVectorSpills(O, TTI, C, 4, Raw);
+  auto Price = priceVPlanSpills(O, TTI, C, 4, Raw);
   ASSERT_TRUE(bool(Price)) << toString(Price.takeError());
   EXPECT_EQ(Raw, 22);
   EXPECT_EQ(*Price, VPExactCost::ratio(44, 3));
+  // Scalar accesses participate in the same price, with their own class.
+  O.Loops.front().Spills.push_back({false, 8, false, 8, 0, true, 1, false,
+                                    VPlanSpillAccess::RegisterKind::Integer});
+  auto Total = priceVPlanSpills(O, TTI, C, 4, Raw);
+  ASSERT_TRUE(bool(Total)) << toString(Total.takeError());
+  EXPECT_EQ(Raw, 33);
+  EXPECT_EQ(*Total, VPExactCost::ratio(22, 1));
+  O.Loops.front().Spills.pop_back();
   O.Loops.front().Spills.back().RegisterGroup = 3;
-  auto Invalid = priceVPlanVectorSpills(O, TTI, C, 4, Raw);
+  auto Invalid = priceVPlanSpills(O, TTI, C, 4, Raw);
   EXPECT_FALSE(bool(Invalid));
   consumeError(Invalid.takeError());
 }
@@ -86,7 +94,7 @@ TEST(VPlanBackendPricing, ZeroRequiresAnObservedMappedBody) {
     O.IterationMapping = true;
     O.Loops.push_back({1, 8, 1, {}, {}});
     InstructionCost Raw;
-    auto Cost = priceVPlanVectorSpills(O, TTI, C, 4, Raw);
+    auto Cost = priceVPlanSpills(O, TTI, C, 4, Raw);
     EXPECT_EQ(bool(Cost), O.succeeded());
     if (Cost)
       EXPECT_EQ(*Cost, VPExactCost());
@@ -114,8 +122,9 @@ TEST(VPlanBackendPricing, MIRNormalizesScalarAndVectorSpillSlotsOnce) {
     EXPECT_EQ(Price->Body, VPExactCost::ratio(17 * Width, 18));
     EXPECT_EQ(Price->Spill, VPExactCost::ratio(5 * Width, 9));
     EXPECT_TRUE(Price->Loops.front().Instructions.front().Unknown);
-    EXPECT_EQ(composeVPlanMIRCost(*Price, 2, false), Price->Body);
-    EXPECT_EQ(composeVPlanMIRCost(*Price, 2, true),
+    EXPECT_EQ(composeVPlanMIRCost(*Price, VPExactCost(InstructionCost(1))),
+              Price->Body - Price->Spill + VPExactCost(InstructionCost(1)));
+    EXPECT_EQ(composeVPlanMIRCost(*Price, VPExactCost(InstructionCost(2))),
               VPExactCost::ratio(7 * Width, 18) +
                   VPExactCost(InstructionCost(2)));
   }
@@ -164,7 +173,7 @@ TEST(VPlanBackendPricing, IndependentLoopsUseExactUniformMean) {
   O.Loops = {{1, 4, 1, {{false, 8, true, 8, 0, true, 1, false}}, {}},
              {2, 12, 1, {{false, 8, true, 8, 0, true, 1, false}}, {}}};
   InstructionCost Raw;
-  auto Spill = priceVPlanVectorSpills(O, TTI, C, 4, Raw);
+  auto Spill = priceVPlanSpills(O, TTI, C, 4, Raw);
   ASSERT_TRUE(bool(Spill)) << toString(Spill.takeError());
   EXPECT_EQ(Raw, 2);
   EXPECT_EQ(*Spill, VPExactCost::ratio(8, 3));
@@ -177,7 +186,8 @@ TEST(VPlanBackendPricing, IndependentLoopsUseExactUniformMean) {
   ASSERT_TRUE(bool(MIR)) << toString(MIR.takeError());
   EXPECT_EQ(MIR->Body, VPExactCost::ratio(32, 3));
   EXPECT_EQ(MIR->Spill, VPExactCost::ratio(40, 9));
-  EXPECT_EQ(composeVPlanMIRCost(*MIR, 2, true), VPExactCost::ratio(128, 9));
+  EXPECT_EQ(composeVPlanMIRCost(*MIR, VPExactCost(InstructionCost(2))),
+            VPExactCost::ratio(128, 9));
   for (auto &L : O.Loops)
     L.MIRBody->clear();
   auto Zero = priceVPlanMIR(O, FractionPrices(), 4);
@@ -241,7 +251,7 @@ TEST(VPlanBackendPricing, ReportOverflowDoesNotRejectNormalizedSpills) {
   for (unsigned ID = 1; ID <= 3; ++ID)
     O.Loops.push_back({ID, 4, 1, {{false, 8, true, 8, 0, true, 1, false}}, {}});
   InstructionCost Raw;
-  auto Cost = priceVPlanVectorSpills(O, TTI, C, 1, Raw);
+  auto Cost = priceVPlanSpills(O, TTI, C, 1, Raw);
   ASSERT_TRUE(bool(Cost)) << toString(Cost.takeError());
   EXPECT_TRUE(Cost->isValid());
   EXPECT_FALSE(Raw.isValid());

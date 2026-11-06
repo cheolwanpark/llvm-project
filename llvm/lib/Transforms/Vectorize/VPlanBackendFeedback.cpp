@@ -19,9 +19,10 @@
 
 using namespace llvm;
 
-static cl::opt<bool> EnableBackendCostModel(
-    "vplan-backend", cl::Hidden, cl::init(false),
-    cl::desc("Select VF using scoped TTI and actual vector spill costs"));
+static cl::opt<bool>
+    EnableBackendCostModel("vplan-backend", cl::Hidden, cl::init(false),
+                           cl::desc("Select VF using scoped TTI and observed "
+                                    "scalar and vector spill costs"));
 static cl::opt<bool>
     UseMIR("use-mir", cl::Hidden, cl::init(false),
            cl::desc("Use target MIR direct cost for VPlan backend body costs"));
@@ -34,8 +35,8 @@ bool llvm::vplanBackendUseEstimatedSpill() {
 }
 StringRef VPlanBackendMode::name() const {
   if (MIR)
-    return EstimatedSpill ? "mir-me-spill-v1" : "mir-v1";
-  return EstimatedSpill ? "llvm-v1" : "llvm-real-vector-spill-v1";
+    return EstimatedSpill ? "mir-me-spill-v2" : "mir-v2";
+  return EstimatedSpill ? "llvm-v1" : "llvm-real-spill-v2";
 }
 StringRef llvm::vplanBackendModelName() {
   return VPlanBackendMode::requested().name();
@@ -43,9 +44,9 @@ StringRef llvm::vplanBackendModelName() {
 static cl::opt<std::string> FeedbackOutput(
     "vplan-backend-jsonl", cl::Hidden,
     cl::desc("Append candidate feedback as JSONL (diagnostic only)"));
-static cl::opt<bool> ForceAllFeedback(
-    "vplan-backend-force-all", cl::Hidden,
-    cl::desc("Query every candidate, retaining the register-bound decision"));
+static cl::opt<bool>
+    ForceAllFeedback("vplan-backend-force-all", cl::Hidden,
+                     cl::desc("Bypass candidate cost lower-bound pruning"));
 
 static cl::opt<bool>
     TimeFeedback("vplan-backend-time", cl::Hidden,
@@ -67,10 +68,10 @@ llvm::vplanBackendObservationStatusName(VPlanBackendObservationStatus Status) {
   llvm_unreachable("invalid observation status");
 }
 
-static json::Object summarizeObservation(const VPlanBackendObservation &O) {
-  bool MIR = O.Stage == "post-frame-lowering";
+static json::Object summarizeObservation(const VPlanBackendObservation &O,
+                                         bool MIR) {
   json::Object Result{
-      {"schema", MIR ? "mir-body-observation-v5" : "rvv-vector-spill-v5"},
+      {"schema", MIR ? "mir-body-observation-v6" : "register-spill-v6"},
       {"stage", O.Stage},
       {"iteration_mapping", O.IterationMapping},
       {"composition", "uniform-loop-mean"},
@@ -91,14 +92,20 @@ static json::Object summarizeObservation(const VPlanBackendObservation &O) {
     if (!MIR) {
       json::Array Accesses;
       for (const auto &A : L.Spills)
-        Accesses.push_back(json::Object{{"load", A.IsLoad},
-                                        {"bytes", A.MinBytes},
-                                        {"scalable", A.Scalable},
-                                        {"alignment", A.Alignment},
-                                        {"address_space", A.AddressSpace},
-                                        {"whole_register", A.WholeRegister},
-                                        {"register_group", A.RegisterGroup},
-                                        {"segment_lowering", A.FromSegment}});
+        Accesses.push_back(json::Object{
+            {"load", A.IsLoad},
+            {"class", A.Kind == VPlanSpillAccess::RegisterKind::Vector
+                          ? "vector"
+                      : A.Kind == VPlanSpillAccess::RegisterKind::Integer
+                          ? "integer"
+                          : "floating-point"},
+            {"bytes", A.MinBytes},
+            {"scalable", A.Scalable},
+            {"alignment", A.Alignment},
+            {"address_space", A.AddressSpace},
+            {"whole_register", A.WholeRegister},
+            {"register_group", A.RegisterGroup},
+            {"segment_lowering", A.FromSegment}});
       Loop["spills"] = std::move(Accesses);
     }
     if (L.MIRBody) {
@@ -139,8 +146,8 @@ static json::Object summarizeObservation(const VPlanBackendObservation &O) {
   return Result;
 }
 json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R) {
-  auto SpillObservation = summarizeObservation(R.Spill);
-  auto MIRObservation = summarizeObservation(R.MIR);
+  auto SpillObservation = summarizeObservation(R.Spill, false);
+  auto MIRObservation = summarizeObservation(R.MIR, true);
   json::Object Result;
   Result["candidate"] = R.Candidate;
   Result["vf"] = R.VF.getKnownMinValue();
@@ -152,7 +159,7 @@ json::Object llvm::summarizeVPlanBackendResult(const VPlanBackendResult &R) {
                                                           : "main";
   Result["spill_observation"] = std::move(SpillObservation);
   Result["mir_observation"] = std::move(MIRObservation);
-  Result["observation_schema"] = "backedge-loop-observations-v4";
+  Result["observation_schema"] = "backedge-loop-observations-v5";
   return Result;
 }
 

@@ -6390,21 +6390,15 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
 
 InstructionCost
 LoopVectorizationPlanner::backendCandidateCost(VPlan &Plan, ElementCount VF,
-                                               InstructionCost &VectorSpill,
-                                               InstructionCost *TotalSpill) {
+                                               InstructionCost &TotalSpill) {
   std::optional<SaveAndRestore<StringRef>> ReportPhase;
   if (Config.CostReport)
     ReportPhase.emplace(Config.CostReport->Phase, "backend-native-body");
-  VectorSpill = 0;
-  if (TotalSpill)
-    *TotalSpill = 0;
+  TotalSpill = 0;
   SmallVector<VPRegisterUsage, 8> RU;
   if (Config.shouldConsiderRegPressureForVF(VF)) {
     RU = calculateRegisterUsageForPlan(Plan, {VF}, TTI, CM.ValuesToIgnore);
-    auto Total = RU[0].spillCost(TTI, Config.CostKind, ForceTargetNumVectorRegs,
-                                 nullptr, &VectorSpill);
-    if (TotalSpill)
-      *TotalSpill = Total;
+    TotalSpill = RU[0].spillCost(TTI, Config.CostKind, ForceTargetNumVectorRegs);
   }
   return cost(Plan, VF, RU.empty() ? nullptr : &RU[0]);
 }
@@ -6451,7 +6445,7 @@ StringRef LoopVectorizationPlanner::candidateRejection(VPlan &Plan,
 }
 
 std::optional<VPBackendPruningContext>
-LoopVectorizationPlanner::backendPruningContext(InstructionCost Scalar) {
+LoopVectorizationPlanner::backendPruningContext(VPExactCost Scalar) {
   if (EnableEpilogueVectorization || hasForcedEpilogueVF() ||
       Hints.getWidth().isVector())
     return std::nullopt;
@@ -8721,7 +8715,7 @@ bool LoopVectorizePass::processLoop(Loop *L) {
                           VPlanBackendCandidateKind::ScalarBaseline) {
     const auto &C = BackendProbe->Candidate;
     if (C.VF != ElementCount::getFixed(1) || C.IC != 1 || C.IsEpilogue ||
-        !C.Observation.collectsMIR() || !L->isInnermost()) {
+        !L->isInnermost()) {
       BackendProbe->Error = VPlanBackendFailure{
           VPlanBackendFailureGroup::Integrity, "invalid scalar baseline probe",
           BackendProbe->Candidate.ID, "materialization", {}, {}};

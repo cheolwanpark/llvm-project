@@ -28,7 +28,7 @@ VPlanCostReport::VPlanCostReport(const Loop &L,
       Detailed(Detailed) {
   const Function &F = *L.getHeader()->getParent();
   raw_string_ostream OS(Header);
-  OS << "VPlan report_version=2 module=" << F.getParent()->getModuleIdentifier()
+  OS << "VPlan report_version=3 module=" << F.getParent()->getModuleIdentifier()
      << " invocation=" << Invocation << " function=" << F.getName()
      << " loop=" << LoopIndex << " header=" << L.getHeader()->getName()
      << " depth=" << (Detailed ? 2 : 1) << "\n";
@@ -380,6 +380,10 @@ void VPlanCostReport::backendScalarCost(const VPBackendScalarCostEntry &Cost,
   Cost.Body.print(OS);
   OS << " quarters_numerator=" << Cost.Body.numerator()
      << " quarters_denominator=" << Cost.Body.denominator();
+  if (StringRef(Cost.Source).contains("observed-spill")) {
+    OS << " Ot=";
+    Cost.ObservedSpill.print(OS);
+  }
   if (Cost.MIR) {
     const auto &M = *Cost.MIR;
     OS << " cpu=" << M.CPU << " nominal_vlen=" << M.NominalVLEN
@@ -417,7 +421,7 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
   printVF(OS, Cost.VF);
   OS << " ic=" << Cost.IC << " model=" << Mode.name()
      << " profile=" << ProfileName << " queried=" << bool(Observation)
-     << " would_skip=" << !Bound.shouldQuery()
+     << " gate_enabled=false hypothetical_would_skip=" << !Bound.shouldQuery()
      << " force_all=" << vplanBackendFeedbackForceAll() << " body_cost=";
   Cost.Body.print(OS);
   OS << '\n';
@@ -425,12 +429,8 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
     OS << "    backend-observations spill="
        << vplanBackendObservationStatusName(Observation->Spill.Status)
        << " mir=" << vplanBackendObservationStatusName(Observation->MIR.Status)
-       << " real_spill_used=" << (!Mode.MIR && !Mode.EstimatedSpill)
-       << " unused_reason="
-       << (Mode.EstimatedSpill ? "estimated-spill-requested"
-           : Mode.MIR          ? "mir-body-pricing"
-                               : "none")
-       << '\n';
+       << " real_spill_used=" << (!Mode.EstimatedSpill) << " unused_reason="
+       << (Mode.EstimatedSpill ? "estimated-spill-requested" : "none") << '\n';
   }
 
   if (!Detailed)
@@ -452,10 +452,12 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
     M.Body.print(DS);
     DS << " S=";
     M.Spill.print(DS);
+    DS << " Ot=";
+    Spill.print(DS);
     DS << " Et=" << Cost.EstimatedSpill
-       << (Mode.EstimatedSpill ? " B=R-S+Et=" : " B=R=");
+       << (Mode.EstimatedSpill ? " B=R-S+Et=" : " B=R-S+Ot=");
     Cost.Body.print(DS);
-    DS << " spill_scope=scalar-and-vector gate=bypassed-for-mir-body"
+    DS << " spill_scope=scalar-and-vector gate=disabled"
           " scalar_baseline="
        << ScalarSource << " ic_policy=native-cost\n";
     printMIRLoopPrices(DS, Observation->MIR, M);
@@ -471,18 +473,19 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
     return;
   }
   DS << " ic=" << Cost.IC << " native=" << Cost.Native << " L=" << Cost.Profile
-     << " Ev=" << Cost.EstimatedVectorSpill << " raw_vector_spill_sum=" << Raw
+     << " Et=" << Cost.EstimatedSpill << " raw_spill_sum=" << Raw
      << " Wtti=" << Width << " loops=";
   if (Observation)
     DS << PricedLoops;
   else
     DS << "not-observed";
-  DS << " composition=uniform-loop-mean Sv=";
+  DS << " composition=uniform-loop-mean Ot=";
   Spill.print(DS);
-  DS << " B=L-Ev+Sv=";
+  DS << " B=L-Et+Ot=";
   Cost.Body.print(DS);
   DS << " scalar_baseline=" << ScalarSource << " ic_policy=native-cost\n"
-     << "      gate known=" << Bound.Known << " reason=" << Bound.Reason;
+     << "      gate enabled=false hypothetical=true known=" << Bound.Known
+     << " reason=" << Bound.Reason;
   if (Bound.Known)
     DS << " peak=" << Bound.Peak << " max_group=" << Bound.MaxRegisterGroup
        << " has_mask=" << Bound.HasMask
@@ -490,16 +493,16 @@ void VPlanCostReport::backendCost(const VPBackendCostEntry &Cost,
        << " budget=32";
   DS << '\n';
   if (!Observation) {
-    DS << "      spill_source=gate-skip Sv=0 (not measured)\n";
+    DS << "      spill_source=unavailable\n";
     return;
   }
   DS << "      spill_source=observed stage=" << Observation->Spill.Stage
      << " iteration_mapping=" << Observation->Spill.IterationMapping << '\n';
   for (const auto &L : Observation->Spill.Loops)
     for (const auto &A : L.Spills)
-      DS << "      vector-spill loop=" << L.ID << " Wobs=" << L.IterationWidth
+      DS << "      spill loop=" << L.ID << " Wobs=" << L.IterationWidth
          << " direction=" << (A.IsLoad ? "load" : "store")
-         << " class=vector bytes=" << A.MinBytes << " scalable=" << A.Scalable
+         << " bytes=" << A.MinBytes << " scalable=" << A.Scalable
          << " group=" << A.RegisterGroup << " alignment=" << A.Alignment
          << " address_space=" << A.AddressSpace
          << " whole_register=" << A.WholeRegister

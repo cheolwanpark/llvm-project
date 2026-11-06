@@ -1,7 +1,7 @@
 # RISC-V backend-aware vectorization
 
-This LLVM fork adds in-process VPlan VF selection using TTI costs, observed RVV
-vector spills, and optional MIR body pricing. Enable it with `-vplan-backend`;
+This LLVM fork adds in-process VPlan VF selection using TTI costs, observed scalar/vector
+spills, and optional MIR body pricing. Enable it with `-vplan-backend`;
 the default remains native LLVM selection. Native IC selection, probe
 optimization, and final code generation retain upstream policy.
 
@@ -26,9 +26,9 @@ The compiler does not provide a RISC-V libc or sysroot.
 | `-vplan-backend` | Enable selection; OFF |
 | `-use-mir` | Observe and price scalar/vector MIR bodies; OFF |
 | `-use-estimated-spill` | Use TTI spill estimates; OFF |
-| `-vplan-backend-prune-cfg=false` | Disable private vector-spill CFG reduction; normally ON |
+| `-vplan-backend-prune-cfg=false` | Compatibility option; CFG reduction is disabled |
 | `-vplan-backend-probe-threads=N` | Positive main-probe worker limit; 1 |
-| `-vplan-backend-force-all` | Query real-spill candidates despite gate/pruning; OFF |
+| `-vplan-backend-force-all` | Bypass candidate cost pruning; OFF |
 | `-vplan-backend-jsonl=FILE` | Append passive candidate, selection and grouped failure diagnostics |
 | `-print-vplans` / `-print-detailed-vplans` | Summary / detailed cost report |
 | `-vplan-backend-time` | Serial probe/cost timing diagnostics |
@@ -44,20 +44,19 @@ model after fallback, not merely the requested flags.
 | Additional flags | Cost | Model ID |
 |---|---|---|
 | `-use-estimated-spill` | Native TTI `L` | `llvm-v1` |
-| none | Native TTI with observed vector spill `L-Ev+Sv` | `llvm-real-vector-spill-v1` |
-| `-use-mir -use-estimated-spill` | MIR with native estimated spill `R-S+Et` | `mir-me-spill-v1` |
-| `-use-mir` | Observed MIR `R` | `mir-v1` |
+| none | Native TTI with observed total spill `L-Et+Ot` | `llvm-real-spill-v2` |
+| `-use-mir -use-estimated-spill` | MIR with native estimated spill `R-S+Et` | `mir-me-spill-v2` |
+| `-use-mir` | MIR with observed spill `R-S+Ot` | `mir-v2` |
 
 All modes use native RISC-V TTI. `-use-default-tti` has been removed.
-TTI estimated mode does not query the backend. MIR shares one original-loop
-VF1/IC1 scalar observation per attempt.
+TTI estimated mode does not query the backend. MIR and TTI observed modes share
+one original-loop VF1/IC1 scalar observation per attempt.
 
-These modes differ in scalar baseline and spill coverage as well as body
-representation. TTI real-spill replaces only estimated vector spills; it retains
-scalar spill estimates inside vector bodies. TTI scalar baselines retain LLVM's
-IR-cost policy without a separate pressure-spill term. MIR prices scalar and
-vector spill-slot accesses inside both bodies. The exact formulas and comparison
-limits are in the [backend contract](BACKEND_FEEDBACK.md#bodyspill-ablation과-mir-info).
+TTI and MIR retain different body and scalar-baseline representations. Both
+observed modes collect scalar/vector spill-slot accesses at post-frame-lowering
+and price each physical register at one unit per store or reload. TTI observed
+adds the original scalar loop's observed spill to its scalar IR baseline.
+See the [backend contract](BACKEND_FEEDBACK.md#bodyspill-ablation과-mir-info).
 
 ## Targets
 
@@ -79,11 +78,10 @@ is also removed, while upstream CPU/codegen support remains.
 
 ## Probe pruning
 
-Gate and strict lower-bound pruning reduce candidate queries; CFG reduction
-changes the private probe's code context. These are separate policies. CFG
-reduction never applies to MIR. Candidate pruning requires compatible main
-candidates, disabled vector epilogues and unforced VFs. Force-all bypasses the
-gate and candidate pruning while leaving the CFG switch independent.
+Pressure-gate skipping and private CFG reduction are disabled for common
+post-frame observation. Strict cost lower-bound pruning remains active for
+compatible main candidates with disabled vector epilogues and unforced VFs.
+Force-all bypasses this candidate pruning; TTI estimated still needs no probe.
 
 Observed costs sum the current natural-loop blocks, including branch alternatives
 and inner helper loops. Independently tracked iterations are normalized by their

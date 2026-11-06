@@ -12,7 +12,7 @@ and target documents own prices and evidence.
 |---|---|---|
 | MIRInfo / Pricing | Native subtarget pricing, TTI/MIR information, facts pricing, exact normalization and cost composition | Probe execution, observation success or cancellation |
 | Probing | Materialization, backedge tracking, iteration widths, native suffix/backend, independent observations, raw cache and worker lifetime | Prices, dominance or fallback model order |
-| Gate / Pruning | Pressure bounds, candidate ordering, dominance, cancellation requests and CFG reduction policy | Mapping decisions, payload ownership or worker joins |
+| Gate / Pruning | Pressure bounds, candidate ordering, dominance, cancellation requests | Mapping decisions, payload ownership or worker joins |
 
 LV coordinates attempts: costs, scalar baseline, main/epilogue selection and
 provisional reports are adopted or discarded together. The dependency direction
@@ -26,23 +26,23 @@ is a read-only pricing service supplied through that callback.
 
 | Mode | Vector body | Original scalar baseline |
 |---|---|---|
-| TTI observed vector spill | `L - Ev + Sv` | Configured TTI scalar IR cost |
+| TTI observed total spill | `L - Et + Ot` | Configured TTI scalar IR cost + `Ot_scalar` |
 | TTI estimated | `L` | Configured TTI scalar IR cost |
-| MIR observed | `R_vector` | `R_scalar` |
+| MIR observed | `R_vector - S_vector + Ot_vector` | `R_scalar - S_scalar + Ot_scalar` |
 | MIR estimated spill | `R_vector - S_vector + Et_vector` | `R_scalar - S_scalar + Et_scalar` |
 
 `L` includes the register-pressure estimates supplied by existing LLVM policy.
-`Ev` is its estimated vector-register spill component. `Sv` prices observed RVV
-vector spills. `R` is the observed MIR body cost; `S` is the cost of its
-scalar/vector spill-slot accesses. Separate address calculations stay in `R-S`.
-`Et` is the configured TTI's total estimated spill cost, not vector-only `Ev`.
-An inactive pressure policy can legitimately produce a zero estimate.
+`Et` is the existing total scalar/vector register-pressure estimate. An inactive
+pressure policy legitimately produces zero; this update does not activate it.
+`Ot` prices observed GPR/FPR/vector spill accesses through the aggregate TTI
+hook: scalar group 1, vector physical group g, separately by class and direction.
+Native RISC-V charges one unit per register for each store or reload, without D.
+`R` is the Generic MIRInfo body cost and `S` its spill-slot instruction subtotal.
+Separate address calculations remain in `R-S`; ordinary MIR prices are unchanged.
 
-Scalar baseline means the original loop at VF1/IC1. Scalar spill means GPR/FPR
-spill/reload, including accesses inside a vector body. TTI real-spill replaces
-only vector spills and preserves scalar spill estimates. Its scalar baseline
-retains upstream IR costing without adding a separate pressure-spill estimate.
-MIR observes and prices both scalar and vector bodies with the same Generic MIRInfo.
+The original scalar baseline uses VF1/IC1. TTI observed adds `Ot_scalar` to its
+existing IR baseline, without subtracting an estimate that was never present.
+MIR estimated retains the original VF1 register-usage estimation policy.
 
 All TTI queries use native RISCVTTIImpl. Generic MIRInfo snapshots the actual
 subtarget's native pricing inputs; CPU-specific sheets and scoped overrides are
@@ -51,8 +51,8 @@ removed. Native IC, probe optimization and final codegen retain upstream policy.
 For N successfully priced native loops, selection uses the uniform mean
 `Wtti × Σ(Cq/Wq) / N`. Each `Wq` includes IC and proven serial unrolling;
 neither factor is divided out again. `Wq` need not be a multiple of `Wtti`. This
-is an explicit static cost policy, not an execution-frequency estimate. The same coefficients apply to MIR R and S,
-while configured TTI Et is already in candidate units. Non-MIR spill accesses are
+is an explicit static cost policy, not an execution-frequency estimate. The same coefficients apply to MIR R, S and Ot,
+while configured TTI Et is already in candidate units. Observed spill accesses are
 aggregated and priced independently per loop and homogeneous physical group,
 class and direction before exact scaling; aggregate hooks need not be linear.
 Exact rational scalar, body, ranking and tail costs must
@@ -60,8 +60,13 @@ survive comparison without truncation. `VPExactCost` uses quarter-cost numerator
 and positive denominators, with 128-bit comparison cross products. Required cost
 overflow fails the attempt; a pruning-proof overflow leaves the candidate live.
 
+MIR observed composition intersects successfully priced MIR and spill loops by
+identity and width, then applies the same exact normalization and uniform mean
+to R, S and Ot. An empty intersection fails. Independent raw spill facts remain
+available to TTI fallback even when MIR collection or pricing fails.
+
 These ablations are not a fully orthogonal experiment: TTI versus MIR changes
-body representation, scalar baseline and spill coverage together. Build success or an
+body and scalar-baseline representations. Build success or an
 ELF variant name does not establish that the requested model was applied; inspect
 the effective model and fallback ledger.
 
@@ -71,18 +76,18 @@ the effective model and fallback ledger.
 
 ```text
 clone → activate private-function tracking → materialize and register body
-  → configured CFG reduction → native post-LV suffix → verify IR
+  → native post-LV suffix → verify IR
   → instruction selection / pre-RA optimization and scheduling
   → RVV allocation / rewrite → VSETVLI insertion → scalar allocation / rewrite
-  → StackSlotColoring → vector-spill observer
-  → remaining native backend → post-frame-lowering MIR observer (when requested)
+  → StackSlotColoring → remaining native backend
+  → common post-frame-lowering observer (optional MIR facts)
 ```
 
-`StopAfter = Spill | MIR` stops using the selected observer's pass ID. Spill
-observations are taken at `post-stack-slot-coloring`, before copy propagation,
-post-RA LICM and frame lowering. MIR uses `post-frame-lowering`: after RISC-V
-post-RA pseudo expansion, KCFI and load/store optimization in `addPreSched2`,
-before final scheduling and RVV pseudo expansion. There is no post-frame retry.
+All executed probes stop at the common observer pass ID at post-frame-lowering,
+after RISC-V post-RA pseudo expansion, KCFI and load/store optimization in
+`addPreSched2`, before final scheduling and RVV pseudo expansion. There is no
+earlier observer or post-frame retry. Spill-only and MIR probes keep identical
+CFG and materialization policies. The later stop does not guarantee faster probes.
 PGO, GlobalISel and user start/stop pipelines remain outside the supported
 research scope. FastISel flags use RISC-V's existing SelectionDAG path. Allocator
 names do not restrict support: each slot uses its actual observation result.
@@ -93,14 +98,14 @@ Each query has one identity-initialized result with independent Spill and MIR
 slots. Each slot owns status, stage, scope evidence and per-loop widths/payloads.
 Status distinguishes not requested, not collected, failed and succeeded. A succeeded
 empty payload for a validated loop is an observed zero, including empty MIR
-payload. An empty loop collection, gate skip or failure is not an observed zero.
+payload. An empty loop collection or failure is not an observed zero.
 One failed slot must not erase the other's valid observation; an unrequested MIR
 slot must not make a spill-only query fail.
 
 The spill collector accepts spill-slot memory accesses with allocated physical
-RVV data registers, preserving direction, group, size, alignment and address
+GPR/FPR/RVV data registers, preserving direction, group, size, alignment and address
 space. Segment accesses use the same physical-group decomposition as lowering.
-It excludes scalar spills and ordinary whole-register memory accesses. MIR
+It excludes ordinary non-spill stack and whole-register memory accesses. MIR
 records scalar/vector body instructions, geometry and spill-slot classification.
 Both collectors omit metadata, upstream pseudoprobes, returns and frame
 setup/destroy overhead.
@@ -128,7 +133,7 @@ IDs, all backedges, old headers, reducible helper CFGs, or disjoint historical
 bodies to survive. Same-loop/same-width aliases count once. Several independent
 loops sharing q count separately. Width contradictions invalidate affected IDs
 and aliases, including dependent clones, rather than unrelated targets.
-Owned results use a unique stage-local `id` for joins and retain q as
+Owned results use a unique common mapped `id` for joins and retain q as
 `tracking_id`.
 
 Membership is **the current natural loop's static block sum**. Both sides of a
@@ -178,7 +183,7 @@ accuracy claims.
 
 ## Scalar, main and epilogue context
 
-A MIR attempt observes one original-loop fixed VF1/IC1 scalar baseline and shares
+A MIR or TTI observed attempt observes one original-loop fixed VF1/IC1 scalar baseline and shares
 it across vector candidates and epilogues. It clones the whole function,
 preserving preceding-loop context, disables LV vectorization/interleaving only
 for the observed scalar loop, and runs the same native suffix. Scalar `Et` comes
@@ -210,43 +215,34 @@ materialization context, CFG reduction, mapping policy revision and normalizatio
 policy revision (including current-loop static sum and uniform-loop composition).
 Cached snapshots retain every loop width and its geometry evidence.
 Required slot availability is checked separately. Stop stage alone does not
-prevent reuse. MIR's full context cannot be treated as equivalent to a reduced
-spill probe. Recompute pricing/pruning for each model; do not persist IR or
+prevent reuse. Both modes now use the same full CFG. Recompute pricing/pruning for each model; do not persist IR or
 machine ranges across stages, attempts or loops.
 
 <a id="비용-하한-pruning"></a>
 
 ## Gate and candidate pruning
 
-For TTI observed-spill modes, the pressure gate queries when usage is unknown or
-`(PeakBound + HasMask) × MaxRegisterGroup × IC >= 32`. Unsupported lowering and
-overflow are unknown. A safe skip applies `Sv=0` without claiming an observation.
-MIR bypasses the gate and TTI estimated performs no backend queries.
+The vector pressure-bound implementation is retained for diagnostics and future
+use, but disabled in selection: it cannot prove absence of scalar spills.
+Bounds are hypothetical and never skip observation or supply zero costs.
+TTI estimated performs no backend queries.
 
-The real-spill lower bound is `L-Ev`, because observed spill costs are nonnegative.
-Prepare native IC, configured costs and gate decisions first. Order queries by
-normalized lower bound; prune only strict losers against valid scalar, gate-skip
-or completed costs. Ties and proof overflow remain live. Forced vectorization
+The real-spill lower bound is `L-Et`, because observed spill costs are nonnegative.
+Prepare native IC, configured costs first. Order queries by
+normalized lower bound; prune only strict losers against valid scalar or completed costs. Ties and proof overflow remain live. Forced vectorization
 cannot use scalar selection as a pruning incumbent. A dominated failed query
 does not force fallback; a required surviving failure does.
 
 Automatic pruning requires disabled vector epilogues, unforced main/epilogue
 VFs and compatible fixed/scalable and scalar-tail policies. Known-trip-count
 comparisons use the existing body/tail objective; unknown counts use exact
-cost-per-width comparisons. Force-all bypasses gate/pruning but records the gate
-decision and does not enable queries for TTI estimated modes.
+cost-per-width comparisons. Force-all bypasses candidate pruning but records the hypothetical bound and does not enable queries for TTI estimated modes.
 
 ## Probe pruning
 
-CFG reduction is a separate, default-ON vector-spill policy and never applies to
-MIR. After materialization it retains the observed header's forward/backward
-closure union. Eligible exclusive paths return using existing available values.
-ABI, EH/indirect control, SSA, vector lifetime, surrounding cycles, return
-ambiguity and switch guards constrain applicability. Missing/ambiguous observation
-identity leaves the clone unchanged. Reduced CFG context belongs in the cache
-key; unchanged global allocation is not guaranteed.
-
-<a id="제한된-probe-병렬-실행"></a>
+CFG reduction is disabled for all feedback probes. The compatibility switch is
+inert and diagnostics report this disabled state. Raw reuse still requires the
+same full CFG, mapping and materialization context.
 
 ## Worker execution
 
@@ -285,15 +281,15 @@ ranking costs, comparisons, selected IC and emission. Forced unevaluated costs
 remain `not-evaluated` rather than fabricated values.
 
 JSONL distinguishes requested/effective model, ordered fallback attempts,
-collection versus use, gate skips and pruning. Independent-observation schema
-`backedge-loop-observations-v4` contains `spill_observation` and `mir_observation`.
-Slots use `rvv-vector-spill-v5` or `mir-body-observation-v5`, with a `loops` array
+collection versus use, disabled gate state and pruning. Independent-observation schema
+`backedge-loop-observations-v5` contains `spill_observation` and `mir_observation`.
+Slots use `register-spill-v6` or `mir-body-observation-v6`, with a `loops` array
 containing `id`, `tracking_id`, `iteration_width`, `selected_block_count` and
 `spills` or `body`. Priced loop arrays may be subsets of raw observations; join
-them by stage-local `id` and use the priced set size for its mean.
-Stage-level fields retain independent slot status, stage, `iteration_mapping`,
+them by common mapped `id` and use the priced set size for its mean.
+Slot-level fields retain independent slot status, stage, `iteration_mapping`,
 materialized width, total selected blocks and mapping/normalization policy
-revisions (both 3). Mapping and normalization have no separate status or failure
+revisions (mapping 4, normalization 3). Mapping and normalization have no separate status or failure
 fields.
 
 The only failure/exclusion report is `schema=vplan-backend-failures-v1`,
@@ -319,7 +315,7 @@ Failure groups appear in this order; empty groups are omitted:
 Each group contains `id`, `count`, and `items`; `count` is the number of deduplicated
 items. An item owns `candidate`, `stage`, `detail` and, when known, `tracking_id`
 (q) and `observation_id`. Stages are `input`, `materialization`, `probe`,
-`selection`, `post-stack-slot-coloring`, and `post-frame-lowering`. Unknown IDs
+`selection` and `post-frame-lowering`. Unknown IDs
 are omitted. Detailed errors remain intact within stable groups; classification
 is explicit at checks or subsystem boundaries, never inferred from text.
 

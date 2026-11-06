@@ -10,11 +10,10 @@
 #include <vector>
 namespace llvm {
 enum class VPlanBackendCandidateKind : uint8_t { Vector, ScalarBaseline };
-enum class VPlanBackendStopAfter { Spill, MIR };
 struct VPlanBackendObservationOptions {
-  // Every executed probe collects spills; MIR extends the same pipeline.
-  VPlanBackendStopAfter StopAfter = VPlanBackendStopAfter::Spill;
-  bool collectsMIR() const { return StopAfter == VPlanBackendStopAfter::MIR; }
+  // Every executed probe reaches post-frame-lowering; MIR optionally adds facts.
+  bool CollectMIR = false;
+  bool collectsMIR() const { return CollectMIR; }
   bool CaptureMIRText = false;
   bool CaptureFailures = false;
 };
@@ -23,7 +22,8 @@ struct VPlanBackendObservationOptions {
 struct VPlanMIRInstruction {
   std::string Opcode, BaseOpcode, Text;
   unsigned BaseOpcodeID = ~0u;
-  unsigned MatrixLambda = 0; // Zero means implementation-selected, not observed.
+  unsigned MatrixLambda =
+      0; // Zero means implementation-selected, not observed.
   bool Call = false;
   std::optional<unsigned> InlineAsmArguments;
   uint64_t MemoryAlignment = 0;
@@ -34,7 +34,7 @@ struct VPlanMIRInstruction {
   std::vector<unsigned> RegisterGroups8;
 };
 /// Owned, cost-independent facts. No IR or CodeGen objects cross the boundary.
-struct VPlanVectorSpillAccess {
+struct VPlanSpillAccess {
   bool IsLoad = false;
   uint64_t MinBytes = 0;
   bool Scalable = true;
@@ -43,6 +43,8 @@ struct VPlanVectorSpillAccess {
   bool WholeRegister = true;
   unsigned RegisterGroup = 0;
   bool FromSegment = false;
+  enum class RegisterKind { Vector, Integer, FloatingPoint };
+  RegisterKind Kind = RegisterKind::Vector;
 };
 struct VPlanFeedbackTiming {
   std::string Phase;
@@ -74,13 +76,13 @@ enum class VPlanBackendObservationStatus {
   Succeeded,
   Failed
 };
-/// One independently tracked iteration, owned by one observation stage.
+/// One independently tracked iteration, owned by one observation slot.
 struct VPlanBackendLoopObservation {
   uint64_t ID = 0, IterationWidth = 0, SelectedBlockCount = 0;
-  std::vector<VPlanVectorSpillAccess> Spills;
+  std::vector<VPlanSpillAccess> Spills;
   std::optional<std::vector<VPlanMIRInstruction>> MIRBody;
   uint64_t TrackingID =
-      0; // q; ID uniquely identifies this stage-local observation.
+      0; // q; ID uniquely identifies this common mapped observation.
 };
 struct VPlanBackendObservation {
   VPlanBackendObservationStatus Status =
@@ -89,9 +91,9 @@ struct VPlanBackendObservation {
   std::vector<VPlanBackendFailure> Exclusions;
   uint64_t SelectedBlockCount = 0, MaterializedWidth = 0;
   bool IterationMapping = false;
-  static constexpr unsigned MappingPolicyRevision = 3;
+  static constexpr unsigned MappingPolicyRevision = 4;
   static constexpr unsigned NormalizationPolicyRevision = 3;
-  std::string Stage = "post-stack-slot-coloring";
+  std::string Stage = "post-frame-lowering";
   std::vector<VPlanBackendLoopObservation> Loops;
   bool succeeded() const {
     return Status == VPlanBackendObservationStatus::Succeeded;

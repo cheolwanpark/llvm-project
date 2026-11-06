@@ -73,9 +73,10 @@ TEST_F(RISCVBackendPricing, NativeModelsAndOperationRelationships) {
     EXPECT_EQ(cost(RISCV::VFNCVT_F_F_W), cost(RISCV::VADD_VV));
     EXPECT_EQ(cost(RISCV::VLSE32_V, 32), 2 * cost(RISCV::VLSE32_V, 16));
     EXPECT_LE(cost(RISCV::VFREDUSUM_VS), cost(RISCV::VFREDOSUM_VS));
-    F->addFnAttr("target-features", "+v,+f,+d,+experimental-zvvmm,"
-                                      "+experimental-zvvfmm,+experimental-zvvmtls,"
-                                      "+experimental-zvvmttls");
+    F->addFnAttr("target-features",
+                 "+v,+f,+d,+experimental-zvvmm,"
+                 "+experimental-zvvfmm,+experimental-zvvmtls,"
+                 "+experimental-zvvmttls");
     MIR = TM->getTargetMIRInfo(*F);
     EXPECT_EQ(cost(RISCV::VWMMACC_VV), 2 * cost(RISCV::VMMACC_VV));
     EXPECT_EQ(cost(RISCV::VFMMACC_VV), cost(RISCV::VMMACC_VV));
@@ -112,7 +113,8 @@ TEST_F(RISCVBackendPricing, RawReuseRequiresMatchingMaterializationContext) {
       %done = icmp eq i64 %next, %n
       br i1 %done, label %exit, label %loop
     exit: ret void
-    })", Error, Context);
+    })",
+                          Error, Context);
   ASSERT_TRUE(M);
   M->setDataLayout(TM->createDataLayout());
   M->setTargetTriple(TM->getTargetTriple());
@@ -129,10 +131,10 @@ TEST_F(RISCVBackendPricing, RawReuseRequiresMatchingMaterializationContext) {
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
   auto &Service = FAM.getResult<VPlanBackendFeedbackAnalysis>(*F);
   auto *Header = F->getEntryBlock().getTerminator()->getSuccessor(0);
-  VPlanBackendCandidate Candidate{"scalar", 0, ElementCount::getFixed(1),
-                                  true, false, false};
+  VPlanBackendCandidate Candidate{"scalar", 0,     ElementCount::getFixed(1),
+                                  true,     false, false};
   Candidate.Kind = VPlanBackendCandidateKind::ScalarBaseline;
-  Candidate.Observation.StopAfter = VPlanBackendStopAfter::MIR;
+  Candidate.Observation.CollectMIR = true;
   auto query = [&](bool Starts, bool Succeeds = true) {
     Candidate.Control = std::make_shared<VPlanBackendProbeControl>();
     auto R = Service.get(*F, *Header, Candidate);
@@ -143,18 +145,17 @@ TEST_F(RISCVBackendPricing, RawReuseRequiresMatchingMaterializationContext) {
   Service.beginInvocation();
   query(true);
   query(false);
-  Candidate.Observation.StopAfter = VPlanBackendStopAfter::Spill;
+  Candidate.Observation.CollectMIR = false;
   query(false); // MIR collected the earlier slot in this same pipeline.
-  Candidate.Observation.StopAfter = VPlanBackendStopAfter::MIR;
+  Candidate.Observation.CollectMIR = true;
   Candidate.ScalarTail = false;
   query(true);
   Candidate.ScalarTail = true;
   Prune = true;
-  Candidate.Observation.StopAfter = VPlanBackendStopAfter::Spill;
-  // Scalar materialization requires MIR. A CFG-context mismatch must execute
-  // and reject this request, rather than return the cached valid spill slot.
-  query(true, false);
-  Candidate.Observation.StopAfter = VPlanBackendStopAfter::MIR;
+  Candidate.Observation.CollectMIR = false;
+  // Both modes retain the same CFG and reuse the scalar spill observation.
+  query(false);
+  Candidate.Observation.CollectMIR = true;
   query(false); // MIR always keeps the full CFG.
   Service.beginInvocation();
   query(true);
@@ -173,7 +174,8 @@ TEST_F(RISCVBackendPricing, InlineAsmPricesUseIRArguments) {
       %done = icmp eq i64 %next, %n
       br i1 %done, label %exit, label %loop
     exit: ret void
-    })", Error, Context);
+    })",
+                          Error, Context);
   ASSERT_TRUE(M);
   M->setDataLayout(TM->createDataLayout());
   M->setTargetTriple(TM->getTargetTriple());
@@ -190,10 +192,10 @@ TEST_F(RISCVBackendPricing, InlineAsmPricesUseIRArguments) {
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
   auto &Service = FAM.getResult<VPlanBackendFeedbackAnalysis>(*F);
   auto *Header = F->getEntryBlock().getTerminator()->getSuccessor(0);
-  VPlanBackendCandidate Candidate{"scalar", 0, ElementCount::getFixed(1),
-                                  true, false, false};
+  VPlanBackendCandidate Candidate{"scalar", 0,     ElementCount::getFixed(1),
+                                  true,     false, false};
   Candidate.Kind = VPlanBackendCandidateKind::ScalarBaseline;
-  Candidate.Observation.StopAfter = VPlanBackendStopAfter::MIR;
+  Candidate.Observation.CollectMIR = true;
   Service.beginInvocation();
   auto Observed = Service.get(*F, *Header, Candidate);
   ASSERT_TRUE(bool(Observed)) << toString(Observed.takeError());

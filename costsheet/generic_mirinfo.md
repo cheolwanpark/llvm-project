@@ -382,7 +382,9 @@ unknown 기본값이나 정확한 expansion 가격으로 표시하지 않는다.
 `generic-mirinfo-native-v1`이며 기존 `generic-v1`과 구별한다.
 
 MIR body `R`와 spill 부분합 `S`에는 같은 명령 가격을 사용한다. 주소 계산은 body에
-남긴다. `R-S+Et`의 Et는 native TTI spill hook으로 계산하며 scalar baseline에도 대칭적으로 적용한다.
+남긴다. 관측 spill 모드는 `R-S+Ot`이며 Ot는 공통 TTI hook의 register당
+단가 1로 계산한다 (scalar g=1, vector physical g; D를 곱하지 않는다).
+일반 명령 가격과 R/S 가격은 변경하지 않는다. `R-S+Et`의 Et는 native TTI spill hook으로 계산하며 scalar baseline에도 대칭적으로 적용한다.
 정확한 폭 정규화와 모델별 loop 제외·whole-loop fallback은
 [가격 단위](rule.md)와 [backend 계약](../BACKEND_FEEDBACK.md)을 따른다.
 미지원/누락/모순을 정상 비용 0 또는 1로 바꾸지 않는다. §7.3의 알려진 pseudo와 명시적

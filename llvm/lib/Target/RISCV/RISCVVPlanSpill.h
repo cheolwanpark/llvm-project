@@ -10,22 +10,11 @@ namespace vplan {
 Error readCandidateIdentity(const Function &F, VPlanBackendResult &Result);
 void observeBody(MachineFunction &MF, VPlanBackendResult &Result, bool MIR,
                  bool Text);
-Error collectVectorSpillAccess(const MachineInstr &MI,
-                               std::vector<VPlanVectorSpillAccess> &Accesses);
+void observeCommonBody(MachineFunction &MF, VPlanBackendResult &Result,
+                       bool MIR, bool Text);
+Error collectSpillAccess(const MachineInstr &MI,
+                         std::vector<VPlanSpillAccess> &Accesses);
 } // namespace vplan
-class RISCVVPlanSpill : public MachineFunctionPass {
-  VPlanBackendResult &Sink;
-  VPlanFeedbackTimer *Timer;
-
-public:
-  static char ID;
-  RISCVVPlanSpill(VPlanBackendResult &Sink, VPlanFeedbackTimer *Timer);
-  StringRef getPassName() const override {
-    return "RISC-V VPlan vector spill observer";
-  }
-  void getAnalysisUsage(AnalysisUsage &AU) const override;
-  bool runOnMachineFunction(MachineFunction &MF) override;
-};
 FunctionPass *createRISCVVPlanTimingMarker(VPlanFeedbackTimer &Timer,
                                            StringRef Phase);
 } // namespace llvm

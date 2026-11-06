@@ -89,8 +89,8 @@ def check_formula(row, mir, estimated):
     if mir:
         obs = row['observation']['mir_observation']
         assert obs['status'] == 'succeeded' and obs['stage'] == 'post-frame-lowering'
-        assert row['observation']['observation_schema'] == 'backedge-loop-observations-v4'
-        assert obs['schema'] == 'mir-body-observation-v5'
+        assert row['observation']['observation_schema'] == 'backedge-loop-observations-v5'
+        assert obs['schema'] == 'mir-body-observation-v6'
         assert obs['mapping_kind'] == 'backedge-loops'
         assert 'iteration_width' not in obs and 'body' not in obs
         loops = {loop['id']: loop for loop in obs['loops']}
@@ -111,16 +111,26 @@ def check_formula(row, mir, estimated):
             spill += raw_spill * scale
         assert exact(row, 'mir_body') == body
         assert exact(row, 'mir_spill') == spill
-        expected = body
-        if estimated:
-            expected += row['estimated_total_spill_quarters'] - spill
+        expected = body - spill + (row['estimated_total_spill_quarters'] if estimated else exact(row, 'normalized_spill'))
     else:
         expected = row['profile_body_quarters']
         if not estimated:
-            expected -= row['estimated_vector_spill_quarters']
-            expected += exact(row, 'normalized_vector_spill')
+            if row.get('role') != 'scalar-baseline':
+                expected -= row['estimated_total_spill_quarters']
+            expected += exact(row, 'normalized_spill')
         else:
             assert 'observation' not in row
+    if not estimated:
+        loops = row['observation']['spill_observation']['loops']
+        prices = row.get('mir_loops' if mir else 'spill_loops', loops)
+        ids = {p['id'] for p in prices}
+        loops = [loop for loop in loops if loop['id'] in ids]
+        # Native RISC-V charges g per access, including D=2 and scalar bodies.
+        observed = sum(Fraction(4 * row['tti_width'] *
+                                sum(a['register_group'] for a in loop['spills']),
+                                loop['iteration_width'] * len(loops))
+                       for loop in loops)
+        assert exact(row, 'normalized_spill') == observed
     assert exact(row, 'body') == expected, row
 
 
@@ -130,8 +140,8 @@ def pipeline():
     observed = [r['observation'] for r in candidates(zero)]
     assert observed
     for obs in observed:
-        assert obs['observation_schema'] == 'backedge-loop-observations-v4'
-        assert obs['spill_observation']['schema'] == 'rvv-vector-spill-v5'
+        assert obs['observation_schema'] == 'backedge-loop-observations-v5'
+        assert obs['spill_observation']['schema'] == 'register-spill-v6'
         assert obs['spill_observation']['status'] == 'succeeded'
         assert all(not loop['spills'] for loop in obs['spill_observation']['loops'])
         assert obs['mir_observation']['status'] == 'not_requested'
@@ -149,12 +159,13 @@ def pipeline():
         for row in scored:
             check_formula(row, mir, estimated)
             assert row['tti_profile'] == 'native'
-        if mir:
+        if mir or not estimated:
             scalar = [r for r in scored if r.get('role') == 'scalar-baseline']
             assert len(scalar) == 1 and scalar[0]['tti_width'] == 1
             vectors = [r for r in scored if r.get('role') != 'scalar-baseline']
             assert all(exact(r, 'scalar') == exact(scalar[0], 'body') for r in vectors)
-            assert all(r['mir_model'] == 'riscv-generic-mirinfo-v1' for r in scored)
+            if mir:
+                assert all(r['mir_model'] == 'riscv-generic-mirinfo-v1' for r in scored)
             assert all(r['observation']['spill_observation']['status'] == 'succeeded'
                        for r in scored)
         elif not estimated:
@@ -173,8 +184,8 @@ def pipeline():
         assert row['tti_profile'] == 'native'
         assert row['mir_model'] == 'riscv-generic-mirinfo-v1'
         check_formula(row, True, False)
-    # MIR collection is still valid when the earlier spill observer cannot run.
-    _, rows, _ = run('spill-unavailable', forced + ['-use-mir', '-disable-ssc'])
+    # MIR estimated remains valid when the independent spill slot is unavailable.
+    _, rows, _ = run('spill-unavailable', forced + ['-use-mir', '-use-estimated-spill', '-disable-ssc'])
     for row in candidates(rows):
         obs = row['observation']
         assert obs['spill_observation']['status'] == 'failed'
@@ -182,7 +193,7 @@ def pipeline():
     assert candidates(rows) and not fell_back(rows)
     # A failed independent spill slot is reported even though MIR succeeds.
     ledger, = failures(rows)
-    assert ledger['requested_model'] == ledger['effective_model'] == 'mir-v1'
+    assert ledger['requested_model'] == ledger['effective_model'] == 'mir-me-spill-v2'
     assert ledger['attempts'][0]['status'] == 'succeeded'
     assert any(g['id'] == 'availability' for g in ledger['attempts'][0]['failures'])
 
@@ -195,9 +206,9 @@ def selection():
     assert off == native and not rows and not disabled and not text
     # An externally restricted pipeline makes every required probe unavailable.
     for label, flags, expected in [
-            ('mir-real', ['-use-mir'], ['mir-v1', 'llvm-real-vector-spill-v1', 'llvm-v1']),
-            ('mir-est', ['-use-mir', '-use-estimated-spill'], ['mir-me-spill-v1', 'llvm-v1']),
-            ('real', [], ['llvm-real-vector-spill-v1', 'llvm-v1'])]:
+            ('mir-real', ['-use-mir'], ['mir-v2', 'llvm-real-spill-v2', 'llvm-v1']),
+            ('mir-est', ['-use-mir', '-use-estimated-spill'], ['mir-me-spill-v2', 'llvm-v1']),
+            ('real', [], ['llvm-real-spill-v2', 'llvm-v1'])]:
         _, rows, report = run(label, forced + flags + [
                             '-stop-before=prologepilog', '-print-detailed-vplans'])
         fallback, = failures(rows)
@@ -269,11 +280,14 @@ def scopes():
 
 def execution():
     off_ir, all_rows, _ = run('all', ['-vplan-backend-force-all'])
-    ir, rows, _ = run('gate', ['-disable-ssc'])
+    ir, rows, _ = run('gate', [])
     assert ir == off_ir
-    assert any(r['status'] == 'skipped' for r in rows)
+    assert any(r['status'] == 'collected' for r in rows)
     assert any(r['status'] == 'pruned' for r in rows)
-    assert not any(r.get('queried') for r in rows)
+    assert not fell_back(rows)
+    assert any(r.get('register_usage_bound', {}).get('would_skip') and
+               r['register_usage_bound']['queried'] and
+               not r['register_usage_bound']['enabled'] for r in rows)
     path = pressure()
     serial, a, _ = run('serial', [], path)
     parallel, b, _ = run('parallel', ['-vplan-backend-probe-threads=2'], path)
@@ -298,7 +312,7 @@ def execution():
     assert reduced == full and costs(a) == costs(b) and decisions(a) == decisions(b)
     traces = [json.loads(line.split(': ', 1)[1]) for line in trace.splitlines()
               if line.startswith('VPLAN-BACKEND-PRUNING: ')]
-    assert traces and any(t['applied'] for t in traces)
+    assert traces and all(not t['applied'] for t in traces)
     _, rows, trace = run('mir-cfg', flags + ['-use-mir'], path)
     traces = [json.loads(line.split(': ', 1)[1]) for line in trace.splitlines()
               if line.startswith('VPLAN-BACKEND-PRUNING: ')]

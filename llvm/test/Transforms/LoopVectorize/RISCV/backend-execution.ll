@@ -1,8 +1,8 @@
 ; REQUIRES: asserts
 ; RUN: %python %S/Inputs/backend-contract.py execution opt %s %t
 ;
-; The cheap candidate is a gate incumbent. Wider candidates must not require
-; backend execution merely because their pressure bounds cross the threshold.
+; Low-pressure candidates are observed. Strict cost lower-bound pruning still
+; avoids backend execution for dominated candidates.
 define void @gate(ptr noalias %a, ptr noalias %b) vscale_range(2,2) {
 entry: br label %loop
 loop:
@@ -22,7 +22,7 @@ loop:
   store i64 %xy, ptr %out0
   store i64 %yz, ptr %out1
   %next = add nuw i64 %i, 1
-  %done = icmp eq i64 %next, 6
+  %done = icmp eq i64 %next, 18
   br i1 %done, label %exit, label %loop
 exit: ret void
 }

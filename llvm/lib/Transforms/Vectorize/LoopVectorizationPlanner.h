@@ -916,8 +916,7 @@ public:
   void plan(ElementCount UserVF, unsigned UserIC);
 
   InstructionCost backendCandidateCost(VPlan &Plan, ElementCount VF,
-                                       InstructionCost &VectorSpill,
-                                       InstructionCost *TotalSpill = nullptr);
+                                       InstructionCost &TotalSpill);
   /// Native scalar IR baseline for this backend selection attempt.
   InstructionCost backendScalarCost(VPlanBackendMode Mode);
   InstructionCost backendScalarSpillCost();
@@ -937,7 +936,7 @@ public:
   /// Return the pruning context using the scalar cost prepared for this TTI
   /// attempt. Do not reprice the baseline during lower-bound preparation.
   std::optional<VPBackendPruningContext>
-  backendPruningContext(InstructionCost Scalar);
+  backendPruningContext(VPExactCost Scalar);
   /// Whether the candidate may supply a bound for rejecting other candidates.
   bool backendPruningEligible(VPlan &Plan, ElementCount VF);
 

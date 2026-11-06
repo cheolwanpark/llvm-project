@@ -39,27 +39,26 @@ coordinates whole-loop attempts and adopts/discards their costs, selections and
 provisional reports together. Preserve the Vectorize→analysis callback→Passes→
 TargetMachine dependency direction.
 
-The vector-spill observer stops at its own `post-stack-slot-coloring` pass ID.
-VSETVLI insertion and scalar allocation have run; later copy propagation, post-RA
-LICM and frame lowering have not. This collector remains vector-spill-only. MIR
-uses the separate `post-frame-lowering` observer and includes scalar/vector
-spill-slot costs. Preserve independent slot statuses, scope and width. Failure,
-not collected, gate skipped and successfully observed zero are distinct.
+All executed probes use one post-frame-lowering observer and the same full CFG.
+Collect scalar/vector spill-slot facts and optional MIR body facts with independent
+slot statuses, scope and widths. Failure, not collected, not requested and
+successfully observed zero are distinct. Preserve body exclusions.
 
-Preserve master/CPU/exact-VLEN selection, native IC/probe/final-codegen policies,
-`L-Ev+Sv`, `L`, `R`, `R-S+Et`, exact rational normalization and gate/main/epilogue
-policy unless explicitly changed. Non-MIR spill estimates/observations use
-profile-independent SpillReloadUnits and the configured aggregate class hook.
-Observed units remain homogeneous by class, direction and physical group.
+Preserve master/CPU/exact-VLEN selection and native IC/probe/final-codegen policy.
+The four compositions are `L`, `L-Et+Ot`, `R-S+Et`, `R-S+Ot`. Observed spills use
+the configured aggregate TTI hook with homogeneous class/direction/physical-group
+units; scalar g=1. Pressure-gate skipping is disabled; preserve bound analysis.
+Use `L-Et` pruning and exact rational scalar/body/tail costs.
 
 All supported RISC-V settings use Generic MIRInfo and native RISCVTTIImpl,
 retaining actual ISA, VLEN, DLEN and native tuning. CPU-specific CostSheet and
 TTI overrides and the use-default-tti option are removed. Four comparisons remain:
-LLVM baseline, LLVM with observed vector spill, MIR with native estimated spill,
+LLVM baseline, LLVM with observed total spill, MIR with native estimated spill,
 and MIR with observed spill. Former target tuning is retained under costsheet/.
-TTI scalar baselines use configured TTI;
-MIR shares one original-loop VF1/IC1 probe per attempt and applies estimated-spill
-substitution symmetrically. Preserve exact scalar rational ranking and tails.
+TTI observed adds original-loop observed spill to its configured scalar IR cost.
+MIR and TTI observed share one original-loop VF1/IC1 probe per attempt. MIR uses
+the corresponding spill substitution for scalar and vector bodies. Preserve exact
+scalar rational ranking and tails.
 
 Follow [whole-loop fallback](BACKEND_FEEDBACK.md#probe와-fallback), retaining the
 requested TTI/spill policy and independently valid observations. Raw reuse

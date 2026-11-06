@@ -91,26 +91,25 @@ const VPBackendCostEntry *VPlanBackendCostModel::lookup(const VPlan &Plan,
       return &C;
   return nullptr;
 }
-VPlanBackendCostModel::PreparedCandidate VPlanBackendCostModel::prepareCost(
-    VPlan &Plan, VPlanBackendCandidate C, InstructionCost Native,
-    InstructionCost Profile, InstructionCost Ev, unsigned Width,
-    InstructionCost EstimatedSpill) const {
+VPlanBackendCostModel::PreparedCandidate
+VPlanBackendCostModel::prepareCost(VPlan &Plan, VPlanBackendCandidate C,
+                                   InstructionCost Native,
+                                   InstructionCost Profile, unsigned Width,
+                                   InstructionCost EstimatedSpill) const {
   auto Bound = computeVPlanRegisterUsageBound(Plan, C.VF, TTI);
   Bound.applyInterleave(C.IC);
-  bool Query =
-      Mode.MIR || (!Mode.EstimatedSpill &&
-                   (Bound.shouldQuery() || vplanBackendFeedbackForceAll()));
-  C.Observation.StopAfter =
-      Mode.MIR ? VPlanBackendStopAfter::MIR : VPlanBackendStopAfter::Spill;
+  // The vector-only bound cannot rule out scalar spills. Keep it diagnostic.
+  bool Query = Mode.needsProbe();
+  C.Observation.CollectMIR = Mode.MIR;
   C.Observation.CaptureMIRText = Report && Report->isDetailed();
   C.Observation.CaptureFailures = vplanBackendFeedbackOutputEnabled();
-  return {&Plan,          std::move(C), Native, Profile, Ev,
+  return {&Plan,          std::move(C), Native, Profile,
           EstimatedSpill, Width,        Bound,  Query};
 }
 
 bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
                                 InstructionCost Native, InstructionCost Profile,
-                                InstructionCost Ev, unsigned Width,
+                                unsigned Width,
                                 InstructionCost EstimatedSpill) {
   if (Failed)
     return false;
@@ -121,11 +120,11 @@ bool VPlanBackendCostModel::add(VPlan &Plan, VPlanBackendCandidate C,
   }
   VPlanFeedbackTimer Timer(vplanBackendFeedbackTimingEnabled());
   auto ReportTime = scope_exit([&] { printCostTiming(C.ID, Timer); });
-  auto Prepared =
-      prepareCost(Plan, C, Native, Profile, Ev, Width, EstimatedSpill);
+  auto Prepared = prepareCost(Plan, C, Native, Profile, Width, EstimatedSpill);
   Timer.mark("gate");
   std::optional<VPlanBackendProbeResult> Result;
-  if (Prepared.Query && Native.isValid() && Profile.isValid() && Ev.isValid()) {
+  if (Prepared.Query && Native.isValid() && Profile.isValid() &&
+      EstimatedSpill.isValid()) {
     Result.emplace(Feedback.get(F, Header, Prepared.Candidate));
     Timer.mark("query_total");
   }
@@ -185,8 +184,9 @@ VPlanBackendCostModel::EvaluatedCost VPlanBackendCostModel::evaluateObservation(
                                           C.ID, O.MIR.Stage);
       else
         E.MIR = std::move(*Cost);
-    } else {
-      auto Spill = priceVPlanVectorSpills(
+    }
+    if (!Mode.EstimatedSpill && !E.Error) {
+      auto Spill = priceVPlanSpills(
           O.Spill, TTI, F.getContext(), P.Width, E.Raw,
           Report && Report->isDetailed() ? &E.AccessCosts : nullptr,
           &E.SpillLoops,
@@ -195,8 +195,45 @@ VPlanBackendCostModel::EvaluatedCost VPlanBackendCostModel::evaluateObservation(
         E.Error = takeVPlanBackendFailure(Spill.takeError(),
                                           VPlanBackendFailureGroup::Pricing,
                                           C.ID, O.Spill.Stage);
-      else
+      else {
         E.Spill = *Spill;
+        if (Mode.MIR) {
+          auto MIRFacts = O.MIR, SpillFacts = O.Spill;
+          auto Common = [&](const VPlanBackendLoopObservation &L) {
+            return any_of(E.MIR->Loops,
+                          [&](const auto &M) {
+                            return M.ID == L.ID &&
+                                   M.IterationWidth == L.IterationWidth;
+                          }) &&
+                   any_of(E.SpillLoops, [&](const auto &S) {
+                     return S.ID == L.ID &&
+                            S.IterationWidth == L.IterationWidth;
+                   });
+          };
+          llvm::erase_if(MIRFacts.Loops,
+                         [&](const auto &L) { return !Common(L); });
+          llvm::erase_if(SpillFacts.Loops,
+                         [&](const auto &L) { return !Common(L); });
+          auto M = priceVPlanMIR(MIRFacts, *MIRInfo, P.Width);
+          E.SpillLoops.clear();
+          E.AccessCosts.clear();
+          auto S = priceVPlanSpills(SpillFacts, TTI, F.getContext(), P.Width,
+                                    E.Raw, &E.AccessCosts, &E.SpillLoops);
+          if (!M || !S) {
+            if (!M)
+              E.Error = takeVPlanBackendFailure(
+                  M.takeError(), VPlanBackendFailureGroup::Pricing, C.ID,
+                  O.MIR.Stage);
+            if (!S)
+              E.Error = takeVPlanBackendFailure(
+                  S.takeError(), VPlanBackendFailureGroup::Pricing, C.ID,
+                  O.Spill.Stage);
+          } else {
+            E.MIR = std::move(*M);
+            E.Spill = *S;
+          }
+        }
+      }
     }
   }
   for (auto &Failure : E.Failures)
@@ -279,7 +316,7 @@ struct VPlanBackendCostModel::PruningState {
       if (P.Candidate.ScalarTail != Candidates.front().Candidate.ScalarTail ||
           P.Candidate.VF.isScalable() !=
               Candidates.front().Candidate.VF.isScalable() ||
-          !(VPExactCost(P.Profile) - VPExactCost(P.Ev)).isValid())
+          !(VPExactCost(P.Profile) - VPExactCost(P.EstimatedSpill)).isValid())
         this->Context.reset();
     Context = this->Context;
     if (Context && Context->UseScalar) {
@@ -293,18 +330,11 @@ struct VPlanBackendCostModel::PruningState {
       for (unsigned I = 0; I < Candidates.size(); ++I) {
         const auto &P = Candidates[I];
         auto &S = States[I];
-        auto B = VPExactCost(P.Profile) - VPExactCost(P.Ev);
+        auto B = VPExactCost(P.Profile) - VPExactCost(P.EstimatedSpill);
         S.Lower = score(B, P.Width);
         S.Rank = VPExactCost::ratio(B.numerator(), P.Width);
         S.Eligible = P.Eligible;
         S.Control = std::make_shared<VPlanBackendProbeControl>();
-        if (!P.Query && S.Eligible && S.Lower.isValid() &&
-            (!Best || S.Lower < *Best)) {
-          Best = S.Lower;
-          Basis = I + 1;
-          BasisWidth = P.Width;
-          BasisCost = B;
-        }
       }
     reject();
     for (unsigned I = 0; I < Candidates.size(); ++I)
@@ -321,7 +351,8 @@ struct VPlanBackendCostModel::PruningState {
     if (E.Error || !S.Eligible)
       return;
     const auto &P = Candidates[I];
-    auto Body = VPExactCost(P.Profile) - VPExactCost(P.Ev) + E.Spill;
+    auto Body =
+        VPExactCost(P.Profile) - VPExactCost(P.EstimatedSpill) + E.Spill;
     auto Cost = score(Body, P.Width);
     if (Cost.isValid() && (!Best || Cost < *Best)) {
       Best = Cost;
@@ -421,9 +452,11 @@ bool VPlanBackendCostModel::addBatch(
             {"basis_quarters_numerator", Pruning.BasisCost.numerator()},
             {"basis_quarters_denominator", Pruning.BasisCost.denominator()},
             {"lower_bound_quarters_numerator",
-             (VPExactCost(P.Profile) - VPExactCost(P.Ev)).numerator()},
+             (VPExactCost(P.Profile) - VPExactCost(P.EstimatedSpill))
+                 .numerator()},
             {"lower_bound_quarters_denominator",
-             (VPExactCost(P.Profile) - VPExactCost(P.Ev)).denominator()},
+             (VPExactCost(P.Profile) - VPExactCost(P.EstimatedSpill))
+                 .denominator()},
             {"score_lower_bound_quarters_numerator", S.Lower.numerator()},
             {"score_lower_bound_quarters_denominator", S.Lower.denominator()}});
       if (vplanBackendFeedbackOutputEnabled() && ScalarEntry)
@@ -446,7 +479,7 @@ bool VPlanBackendCostModel::applyCost(
     VPlanFeedbackTimer &Timer, const EvaluatedCost *Evaluated) {
   const auto &C = P.Candidate;
   const auto &Bound = P.Bound;
-  auto Native = P.Native, Profile = P.Profile, Ev = P.Ev;
+  auto Native = P.Native, Profile = P.Profile;
   unsigned Width = P.Width;
   bool Query = P.Query;
   VPExactCost Spill;
@@ -456,8 +489,7 @@ bool VPlanBackendCostModel::applyCost(
   SmallVector<VPSpillCost> AccessCosts;
   SmallVector<VPSpillLoopCost> SpillLoops;
   std::optional<VPMIRCost> MIRCost;
-  if (!Native.isValid() || !Profile.isValid() || !Ev.isValid() ||
-      !P.EstimatedSpill.isValid())
+  if (!Native.isValid() || !Profile.isValid() || !P.EstimatedSpill.isValid())
     Error = VPlanBackendFailure{VPlanBackendFailureGroup::Pricing,
                                 "invalid TTI candidate cost",
                                 C.ID,
@@ -483,12 +515,13 @@ bool VPlanBackendCostModel::applyCost(
   VPExactCost Body = VPExactCost(Profile);
   if (Mode.MIR) {
     if (MIRCost) {
-      Body =
-          composeVPlanMIRCost(*MIRCost, P.EstimatedSpill, Mode.EstimatedSpill);
+      Body = composeVPlanMIRCost(*MIRCost, Mode.EstimatedSpill
+                                               ? VPExactCost(P.EstimatedSpill)
+                                               : Spill);
     } else
       Body = VPExactCost::ratio(-1, 1);
   } else if (!Mode.EstimatedSpill)
-    Body = Body - VPExactCost(Ev) + Spill;
+    Body = Body - VPExactCost(P.EstimatedSpill) + Spill;
   if (!Body.isValid() && !Error)
     Error = VPlanBackendFailure{VPlanBackendFailureGroup::Pricing,
                                 "invalid or overflowing hybrid cost",
@@ -497,8 +530,8 @@ bool VPlanBackendCostModel::applyCost(
                                 {},
                                 {}};
   if (!Error) {
-    Costs.push_back({P.Plan, C.VF, C.IC, C.IsEpilogue, Native, Profile, Ev,
-                     Body, P.EstimatedSpill, std::move(MIRCost)});
+    Costs.push_back({P.Plan, C.VF, C.IC, C.IsEpilogue, Native, Profile, Body,
+                     P.EstimatedSpill, std::move(MIRCost)});
     if (Report)
       Report->backendCost(Costs.back(), Bound,
                           Observation ? &*Observation : nullptr, AccessCosts,
@@ -508,7 +541,9 @@ bool VPlanBackendCostModel::applyCost(
   // Serialization is entirely optional. The selection and text report use
   // the owned C++ observation and the exact values computed above.
   if (vplanBackendFeedbackOutputEnabled()) {
-    json::Object Gate{{"known", Bound.Known},
+    json::Object Gate{{"enabled", false},
+                      {"hypothetical", true},
+                      {"known", Bound.Known},
                       {"reason", Bound.Reason},
                       {"would_skip", !Bound.shouldQuery()},
                       {"force_all", vplanBackendFeedbackForceAll()},
@@ -526,9 +561,7 @@ bool VPlanBackendCostModel::applyCost(
     if (Bound.Opcode)
       Gate["opcode"] = *Bound.Opcode;
     json::Object Row{{"model", Mode.name()},
-                     {"cost_source", Query                 ? "observation"
-                                     : Mode.EstimatedSpill ? "estimated"
-                                                           : "gate"},
+                     {"cost_source", Query ? "observation" : "estimated"},
                      {"use_mir", Mode.MIR},
                      {"use_estimated_spill", Mode.EstimatedSpill},
                      {"candidate", C.ID},
@@ -545,11 +578,9 @@ bool VPlanBackendCostModel::applyCost(
                      {"vector_epilogue", C.EpilogueVF.isVector()},
                      {"register_usage_bound", std::move(Gate)}};
     if (Observation) {
-      Row["real_spill_used"] = !Mode.MIR && !Mode.EstimatedSpill && !Error;
-      Row["real_spill_unused_reason"] = Mode.EstimatedSpill
-                                            ? "estimated-spill-requested"
-                                        : Mode.MIR ? "mir-body-pricing"
-                                                   : "";
+      Row["real_spill_used"] = !Mode.EstimatedSpill && !Error;
+      Row["real_spill_unused_reason"] =
+          Mode.EstimatedSpill ? "estimated-spill-requested" : "";
       Row["status"] = "collected";
       Row["observation"] = summarizeVPlanBackendResult(*Observation);
     } else {
@@ -561,13 +592,12 @@ bool VPlanBackendCostModel::applyCost(
     if (!Error) {
       Row["native_body_quarters"] = Native.getQuarterValue();
       Row["profile_body_quarters"] = Profile.getQuarterValue();
-      Row["estimated_vector_spill_quarters"] = Ev.getQuarterValue();
       Row["estimated_total_spill_quarters"] =
           P.EstimatedSpill.getQuarterValue();
-      if (!Mode.MIR) {
-        Row["raw_vector_spill_sum_quarters"] =
-            Raw.isValid() ? json::Value(Raw.getQuarterValue())
-                          : json::Value(nullptr);
+      {
+        Row["raw_spill_sum_quarters"] = Raw.isValid()
+                                            ? json::Value(Raw.getQuarterValue())
+                                            : json::Value(nullptr);
         json::Array Loops;
         for (const auto &L : SpillLoops)
           Loops.push_back(json::Object{
@@ -583,10 +613,9 @@ bool VPlanBackendCostModel::applyCost(
       if (ScalarEntry)
         addScalarFields(Row, *ScalarEntry);
       Row["tti_width"] = Width;
-      if (!Mode.MIR) {
-        Row["normalized_vector_spill_quarters_numerator"] = Spill.numerator();
-        Row["normalized_vector_spill_quarters_denominator"] =
-            Spill.denominator();
+      {
+        Row["normalized_spill_quarters_numerator"] = Spill.numerator();
+        Row["normalized_spill_quarters_denominator"] = Spill.denominator();
       }
       Row["body_quarters_numerator"] = Body.numerator();
       Row["body_quarters_denominator"] = Body.denominator();
@@ -609,11 +638,11 @@ bool VPlanBackendCostModel::applyScalar(const VPlanBackendCandidate &C,
     fail("invalid scalar estimated spill cost");
     return false;
   }
-  PreparedCandidate P{nullptr, C, 0, 0, 0, EstimatedSpill, 1, {}, true};
+  PreparedCandidate P{nullptr, C, 0, 0, EstimatedSpill, 1, {}, true};
   recordObservation(Result, C.ID);
   auto E = evaluateObservation(P, Result);
   Failures.append(E.Failures);
-  if (E.Error || !E.MIR) {
+  if (E.Error || (Mode.MIR && !E.MIR)) {
     if (E.Error)
       fail(*E.Error);
     else
@@ -621,7 +650,11 @@ bool VPlanBackendCostModel::applyScalar(const VPlanBackendCandidate &C,
            VPlanBackendFailureGroup::Availability, C.ID);
     return false;
   }
-  auto Body = composeVPlanMIRCost(*E.MIR, EstimatedSpill, Mode.EstimatedSpill);
+  auto Body =
+      Mode.MIR ? composeVPlanMIRCost(*E.MIR, Mode.EstimatedSpill
+                                                 ? VPExactCost(EstimatedSpill)
+                                                 : E.Spill)
+               : ScalarEntry->Body + E.Spill;
   if (!Body.isValid()) {
     fail("invalid or overflowing scalar MIR cost");
     return false;
@@ -629,10 +662,13 @@ bool VPlanBackendCostModel::applyScalar(const VPlanBackendCandidate &C,
   ScalarEntry = VPBackendScalarCostEntry{
       Body,
       EstimatedSpill,
-      Mode.EstimatedSpill ? "mir-estimated-spill" : "mir",
-      E.MIR->Model,
-      E.MIR->Revision,
-      std::move(E.MIR)};
+      Mode.MIR
+          ? (Mode.EstimatedSpill ? "mir-estimated-spill" : "mir-observed-spill")
+          : "tti-observed-spill",
+      Mode.MIR ? E.MIR->Model : "native",
+      Mode.MIR ? E.MIR->Revision : "native-tti",
+      std::move(E.MIR),
+      E.Spill};
   if (Report)
     Report->backendScalarCost(*ScalarEntry, &*Result.Observation);
   if (vplanBackendFeedbackOutputEnabled()) {
@@ -642,7 +678,7 @@ bool VPlanBackendCostModel::applyScalar(const VPlanBackendCandidate &C,
         {"scalar_cost_source", ScalarEntry->Source},
         {"scalar_profile", ScalarEntry->Profile},
         {"scalar_revision", ScalarEntry->Revision},
-        {"use_mir", true},
+        {"use_mir", Mode.MIR},
         {"use_estimated_spill", Mode.EstimatedSpill},
         {"candidate", C.ID},
         {"function", F.getName()},
@@ -659,14 +695,20 @@ bool VPlanBackendCostModel::applyScalar(const VPlanBackendCandidate &C,
         {"estimated_total_spill_quarters", EstimatedSpill.getQuarterValue()},
         {"body_quarters_numerator", Body.numerator()},
         {"body_quarters_denominator", Body.denominator()}};
-    addMIRFields(Row, *ScalarEntry->MIR);
+    if (ScalarEntry->MIR)
+      addMIRFields(Row, *ScalarEntry->MIR);
+    Row["normalized_spill_quarters_numerator"] = E.Spill.numerator();
+    Row["normalized_spill_quarters_denominator"] = E.Spill.denominator();
+    if (!Mode.MIR)
+      Row["profile_body_quarters"] =
+          InstructionCost(Body - E.Spill).getQuarterValue();
     Rows.push_back(std::move(Row));
   }
   return true;
 }
 
 bool VPlanBackendCostModel::prepareScalar(LoopVectorizationPlanner &LVP) {
-  if (!Mode.MIR) {
+  if (!Mode.MIR && Mode.EstimatedSpill) {
     auto Scalar = VPExactCost(LVP.backendScalarCost(Mode));
     if (!Scalar.isValid()) {
       fail("invalid scalar baseline cost");
@@ -674,14 +716,13 @@ bool VPlanBackendCostModel::prepareScalar(LoopVectorizationPlanner &LVP) {
     }
     StringRef Profile = "native", Revision = "native-tti";
     ScalarEntry = VPBackendScalarCostEntry{
-        Scalar, 0, "tti", Profile.str(), Revision.str(), std::nullopt};
+        Scalar, 0, "tti", Profile.str(), Revision.str(), std::nullopt, {}};
     if (Report)
       Report->backendScalarCost(*ScalarEntry, nullptr);
     return true;
   }
-  InstructionCost EstimatedSpill = Mode.EstimatedSpill
-                                       ? LVP.backendScalarSpillCost()
-                                       : InstructionCost(0);
+  InstructionCost EstimatedSpill =
+      Mode.EstimatedSpill ? LVP.backendScalarSpillCost() : InstructionCost(0);
   if (!EstimatedSpill.isValid() || EstimatedSpill < 0) {
     fail("invalid scalar estimated spill cost");
     return false;
@@ -695,9 +736,18 @@ bool VPlanBackendCostModel::prepareScalar(LoopVectorizationPlanner &LVP) {
                           InterleaveOnly,
                           VectorizeOnly};
   C.Kind = VPlanBackendCandidateKind::ScalarBaseline;
-  C.Observation.StopAfter = VPlanBackendStopAfter::MIR;
+  C.Observation.CollectMIR = Mode.MIR;
   C.Observation.CaptureMIRText = Report && Report->isDetailed();
   C.Observation.CaptureFailures = vplanBackendFeedbackOutputEnabled();
+  if (!Mode.MIR)
+    ScalarEntry =
+        VPBackendScalarCostEntry{VPExactCost(LVP.backendScalarCost(Mode)),
+                                 0,
+                                 "tti-observed-spill",
+                                 "native",
+                                 "native-tti",
+                                 std::nullopt,
+                                 {}};
   return applyScalar(C, EstimatedSpill,
                      VPlanBackendProbeResult(Feedback.get(F, Header, C)));
 }
@@ -721,7 +771,7 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
     return false;
   auto Pruning =
       !Mode.MIR && !Mode.EstimatedSpill && !vplanBackendFeedbackForceAll()
-          ? LVP.backendPruningContext(InstructionCost(scalarCost()))
+          ? LVP.backendPruningContext(scalarCost())
           : std::nullopt;
   const bool Batch =
       Mode.needsProbe() && (Feedback.canBatch(F) || Pruning.has_value());
@@ -733,9 +783,8 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
         if (VF.isScalar())
           continue;
         VPlanFeedbackTimer Preparation(vplanBackendFeedbackTimingEnabled());
-        InstructionCost Ev, EstimatedSpill;
-        auto Native =
-            LVP.backendCandidateCost(*Plan, VF, Ev, &EstimatedSpill);
+        InstructionCost EstimatedSpill;
+        auto Native = LVP.backendCandidateCost(*Plan, VF, EstimatedSpill);
         if (!Native.isValid()) {
           PreparationError =
               VPlanBackendFailure{VPlanBackendFailureGroup::Pricing,
@@ -772,12 +821,9 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
         }
         Preparation.mark("native_ic");
         auto Profile = Native;
-        if (Mode.MIR) {
-          Ev = 0;
-          if (!Mode.EstimatedSpill)
-            EstimatedSpill = 0;
-        }
-        if (!Ev.isValid() || !EstimatedSpill.isValid()) {
+        if (Mode.MIR && !Mode.EstimatedSpill)
+          EstimatedSpill = 0;
+        if (!EstimatedSpill.isValid()) {
           PreparationError =
               VPlanBackendFailure{VPlanBackendFailureGroup::Pricing,
                                   "invalid candidate spill estimate",
@@ -807,12 +853,12 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
             C.EpilogueVF = Epilogue->getSingleVF();
         }
         if (Batch) {
-          auto P = prepareCost(*Plan, std::move(C), Native, Profile, Ev,
+          auto P = prepareCost(*Plan, std::move(C), Native, Profile,
                                unsigned(Width), EstimatedSpill);
           P.Eligible = LVP.backendPruningEligible(*Plan, VF);
           Pending.push_back(std::move(P));
-        } else if (!add(*Plan, std::move(C), Native, Profile, Ev,
-                        unsigned(Width), EstimatedSpill))
+        } else if (!add(*Plan, std::move(C), Native, Profile, unsigned(Width),
+                        EstimatedSpill))
           return false;
       }
     return true;
@@ -840,16 +886,12 @@ bool VPlanBackendCostModel::prepareEpilogue(
       MPI = Index;
   }
   VPlanFeedbackTimer Preparation(vplanBackendFeedbackTimingEnabled());
-  InstructionCost Ev, EstimatedSpill;
-  auto Native = LVP.backendCandidateCost(Plan, VF, Ev, &EstimatedSpill);
+  InstructionCost EstimatedSpill;
+  auto Native = LVP.backendCandidateCost(Plan, VF, EstimatedSpill);
   auto Profile = Native;
-  if (Mode.MIR) {
-    Ev = 0;
-    if (!Mode.EstimatedSpill)
-      EstimatedSpill = 0;
-  }
-  if (!Native.isValid() || !Ev.isValid() ||
-      !EstimatedSpill.isValid()) {
+  if (Mode.MIR && !Mode.EstimatedSpill)
+    EstimatedSpill = 0;
+  if (!Native.isValid() || !EstimatedSpill.isValid()) {
     fail("invalid epilogue TTI cost");
     return false;
   }
@@ -881,7 +923,7 @@ bool VPlanBackendCostModel::prepareEpilogue(
          VPlanBackendFailureGroup::Tracking, C.ID);
     return false;
   }
-  return add(Plan, C, Native, Profile, Ev, unsigned(Width), EstimatedSpill);
+  return add(Plan, C, Native, Profile, unsigned(Width), EstimatedSpill);
 }
 
 json::Object VPlanBackendCostModel::attemptSummary() const {

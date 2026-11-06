@@ -228,8 +228,10 @@ VPlanMIRInstruction llvm::vplan::collectMIRInstruction(const MachineInstr &MI,
 }
 char RISCVVPlanMIR::ID = 0;
 RISCVVPlanMIR::RISCVVPlanMIR(VPlanBackendResult &Sink,
-                             VPlanFeedbackTimer *Timer, bool Text)
-    : MachineFunctionPass(ID), Sink(Sink), Timer(Timer), Text(Text) {
+                             VPlanFeedbackTimer *Timer, bool Text,
+                             bool CollectMIR)
+    : MachineFunctionPass(ID), Sink(Sink), Timer(Timer), Text(Text),
+      CollectMIR(CollectMIR) {
   static const PassInfo PI("RISC-V VPlan MIR body observer", "riscv-vplan-mir",
                            &ID, nullptr, false, false);
   static const bool Registered = [] {
@@ -246,7 +248,7 @@ bool RISCVVPlanMIR::runOnMachineFunction(MachineFunction &MF) {
   if (Timer)
     Timer->mark("post_rvv_to_frame_lowering");
   if (MF.getFunction().hasFnAttribute("vplan.backend.candidate")) {
-    vplan::observeBody(MF, Sink, true, Text);
+    vplan::observeCommonBody(MF, Sink, CollectMIR, Text);
   }
   if (Timer)
     Timer->mark("mir_collection");
