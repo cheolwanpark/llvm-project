@@ -99,7 +99,6 @@
 #include "llvm/Analysis/ScalarEvolutionPatternMatch.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/Attributes.h"
@@ -6389,15 +6388,13 @@ InstructionCost LoopVectorizationPlanner::cost(VPlan &Plan, ElementCount VF,
   return Cost;
 }
 
-InstructionCost LoopVectorizationPlanner::backendCandidateCost(
-    VPlan &Plan, ElementCount VF, bool Profile, InstructionCost &VectorSpill,
-    InstructionCost *TotalSpill) {
-  VPlanCostProfileScope Scope(Profile);
+InstructionCost
+LoopVectorizationPlanner::backendCandidateCost(VPlan &Plan, ElementCount VF,
+                                               InstructionCost &VectorSpill,
+                                               InstructionCost *TotalSpill) {
   std::optional<SaveAndRestore<StringRef>> ReportPhase;
   if (Config.CostReport)
-    ReportPhase.emplace(Config.CostReport->Phase, Profile
-                                                      ? "backend-profile-body"
-                                                      : "backend-native-body");
+    ReportPhase.emplace(Config.CostReport->Phase, "backend-native-body");
   VectorSpill = 0;
   if (TotalSpill)
     *TotalSpill = 0;
@@ -6415,27 +6412,24 @@ InstructionCost LoopVectorizationPlanner::backendCandidateCost(
 InstructionCost
 LoopVectorizationPlanner::backendScalarCost(VPlanBackendMode Mode) {
   assert(!Mode.MIR && "MIR attempts require an observed scalar baseline");
-  VPlanCostProfileScope Scope(!Mode.DefaultTTI);
   return CM.expectedCost(ElementCount::getFixed(1));
 }
 
 InstructionCost
-LoopVectorizationPlanner::backendScalarSpillCost(VPlanBackendMode Mode) {
+LoopVectorizationPlanner::backendScalarSpillCost() {
   const auto VF = ElementCount::getFixed(1);
   if (!Config.shouldConsiderRegPressureForVF(VF))
     return 0;
   if (!ScalarPressurePlan)
     return InstructionCost::getInvalid();
-  return backendSpillCost(*ScalarPressurePlan, VF, Mode);
+  return backendSpillCost(*ScalarPressurePlan, VF);
 }
 
 InstructionCost LoopVectorizationPlanner::backendSpillCost(
-    VPlan &Plan, ElementCount VF, VPlanBackendMode Mode) {
+    VPlan &Plan, ElementCount VF) {
   if (!Config.shouldConsiderRegPressureForVF(VF))
     return 0;
-  VPlanCostProfileScope NativeScope(false);
   auto RU = calculateRegisterUsageForPlan(Plan, {VF}, TTI, CM.ValuesToIgnore);
-  VPlanCostProfileScope PricingScope(!Mode.DefaultTTI);
   return RU[0].spillCost(TTI, Config.CostKind, ForceTargetNumVectorRegs);
 }
 unsigned LoopVectorizationPlanner::limitBackendIC(VPlan &Plan,
@@ -9058,9 +9052,9 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     BackendFeedback->beginInvocation();
     Selected = TrySelection(RequestedMode);
     if (!Selected && RequestedMode.MIR && !RequestedMode.EstimatedSpill)
-      Selected = TrySelection({false, false, RequestedMode.DefaultTTI});
+      Selected = TrySelection({false, false});
     if (!Selected && RequestedMode.needsProbe())
-      Selected = TrySelection({false, true, RequestedMode.DefaultTTI});
+      Selected = TrySelection({false, true});
     if (!Selected)
       RestoreNativeReport();
   }

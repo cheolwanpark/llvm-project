@@ -35,7 +35,7 @@ add_llvm_target(RISCVCodeGen
   RISCVCallingConv.cpp
   RISCVCodeGenPrepare.cpp
   RISCVConstantPoolValue.cpp
-  RISCVCostSheet.cpp
+  RISCVGenericMIRInfo.cpp
   RISCVDeadRegisterDefinitions.cpp
   RISCVExpandAtomicPseudoInsts.cpp
   RISCVExpandPseudoInsts.cpp
@@ -69,7 +69,6 @@ add_llvm_target(RISCVCodeGen
   RISCVSubtarget.cpp
   RISCVTargetMachine.cpp
   RISCVTargetObjectFile.cpp
-  XiangShanV2TargetTransformInfo.cpp
   RISCVVPlanMIR.cpp
   RISCVTargetTransformInfo.cpp
   RISCVVectorMaskDAGMutation.cpp

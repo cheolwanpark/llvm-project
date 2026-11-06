@@ -4,7 +4,6 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
-#include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/IR/DerivedTypes.h"
 #include <numeric>
 using namespace llvm;
@@ -183,7 +182,7 @@ void VPExactCost::print(raw_ostream &OS, unsigned Divisor) const {
 Expected<VPExactCost> llvm::priceVPlanVectorSpills(
     const VPlanBackendObservation &O, const TargetTransformInfo &TTI,
     LLVMContext &Context, unsigned Width, InstructionCost &RawCost,
-    SmallVectorImpl<VPSpillCost> *AccessCosts, bool UseDefaultTTI,
+    SmallVectorImpl<VPSpillCost> *AccessCosts,
     SmallVectorImpl<VPSpillLoopCost> *LoopCosts,
     SmallVectorImpl<VPlanBackendFailure> *Failures) {
   if (!O.succeeded() || !O.IterationMapping ||
@@ -232,7 +231,7 @@ Expected<VPExactCost> llvm::priceVPlanVectorSpills(
         I->Registers += A.RegisterGroup;
         ++I->Accesses;
       }
-      VPlanCostProfileScope Scope(!UseDefaultTTI);
+
       for (auto &P : Prices) {
         auto Cost = TTI.getRegisterClassSpillReloadCost(
             P.ClassID, P.IsLoad, {P.Registers, P.Accesses},

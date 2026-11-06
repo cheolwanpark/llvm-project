@@ -40,6 +40,9 @@ void addMIRFields(json::Object &Row, const VPMIRCost &M) {
       Unknown += I.Unknown;
       Ops.push_back(json::Object{{"rule", I.Rule},
                                  {"unknown", I.Unknown},
+                                 {"evidence", I.Evidence},
+                                 {"count_source", I.CountSource},
+                                 {"price_group8", I.PriceGroup8},
                                  {"numerator", I.Numerator},
                                  {"denominator", I.Denominator}});
     }
@@ -186,7 +189,7 @@ VPlanBackendCostModel::EvaluatedCost VPlanBackendCostModel::evaluateObservation(
       auto Spill = priceVPlanVectorSpills(
           O.Spill, TTI, F.getContext(), P.Width, E.Raw,
           Report && Report->isDetailed() ? &E.AccessCosts : nullptr,
-          Mode.DefaultTTI, &E.SpillLoops,
+          &E.SpillLoops,
           vplanBackendFeedbackOutputEnabled() ? &E.Failures : nullptr);
       if (!Spill)
         E.Error = takeVPlanBackendFailure(Spill.takeError(),
@@ -528,7 +531,6 @@ bool VPlanBackendCostModel::applyCost(
                                                            : "gate"},
                      {"use_mir", Mode.MIR},
                      {"use_estimated_spill", Mode.EstimatedSpill},
-                     {"use_default_tti", Mode.DefaultTTI},
                      {"candidate", C.ID},
                      {"feedback_point", "middle-end-before-vf-selection"},
                      {"function", F.getName()},
@@ -642,7 +644,6 @@ bool VPlanBackendCostModel::applyScalar(const VPlanBackendCandidate &C,
         {"scalar_revision", ScalarEntry->Revision},
         {"use_mir", true},
         {"use_estimated_spill", Mode.EstimatedSpill},
-        {"use_default_tti", Mode.DefaultTTI},
         {"candidate", C.ID},
         {"function", F.getName()},
         {"loop", LoopIndex},
@@ -671,11 +672,7 @@ bool VPlanBackendCostModel::prepareScalar(LoopVectorizationPlanner &LVP) {
       fail("invalid scalar baseline cost");
       return false;
     }
-    StringRef Profile =
-        Mode.DefaultTTI ? "native" : TTI.getVPlanCostProfileName();
-    StringRef Revision = Profile == "native" ? "native-tti"
-                         : MIRInfo           ? MIRInfo->getRevision()
-                                             : "unavailable";
+    StringRef Profile = "native", Revision = "native-tti";
     ScalarEntry = VPBackendScalarCostEntry{
         Scalar, 0, "tti", Profile.str(), Revision.str(), std::nullopt};
     if (Report)
@@ -683,7 +680,7 @@ bool VPlanBackendCostModel::prepareScalar(LoopVectorizationPlanner &LVP) {
     return true;
   }
   InstructionCost EstimatedSpill = Mode.EstimatedSpill
-                                       ? LVP.backendScalarSpillCost(Mode)
+                                       ? LVP.backendScalarSpillCost()
                                        : InstructionCost(0);
   if (!EstimatedSpill.isValid() || EstimatedSpill < 0) {
     fail("invalid scalar estimated spill cost");
@@ -716,7 +713,7 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
   VectorizeOnly = VectorizeOnlyWhenForced;
   MIRInfo = Feedback.getMIRInfo(F);
   if (Mode.MIR && !MIRInfo) {
-    fail("target has no MIR cost sheet",
+    fail("target has no MIR pricing service",
          VPlanBackendFailureGroup::Availability);
     return false;
   }
@@ -736,8 +733,9 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
         if (VF.isScalar())
           continue;
         VPlanFeedbackTimer Preparation(vplanBackendFeedbackTimingEnabled());
-        InstructionCost Ev;
-        auto Native = LVP.backendCandidateCost(*Plan, VF, false, Ev);
+        InstructionCost Ev, EstimatedSpill;
+        auto Native =
+            LVP.backendCandidateCost(*Plan, VF, Ev, &EstimatedSpill);
         if (!Native.isValid()) {
           PreparationError =
               VPlanBackendFailure{VPlanBackendFailureGroup::Pricing,
@@ -773,19 +771,16 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
           return false;
         }
         Preparation.mark("native_ic");
-        InstructionCost EstimatedSpill;
         auto Profile = Native;
-        Ev = 0;
         if (Mode.MIR) {
-          if (Mode.EstimatedSpill)
-            EstimatedSpill = LVP.backendSpillCost(*Plan, VF, Mode);
-        } else
-          Profile = LVP.backendCandidateCost(*Plan, VF, !Mode.DefaultTTI, Ev,
-                                             &EstimatedSpill);
-        if (!Profile.isValid() || !Ev.isValid() || !EstimatedSpill.isValid()) {
+          Ev = 0;
+          if (!Mode.EstimatedSpill)
+            EstimatedSpill = 0;
+        }
+        if (!Ev.isValid() || !EstimatedSpill.isValid()) {
           PreparationError =
               VPlanBackendFailure{VPlanBackendFailureGroup::Pricing,
-                                  "invalid profile candidate cost",
+                                  "invalid candidate spill estimate",
                                   "",
                                   "selection",
                                   {},
@@ -797,7 +792,7 @@ bool VPlanBackendCostModel::prepare(LoopVectorizationPlanner &LVP,
              ":" + Twine(PlanIndex) + ":" + (VF.isScalable() ? "s" : "f") +
              Twine(VF.getKnownMinValue()) + ":ic" + Twine(IC) + ":main")
                 .str();
-        Preparation.mark("profile_cost");
+        Preparation.mark("candidate_setup");
         printCostTiming(ID, Preparation);
         VPlanBackendCandidate C{ID,
                                 unsigned(PlanIndex),
@@ -845,18 +840,15 @@ bool VPlanBackendCostModel::prepareEpilogue(
       MPI = Index;
   }
   VPlanFeedbackTimer Preparation(vplanBackendFeedbackTimingEnabled());
-  InstructionCost Ev;
-  auto Native = LVP.backendCandidateCost(Plan, VF, false, Ev);
-  InstructionCost EstimatedSpill;
+  InstructionCost Ev, EstimatedSpill;
+  auto Native = LVP.backendCandidateCost(Plan, VF, Ev, &EstimatedSpill);
   auto Profile = Native;
-  Ev = 0;
   if (Mode.MIR) {
-    if (Mode.EstimatedSpill)
-      EstimatedSpill = LVP.backendSpillCost(Plan, VF, Mode);
-  } else
-    Profile = LVP.backendCandidateCost(Plan, VF, !Mode.DefaultTTI, Ev,
-                                       &EstimatedSpill);
-  if (!Native.isValid() || !Profile.isValid() || !Ev.isValid() ||
+    Ev = 0;
+    if (!Mode.EstimatedSpill)
+      EstimatedSpill = 0;
+  }
+  if (!Native.isValid() || !Ev.isValid() ||
       !EstimatedSpill.isValid()) {
     fail("invalid epilogue TTI cost");
     return false;
@@ -873,7 +865,7 @@ bool VPlanBackendCostModel::prepareEpilogue(
       Plan.hasScalarTail(),
       InterleaveOnly,
       VectorizeOnly};
-  Preparation.mark("native_and_profile_cost");
+  Preparation.mark("native_cost");
   printCostTiming(C.ID, Preparation);
   C.IsEpilogue = true;
   C.IC = 1;
@@ -898,7 +890,6 @@ json::Object VPlanBackendCostModel::attemptSummary() const {
     Observations.push_back(summarizeVPlanBackendResult(O));
   return json::Object{{"model", Mode.name()},
                       {"use_estimated_spill", Mode.EstimatedSpill},
-                      {"use_default_tti", Mode.DefaultTTI},
                       {"status", Failed ? "failed" : "succeeded"},
                       {"failures", summarizeVPlanBackendFailures(Failures)},
                       {"observations", std::move(Observations)}};
@@ -920,9 +911,7 @@ void VPlanBackendCostModel::selection(ElementCount VF, unsigned IC,
   json::Object Row{{"model", Mode.name()},
                    {"requested_model", Requested.name()},
                    {"requested_estimated_spill", Requested.EstimatedSpill},
-                   {"requested_default_tti", Requested.DefaultTTI},
                    {"use_estimated_spill", Mode.EstimatedSpill},
-                   {"use_default_tti", Mode.DefaultTTI},
                    {"effective_model", Mode.name()},
                    {"status", "selected"},
                    {"function", F.getName()},

@@ -5,7 +5,8 @@
 This fork adds in-process VPlan VF selection. Preserve upstream LLVM options and
 behavior. README owns usage/build/test commands; BACKEND_FEEDBACK.md owns module,
 probe, selection, fallback and reporting contracts. costsheet/rule.md owns units
-and conversion; target sheets own prices, revisions, evidence and assumptions.
+and conversion; costsheet/generic_mirinfo.md owns current MIR instruction prices,
+revisions and assumptions. Target sheets retain historical tuning evidence.
 Update these documents instead of adding overlapping reports. Keep historical
 measurements distinct from the current compiler and describe artifact availability
 accurately.
@@ -33,7 +34,7 @@ accurately.
 
 ## Backend invariants
 
-Keep CostSheet/Pricing, Probing and Gate/Pruning responsibilities separate. LV
+Keep MIRInfo/Pricing, Probing and Gate/Pruning responsibilities separate. LV
 coordinates whole-loop attempts and adopts/discards their costs, selections and
 provisional reports together. Preserve the Vectorize→analysis callback→Passes→
 TargetMachine dependency direction.
@@ -51,9 +52,12 @@ policy unless explicitly changed. Non-MIR spill estimates/observations use
 profile-independent SpillReloadUnits and the configured aggregate class hook.
 Observed units remain homogeneous by class, direction and physical group.
 
-Tuned profiles apply at Kunminghu128 and Saturn GEN/Shuttle/K1 256. Other settings
-use generic MIR and native TTI. Default-TTI affects both estimated spill terms
-independently of MIR-sheet selection. TTI scalar baselines use configured TTI;
+All supported RISC-V settings use Generic MIRInfo and native RISCVTTIImpl,
+retaining actual ISA, VLEN, DLEN and native tuning. CPU-specific CostSheet and
+TTI overrides and the use-default-tti option are removed. Four comparisons remain:
+LLVM baseline, LLVM with observed vector spill, MIR with native estimated spill,
+and MIR with observed spill. Former target tuning is retained under costsheet/.
+TTI scalar baselines use configured TTI;
 MIR shares one original-loop VF1/IC1 probe per attempt and applies estimated-spill
 substitution symmetrically. Preserve exact scalar rational ranking and tails.
 

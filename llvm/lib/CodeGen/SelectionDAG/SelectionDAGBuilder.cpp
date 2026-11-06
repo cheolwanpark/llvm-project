@@ -10789,6 +10789,16 @@ determineConstraints(ConstraintDecisionInfo &Info,
   // this to the ultimately generated inline asm machineinstr.  To do this, we
   // pass in the third operand as this (potentially null) inline asm MDNode.
   const MDNode *SrcLoc = Call.getMetadata("srcloc");
+  // Preserve the IR argument count for the private backend observation
+  // pipeline. Keep srcloc separate: it retains its existing assembler
+  // diagnostic meaning.
+  if (Call.getFunction()->hasFnAttribute("vplan.backend.candidate")) {
+    auto &C = Call.getContext();
+    SrcLoc = MDNode::get(C, {MDString::get(C, "vplan.asm.arguments"),
+                             ConstantAsMetadata::get(ConstantInt::get(
+                                 Type::getInt32Ty(C), Call.arg_size())),
+                             const_cast<MDNode *>(SrcLoc)});
+  }
   Info.AsmNodeOperands.push_back(DAG.getMDNode(SrcLoc));
 
   // Remember the HasSideEffect, AlignStack, AsmDialect, MayLoad and MayStore

@@ -12,7 +12,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/DiagnosticInfo.h"
@@ -43,10 +42,7 @@ VPlanBackendFeedback::Batch VPlanBackendProbePool::run(
     unsigned Count, function_ref<VPlanBackendProbeResult(unsigned)> Probe,
     function_ref<void(unsigned, const VPlanBackendProbeResult &)> Completed) {
   SmallVector<std::optional<VPlanBackendProbeResult>, 0> Slots(Count);
-  auto Run = [&](unsigned I) {
-    VPlanCostProfileScope NativeScope(false);
-    Slots[I].emplace(Probe(I));
-  };
+  auto Run = [&](unsigned I) { Slots[I].emplace(Probe(I)); };
   if (LLVM_ENABLE_THREADS && Count > 1 && Threads > 1) {
     if (!Pool)
       Pool = std::make_unique<DefaultThreadPool>(hardware_concurrency(Threads));
@@ -627,7 +623,6 @@ public:
   Expected<VPlanBackendFeedback::Batch>
   queryUncached(const Function &F, const BasicBlock &Header,
                 ArrayRef<VPlanBackendCandidate> Candidates) {
-    VPlanCostProfileScope NativeScope(false);
     std::string Reason = Threads > 1 ? serialReason(F) : std::string();
     if (!Reason.empty() && !Warned) {
       for (const auto &C : Candidates)

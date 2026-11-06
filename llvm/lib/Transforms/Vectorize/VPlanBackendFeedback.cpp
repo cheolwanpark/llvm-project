@@ -28,22 +28,14 @@ static cl::opt<bool>
 static cl::opt<bool> UseEstimatedSpill(
     "use-estimated-spill", cl::Hidden, cl::init(false),
     cl::desc("Use estimated spill costs in VPlan backend selection"));
-static cl::opt<bool> UseDefaultTTI(
-    "use-default-tti", cl::Hidden, cl::init(false),
-    cl::desc("Use default TTI for all VPlan backend TTI queries"));
 bool llvm::vplanBackendUseMIR() { return EnableBackendCostModel && UseMIR; }
 bool llvm::vplanBackendUseEstimatedSpill() {
   return EnableBackendCostModel && UseEstimatedSpill;
 }
-bool llvm::vplanBackendUseDefaultTTI() {
-  return EnableBackendCostModel && UseDefaultTTI;
-}
 StringRef VPlanBackendMode::name() const {
   if (MIR)
     return EstimatedSpill ? "mir-me-spill-v1" : "mir-v1";
-  if (DefaultTTI)
-    return EstimatedSpill ? "llvm-v1" : "llvm-real-vector-spill-v1";
-  return EstimatedSpill ? "tti-v1" : "tti-real-vector-spill-v1";
+  return EstimatedSpill ? "llvm-v1" : "llvm-real-vector-spill-v1";
 }
 StringRef llvm::vplanBackendModelName() {
   return VPlanBackendMode::requested().name();
@@ -127,7 +119,13 @@ static json::Object summarizeObservation(const VPlanBackendObservation &O) {
                         {"sew", MI.SEW},
                         {"index_emul8", MI.IndexEMUL8},
                         {"index_eew", MI.IndexEEW},
+                        {"memory_alignment", MI.MemoryAlignment},
+                        {"address_space", MI.AddressSpace},
+                        {"call", MI.Call},
+                        {"matrix_lambda", MI.MatrixLambda},
                         {"register_groups8", std::move(Groups)}};
+        if (MI.InlineAsmArguments)
+          Op["inline_asm_arguments"] = *MI.InlineAsmArguments;
         if (!MI.Text.empty())
           Op["mir"] = MI.Text;
         Body.push_back(std::move(Op));
@@ -258,6 +256,5 @@ void llvm::emitVPlanBackendFailures(StringRef Function, unsigned Invocation,
                    {"requested_model", Requested.name()},
                    {"effective_model", Effective},
                    {"requested_estimated_spill", Requested.EstimatedSpill},
-                   {"requested_default_tti", Requested.DefaultTTI},
                    {"attempts", json::Array(Attempts)}});
 }

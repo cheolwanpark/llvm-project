@@ -73,23 +73,6 @@ protected:
   InstructionCost getSlideCost(FixedVectorType *Tp, ArrayRef<int> Mask,
                                TTI::TargetCostKind CostKind) const;
 
-  enum class MemoryCostPath { Strided, Segment };
-  virtual std::optional<InstructionCost>
-  profileOpcodeCost(unsigned Opcode, MVT VT, TTI::TargetCostKind Kind) const {
-    return std::nullopt;
-  }
-  virtual std::optional<InstructionCost> profileArithmeticInstruction(
-      unsigned Opcode, MVT VT, TTI::TargetCostKind Kind,
-      TTI::OperandValueInfo O1, TTI::OperandValueInfo O2) const {
-    return std::nullopt;
-  }
-  virtual InstructionCost
-  profileMemoryCost(InstructionCost Cost, MemoryCostPath Path, unsigned Opcode,
-                    TTI::TargetCostKind Kind, Type *DataTy,
-                    unsigned Fields) const {
-    return Cost;
-  }
-
 public:
   explicit RISCVTTIImpl(const RISCVTargetMachine *TM, const Function &F)
       : BaseT(TM, F.getDataLayout()), ST(TM->getSubtargetImpl(F)),

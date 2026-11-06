@@ -7,6 +7,7 @@
 #include "RISCVVPlanSpill.h"
 #include "llvm/Analysis/LoopBackedgeAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/TargetMIRInfo.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/IR/CFG.h"
@@ -253,4 +254,26 @@ TEST_F(RISCVBackendObservation, FailedLoopLeavesIndependentZeroObservation) {
   EXPECT_EQ(Result->Spill.Loops.front().SelectedBlockCount, 1u);
   EXPECT_TRUE(Result->Spill.Loops.front().Spills.empty());
   EXPECT_EQ(Result->Spill.Loops.front().TrackingID, LoopID);
+}
+
+TEST_F(RISCVBackendObservation, MatrixPricesFollowReachingConfiguration) {
+  auto *Setup = block(Entry), *B = block(Body);
+  Setup->addSuccessor(B);
+  BuildMI(*Setup, Setup->end(), DebugLoc(), TII->get(RISCV::VSETVLI))
+      .addReg(RISCV::X0, RegState::Define).addReg(RISCV::X0)
+      .addImm(RISCVVType::encodeVTYPE(RISCVVType::LMUL_1, 32, true, true));
+  auto matrix = [&](unsigned Opcode) {
+    return BuildMI(*B, B->end(), DebugLoc(), TII->get(Opcode))
+        .addReg(RISCV::V8, RegState::Define).addReg(RISCV::V8)
+        .addReg(RISCV::V4).addReg(RISCV::V20).getInstr();
+  };
+  F->addFnAttr("target-features", "+v,+experimental-zvvmm");
+  auto Info = TM->getTargetMIRInfo(*F);
+  auto Base = Info->getInstructionCost(vplan::collectMIRInstruction(*matrix(RISCV::VMMACC_VV), false));
+  ASSERT_TRUE(bool(Base)) << toString(Base.takeError());
+  auto Wide = Info->getInstructionCost(vplan::collectMIRInstruction(*matrix(RISCV::VWMMACC_VV), false));
+  ASSERT_TRUE(bool(Wide)) << toString(Wide.takeError());
+  EXPECT_EQ(Wide->Numerator * Base->Denominator,
+            2 * Base->Numerator * Wide->Denominator);
+  EXPECT_EQ(Base->CountSource, "nominal-capacity;lambda-cost-midrange");
 }

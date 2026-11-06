@@ -22,6 +22,12 @@ struct VPlanBackendObservationOptions {
 /// Zero geometry denotes unavailable information, never a guessed value.
 struct VPlanMIRInstruction {
   std::string Opcode, BaseOpcode, Text;
+  unsigned BaseOpcodeID = ~0u;
+  unsigned MatrixLambda = 0; // Zero means implementation-selected, not observed.
+  bool Call = false;
+  std::optional<unsigned> InlineAsmArguments;
+  uint64_t MemoryAlignment = 0;
+  unsigned AddressSpace = 0;
   bool Vector = false, Pseudo = false, Configuration = false;
   bool Load = false, Store = false, Spill = false;
   unsigned LMUL8 = 0, SEW = 0, IndexEMUL8 = 0, IndexEEW = 0;

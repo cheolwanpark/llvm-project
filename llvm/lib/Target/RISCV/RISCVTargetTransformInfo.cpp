@@ -62,10 +62,6 @@ RISCVTTIImpl::getRISCVInstructionCost(ArrayRef<unsigned> OpCodes, MVT VT,
     return LMULCost * NumInstr;
   InstructionCost Cost = 0;
   for (auto Op : OpCodes) {
-    if (auto Tuned = profileOpcodeCost(Op, VT, CostKind)) {
-      Cost += *Tuned;
-      continue;
-    }
     switch (Op) {
     case RISCV::VRGATHER_VI:
       Cost += TLI->getVRGatherVICost(VT);
@@ -1144,9 +1140,7 @@ InstructionCost RISCVTTIImpl::getInterleavedMemoryOpCost(
         // Otherwise, the cost is proportional to the number of elements (VL *
         // Factor ops).
         unsigned NumLoads = getEstimatedVLFor(VTy);
-        return profileMemoryCost(NumLoads * TTI::TCC_Basic,
-                                 MemoryCostPath::Segment, Opcode,
-                                 CostKind, SubVecTy, Factor);
+        return NumLoads * TTI::TCC_Basic;
       }
     }
   }
@@ -1257,7 +1251,6 @@ RISCVTTIImpl::getGatherScatterOpCost(const MemIntrinsicCostAttributes &MICA,
   // know exactly what VL will be.
   auto &VTy = *cast<VectorType>(DataTy);
   unsigned NumLoads = getEstimatedVLFor(&VTy);
-  // This query has no index geometry for a CostSheet instruction.
   return NumLoads * TTI::TCC_Basic;
 }
 
@@ -1321,10 +1314,7 @@ RISCVTTIImpl::getStridedMemoryOpCost(const MemIntrinsicCostAttributes &MICA,
   // know exactly what VL will be.
   auto &VTy = *cast<VectorType>(DataTy);
   unsigned NumLoads = getEstimatedVLFor(&VTy);
-  unsigned Opcode = MICA.getID() == Intrinsic::experimental_vp_strided_load
-                        ? Instruction::Load : Instruction::Store;
-  return profileMemoryCost(NumLoads * TTI::TCC_Basic, MemoryCostPath::Strided,
-                           Opcode, CostKind, DataTy, 1);
+  return NumLoads * TTI::TCC_Basic;
 }
 
 InstructionCost
@@ -2887,13 +2877,8 @@ InstructionCost RISCVTTIImpl::getArithmeticInstrCost(
                                          Args, CxtI);
   }
 
-  auto Tuned = profileArithmeticInstruction(Opcode, LT.second, CostKind,
-                                            Op1Info, Op2Info);
-  InstructionCost InstrCost =
-      Tuned ? *Tuned : getRISCVInstructionCost(Op, LT.second, CostKind);
-  // Keep native FP scaling for inherited estimates. CostSheet results already
-  // include their operation price.
-  if (!Tuned && Ty->isFPOrFPVectorTy())
+  InstructionCost InstrCost = getRISCVInstructionCost(Op, LT.second, CostKind);
+  if (Ty->isFPOrFPVectorTy())
     InstrCost *= 2;
   return CastCost + ConstantMatCost + LT.first * InstrCost;
 }

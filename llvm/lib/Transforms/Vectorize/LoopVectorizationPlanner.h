@@ -916,15 +916,12 @@ public:
   void plan(ElementCount UserVF, unsigned UserIC);
 
   InstructionCost backendCandidateCost(VPlan &Plan, ElementCount VF,
-                                       bool Profile,
                                        InstructionCost &VectorSpill,
                                        InstructionCost *TotalSpill = nullptr);
-  /// Scalar IR baseline for this explicit backend selection attempt. Scope
-  /// only these queries; IC, planning and probe optimization stay native.
+  /// Native scalar IR baseline for this backend selection attempt.
   InstructionCost backendScalarCost(VPlanBackendMode Mode);
-  InstructionCost backendScalarSpillCost(VPlanBackendMode Mode);
-  InstructionCost backendSpillCost(VPlan &Plan, ElementCount VF,
-                                   VPlanBackendMode Mode);
+  InstructionCost backendScalarSpillCost();
+  InstructionCost backendSpillCost(VPlan &Plan, ElementCount VF);
   unsigned limitBackendIC(VPlan &Plan, unsigned IC) const;
   StringRef candidateRejection(VPlan &Plan, ElementCount VF) const;
   void resetVFSelection() {

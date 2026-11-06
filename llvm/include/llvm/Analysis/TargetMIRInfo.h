@@ -11,6 +11,8 @@ struct MIRInstructionCost {
   std::string Rule;
   bool Unknown = false;
   int64_t Numerator = 0, Denominator = 1;
+  std::string Evidence = {}, CountSource = {};
+  unsigned PriceGroup8 = 0;
 };
 /// Target-owned, read-only pricing of owned MIR facts. No IR or machine pass
 /// state, measured timings, or choice of VF enters this interface.

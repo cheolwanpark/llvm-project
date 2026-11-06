@@ -1453,6 +1453,16 @@ EmitSpecialNode(SDNode *Node, bool IsClone, bool IsCloned,
     // Get the mdnode from the asm if it exists and add it to the instruction.
     SDValue MDV = Node->getOperand(InlineAsm::Op_MDNode);
     const MDNode *MD = cast<MDNodeSDNode>(MDV)->getMD();
+    if (MD && MD->getNumOperands() == 3 &&
+        isa_and_nonnull<MDString>(MD->getOperand(0)) &&
+        cast<MDString>(MD->getOperand(0))->getString() ==
+            "vplan.asm.arguments") {
+      MIB.addMetadata(MDNode::get(MF->getFunction().getContext(),
+                                  {MD->getOperand(0), MD->getOperand(1)}));
+      MD = dyn_cast_or_null<MDNode>(MD->getOperand(2));
+      if (!MD)
+        MD = MDNode::get(MF->getFunction().getContext(), {});
+    }
     if (MD)
       MIB.addMetadata(MD);
 

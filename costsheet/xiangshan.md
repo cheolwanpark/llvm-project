@@ -1,3 +1,6 @@
+> Source snapshot: `archive/`, from checkout 6e6cf039e3676069dd03ac25c095ef8eaaf6fc0d.
+> Retained tuning record; no longer selected by the compiler. Current pricing: [Generic MIRInfo specification](generic_mirinfo.md).
+
 # XiangShan Kunminghu v2
 
 Effective tune CPU: `xiangshan-kunminghu`; exact VLEN: 128.
@@ -51,8 +54,8 @@ widening/narrowing and index geometry before selecting the opcode formula.
 For folded FP reduction,
 `Fold=(min(log2(G)-3,0)+C+8) mod 8`, where C is 3/2/1 for SEW 16/32/64.
 Mask logic, scalar extract/insert and moves use opcode-specific fixed/group rules.
-[Opcode classification](../llvm/lib/Target/RISCV/RISCVCostSheetTables.inc) and
-[geometry/formulas](../llvm/lib/Target/RISCV/RISCVCostSheet.cpp) define the exact
+[Opcode classification](archive/RISCVCostSheetTables.inc) and
+[geometry/formulas](archive/RISCVCostSheet.cpp) define the exact
 supported forms. Unknown opcodes have explicit unknown pricing; invalid geometry
 or required unsupported precision fails.
 

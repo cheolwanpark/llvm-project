@@ -51,6 +51,14 @@ def decisions(rows):
     return [r for r in rows if r['status'] == 'selected']
 
 
+def failures(rows):
+    return [r for r in rows if r['status'] == 'backend-failures']
+
+
+def fell_back(rows):
+    return any(r['requested_model'] != r['effective_model'] for r in decisions(rows))
+
+
 def costs(rows):
     return [(r['candidate'], r['model'], exact(r, 'body')) for r in candidates(rows)]
 
@@ -81,20 +89,22 @@ def check_formula(row, mir, estimated):
     if mir:
         obs = row['observation']['mir_observation']
         assert obs['status'] == 'succeeded' and obs['stage'] == 'post-frame-lowering'
-        assert obs['schema'] == 'mir-body-observation-v3'
+        assert row['observation']['observation_schema'] == 'backedge-loop-observations-v4'
+        assert obs['schema'] == 'mir-body-observation-v5'
         assert obs['mapping_kind'] == 'backedge-loops'
         assert 'iteration_width' not in obs and 'body' not in obs
-        assert len(obs['loops']) == len(row['mir_loops']) > 0
+        loops = {loop['id']: loop for loop in obs['loops']}
+        assert row['mir_loops'] and len(loops) == len(obs['loops'])
         body = spill = Fraction(0)
-        for loop, prices in zip(obs['loops'], row['mir_loops']):
-            assert loop['id'] == prices['id']
+        for prices in row['mir_loops']:
+            loop = loops[prices['id']]
             raw_body = sum(Fraction(c['numerator'], c['denominator'])
                            for c in prices['instructions'])
             raw_spill = sum(Fraction(c['numerator'], c['denominator'])
                             for op, c in zip(loop['body'], prices['instructions'])
                             if op['spill_slot'])
             scale = Fraction(4 * row['tti_width'],
-                             loop['iteration_width'] * len(obs['loops']))
+                             loop['iteration_width'] * len(row['mir_loops']))
             assert exact(prices, 'body') == raw_body * scale
             assert exact(prices, 'spill') == raw_spill * scale
             body += raw_body * scale
@@ -120,43 +130,61 @@ def pipeline():
     observed = [r['observation'] for r in candidates(zero)]
     assert observed
     for obs in observed:
+        assert obs['observation_schema'] == 'backedge-loop-observations-v4'
+        assert obs['spill_observation']['schema'] == 'rvv-vector-spill-v5'
         assert obs['spill_observation']['status'] == 'succeeded'
         assert all(not loop['spills'] for loop in obs['spill_observation']['loops'])
         assert obs['mir_observation']['status'] == 'not_requested'
     path = pressure()
-    # Each algebraic mode once; default-TTI is an orthogonal policy boundary.
-    for label, mir, estimated, default in [('real', False, False, False),
-                                         ('estimated', False, True, False),
-                                         ('mir', True, False, False),
-                                         ('mir-estimated', True, True, False),
-                                         ('mir-native-estimate', True, True, True)]:
+    # Four observable cost compositions, all using native TTI.
+    for label, mir, estimated in [('real', False, False),
+                                  ('estimated', False, True),
+                                  ('mir', True, False),
+                                  ('mir-estimated', True, True)]:
         flags = forced + [f'-use-mir={str(mir).lower()}',
-                          f'-use-estimated-spill={str(estimated).lower()}',
-                          f'-use-default-tti={str(default).lower()}']
+                          f'-use-estimated-spill={str(estimated).lower()}']
         _, rows, _ = run(label, flags, path)
         scored = candidates(rows)
-        assert scored and not any('fallback' in r['status'] for r in rows), rows
+        assert scored and not fell_back(rows), rows
         for row in scored:
             check_formula(row, mir, estimated)
-            assert row['tti_profile'] == ('native' if default else 'xiangshan-v2-128')
+            assert row['tti_profile'] == 'native'
         if mir:
             scalar = [r for r in scored if r.get('role') == 'scalar-baseline']
             assert len(scalar) == 1 and scalar[0]['tti_width'] == 1
             vectors = [r for r in scored if r.get('role') != 'scalar-baseline']
             assert all(exact(r, 'scalar') == exact(scalar[0], 'body') for r in vectors)
-            assert all(r['mir_model'] == 'xiangshan-direct-v1' for r in scored)
+            assert all(r['mir_model'] == 'riscv-generic-mirinfo-v1' for r in scored)
             assert all(r['observation']['spill_observation']['status'] == 'succeeded'
                        for r in scored)
         elif not estimated:
             assert any(loop['spills'] for r in scored
                        for loop in r['observation']['spill_observation']['loops'])
+    # Saturn uses the same generic services with its own native geometry.
+    saturn = root / 'saturn-input.ll'
+    saturn.write_text(path.read_text().replace(
+        'vscale_range(2,2)',
+        'vscale_range(4,4) "tune-cpu"="saturn-shuttle-v256d128"'))
+    _, rows, _ = run('saturn', forced + ['-use-mir', '-mcpu=generic-rv64',
+                                       '-mattr=+v,+d,+f'], saturn)
+    scored = candidates(rows)
+    assert scored and not fell_back(rows), rows
+    for row in scored:
+        assert row['tti_profile'] == 'native'
+        assert row['mir_model'] == 'riscv-generic-mirinfo-v1'
+        check_formula(row, True, False)
     # MIR collection is still valid when the earlier spill observer cannot run.
     _, rows, _ = run('spill-unavailable', forced + ['-use-mir', '-disable-ssc'])
     for row in candidates(rows):
         obs = row['observation']
         assert obs['spill_observation']['status'] == 'failed'
         assert obs['mir_observation']['status'] == 'succeeded'
-    assert candidates(rows) and not any('fallback' in r['status'] for r in rows)
+    assert candidates(rows) and not fell_back(rows)
+    # A failed independent spill slot is reported even though MIR succeeds.
+    ledger, = failures(rows)
+    assert ledger['requested_model'] == ledger['effective_model'] == 'mir-v1'
+    assert ledger['attempts'][0]['status'] == 'succeeded'
+    assert any(g['id'] == 'availability' for g in ledger['attempts'][0]['failures'])
 
 
 def selection():
@@ -165,25 +193,28 @@ def selection():
     off, disabled, text = run('master-off', ['-vplan-backend=false', '-use-mir',
                               '-use-estimated-spill', '-vplan-backend-time'])
     assert off == native and not rows and not disabled and not text
+    # An externally restricted pipeline makes every required probe unavailable.
     for label, flags, expected in [
             ('mir-real', ['-use-mir'], ['mir-v1', 'llvm-real-vector-spill-v1', 'llvm-v1']),
             ('mir-est', ['-use-mir', '-use-estimated-spill'], ['mir-me-spill-v1', 'llvm-v1']),
             ('real', [], ['llvm-real-vector-spill-v1', 'llvm-v1'])]:
-        _, rows, report = run(label, forced + flags + ['-use-default-tti',
-                            '-riscv-rvv-regalloc=fast', '-print-detailed-vplans'])
-        fallback = next(r for r in rows if r['status'] == 'estimated-fallback')
+        _, rows, report = run(label, forced + flags + [
+                            '-stop-before=prologepilog', '-print-detailed-vplans'])
+        fallback, = failures(rows)
+        assert fallback['schema'] == 'vplan-backend-failures-v1'
+        assert fallback['requested_model'] == expected[0]
+        assert fallback['effective_model'] == 'llvm-v1' and fell_back(rows)
         assert [a['model'] for a in fallback['attempts']] == expected
-        assert all(a['use_default_tti'] for a in fallback['attempts'])
+        assert [a['status'] for a in fallback['attempts']] == (
+            ['failed'] * (len(expected) - 1) + ['succeeded'])
         assert not any(r.get('role') == 'scalar-baseline' for r in rows)
         assert all(r['model'] == 'llvm-v1' for r in candidates(rows))
         assert 'backend-scalar source=mir' not in report
-    # An externally restricted pipeline is uncollected, never observed zero.
-    _, rows, _ = run('late-unavailable', forced + ['-use-mir', '-use-default-tti',
-                                                '-stop-before=prologepilog'])
-    fallback = next(r for r in rows if r['status'] == 'estimated-fallback')
-    obs = fallback['attempts'][0]['observations'][0]
-    assert obs['spill_observation']['status'] == 'not_collected'
-    assert obs['mir_observation']['status'] == 'not_collected'
+        if label == 'mir-real':
+            # Unavailable slots are uncollected, never observed zero.
+            obs = fallback['attempts'][0]['observations'][0]
+            assert obs['spill_observation']['status'] == 'not_collected'
+            assert obs['mir_observation']['status'] == 'not_collected'
     # Report requests may enrich text, but never change prices, selection or IR.
     flags = forced + ['-use-mir']
     silent, _, _ = run('silent', flags, diagnostic=False)
@@ -204,7 +235,7 @@ def selection():
 def scopes():
     flags = ['-codegen-opt-level=3', '-disable-loop-unrolling=false',
              '-scalable-vectorization=off', '-force-vector-width=16',
-             '-vplan-backend-force-all', '-use-default-tti']
+             '-vplan-backend-force-all']
     for trips in (64, 16):
         path = root / f'trips-{trips}.ll'
         path.write_text(source.read_text().replace('%next, 64', f'%next, {trips}'))
@@ -215,9 +246,11 @@ def scopes():
         observed = [obs['spill_observation'] for attempt in attempts
                     for obs in attempt.get('observations', [])]
         assert observed, rows
-        assert any(o['status'] == 'failed' and
-                   'unsupported-finite-body' in o['failure'] for o in observed), rows
-        assert any('fallback' in r['status'] for r in rows), rows
+        assert any(o['status'] == 'failed' for o in observed), rows
+        assert any(group['id'] in ('availability', 'tracking')
+                   for row in failures(rows) for attempt in row['attempts']
+                   for group in attempt['failures']), rows
+        assert fell_back(rows), rows
     # Upstream instrumentation remains independent of body membership.
     path = root / 'instrumented-input.ll'
     text = (source.parent / 'backend-pipeline.ll').read_text()

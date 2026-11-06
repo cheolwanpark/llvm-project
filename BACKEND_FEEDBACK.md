@@ -10,7 +10,7 @@ and target documents own prices and evidence.
 
 | Module | Owns | Does not own |
 |---|---|---|
-| CostSheet / Pricing | CPU/exact-VLEN profiles, TTI/MIR information, facts pricing, exact normalization and cost composition | Probe execution, observation success or cancellation |
+| MIRInfo / Pricing | Native subtarget pricing, TTI/MIR information, facts pricing, exact normalization and cost composition | Probe execution, observation success or cancellation |
 | Probing | Materialization, backedge tracking, iteration widths, native suffix/backend, independent observations, raw cache and worker lifetime | Prices, dominance or fallback model order |
 | Gate / Pruning | Pressure bounds, candidate ordering, dominance, cancellation requests and CFG reduction policy | Mapping decisions, payload ownership or worker joins |
 
@@ -42,13 +42,11 @@ Scalar baseline means the original loop at VF1/IC1. Scalar spill means GPR/FPR
 spill/reload, including accesses inside a vector body. TTI real-spill replaces
 only vector spills and preserves scalar spill estimates. Its scalar baseline
 retains upstream IR costing without adding a separate pressure-spill estimate.
-MIR observes and prices both scalar and vector bodies with the same sheet.
+MIR observes and prices both scalar and vector bodies with the same Generic MIRInfo.
 
-Default-TTI selects scalar/vector TTI comparison costs and both MIR estimated
-spill terms independently of the MIR sheet. Successful pure-MIR pricing and
-selection are unchanged by this flag. Saturn/K1 TTI remains native. Native IC,
-probe optimization and final codegen always stay outside the tuned comparison
-scope. CPU/exact-VLEN selection and prices are in the target sheets.
+All TTI queries use native RISCVTTIImpl. Generic MIRInfo snapshots the actual
+subtarget's native pricing inputs; CPU-specific sheets and scoped overrides are
+removed. Native IC, probe optimization and final codegen retain upstream policy.
 
 For N successfully priced native loops, selection uses the uniform mean
 `Wtti × Σ(Cq/Wq) / N`. Each `Wq` includes IC and proven serial unrolling;
@@ -63,8 +61,7 @@ and positive denominators, with 128-bit comparison cross products. Required cost
 overflow fails the attempt; a pruning-proof overflow leaves the candidate live.
 
 These ablations are not a fully orthogonal experiment: TTI versus MIR changes
-body representation, scalar baseline and spill coverage together. Default versus
-tuned changes scalar and vector comparison prices together. Build success or an
+body representation, scalar baseline and spill coverage together. Build success or an
 ELF variant name does not establish that the requested model was applied; inspect
 the effective model and fallback ledger.
 
@@ -203,7 +200,7 @@ rationals throughout.
 | TTI observed | TTI observed → TTI estimated → native |
 | TTI estimated | TTI estimated → native |
 
-Every attempt retains the requested default/tuned policy. Scalar selection is a
+Every attempt retains the requested spill policy. Scalar selection is a
 successful attempt. Required scalar/main/epilogue failure discards that attempt's
 cost table, scalar baseline, pruning, selection and provisional reports.
 
@@ -275,9 +272,10 @@ execution and warn once when multiple main queries actually need it.
 
 ## Pricing and reports
 
-Target evidence and prices: [XiangShan](costsheet/xiangshan.md),
-[Saturn](costsheet/saturn.md), [K1](costsheet/k1.md). RVV capability is checked
-before VLEN queries. Generic MIR and native TTI cover other CPU/VLEN settings.
+Current instruction pricing follows [Generic MIRInfo specification](costsheet/generic_mirinfo.md),
+revision `generic-mirinfo-native-v1`. RVV capability is checked before VLEN
+queries. All supported CPUs use native TTI and Generic MIRInfo. Former target
+tuning and evidence are retained under `costsheet/`, outside the build.
 
 Reports consume already computed values. They must not cause TTI queries,
 reprice candidates or compile probes. Native fallback discards attempted backend
@@ -302,7 +300,7 @@ The only failure/exclusion report is `schema=vplan-backend-failures-v1`,
 `status=backend-failures`, appended through `-vplan-backend-jsonl`. One row per
 original LV loop is emitted only when records exist and contains `function`,
 `invocation`, `loop`, `requested_model`, `effective_model` and ordered `attempts`. Each attempt retains `model`,
-`use_estimated_spill`, `use_default_tti`, `status` (`failed` or `succeeded`), owned
+`use_estimated_spill`, `status` (`failed` or `succeeded`), owned
 `observations`, and `failures`. An exclusion can accompany a successful requested
 model; actual fallback means requested and effective models differ. Native fallback
 uses `effective_model=native` and the same ledger, discarding attempted cost rows.

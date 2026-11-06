@@ -1,3 +1,5 @@
+> Retained tuning record; no longer selected by the compiler. Current pricing: [Generic MIRInfo specification](generic_mirinfo.md).
+
 # Saturn GEN/Shuttle V256D128
 
 Effective tune CPU: `saturn-shuttle-v256d128`; exact VLEN: 256.
@@ -44,8 +46,7 @@ Q, consistent with whole-register instruction prices. Group/access validation is
 retained. Unknown opcodes cost 1 with an explicit unknown flag; invalid geometry
 fails. Ordinary MIR body cost already includes spills.
 
-The implementation is [RISCVCostSheet.cpp](../llvm/lib/Target/RISCV/RISCVCostSheet.cpp),
-with opcode classification in [the tables](../llvm/lib/Target/RISCV/RISCVCostSheetTables.inc).
+The implementation is [RISCVCostSheet.cpp](archive/RISCVCostSheet.cpp),
+with opcode classification in [the tables](archive/RISCVCostSheetTables.inc).
 This MIR table does not reproduce every TTI legalization/materialization sequence,
-so equality with all IR prices is not claimed. Default-TTI does not replace the
-MIR sheet; scalar/vector composition follows the backend contract.
+so equality with all IR prices is not claimed. The former Default-TTI option did not replace this MIR sheet.

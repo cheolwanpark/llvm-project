@@ -214,7 +214,6 @@ LLVM_ABI_FOR_TEST Expected<VPExactCost> priceVPlanVectorSpills(
     const VPlanBackendObservation &Observation, const TargetTransformInfo &TTI,
     LLVMContext &Context, unsigned Width, InstructionCost &RawCost,
     SmallVectorImpl<VPSpillCost> *AccessCosts = nullptr,
-    bool UseDefaultTTI = false,
     SmallVectorImpl<VPSpillLoopCost> *LoopCosts = nullptr,
     SmallVectorImpl<VPlanBackendFailure> *Failures = nullptr);
 } // namespace llvm

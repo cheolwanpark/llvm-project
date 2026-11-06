@@ -1,4 +1,5 @@
-//===- VPlanBackendFeedback.h - Candidate backend queries ---------*- C++ -*-===//
+//===- VPlanBackendFeedback.h - Candidate backend queries ---------*- C++
+//-*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -215,14 +216,12 @@ public:
 LLVM_ABI bool vplanBackendFeedbackEnabled();
 LLVM_ABI bool vplanBackendUseMIR();
 LLVM_ABI bool vplanBackendUseEstimatedSpill();
-LLVM_ABI bool vplanBackendUseDefaultTTI();
 struct VPlanBackendMode {
-  bool MIR = false, EstimatedSpill = false, DefaultTTI = false;
+  bool MIR = false, EstimatedSpill = false;
   LLVM_ABI StringRef name() const;
   bool needsProbe() const { return MIR || !EstimatedSpill; }
   static VPlanBackendMode requested() {
-    return {vplanBackendUseMIR(), vplanBackendUseEstimatedSpill(),
-            vplanBackendUseDefaultTTI()};
+    return {vplanBackendUseMIR(), vplanBackendUseEstimatedSpill()};
   }
 };
 LLVM_ABI StringRef vplanBackendModelName();

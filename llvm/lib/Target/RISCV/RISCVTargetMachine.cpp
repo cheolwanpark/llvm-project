@@ -13,7 +13,7 @@
 #include "RISCVTargetMachine.h"
 #include "MCTargetDesc/RISCVBaseInfo.h"
 #include "RISCV.h"
-#include "RISCVCostSheet.h"
+#include "RISCVGenericMIRInfo.h"
 #include "RISCVMachineFunctionInfo.h"
 #include "RISCVMachineScheduler.h"
 #include "RISCVTargetObjectFile.h"
@@ -21,10 +21,7 @@
 #include "RISCVVPlanMIR.h"
 #include "RISCVVPlanMapping.h"
 #include "RISCVVPlanSpill.h"
-#include "SaturnTargetTransformInfo.h"
-#include "SpacemitK1TargetTransformInfo.h"
 #include "TargetInfo/RISCVTargetInfo.h"
-#include "XiangShanV2TargetTransformInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/CodeGen/GlobalISel/CSEInfo.h"
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
@@ -287,36 +284,8 @@ MachineFunctionInfo *RISCVTargetMachine::createMachineFunctionInfo(
       Allocator, F, static_cast<const RISCVSubtarget *>(STI));
 }
 
-namespace {
-enum class FeedbackProfile { Generic, XiangShan, Saturn, K1 };
-FeedbackProfile feedbackProfile(const RISCVSubtarget &ST) {
-  if (!ST.hasVInstructions() || ST.getRealMinVLen() != ST.getRealMaxVLen())
-    return FeedbackProfile::Generic;
-  if (ST.getRealMinVLen() == 128 && ST.getTuneCPU() == "xiangshan-kunminghu")
-    return FeedbackProfile::XiangShan;
-  if (ST.getRealMinVLen() == 256) {
-    if (ST.getTuneCPU() == "saturn-shuttle-v256d128")
-      return FeedbackProfile::Saturn;
-    if (ST.getTuneCPU() == "spacemit-x60")
-      return FeedbackProfile::K1;
-  }
-  return FeedbackProfile::Generic;
-}
-} // namespace
-
 TargetTransformInfo
 RISCVTargetMachine::getTargetTransformInfo(const Function &F) const {
-  if (!vplanBackendUseDefaultTTI())
-    switch (feedbackProfile(*getSubtargetImpl(F))) {
-    case FeedbackProfile::XiangShan:
-      return TargetTransformInfo(std::make_unique<XiangShanV2TTIImpl>(this, F));
-    case FeedbackProfile::Saturn:
-      return TargetTransformInfo(std::make_unique<SaturnTTIImpl>(this, F));
-    case FeedbackProfile::K1:
-      return TargetTransformInfo(std::make_unique<SpacemitK1TTIImpl>(this, F));
-    case FeedbackProfile::Generic:
-      break;
-    }
   return TargetTransformInfo(std::make_unique<RISCVTTIImpl>(this, F));
 }
 
@@ -325,18 +294,7 @@ RISCVTargetMachine::getTargetMIRInfo(const Function &F) const {
   const auto *ST = getSubtargetImpl(F);
   if (!ST->hasVInstructions())
     return nullptr;
-  switch (feedbackProfile(*ST)) {
-  case FeedbackProfile::XiangShan:
-    return std::make_unique<XiangShanCostSheet>();
-  case FeedbackProfile::Saturn:
-    return std::make_unique<SaturnCostSheet>();
-  case FeedbackProfile::K1:
-    return std::make_unique<SpacemitK1CostSheet>();
-  case FeedbackProfile::Generic:
-    return std::make_unique<RISCVCostSheet>(ST->getRealMinVLen(),
-                                            ST->getTuneCPU());
-  }
-  llvm_unreachable("unknown feedback profile");
+  return std::make_unique<RISCVGenericMIRInfo>(*ST);
 }
 
 // A RISC-V hart has a single byte-addressable address space of 2^XLEN bytes

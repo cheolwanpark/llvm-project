@@ -26,7 +26,6 @@ The compiler does not provide a RISC-V libc or sysroot.
 | `-vplan-backend` | Enable selection; OFF |
 | `-use-mir` | Observe and price scalar/vector MIR bodies; OFF |
 | `-use-estimated-spill` | Use TTI spill estimates; OFF |
-| `-use-default-tti` | Select native comparison TTI independently of MIR sheet; OFF |
 | `-vplan-backend-prune-cfg=false` | Disable private vector-spill CFG reduction; normally ON |
 | `-vplan-backend-probe-threads=N` | Positive main-probe worker limit; 1 |
 | `-vplan-backend-force-all` | Query real-spill candidates despite gate/pruning; OFF |
@@ -42,19 +41,16 @@ model after fallback, not merely the requested flags.
 
 ## Body/spill ablations
 
-| Additional flags | Cost source | Model ID |
+| Additional flags | Cost | Model ID |
 |---|---|---|
-| none | Selected TTI body, observed vector spills | `tti-real-vector-spill-v1` |
-| `-use-estimated-spill` | Selected TTI estimates | `tti-v1` |
-| `-use-default-tti` | Native TTI body, observed vector spills | `llvm-real-vector-spill-v1` |
-| `-use-default-tti -use-estimated-spill` | Native TTI estimates | `llvm-v1` |
-| `-use-mir` | Observed MIR body | `mir-v1` |
-| `-use-mir -use-estimated-spill` | MIR body with selected TTI spill estimates | `mir-me-spill-v1` |
+| `-use-estimated-spill` | Native TTI `L` | `llvm-v1` |
+| none | Native TTI with observed vector spill `L-Ev+Sv` | `llvm-real-vector-spill-v1` |
+| `-use-mir -use-estimated-spill` | MIR with native estimated spill `R-S+Et` | `mir-me-spill-v1` |
+| `-use-mir` | Observed MIR `R` | `mir-v1` |
 
-Both MIR modes also accept `-use-default-tti`. It selects both scalar/vector
-estimated spill terms, without changing the CPU-selected MIR sheet or successful
-pure-MIR selection. TTI estimated modes do not query the backend. MIR shares one
-original-loop VF1/IC1 scalar observation per attempt.
+All modes use native RISC-V TTI. `-use-default-tti` has been removed.
+TTI estimated mode does not query the backend. MIR shares one original-loop
+VF1/IC1 scalar observation per attempt.
 
 These modes differ in scalar baseline and spill coverage as well as body
 representation. TTI real-spill replaces only estimated vector spills; it retains
@@ -65,15 +61,13 @@ limits are in the [backend contract](BACKEND_FEEDBACK.md#bodyspill-ablation과-m
 
 ## Targets
 
-| Effective tune CPU | Exact VLEN | Prices and evidence |
-|---|---|---|
-| `xiangshan-kunminghu` | 128 | [XiangShan](costsheet/xiangshan.md) |
-| `saturn-shuttle-v256d128` (tune-only) | 256 | [Saturn GEN/Shuttle](costsheet/saturn.md) |
-| `spacemit-x60` | 256 | [K1](costsheet/k1.md) |
+XiangShan Kunminghu128 and Saturn GEN/Shuttle256 use the same native TTI and
+Generic MIRInfo implementation. Actual ISA, VLEN, DLEN and native tuning remain
+inputs; the CPU is not replaced by a generic CPU. K1's dedicated pricing profile
+is also removed, while upstream CPU/codegen support remains.
 
-Other CPU/VLEN settings use native RISC-V TTI and generic MIR prices. Functions
-without RVV retain native TTI. Saturn and K1 use native TTI even with their named
-profiles. Their MIR prices are native-relative models, not measured cycles.
+[MIR price specification](costsheet/generic_mirinfo.md) defines the new model;
+`costsheet/` retains the former tuning evidence and source snapshots.
 
 ```sh
 .cache/build/bin/clang --target=riscv64-unknown-elf -march=rv64gcv \
@@ -133,7 +127,7 @@ Focused backend contract checks:
 ```sh
 .cache/build/unittests/IR/IRTests --gtest_filter='LoopBackedge.*'
 .cache/build/unittests/Transforms/Vectorize/VectorizeTests --gtest_filter='VPlanBackendPricing.*:VPlanBackendExecution.*:BackendGate.*'
-.cache/build/unittests/Target/RISCV/RISCVTests --gtest_filter='RISCVBackendPricing.*:RISCVBackendSheets.*:RISCVBackendObservation.*'
+.cache/build/unittests/Target/RISCV/RISCVTests --gtest_filter='RISCVBackendPricing.*:RISCVBackendObservation.*'
 .cache/build/bin/llvm-lit -j 1 -v \
   llvm/test/Transforms/LoopVectorize/RISCV/backend-pipeline.ll \
   llvm/test/Transforms/LoopVectorize/RISCV/backend-scopes.ll \
@@ -142,8 +136,9 @@ Focused backend contract checks:
 ```
 
 The shared lit driver checks cost equations and meaningful observation/selection
-fields. Unit checks cover exact arithmetic, target profiles, current-loop scope,
-independent iteration widths and observation stages, raw reuse, cancellation and
+fields. Unit checks cover exact arithmetic, native target routing, current-loop scope,
+independent iteration widths and observation stages, inline asm argument pricing,
+matrix configuration/geometry, raw reuse, cancellation and
 injected whole-loop failures. Native report arithmetic/path regressions remain
 separate from these backend checks.
 
@@ -153,7 +148,7 @@ separate private feedback from normal final code generation.
 
 ## Experiments and retained data
 
-`~/scripts/gen-cost-model-sweep.sh` builds the six modes from the current binaries
+`~/scripts/gen-cost-model-sweep.sh` builds the four modes from the current binaries
 without rebuilding LLVM. Use `--llvm` to specify binaries and a new `--out`
 directory. Sweeps preserve IC1, LMUL8 and disabled vector epilogues; `k1-linux`
 selects K1 VLEN256. Identical execution images may cause ELF publication to be

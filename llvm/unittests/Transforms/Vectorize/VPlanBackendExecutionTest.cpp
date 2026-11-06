@@ -10,20 +10,14 @@
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetTransformInfoImpl.h"
-#include "llvm/Analysis/VPlanCostProfile.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
-#include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "gtest/gtest.h"
 #include <condition_variable>
 #include <mutex>
@@ -161,11 +155,9 @@ TEST(VPlanBackendExecution, CancellationJoinsAndLeavesWorkersReusable) {
   std::mutex Mutex;
   std::condition_variable CV;
   bool Requested = false;
-  VPlanCostProfileScope CallerScope(true);
   auto Result = Pool.run(
       2,
       [&](unsigned I) -> VPlanBackendProbeResult {
-        EXPECT_FALSE(VPlanCostProfileScope::active());
         if (I == 1) {
           std::unique_lock<std::mutex> Lock(Mutex);
           CV.wait(Lock, [&] { return Requested; });
@@ -197,190 +189,7 @@ TEST(VPlanBackendExecution, CancellationJoinsAndLeavesWorkersReusable) {
   ASSERT_EQ(Reused.size(), 3u);
   for (unsigned I = 0; I < Reused.size(); ++I)
     EXPECT_EQ(Reused[I].Observation->Candidate, std::to_string(I));
-  EXPECT_TRUE(VPlanCostProfileScope::active());
 }
-
-#if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-namespace {
-class ReportingTTI : public TargetTransformInfoImplCRTPBase<ReportingTTI> {
-  using Base = TargetTransformInfoImplCRTPBase<ReportingTTI>;
-  unsigned &Queries;
-  bool RejectTuned;
-
-public:
-  ReportingTTI(const DataLayout &DL, unsigned &Queries, bool RejectTuned)
-      : Base(DL), Queries(Queries), RejectTuned(RejectTuned) {}
-  TypeSize getRegisterBitWidth(TTI::RegisterKind K) const override {
-    return TypeSize::get(128, K == TTI::RGK_ScalableVector);
-  }
-  unsigned getEpilogueVectorizationMinVF() const override { return 2; }
-  bool preferEpilogueVectorization(ElementCount) const override { return true; }
-  InstructionCost
-  getArithmeticInstrCost(unsigned Op, Type *Ty, TTI::TargetCostKind Kind,
-                         TTI::OperandValueInfo A, TTI::OperandValueInfo B,
-                         ArrayRef<const Value *> Args,
-                         const Instruction *I = nullptr) const override {
-    ++Queries;
-    if (RejectTuned && VPlanCostProfileScope::active() && isa<VectorType>(Ty))
-      return InstructionCost::getInvalid();
-    return Base::getArithmeticInstrCost(Op, Ty, Kind, A, B, Args, I);
-  }
-};
-} // namespace
-
-// Automatic epilogue failures and native preparation failures cannot be
-// reliably forced by target flags. Inject only those two failures here.
-TEST(VPlanBackendExecution, ReportingAndWholeLoopAttemptAreTransactional) {
-  auto &Options = cl::getRegisteredOptions();
-  auto flag = [&](StringRef Name) -> bool & {
-    return static_cast<cl::opt<bool> *>(Options[Name])->getValue();
-  };
-  SaveAndRestore Force(flag("vplan-backend-force-all"), true);
-  SaveAndRestore Epilogue(flag("enable-epilogue-vectorization"), true);
-  std::string NativeIR, NativeReport;
-  for (unsigned Scenario : {0u, 1u, 2u}) {
-    SaveAndRestore Master(flag("vplan-backend"), Scenario != 0);
-    std::string ReferenceIR;
-    unsigned ReferenceQueries = 0;
-    std::vector<bool> ReferenceProbes;
-    for (bool Print : {false, true}) {
-      SaveAndRestore Detailed(flag("print-detailed-vplans"), Print);
-      SmallString<128> FeedbackPath;
-      ASSERT_FALSE(bool(sys::fs::createTemporaryFile("backend-report", "jsonl",
-                                                     FeedbackPath)));
-      auto &Destination =
-          static_cast<cl::opt<std::string> *>(Options["vplan-backend-jsonl"])
-              ->getValue();
-      SaveAndRestore FeedbackOutput(Destination,
-                                    Print ? FeedbackPath.str().str() : "");
-      LLVMContext C;
-      SMDiagnostic E;
-      auto M = parseAssemblyString(R"(
-        target datalayout = "e-p:64:64-i64:64-n8:16:32:64-S128"
-        target triple = "riscv64"
-        define void @map(ptr noalias %a, ptr noalias %b, i64 %n) {
-        entry: br label %loop
-        loop:
-          %i = phi i64 [0, %entry], [%next, %loop]
-          %src = getelementptr i32, ptr %a, i64 %i
-          %dst = getelementptr i32, ptr %b, i64 %i
-          %x = load i32, ptr %src
-          %y = add i32 %x, 7
-          store i32 %y, ptr %dst
-          %next = add nuw i64 %i, 1
-          %end = icmp eq i64 %next, %n
-          br i1 %end, label %exit, label %loop
-        exit: ret void
-        })",
-                                   E, C);
-      ASSERT_TRUE(M);
-      unsigned Queries = 0;
-      std::vector<bool> Probes;
-      PassBuilder PB;
-      LoopAnalysisManager LAM;
-      FunctionAnalysisManager FAM;
-      CGSCCAnalysisManager CGAM;
-      ModuleAnalysisManager MAM;
-      FAM.registerPass([&] {
-        return TargetIRAnalysis([&](const Function &F) {
-          return TargetTransformInfo(std::make_unique<ReportingTTI>(
-              F.getDataLayout(), Queries, Scenario == 2));
-        });
-      });
-      FAM.registerPass([&] {
-        return VPlanBackendFeedbackAnalysis(
-            [&](const Function &, const BasicBlock &,
-                ArrayRef<VPlanBackendCandidate> Cs)
-                -> Expected<VPlanBackendFeedback::Batch> {
-              VPlanBackendFeedback::Batch Results;
-              for (const auto &Candidate : Cs) {
-                Probes.push_back(Candidate.IsEpilogue);
-                if (Candidate.IsEpilogue)
-                  Results.emplace_back(
-                      createStringError("epilogue unavailable"));
-                else {
-                  VPlanBackendResult R;
-                  R.Candidate = Candidate.ID;
-                  R.VF = Candidate.VF;
-                  R.IC = Candidate.IC;
-                  R.Spill.Status = VPlanBackendObservationStatus::Succeeded;
-                  R.Spill.IterationMapping = true;
-                  R.Spill.Loops.push_back(
-                      {1,
-                       Candidate.VF.getKnownMinValue() * Candidate.IC,
-                       1,
-                       {},
-                       {}});
-                  Results.emplace_back(std::move(R));
-                }
-              }
-              return Results;
-            });
-      });
-      PB.registerModuleAnalyses(MAM);
-      PB.registerCGSCCAnalyses(CGAM);
-      PB.registerFunctionAnalyses(FAM);
-      PB.registerLoopAnalyses(LAM);
-      PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-      FunctionPassManager FPM;
-      FPM.addPass(LoopVectorizePass());
-      testing::internal::CaptureStderr();
-      FPM.run(*M->getFunction("map"), FAM);
-      auto Report = testing::internal::GetCapturedStderr();
-      auto Feedback = MemoryBuffer::getFile(FeedbackPath);
-      ASSERT_TRUE(bool(Feedback));
-      unsigned FailureRows = 0;
-      for (auto Line : split((*Feedback)->getBuffer(), '\n')) {
-        if (Line.empty())
-          continue;
-        auto Value = json::parse(Line);
-        ASSERT_TRUE(bool(Value)) << toString(Value.takeError());
-        auto *Row = Value->getAsObject();
-        ASSERT_TRUE(Row);
-        EXPECT_TRUE(Row->getInteger("invocation"));
-        if (Row->getString("status") != "backend-failures")
-          continue;
-        ++FailureRows;
-        EXPECT_EQ(Row->getString("schema"), "vplan-backend-failures-v1");
-        EXPECT_EQ(Row->getString("effective_model"),
-                  Scenario == 2 ? "native" : "tti-v1");
-        EXPECT_FALSE(Row->get("reason"));
-      }
-      EXPECT_EQ(FailureRows, Print && Scenario != 0 ? 1u : 0u);
-      sys::fs::remove(FeedbackPath);
-      std::string IR;
-      raw_string_ostream OS(IR);
-      M->print(OS, nullptr);
-      if (!Print) {
-        ReferenceIR = IR;
-        ReferenceQueries = Queries;
-        ReferenceProbes = Probes;
-        EXPECT_TRUE(Report.empty());
-      } else {
-        EXPECT_EQ(IR, ReferenceIR);
-        EXPECT_EQ(Queries, ReferenceQueries);
-        EXPECT_EQ(Probes, ReferenceProbes);
-        if (Scenario == 0) {
-          NativeIR = IR;
-          NativeReport = Report;
-        }
-        if (Scenario == 1) {
-          EXPECT_TRUE(llvm::is_contained(Probes, true));
-          EXPECT_NE(Report.find("model=tti-v1"), std::string::npos);
-          EXPECT_EQ(Report.find(" model=tti-real-vector-spill-v1"),
-                    std::string::npos);
-        }
-        if (Scenario == 2) {
-          EXPECT_EQ(IR, NativeIR);
-          EXPECT_EQ(Report, NativeReport);
-          EXPECT_EQ(Report.find("backend-cost"), std::string::npos);
-          EXPECT_EQ(Report.find("backend-scalar"), std::string::npos);
-        }
-      }
-    }
-  }
-}
-#endif
 
 // Exercise real IR transformations and their observable normalization, not the
 // ledger API or the number/order of propagation hooks.
