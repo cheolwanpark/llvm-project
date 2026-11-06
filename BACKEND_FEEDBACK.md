@@ -110,7 +110,6 @@ setup/destroy overhead.
 Owned results contain no IR/MachineInstr pointers. MIR text is captured only when
 requested for detailed reporting.
 
-<a id="related-block-mapping"></a>
 <a id="backedge-loop-mapping"></a>
 
 ## Body mapping and normalization
@@ -123,9 +122,11 @@ scalar baseline starts at 1. IDs are local to the probe. Body membership,
 nesting and instruction origins are not persistent tracking state. Inactive
 native paths do not allocate tracking tables.
 
-Each observer obtains current dominance and LoopInfo independently. Surviving
-actual backedges identify current native loops; missing edges, eliminated loops
-and undefined widths are excluded. The observer does not require all registered
+Both observers use the same collection and backedge-mapping path, independently
+recomputing dominance and LoopInfo at their observation stages. Their surviving
+loop sets can differ. Actual backedges identify current native loops; missing
+edges, eliminated loops and undefined widths are excluded. The observer does not
+require all registered
 IDs, all backedges, old headers, reducible helper CFGs, or disjoint historical
 bodies to survive. Same-loop/same-width aliases count once. Several independent
 loops sharing q count separately. Width contradictions invalidate affected IDs
@@ -210,8 +211,7 @@ Raw observations survive only within the original-loop invocation. Reuse require
 matching candidate identity, role, VF/IC, main/epilogue and scalar-tail geometry,
 materialization context, CFG reduction, mapping policy revision and normalization
 policy revision (including current-loop static sum and uniform-loop composition).
-Cached snapshots retain every loop width and its geometry evidence; old ancestry
-results are never reinterpreted as backedge observations.
+Cached snapshots retain every loop width and its geometry evidence.
 Required slot availability is checked separately. Stop stage alone does not
 prevent reuse. MIR's full context cannot be treated as equivalent to a reduced
 spill probe. Recompute pricing/pruning for each model; do not persist IR or
@@ -293,7 +293,6 @@ Slots use `rvv-vector-spill-v5` or `mir-body-observation-v5`, with a `loops` arr
 containing `id`, `tracking_id`, `iteration_width`, `selected_block_count` and
 `spills` or `body`. Priced loop arrays may be subsets of raw observations; join
 them by stage-local `id` and use the priced set size for its mean.
-There are no single-width/payload compatibility aliases or ancestry statistics.
 Stage-level fields retain independent slot status, stage, `iteration_mapping`,
 materialized width, total selected blocks and mapping/normalization policy
 revisions (both 3). Mapping and normalization have no separate status or failure
@@ -342,8 +341,8 @@ outcomes by `(case, configuration, function, invocation, loop)`. Native fallback
 outcomes report unknown VF and emission as JSON null. Candidate IDs and q/observation
 IDs are local identities, qualified by configuration, attempt and observation
 stage. No separate fallback rows, concatenated reasons, candidate `cost_failure`,
-observation failure strings or text fallback summary are emitted. Unrelated cost,
-pruning and timing diagnostics retain their existing formats.
+observation failure strings or text fallback summary are emitted. Cost, pruning
+and timing diagnostic records remain separate from this failure ledger.
 
 Mapping reports `mapping_kind=backedge-loops`,
 `region_granularity=natural-loop-block-set`, `body_cost_semantics=static-block-sum`
@@ -362,9 +361,13 @@ selection. Failed-attempt diagnostic ledgers remain separate from discarded
 provisional cost reports.
 
 Timing is inert when disabled. Enabled timing separates probe phases, cost
-preparation and failed partial pipelines. Totals include their subintervals and
-must not be added again. Diagnostic timings are separate from ordinary compiler
-measurements; parallel comparisons require external process measurements.
+preparation and failed partial pipelines. The `ir_verification` phase measures
+module verification after the native post-LV suffix; backedge mapping runs later
+inside each observer's collection interval. Its timing fields are
+`ir_verification_wall_seconds` and `ir_verification_cpu_seconds`. Totals include
+their subintervals and must not be added again. Diagnostic timings are separate
+from ordinary compiler measurements; parallel comparisons require external
+process measurements.
 
 <a id="scalar-기준과-검증-계약"></a>
 

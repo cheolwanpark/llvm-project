@@ -158,21 +158,24 @@ TEST_F(RISCVBackendObservation, MovedAndClonedCodeUsesCurrentLocation) {
   Outside->push_back(MF->CloneMachineInstr(MI));
   MI->removeFromParent();
   Outside->push_back(MI);
-  auto Hoisted = vplan::collectVectorSpills(*MF);
-  ASSERT_TRUE(bool(Hoisted)) << toString(Hoisted.takeError());
-  ASSERT_TRUE(Hoisted->Spill.succeeded());
-  ASSERT_EQ(Hoisted->Spill.Loops.size(), 1u);
-  EXPECT_TRUE(Hoisted->Spill.Loops.front().Spills.empty());
-  EXPECT_EQ(Hoisted->Spill.Loops.front().IterationWidth, 4u);
+  VPlanBackendResult Hoisted;
+  ASSERT_FALSE(bool(vplan::readCandidateIdentity(*F, Hoisted)));
+  vplan::observeBody(*MF, Hoisted, false, false);
+  ASSERT_TRUE(Hoisted.Spill.succeeded());
+  ASSERT_EQ(Hoisted.Spill.Loops.size(), 1u);
+  EXPECT_TRUE(Hoisted.Spill.Loops.front().Spills.empty());
+  EXPECT_EQ(Hoisted.Spill.Loops.front().IterationWidth, 4u);
 
   // Sinking one access into the loop changes the current body cost, regardless
   // of the instruction's creation or clone location.
   MI->removeFromParent();
   Inside->push_back(MI);
-  auto Sunk = vplan::collectVectorSpills(*MF);
-  ASSERT_TRUE(bool(Sunk)) << toString(Sunk.takeError());
-  ASSERT_EQ(Sunk->Spill.Loops.size(), 1u);
-  EXPECT_EQ(Sunk->Spill.Loops.front().Spills.size(), 1u);
+  VPlanBackendResult Sunk;
+  ASSERT_FALSE(bool(vplan::readCandidateIdentity(*F, Sunk)));
+  vplan::observeBody(*MF, Sunk, false, false);
+  ASSERT_TRUE(Sunk.Spill.succeeded());
+  ASSERT_EQ(Sunk.Spill.Loops.size(), 1u);
+  EXPECT_EQ(Sunk.Spill.Loops.front().Spills.size(), 1u);
 }
 
 TEST_F(RISCVBackendObservation, MachineObservationOutlivesIRTracking) {
@@ -182,13 +185,14 @@ TEST_F(RISCVBackendObservation, MachineObservationOutlivesIRTracking) {
   bindBackedge(Loop, Loop);
   store(Loop, SpillFI);
   Tracking.reset();
-  auto Result = vplan::collectVectorSpills(*MF);
-  ASSERT_TRUE(bool(Result)) << toString(Result.takeError());
-  ASSERT_TRUE(Result->Spill.succeeded());
+  VPlanBackendResult Result;
+  ASSERT_FALSE(bool(vplan::readCandidateIdentity(*F, Result)));
+  vplan::observeBody(*MF, Result, false, false);
+  ASSERT_TRUE(Result.Spill.succeeded());
   MF.reset();
-  ASSERT_EQ(Result->Spill.Loops.size(), 1u);
-  EXPECT_EQ(Result->Spill.Loops.front().IterationWidth, 4u);
-  EXPECT_EQ(Result->Spill.Loops.front().Spills.size(), 1u);
+  ASSERT_EQ(Result.Spill.Loops.size(), 1u);
+  EXPECT_EQ(Result.Spill.Loops.front().IterationWidth, 4u);
+  EXPECT_EQ(Result.Spill.Loops.front().Spills.size(), 1u);
 }
 
 TEST_F(RISCVBackendObservation, SegmentAccessesFollowPhysicalEncoding) {

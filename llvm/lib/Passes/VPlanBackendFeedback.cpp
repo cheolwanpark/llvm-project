@@ -355,7 +355,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   if (verifyModule(M, &Diagnostics))
     return vplanBackendError(VPlanBackendFailureGroup::Execution,
                              "invalid candidate module", "", "probe");
-  Timer.mark("iteration_mapping_and_verification");
+  Timer.mark("ir_verification");
   auto Result =
       TM->getVPlanBackendFeedback(M, Timer.Enabled, Candidate.Observation);
   Timer.mark("backend_total");
@@ -373,9 +373,9 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
   return Result;
 }
 
-/// Single-query compatibility path: retain the live context, diagnostic
-/// handler, VFS and phase timing, including short-circuiting before the next
-/// candidate.
+/// Execute one query on the calling compiler thread, retaining the live context,
+/// diagnostic handler, VFS and phase timing. Finish before the caller decides
+/// whether to query another candidate.
 Expected<VPlanBackendResult>
 runSerial(const Function &F, const BasicBlock &Header,
           const VPlanBackendCandidate &Candidate, TargetMachine *LiveTarget,

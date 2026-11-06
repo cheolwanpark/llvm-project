@@ -10,7 +10,6 @@ namespace vplan {
 Error readCandidateIdentity(const Function &F, VPlanBackendResult &Result);
 void observeBody(MachineFunction &MF, VPlanBackendResult &Result, bool MIR,
                  bool Text);
-Expected<VPlanBackendResult> collectVectorSpills(MachineFunction &MF);
 Error collectVectorSpillAccess(const MachineInstr &MI,
                                std::vector<VPlanVectorSpillAccess> &Accesses);
 } // namespace vplan

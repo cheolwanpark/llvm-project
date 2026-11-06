@@ -3,12 +3,10 @@
 #ifndef LLVM_LIB_TARGET_RISCV_RISCVVPLANMIR_H
 #define LLVM_LIB_TARGET_RISCV_RISCVVPLANMIR_H
 #include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/Support/Error.h"
 #include "llvm/Support/VPlanBackendResult.h"
 namespace llvm {
 namespace vplan {
 VPlanMIRInstruction collectMIRInstruction(const MachineInstr &MI, bool Text);
-Expected<VPlanBackendResult> collectMIRBody(MachineFunction &MF, bool Text);
 } // namespace vplan
 class RISCVVPlanMIR : public MachineFunctionPass {
   VPlanBackendResult &Sink;

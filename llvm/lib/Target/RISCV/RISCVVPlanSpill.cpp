@@ -260,24 +260,6 @@ static Error collectBody(MachineFunction &MF, VPlanBackendResult &Result,
   Observation.Status = VPlanBackendObservationStatus::Succeeded;
   return Error::success();
 }
-Expected<VPlanBackendResult>
-llvm::vplan::collectVectorSpills(MachineFunction &MF) {
-  VPlanBackendResult Result;
-  if (auto E = readCandidateIdentity(MF.getFunction(), Result))
-    return std::move(E);
-  if (auto E = collectBody(MF, Result, false, false))
-    return std::move(E);
-  return Result;
-}
-Expected<VPlanBackendResult> llvm::vplan::collectMIRBody(MachineFunction &MF,
-                                                         bool Text) {
-  VPlanBackendResult Result;
-  if (auto E = readCandidateIdentity(MF.getFunction(), Result))
-    return std::move(E);
-  if (auto E = collectBody(MF, Result, true, Text))
-    return std::move(E);
-  return Result;
-}
 void llvm::vplan::observeBody(MachineFunction &MF, VPlanBackendResult &Result,
                               bool MIR, bool Text) {
   auto &Slot = MIR ? Result.MIR : Result.Spill;
