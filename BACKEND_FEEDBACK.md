@@ -74,6 +74,10 @@ the effective model and fallback ledger.
 
 ## One probe pipeline and independent observations
 
+The probe TargetMachine retains the module's effective code model. The common
+external builder forwards CPU, tuning, ABI and code model to opt, and opt adopts
+the IR Code Model flag when no explicit CLI override exists.
+
 ```text
 clone → activate private-function tracking → materialize and register body
   → native post-LV suffix → verify IR

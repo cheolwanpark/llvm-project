@@ -702,6 +702,12 @@ optMain(int argc, char **argv,
     return 1;
   }
 
+  // In-process backend probes must use the same code model as lowering this
+  // module with llc. An explicit command-line model still takes precedence.
+  if (TM && !codegen::getExplicitCodeModel())
+    if (auto CM = M->getCodeModel())
+      TM->setCodeModel(*CM);
+
   TargetOptions CodeGenFlagsOptions;
   const TargetOptions *Options = TM ? &TM->Options : &CodeGenFlagsOptions;
   if (!TM) {

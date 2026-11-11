@@ -97,6 +97,11 @@ force serial execution and report the reason. Required failures trigger
 
 ## Build and verification
 
+The common external builder forwards CPU, tuning, ABI and code model to opt's
+probe TargetMachine.
+When no CLI code model is given, opt honors the module's Code Model flag, as llc
+does, so a medany executable is also observed with the Medium code model.
+
 Reuse the Release/assertions/tests-enabled `.cache/build` and preserve
 `.cache/compiler-build -> build`. Reconfigure an existing cache through that
 compatibility alias. Use `.cache/build` directly only for a fresh configuration:

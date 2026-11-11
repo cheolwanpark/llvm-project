@@ -9148,6 +9148,9 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     if (!ForceVectorization && !BackendProbe &&
         !isOutsideLoopWorkProfitable(Checks, VF, L, PSE, CostCtx, *BestPlanPtr,
                                      SEL, Config.getVScaleForTuning())) {
+      if (Config.BackendCosts)
+        Config.BackendCosts->selection(VF.Width, SelectedIC,
+                                       ElementCount::getFixed(0), false);
       ORE->emit([&]() {
         return OptimizationRemarkAnalysisAliasing(
                    DEBUG_TYPE, "CantReorderMemOps", L->getStartLoc(),
