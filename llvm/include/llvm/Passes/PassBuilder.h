@@ -28,6 +28,7 @@
 #include "llvm/Transforms/IPO/Inliner.h"
 #include "llvm/Transforms/IPO/ModuleInliner.h"
 #include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -36,6 +37,7 @@ class StringRef;
 class AAManager;
 class TargetMachine;
 class ModuleSummaryIndex;
+struct VPlanBackendPipelineConfig;
 
 /// Tunable parameters for passes in the default pipelines.
 class PipelineTuningOptions {
@@ -171,6 +173,11 @@ public:
   /// still manually register any additional analyses. Callers can also
   /// pre-register analyses and this will not override those.
   LLVM_ABI void registerFunctionAnalyses(FunctionAnalysisManager &FAM);
+
+  /// Capture an owned native post-LV continuation configuration.
+  LLVM_ABI std::shared_ptr<const VPlanBackendPipelineConfig>
+  createVPlanBackendPipelineConfig(OptimizationLevel Level,
+                                   ThinOrFullLTOPhase Phase) const;
 
   /// Registers all available loop analysis passes.
   ///

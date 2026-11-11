@@ -76,6 +76,11 @@ is also removed, while upstream CPU/codegen support remains.
   -mrvv-vector-bits=256 -O3 -mllvm -vplan-backend kernel.c -S -o .cache/k1.s
 ```
 
+For backend probes, use `opt -passes='default<O2>'`,
+`opt -passes='default<O3>'`, or a standard Clang optimization pipeline.
+Bare `-passes=loop-vectorize` uses the
+[unavailable-configuration fallback](BACKEND_FEEDBACK.md#one-probe-pipeline-and-independent-observations).
+
 ## Probe pruning
 
 Pressure-gate skipping and private CFG reduction are disabled for common
@@ -132,6 +137,7 @@ Focused backend contract checks:
 .cache/build/unittests/Transforms/Vectorize/VectorizeTests --gtest_filter='VPlanBackendPricing.*:VPlanBackendExecution.*:BackendGate.*'
 .cache/build/unittests/Target/RISCV/RISCVTests --gtest_filter='RISCVBackendPricing.*:RISCVBackendObservation.*'
 .cache/build/bin/llvm-lit -j 1 -v \
+  llvm/test/Transforms/LoopVectorize/RISCV/backend-continuation.ll \
   llvm/test/Transforms/LoopVectorize/RISCV/backend-pipeline.ll \
   llvm/test/Transforms/LoopVectorize/RISCV/backend-scopes.ll \
   llvm/test/Transforms/LoopVectorize/RISCV/backend-selection.ll \

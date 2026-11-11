@@ -22,5 +22,8 @@ loop:
   br i1 %done, label %exit, label %loop, !llvm.loop !0
 exit: ret void
 }
-!0 = distinct !{!0, !1}
-!1 = !{!"llvm.loop.unroll.full"}
+!0 = distinct !{!0, !1, !2}
+!1 = !{!"llvm.loop.unroll.disable"}
+!2 = !{!"llvm.loop.vectorize.followup_vectorized", !3}
+!3 = distinct !{!3, !4}
+!4 = !{!"llvm.loop.unroll.full"}

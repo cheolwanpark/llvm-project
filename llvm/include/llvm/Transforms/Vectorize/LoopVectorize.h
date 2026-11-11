@@ -61,6 +61,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Transforms/Utils/ExtraPassManager.h"
 #include <functional>
+#include <memory>
 
 namespace llvm {
 
@@ -80,6 +81,7 @@ class TargetLibraryInfo;
 class TargetTransformInfo;
 class VPlanBackendFeedback;
 struct VPlanBackendProbe;
+struct VPlanBackendPipelineConfig;
 
 LLVM_ABI extern cl::opt<bool> EnableLoopInterleaving;
 LLVM_ABI extern cl::opt<bool> EnableLoopVectorization;
@@ -134,6 +136,7 @@ struct LoopVectorizePass : public OptionalPassInfoMixin<LoopVectorizePass> {
 private:
   VPlanBackendFeedback *BackendFeedback = nullptr;
   VPlanBackendProbe *BackendProbe = nullptr;
+  std::shared_ptr<const VPlanBackendPipelineConfig> BackendPipeline;
   /// If false, consider all loops for interleaving.
   /// If true, only loops that explicitly request interleaving are considered.
   bool InterleaveOnlyWhenForced;
@@ -144,6 +147,13 @@ private:
 
 public:
   LLVM_ABI LoopVectorizePass(LoopVectorizeOptions Opts = {});
+
+  /// Bind the native continuation captured when this LV pipeline was built.
+  LoopVectorizePass &
+  setBackendPipeline(std::shared_ptr<const VPlanBackendPipelineConfig> Config) {
+    BackendPipeline = std::move(Config);
+    return *this;
+  }
 
   /// Internal materialization on a disposable function, using normal planning.
   LoopVectorizePass &setBackendProbe(VPlanBackendProbe &Probe) {

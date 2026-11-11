@@ -26,6 +26,7 @@
 namespace llvm {
 class BasicBlock;
 class Loop;
+struct VPlanBackendPipelineConfig;
 
 struct VPlanBackendProbeResult;
 /// Completion runs on the calling compiler thread, after worker cleanup.
@@ -142,7 +143,7 @@ public:
     return MIRInfo ? MIRInfo(F) : nullptr;
   }
 
-  /// Reset per-invocation diagnostics independently of capacity queries.
+  /// Reset observations and diagnostics for a new original-loop invocation.
   void beginInvocation() const {
     if (Setup)
       Setup();
@@ -177,12 +178,6 @@ public:
     return Results->front().takeResult();
   }
 
-  bool invalidate(Function &, const PreservedAnalyses &,
-                  FunctionAnalysisManager::Invalidator &) {
-    // Only a service handle; observations are scoped to the caller's plan.
-    return false;
-  }
-
 private:
   Query QueryCandidates;
   BatchPolicy Policy;
@@ -194,23 +189,32 @@ class VPlanBackendFeedbackAnalysis
     : public AnalysisInfoMixin<VPlanBackendFeedbackAnalysis> {
   friend AnalysisInfoMixin<VPlanBackendFeedbackAnalysis>;
   LLVM_ABI static AnalysisKey Key;
-  VPlanBackendFeedback::Query Query;
-  VPlanBackendFeedback::BatchPolicy Policy;
-  VPlanBackendFeedback::MIRInfoProvider MIRInfo;
-  VPlanBackendFeedback::InvocationSetup Setup;
 
 public:
-  using Result = VPlanBackendFeedback;
-  explicit VPlanBackendFeedbackAnalysis(
-      VPlanBackendFeedback::Query Q = {},
-      VPlanBackendFeedback::BatchPolicy Policy = {},
-      VPlanBackendFeedback::MIRInfoProvider MIRInfo = {},
-      VPlanBackendFeedback::InvocationSetup Setup = {})
-      : Query(std::move(Q)), Policy(std::move(Policy)),
-        MIRInfo(std::move(MIRInfo)), Setup(std::move(Setup)) {}
-  Result run(Function &, FunctionAnalysisManager &) {
-    return Result(Query, Policy, MIRInfo, Setup);
-  }
+  using Factory = std::function<VPlanBackendFeedback(
+      std::shared_ptr<const VPlanBackendPipelineConfig>)>;
+  /// Configuration-independent factory; each binding owns its query state.
+  class Result {
+    Factory Create;
+
+  public:
+    explicit Result(Factory Create) : Create(std::move(Create)) {}
+    VPlanBackendFeedback
+    bind(std::shared_ptr<const VPlanBackendPipelineConfig> Config) const {
+      return Create ? Create(std::move(Config)) : VPlanBackendFeedback();
+    }
+    bool invalidate(Function &, const PreservedAnalyses &,
+                    FunctionAnalysisManager::Invalidator &) {
+      // The factory owns no IR-dependent observations.
+      return false;
+    }
+  };
+  explicit VPlanBackendFeedbackAnalysis(Factory Create = {})
+      : Create(std::move(Create)) {}
+  Result run(Function &, FunctionAnalysisManager &) { return Result(Create); }
+
+private:
+  Factory Create;
 };
 
 LLVM_ABI bool vplanBackendFeedbackEnabled();

@@ -38,6 +38,17 @@
 
 using namespace llvm;
 
+namespace llvm {
+// Only the Passes layer knows the contents of the immutable LV-owned handle.
+struct VPlanBackendPipelineConfig {
+  PipelineTuningOptions Tuning;
+  OptimizationLevel Level;
+  ThinOrFullLTOPhase Phase;
+  void (*BuildSuffix)(PassBuilder &, OptimizationLevel, FunctionPassManager &,
+                      ThinOrFullLTOPhase);
+};
+} // namespace llvm
+
 VPlanBackendFeedback::Batch VPlanBackendProbePool::run(
     unsigned Count, function_ref<VPlanBackendProbeResult(unsigned)> Probe,
     function_ref<void(unsigned, const VPlanBackendProbeResult &)> Completed) {
@@ -208,11 +219,6 @@ std::unique_ptr<Module> cloneInput(const Function &F, ValueToValueMapTy &VMap) {
       /*PreserveUseListOrder=*/true);
 }
 
-struct ProbePipeline {
-  PipelineTuningOptions Tuning;
-  void (*BuildSuffix)(PassBuilder &, OptimizationLevel, FunctionPassManager &);
-};
-
 void setCandidateIdentity(VPlanBackendResult &Result,
                           const VPlanBackendCandidate &Candidate) {
   Result.Candidate = Candidate.ID;
@@ -225,7 +231,7 @@ void setCandidateIdentity(VPlanBackendResult &Result,
 Expected<VPlanBackendResult>
 runProbe(Module &M, Function &F, BasicBlock &Header,
          const VPlanBackendCandidate &Candidate, const ProbeTarget &Target,
-         const ProbePipeline &Pipeline,
+         const VPlanBackendPipelineConfig &Pipeline,
          IntrusiveRefCntPtr<vfs::FileSystem> FileSystem,
          VPlanFeedbackTimer &Timer, raw_ostream &Diagnostics) {
   if (Candidate.Kind == VPlanBackendCandidateKind::ScalarBaseline &&
@@ -300,11 +306,8 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
     return vplanBackendError(VPlanBackendFailureGroup::Execution,
                              "backend probe cancelled", "", "probe");
   // This is the same explicit post-LV continuation for both execution modes.
-  auto Level = Target.OptLevel == CodeGenOptLevel::Aggressive
-                   ? OptimizationLevel::O3
-                   : OptimizationLevel::O2;
   FunctionPassManager Cleanup;
-  Pipeline.BuildSuffix(PB, Level, Cleanup);
+  Pipeline.BuildSuffix(PB, Pipeline.Level, Cleanup, Pipeline.Phase);
   Cleanup.run(F, FAM);
   DumpPruningIR("suffix");
   if (PruningTrace) {
@@ -362,7 +365,7 @@ runProbe(Module &M, Function &F, BasicBlock &Header,
 Expected<VPlanBackendResult>
 runSerial(const Function &F, const BasicBlock &Header,
           const VPlanBackendCandidate &Candidate, TargetMachine *LiveTarget,
-          const ProbePipeline &Pipeline,
+          const VPlanBackendPipelineConfig &Pipeline,
           IntrusiveRefCntPtr<vfs::FileSystem> FileSystem) {
   VPlanFeedbackTimer Timer(vplanBackendFeedbackTimingEnabled());
   TimeRecord Start = Timer.Last;
@@ -435,9 +438,9 @@ struct ProbeSnapshot {
     WriteBitcodeToFile(*Clone, OS, /*ShouldPreserveUseListOrder=*/true);
   }
 
-  VPlanBackendProbeResult run(const VPlanBackendCandidate &Candidate,
-                              const ProbeTarget &Target,
-                              const ProbePipeline &Pipeline) const {
+  VPlanBackendProbeResult
+  run(const VPlanBackendCandidate &Candidate, const ProbeTarget &Target,
+      const VPlanBackendPipelineConfig &Pipeline) const {
     std::string Diagnostics;
     raw_string_ostream OS(Diagnostics);
     auto Run = [&]() -> Expected<VPlanBackendResult> {
@@ -516,7 +519,7 @@ runControlledProbe(const VPlanBackendCandidate &C,
 
 class FeedbackProvider {
   TargetMachine *Target;
-  ProbePipeline Pipeline;
+  std::shared_ptr<const VPlanBackendPipelineConfig> Pipeline;
   IntrusiveRefCntPtr<vfs::FileSystem> FileSystem;
   unsigned Threads;
   VPlanBackendProbePool Pool;
@@ -534,10 +537,12 @@ class FeedbackProvider {
   bool Warned = false;
 
 public:
-  FeedbackProvider(TargetMachine *Target, ProbePipeline Pipeline,
+  FeedbackProvider(TargetMachine *Target,
+                   std::shared_ptr<const VPlanBackendPipelineConfig> Pipeline,
                    IntrusiveRefCntPtr<vfs::FileSystem> FileSystem)
-      : Target(Target), Pipeline(Pipeline), FileSystem(std::move(FileSystem)),
-        Threads(ProbeThreads), Pool(Threads) {}
+      : Target(Target), Pipeline(std::move(Pipeline)),
+        FileSystem(std::move(FileSystem)), Threads(ProbeThreads),
+        Pool(Threads) {}
 
   void beginInvocation() {
     SerialMainQueries = 0;
@@ -551,6 +556,10 @@ public:
   Expected<VPlanBackendFeedback::Batch>
   query(const Function &F, const BasicBlock &Header,
         ArrayRef<VPlanBackendCandidate> Candidates) {
+    if (!Pipeline)
+      return vplanBackendError(
+          VPlanBackendFailureGroup::Availability,
+          "backend probe continuation configuration unavailable", "", "input");
     VPlanBackendFeedback::Batch Results;
     SmallVector<VPlanBackendCandidate> Missing;
     SmallVector<unsigned> Indices;
@@ -630,7 +639,7 @@ public:
         const auto &C = Candidates[I];
         Results.push_back(
             runControlledProbe(C, [&]() -> VPlanBackendProbeResult {
-              return {runSerial(F, Header, C, Target, Pipeline, FileSystem)};
+              return {runSerial(F, Header, C, Target, *Pipeline, FileSystem)};
             }));
         Completed(I, Results.back());
       }
@@ -644,7 +653,7 @@ public:
         Candidates.size(),
         [&](unsigned I) {
           return runControlledProbe(Candidates[I], [&] {
-            return Snapshot.run(Candidates[I], Settings, Pipeline);
+            return Snapshot.run(Candidates[I], Settings, *Pipeline);
           });
         },
         Completed);
@@ -652,27 +661,36 @@ public:
 };
 } // namespace
 
+std::shared_ptr<const VPlanBackendPipelineConfig>
+PassBuilder::createVPlanBackendPipelineConfig(OptimizationLevel Level,
+                                              ThinOrFullLTOPhase Phase) const {
+  return std::make_shared<const VPlanBackendPipelineConfig>(
+      VPlanBackendPipelineConfig{
+          PTO, Level, Phase,
+          [](PassBuilder &PB, OptimizationLevel Level, FunctionPassManager &FPM,
+             ThinOrFullLTOPhase Phase) {
+            PB.addVectorPasses(Level, FPM, Phase, /*AddVectorizer=*/false);
+          }});
+}
+
 void PassBuilder::registerVPlanBackendFeedbackAnalysis(
     FunctionAnalysisManager &FAM) {
-  // The service owns the lazy pool and outlives this PassBuilder. Each local
-  // probe PassBuilder registers its own unused service, never a nested pool.
-  ProbePipeline Pipeline{PTO, [](PassBuilder &PB, OptimizationLevel Level,
-                                 FunctionPassManager &FPM) {
-                           PB.addVectorPasses(Level, FPM,
-                                              ThinOrFullLTOPhase::None,
-                                              /*AddVectorizer=*/false);
-                         }};
-  auto Provider = std::make_shared<FeedbackProvider>(TM, Pipeline, FS);
-  FAM.registerPass([Provider, TM = TM] {
+  // Registration owns no pipeline snapshot or live PassBuilder reference.
+  FAM.registerPass([TM = TM, FS = FS] {
     return VPlanBackendFeedbackAnalysis(
-        [Provider](const Function &F, const BasicBlock &Header,
-                   ArrayRef<VPlanBackendCandidate> Candidates) {
-          return Provider->query(F, Header, Candidates);
-        },
-        [Provider](const Function &F) { return Provider->canBatch(F); },
-        [TM](const Function &F) {
-          return TM ? TM->getTargetMIRInfo(F) : nullptr;
-        },
-        [Provider] { Provider->beginInvocation(); });
+        [TM, FS](std::shared_ptr<const VPlanBackendPipelineConfig> Config) {
+          auto Provider =
+              std::make_shared<FeedbackProvider>(TM, std::move(Config), FS);
+          return VPlanBackendFeedback(
+              [Provider](const Function &F, const BasicBlock &Header,
+                         ArrayRef<VPlanBackendCandidate> Candidates) {
+                return Provider->query(F, Header, Candidates);
+              },
+              [Provider](const Function &F) { return Provider->canBatch(F); },
+              [TM](const Function &F) {
+                return TM ? TM->getTargetMIRInfo(F) : nullptr;
+              },
+              [Provider] { Provider->beginInvocation(); });
+        });
   });
 }

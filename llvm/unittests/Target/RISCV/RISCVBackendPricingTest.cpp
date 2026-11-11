@@ -129,7 +129,9 @@ TEST_F(RISCVBackendPricing, RawReuseRequiresMatchingMaterializationContext) {
   PB.registerFunctionAnalyses(FAM);
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-  auto &Service = FAM.getResult<VPlanBackendFeedbackAnalysis>(*F);
+  auto Service = FAM.getResult<VPlanBackendFeedbackAnalysis>(*F).bind(
+      PB.createVPlanBackendPipelineConfig(OptimizationLevel::O2,
+                                          ThinOrFullLTOPhase::None));
   auto *Header = F->getEntryBlock().getTerminator()->getSuccessor(0);
   VPlanBackendCandidate Candidate{"scalar", 0,     ElementCount::getFixed(1),
                                   true,     false, false};
@@ -190,7 +192,9 @@ TEST_F(RISCVBackendPricing, InlineAsmPricesUseIRArguments) {
   PB.registerFunctionAnalyses(FAM);
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
-  auto &Service = FAM.getResult<VPlanBackendFeedbackAnalysis>(*F);
+  auto Service = FAM.getResult<VPlanBackendFeedbackAnalysis>(*F).bind(
+      PB.createVPlanBackendPipelineConfig(OptimizationLevel::O2,
+                                          ThinOrFullLTOPhase::None));
   auto *Header = F->getEntryBlock().getTerminator()->getSuccessor(0);
   VPlanBackendCandidate Candidate{"scalar", 0,     ElementCount::getFixed(1),
                                   true,     false, false};
@@ -212,4 +216,85 @@ TEST_F(RISCVBackendPricing, InlineAsmPricesUseIRArguments) {
         ++Asms;
       }
   EXPECT_EQ(Asms, 2u);
+}
+
+// VF1 materialization must still receive SLP from its own continuation, even
+// after other pipelines are constructed and the builders have been destroyed.
+TEST_F(RISCVBackendPricing, ContinuationOwnsSLPConfiguration) {
+  SMDiagnostic Error;
+  M = parseAssemblyString(R"(
+    define void @f(ptr noalias %a, ptr noalias %b, i64 %n) vscale_range(2,2) {
+    entry: br label %loop
+    loop:
+      %i = phi i64 [0, %entry], [%next, %loop]
+      %a0 = getelementptr float, ptr %a, i64 %i
+      %a1 = getelementptr float, ptr %a0, i64 1
+      %a2 = getelementptr float, ptr %a0, i64 2
+      %a3 = getelementptr float, ptr %a0, i64 3
+      %b0 = getelementptr float, ptr %b, i64 %i
+      %b1 = getelementptr float, ptr %b0, i64 1
+      %b2 = getelementptr float, ptr %b0, i64 2
+      %b3 = getelementptr float, ptr %b0, i64 3
+      %x0 = load float, ptr %a0
+      %x1 = load float, ptr %a1
+      %x2 = load float, ptr %a2
+      %x3 = load float, ptr %a3
+      %y0 = fadd float %x0, 1.0
+      %y1 = fadd float %x1, 1.0
+      %y2 = fadd float %x2, 1.0
+      %y3 = fadd float %x3, 1.0
+      store float %y0, ptr %b0
+      store float %y1, ptr %b1
+      store float %y2, ptr %b2
+      store float %y3, ptr %b3
+      %next = add nuw i64 %i, 4
+      %done = icmp eq i64 %next, %n
+      br i1 %done, label %exit, label %loop
+    exit: ret void
+    })",
+                          Error, Context);
+  ASSERT_TRUE(M);
+  M->setDataLayout(TM->createDataLayout());
+  M->setTargetTriple(TM->getTargetTriple());
+  F = M->getFunction("f");
+  FunctionAnalysisManager FAM;
+  std::shared_ptr<const VPlanBackendPipelineConfig> Enabled, Disabled;
+  {
+    PipelineTuningOptions PTO;
+    PTO.SLPVectorization = true;
+    PTO.LoopUnrolling = false;
+    PassBuilder PB(TM.get(), PTO);
+    PB.registerFunctionAnalyses(FAM);
+    Enabled = PB.createVPlanBackendPipelineConfig(OptimizationLevel::O3,
+                                                  ThinOrFullLTOPhase::None);
+    PTO.SLPVectorization = false;
+    PassBuilder Other(TM.get(), PTO);
+    Disabled = Other.createVPlanBackendPipelineConfig(OptimizationLevel::O3,
+                                                      ThinOrFullLTOPhase::None);
+  }
+  auto &Factory = FAM.getResult<VPlanBackendFeedbackAnalysis>(*F);
+  auto On = Factory.bind(Enabled);
+  auto Off = Factory.bind(Disabled);
+  auto *Header = F->getEntryBlock().getTerminator()->getSuccessor(0);
+  VPlanBackendCandidate C{"scalar", 0,     ElementCount::getFixed(1),
+                          true,     false, false};
+  C.Kind = VPlanBackendCandidateKind::ScalarBaseline;
+  C.Observation.CollectMIR = true;
+  for (auto *Service : {&On, &Off, &On}) {
+    Service->beginInvocation();
+    auto R = Service->get(*F, *Header, C);
+    ASSERT_TRUE(bool(R)) << toString(R.takeError());
+    ASSERT_TRUE(R->MIR.succeeded());
+    bool Vector = false;
+    for (const auto &Loop : R->MIR.Loops)
+      for (const auto &MI : *Loop.MIRBody)
+        Vector |= MI.Vector && !MI.Configuration;
+    EXPECT_EQ(Vector, Service == &On);
+  }
+  auto Missing = Factory.bind(nullptr);
+  auto R = Missing.get(*F, *Header, C);
+  ASSERT_FALSE(bool(R));
+  EXPECT_NE(
+      toString(R.takeError()).find("continuation configuration unavailable"),
+      std::string::npos);
 }

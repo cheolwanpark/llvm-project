@@ -74,6 +74,29 @@ the effective model and fallback ledger.
 
 ## One probe pipeline and independent observations
 
+Each native LV pipeline owns an immutable continuation configuration captured
+when LV is added, after driver and pipeline-alias settings have been applied.
+It contains the complete tuning options, explicit IR optimization level and LTO
+phase. Analysis registration supplies only a service factory; binding an LV's
+configuration creates a private feedback service for that LV function execution,
+with a lazy worker pool shared across its loops. No deferred callback retains
+the original PassBuilder.
+
+Scalar, main-vector and epilogue probes materialize their candidate separately,
+then use the shared native `addVectorPasses(..., AddVectorizer=false)` helper.
+Each execution constructs fresh passes, analyses and target state; serial and
+worker execution inherit the same immutable settings. Backend codegen level
+remains an independent target setting. This continuation includes SLP, vector
+cleanup and ordinary unrolling, but approximates later compilation: it excludes
+vectorizer-end callbacks, later cleanup outside the helper, module/CGSCC work
+and arbitrary frontend/plugin registrations.
+
+Standalone textual `loop-vectorize` and directly constructed LV passes without
+an explicitly supplied configuration have unavailable probes. They follow the
+existing whole-loop fallback, including estimated-only selection; missing
+configuration never supplies zero observations. Default opt and standard Clang
+pipelines supply the configuration automatically.
+
 The probe TargetMachine retains the module's effective code model. The common
 external builder forwards CPU, tuning, ABI and code model to opt, and opt adopts
 the IR Code Model flag when no explicit CLI override exists.
@@ -213,14 +236,15 @@ Every attempt retains the requested spill policy. Scalar selection is a
 successful attempt. Required scalar/main/epilogue failure discards that attempt's
 cost table, scalar baseline, pruning, selection and provisional reports.
 
-Raw observations survive only within the original-loop invocation. Reuse requires
-matching candidate identity, role, VF/IC, main/epilogue and scalar-tail geometry,
-materialization context, CFG reduction, mapping policy revision and normalization
-policy revision (including current-loop static sum and uniform-loop composition).
-Cached snapshots retain every loop width and its geometry evidence.
-Required slot availability is checked separately. Stop stage alone does not
-prevent reuse. Both modes now use the same full CFG. Recompute pricing/pruning for each model; do not persist IR or
-machine ranges across stages, attempts or loops.
+Raw observations are cleared at each original-loop invocation. The bound service
+retains one immutable continuation configuration, so reuse cannot cross pipeline
+settings. Reuse requires matching candidate identity, role, VF/IC, main/epilogue
+and scalar-tail geometry, materialization context, CFG reduction, mapping policy
+revision and normalization policy revision (including current-loop static sum
+and uniform-loop composition). Cached snapshots retain every loop width and its
+geometry evidence. Required slot availability is checked separately. Stop stage
+alone does not prevent reuse. Recompute pricing/pruning for each model; do not
+persist IR or machine ranges across stages, attempts or loops.
 
 <a id="비용-하한-pruning"></a>
 

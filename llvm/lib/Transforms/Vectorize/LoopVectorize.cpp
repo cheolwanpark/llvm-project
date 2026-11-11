@@ -9538,10 +9538,13 @@ PreservedAnalyses LoopVectorizePass::run(Function &F,
   GetBFI = [&AM, &F]() -> BlockFrequencyInfo & {
     return AM.getResult<BlockFrequencyAnalysis>(F);
   };
-  BackendFeedback = vplanBackendFeedbackEnabled() && !BackendProbe
-                        ? &AM.getResult<VPlanBackendFeedbackAnalysis>(F)
-                        : nullptr;
+  std::optional<VPlanBackendFeedback> Feedback;
+  if (vplanBackendFeedbackEnabled() && !BackendProbe)
+    Feedback.emplace(
+        AM.getResult<VPlanBackendFeedbackAnalysis>(F).bind(BackendPipeline));
+  BackendFeedback = Feedback ? &*Feedback : nullptr;
   LoopVectorizeResult Result = runImpl(F);
+  BackendFeedback = nullptr;
   if (!Result.MadeAnyChange)
     return PreservedAnalyses::all();
   PreservedAnalyses PA;

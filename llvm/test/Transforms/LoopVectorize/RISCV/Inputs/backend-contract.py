@@ -12,7 +12,7 @@ source, root = Path(source), Path(temporary)
 root.mkdir(parents=True, exist_ok=True)
 commands = []
 base = [opt, '-mtriple=riscv64', '-mcpu=xiangshan-kunminghu', '-mattr=+v',
-        '-codegen-opt-level=2', '-passes=loop-vectorize', '-vplan-backend',
+        '-codegen-opt-level=2', '-passes=default<O2>', '-vplan-backend',
         '-scalable-vectorization=always', '-force-vector-interleave=1',
         '-enable-epilogue-vectorization=false', '-riscv-v-register-bit-width-lmul=8',
         '-disable-loop-unrolling', '-verify-each', '-verify-machineinstrs']
@@ -319,5 +319,21 @@ def execution():
     assert traces and all(not t['applied'] for t in traces)
 
 
-{'pipeline': pipeline, 'selection': selection, 'scopes': scopes, 'execution': execution}[suite]()
+def continuation():
+    flags = ['-use-mir', '-vplan-backend-force-all', '-force-vector-width=4',
+             '-scalable-vectorization=off']
+    for level in ('O2', 'O3'):
+        _, rows, _ = run(level, flags + [f'-passes=default<{level}>'])
+        scalar = [r for r in candidates(rows) if r.get('role') == 'scalar-baseline']
+        assert scalar and not fell_back(rows), rows
+        body = scalar[0]['observation']['mir_observation']
+        assert body['status'] == 'succeeded'
+        assert any(mi['vector'] for loop in body['loops'] for mi in loop['body'])
+    _, rows, _ = run('unconfigured', flags + ['-passes=loop-vectorize'])
+    assert fell_back(rows) and not any('observation' in r for r in candidates(rows))
+    assert all(r['effective_model'] == 'llvm-v1' for r in decisions(rows))
+
+
+
+{'continuation': continuation, 'pipeline': pipeline, 'selection': selection, 'scopes': scopes, 'execution': execution}[suite]()
 print(f'{suite}: {len(commands)} compiler invocations')

@@ -1349,9 +1349,12 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
                                   FunctionPassManager &FPM,
                                   ThinOrFullLTOPhase LTOPhase,
                                   bool AddVectorizer) {
-  if (AddVectorizer)
-    FPM.addPass(LoopVectorizePass(
-        LoopVectorizeOptions(!PTO.LoopInterleaving, !PTO.LoopVectorization)));
+  if (AddVectorizer) {
+    LoopVectorizePass LV(
+        LoopVectorizeOptions(!PTO.LoopInterleaving, !PTO.LoopVectorization));
+    LV.setBackendPipeline(createVPlanBackendPipelineConfig(Level, LTOPhase));
+    FPM.addPass(std::move(LV));
+  }
 
   // Drop dereferenceable assumes after vectorization, as they are no longer
   // needed and can inhibit further optimization.
